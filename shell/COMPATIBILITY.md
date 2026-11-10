@@ -29,16 +29,23 @@ and the `pi_plugin_loaded` trace line).
 
 ## Refused or dropped (documented, not promised away)
 
-- **Refused** (`PiCapabilityUnsupported`, plugin is disabled with the reason recorded):
-  `registerMcpServer`, `registerVirtualModel`, and interactive UI (`ui.select/confirm/input/editor/custom`).
-- **Dropped** (recorded in the trace via `pi_capability_dropped`, plugin keeps running): rendering-only
+Every capability named below is asserted against the trace in `test/pi-adapter.test.ts`, so this list
+and the log cannot drift apart.
+
+- **Refused** (`PiCapabilityUnsupported`), traced as `pi_capability_refused`: `registerMcpServer` and
+  `registerVirtualModel` are refused while the plugin loads, so the plugin is disabled and the reason is
+  additionally recorded as `pi_plugin_refused`. The interactive UI surface is only reachable from a
+  call the adapter hands a context to — an event handler, a tool's `execute`, or a command handler:
+  `ui.select`, `ui.confirm`, `ui.input`, `ui.editor` and `ui.custom` are refused at the
+  call and traced there, and the plugin keeps running without a user.
+- **Dropped** (traced as `pi_capability_dropped`, plugin keeps running): rendering-only
   registrations — `registerMessageRenderer`, `registerEntryRenderer`, `registerToolRenderer`,
   `registerMarkdownTransformer`, `registerShortcut` — because a resident headless process has no renderer
   or key surface.
-- **Empty, and recorded**: `sessionManager.getEntries` / `getBranch` return `[]` (no session tree exists
-  headlessly; a plugin that tolerates an empty history keeps working, one that needs the tree does not)
-  and `setActiveTools` is a no-op because the cage whitelist decides the loadout. Each call records the
-  drop the first time, so the degradation is visible in `.cogmem-shell/shell-events.jsonl`.
+- **Empty, and recorded**: `sessionManager.getEntries` and `sessionManager.getBranch` return `[]` (no
+  session tree exists headlessly; a plugin that tolerates an empty history keeps working, one that needs
+  the tree does not) and `setActiveTools` is a no-op because the cage whitelist decides the loadout. Each
+  call records the drop the first time, so the degradation is visible in `.cogmem-shell/shell-events.jsonl`.
 - Payload parity is at the documented field level, not byte-for-byte: `turn_end` carries
   `{ message, toolResults, turnIndex }`, `agent_end` carries `{ messages, summary }` (the `summary`
   is a companion superset). Entry ids, boundary state and session-tree fields are absent by design.

@@ -4,8 +4,9 @@ import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rm
 import { join } from 'node:path';
 import { WebSocketServer } from 'ws';
 import { PluginHost } from '../src/plugins/host.ts';
-import { PiCompatAdapter, resolvePiExtensionEntry } from '../src/pi/adapter.ts';
+import { PiCapabilityUnsupported, PiCompatAdapter, resolvePiExtensionEntry } from '../src/pi/adapter.ts';
 import { PI_TARGET_PACKAGE, PI_TARGET_VERSION } from '../src/pi/target.ts';
+import { TraceLog } from '../src/trace.ts';
 import { makeTempDir } from './helpers.ts';
 
 const shellRoot = join(import.meta.dir, '..');
@@ -191,5 +192,77 @@ describe('Pi compatibility adapter', () => {
       expect(source).not.toMatch(/from\s+['"][^'"]*pi\/adapter/);
     }
     expect(readFileSync(join(shellRoot, 'src', 'app.ts'), 'utf8')).toContain("await import('./pi/adapter.ts')");
+  });
+
+  test('a plugin that registers an MCP server is refused at load, disabled, and traced', async () => {
+    const dir = makeTempDir();
+    const pluginDir = join(dir, 'refusing-plugin');
+    mkdirSync(pluginDir, { recursive: true });
+    writeFileSync(join(pluginDir, 'index.ts'), 'export default function (pi: any) { pi.registerMcpServer("x", {}); }\n', 'utf8');
+    const trace = new TraceLog(dir);
+    const host = new PluginHost();
+    host.seedService('eventBus', host.bus);
+    const adapter = new PiCompatAdapter({ host, pluginName: 'refusing-plugin', cwd: dir, sessionId: 's', trace });
+    const result = await adapter.load(resolvePiExtensionEntry(pluginDir, dir));
+    expect(result.status).toBe('refused');
+    expect(result.refusedCapabilities).toEqual(['registerMcpServer']);
+    const records = trace.read();
+    expect(records.some((record) => record.kind === 'pi_capability_refused' && record.capability === 'registerMcpServer')).toBe(true);
+    expect(records.some((record) => record.kind === 'pi_plugin_refused' && record.capability === 'registerMcpServer')).toBe(true);
+  });
+
+  // The refused and dropped boundaries are lists in COMPATIBILITY.md; each one is proved twice: the
+  // doc names it, and exercising it writes the trace record that documents the degradation.
+  const REFUSED_BOUNDARIES: Array<[string, (api: any, ctx: any) => void]> = [
+    ['registerMcpServer', (api) => api.registerMcpServer()],
+    ['registerVirtualModel', (api) => api.registerVirtualModel()],
+    ['ui.select', (_api, ctx) => ctx.ui.select()],
+    ['ui.confirm', (_api, ctx) => ctx.ui.confirm()],
+    ['ui.input', (_api, ctx) => ctx.ui.input()],
+    ['ui.editor', (_api, ctx) => ctx.ui.editor()],
+    ['ui.custom', (_api, ctx) => ctx.ui.custom()],
+  ];
+  const DROPPED_BOUNDARIES: Array<[string, (api: any, ctx: any) => void]> = [
+    ['registerMessageRenderer', (api) => api.registerMessageRenderer('probe')],
+    ['registerEntryRenderer', (api) => api.registerEntryRenderer('probe')],
+    ['registerToolRenderer', (api) => api.registerToolRenderer()],
+    ['registerMarkdownTransformer', (api) => api.registerMarkdownTransformer()],
+    ['registerShortcut', (api) => api.registerShortcut('probe')],
+    ['sessionManager.getEntries', (_api, ctx) => ctx.sessionManager.getEntries()],
+    ['sessionManager.getBranch', (_api, ctx) => ctx.sessionManager.getBranch()],
+    ['setActiveTools', (api) => api.setActiveTools(['read'])],
+  ];
+
+  test('every boundary COMPATIBILITY.md names is traced when it is exercised', async () => {
+    const dir = makeTempDir();
+    const trace = new TraceLog(dir);
+    const host = new PluginHost();
+    host.seedService('eventBus', host.bus);
+    const adapter = new PiCompatAdapter({ host, pluginName: 'boundary-probe', cwd: shellRoot, sessionId: 's', trace });
+    const api = (adapter as unknown as { api(): any }).api();
+    const ctx = (adapter as unknown as { extensionContext(): any }).extensionContext();
+    const doc = readFileSync(join(shellRoot, 'COMPATIBILITY.md'), 'utf8');
+
+    for (const [capability, trigger] of REFUSED_BOUNDARIES) {
+      let thrown: unknown;
+      try {
+        trigger(api, ctx);
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown, capability).toBeInstanceOf(PiCapabilityUnsupported);
+      expect(trace.read().some((record) => record.kind === 'pi_capability_refused' && record.capability === capability), `${capability} is traced`).toBe(true);
+    }
+    for (const [capability, trigger] of DROPPED_BOUNDARIES) {
+      trigger(api, ctx);
+      expect(trace.read().some((record) => record.kind === 'pi_capability_dropped' && record.capability === capability), `${capability} is traced`).toBe(true);
+    }
+
+    // Both directions, so neither the doc nor this test can grow a boundary alone: the doc's boundary
+    // section names exactly the capabilities driven here.
+    const boundarySection = doc.slice(doc.indexOf('## Refused or dropped'));
+    const namedInDoc = (boundarySection.match(/`(?:ui\.[a-zA-Z]+|register[A-Z][A-Za-z]*|sessionManager\.[a-zA-Z]+|setActiveTools)`/g) ?? []).map((token) => token.slice(1, -1));
+    const drivenHere = [...REFUSED_BOUNDARIES, ...DROPPED_BOUNDARIES].map(([capability]) => capability);
+    expect([...namedInDoc].sort()).toEqual([...drivenHere].sort());
   });
 });

@@ -261,14 +261,14 @@ export class PiCompatAdapter {
         adapter.drop('registerShortcut', shortcut);
       },
       registerMcpServer() {
-        throw new PiCapabilityUnsupported('registerMcpServer', 'the shell has no MCP client; only the kernel-facing MCP server');
+        adapter.refuse('registerMcpServer', 'the shell has no MCP client; only the kernel-facing MCP server');
       },
       unregisterMcpServer() {},
       getMcpServers() {
         return [];
       },
       registerVirtualModel() {
-        throw new PiCapabilityUnsupported('registerVirtualModel', 'virtual models are a Pi routing feature; the shell has one mg provider');
+        adapter.refuse('registerVirtualModel', 'virtual models are a Pi routing feature; the shell has one mg provider');
       },
       unregisterVirtualModel() {},
       events,
@@ -280,6 +280,17 @@ export class PiCompatAdapter {
     if (this.dropped.includes(entry)) return;
     this.dropped.push(entry);
     this.options.trace?.append('pi_capability_dropped', { plugin: this.options.pluginName, capability, detail, reason: 'headless_renderer_or_shortcut' });
+  }
+
+  /**
+   * Every refusal is traced where it happens, so COMPATIBILITY.md's refused list is checkable against
+   * the log rather than against a promise. A refusal thrown while the plugin loads is additionally
+   * recorded as `pi_plugin_refused` by `load()` and disables the plugin; one thrown from a handler
+   * only refuses that call, and the plugin keeps running (see the UI surface below).
+   */
+  private refuse(capability: string, detail: string): never {
+    this.options.trace?.append('pi_capability_refused', { plugin: this.options.pluginName, capability, detail, reason: 'the companion shell does not implement it' });
+    throw new PiCapabilityUnsupported(capability, detail);
   }
 
   private extensionContext(): any {
@@ -317,21 +328,11 @@ export class PiCompatAdapter {
         setTheme: () => ({ success: false, error: 'headless' }),
         theme,
         onTerminalInput: () => () => {},
-        select: () => {
-          throw new PiCapabilityUnsupported('ui.select', 'headless resident process has no interactive user');
-        },
-        confirm: () => {
-          throw new PiCapabilityUnsupported('ui.confirm', 'headless resident process has no interactive user');
-        },
-        input: () => {
-          throw new PiCapabilityUnsupported('ui.input', 'headless resident process has no interactive user');
-        },
-        editor: () => {
-          throw new PiCapabilityUnsupported('ui.editor', 'headless resident process has no interactive user');
-        },
-        custom: () => {
-          throw new PiCapabilityUnsupported('ui.custom', 'headless resident process has no interactive user');
-        },
+        select: () => this.refuse('ui.select', 'headless resident process has no interactive user'),
+        confirm: () => this.refuse('ui.confirm', 'headless resident process has no interactive user'),
+        input: () => this.refuse('ui.input', 'headless resident process has no interactive user'),
+        editor: () => this.refuse('ui.editor', 'headless resident process has no interactive user'),
+        custom: () => this.refuse('ui.custom', 'headless resident process has no interactive user'),
       },
       mode: 'json',
       hasUI: false,
