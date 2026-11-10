@@ -372,6 +372,8 @@ export class AgentRuntime {
         // therefore the cage's turn budget — is charged once however many provider calls it took.
         let turn: ModelTurn = { text: '', toolCalls: [] };
         let failedReason: string | undefined;
+        let abortedReason: string | undefined;
+        let lastDraft: AgentMessage = assistantDraft;
         for (let attempt = 0; ; ) {
           const draft: AgentMessage = { role: 'assistant', content: '' };
           const attemptMessages = await this.projectMessages(handlerMessages ?? context.project(), input.runId);
@@ -389,8 +391,15 @@ export class AgentRuntime {
             });
           } catch (caught) {
             // A thrown transport failure is the same failure as a provider that reports one in its
-            // turn; normalize it so one ladder classifies both.
-            turn = { text: '', toolCalls: [], stopReason: 'error', error: caught instanceof Error ? caught.message : String(caught) };
+            // turn; normalize it so one ladder classifies both. An abort is not a failure to
+            // classify: it is terminal, and it must keep reporting run_aborted whether it surfaced as
+            // a throw, a signal that fired, or a provider turn that says so.
+            turn = {
+              text: '',
+              toolCalls: [],
+              stopReason: signal.aborted ? 'aborted' : 'error',
+              error: caught instanceof Error ? caught.message : String(caught),
+            };
           }
           draft.content = turn.text;
           draft.toolCalls = turn.toolCalls;
@@ -398,8 +407,15 @@ export class AgentRuntime {
           await this.options.bus.emit('message_update', { type: 'message_update', message: draft, delta: turn.text }, { runId: input.runId });
           await this.options.bus.emit('message_end', { type: 'message_end', message: draft }, { runId: input.runId });
           const failedEntry = context.append(draft);
-          if (turn.stopReason !== 'error') {
+          lastDraft = draft;
+          if (turn.stopReason !== 'error' && turn.stopReason !== 'aborted') {
             assistantDraft = draft;
+            break;
+          }
+          if (turn.stopReason === 'aborted' || signal.aborted) {
+            // Pi's `retryAssistantCall` never retries an abort; it is a hard exit. `signal.aborted`
+            // wins over the error text so an abort cannot be read as a transient failure.
+            abortedReason = turn.error ?? 'aborted';
             break;
           }
           const plan = planFailure({ message: turn.error ?? 'provider_error', attempt, policy, overflowRecoveryUsed: this.overflowRecoveryUsed });
@@ -425,9 +441,14 @@ export class AgentRuntime {
           attempt = plan.attempt;
           if (plan.delayMs > 0) await (this.options.sleep ?? sleepAbortable)(plan.delayMs, signal);
         }
-        if (failedReason !== undefined) {
-          stopReason = 'run_error';
-          error = failedReason;
+        if (failedReason !== undefined || abortedReason !== undefined) {
+          stopReason = abortedReason !== undefined ? 'run_aborted' : 'run_error';
+          error = abortedReason ?? failedReason;
+          // Pi runs finishTurn and emits turn_end for an error or aborted turn too: the turn did
+          // complete, it just did not succeed, and a hook is entitled to see it.
+          const failedTurn: TurnContext = { turnIndex, message: lastDraft, toolResults: [] };
+          await this.options.bus.emit('finishTurn', { type: 'finishTurn', ...failedTurn }, { runId: input.runId });
+          await this.options.bus.emit('turn_end', { type: 'turn_end', ...failedTurn }, { runId: input.runId });
           break;
         }
 

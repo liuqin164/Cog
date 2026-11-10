@@ -256,6 +256,40 @@ describe('Pi-aligned loop', () => {
     expect(seen[1].aborted).toBe(true);
   });
 
+  test('an abort surfacing as a provider throw stays run_aborted and is not retried', async () => {
+    const bus = new EventBus();
+    const settled: Array<{ aborted?: boolean; stopReason?: string }> = [];
+    bus.on('agent_settled', (payload: { aborted?: boolean; stopReason?: string }) => {
+      settled.push(payload);
+    });
+    const seen = recordEvents(bus, ['finishTurn', 'turn_end']);
+    let attempts = 0;
+    let runner: AgentRuntime;
+    const provider = new ScriptedProvider([
+      () => {
+        attempts += 1;
+        runner.abort('test'); // the abort fires, then the call throws with the abort's text
+        throw new Error('The operation was aborted');
+      },
+    ]);
+    runner = new AgentRuntime({
+      bus,
+      tools: tools(),
+      provider,
+      budget: new RunCage({ maxTurnsPerRun: 10, maxTokensPerRun: 10_000, toolWhitelist: null }),
+      systemPrompt: () => 'system',
+      retry: { enabled: true, maxRetries: 3, baseDelayMs: 1, maxDelayMs: 1_000 },
+      sleep: async () => {},
+    });
+    const summary = await runner.run({ runId: 'r', sessionId: 's', userText: 'go' });
+    expect(summary.stopReason).toBe('run_aborted');
+    expect(attempts).toBe(1); // an abort is terminal, never a retryable failure
+    // Pi still runs finishTurn and emits turn_end for an aborted turn.
+    expect(seen.map((event) => event.name)).toEqual(['finishTurn', 'turn_end']);
+    expect(settled[0]?.aborted).toBe(true);
+    expect(settled[0]?.stopReason).toBe('run_aborted');
+  });
+
   test('prepareRequest is the last gate before every request, the first included', async () => {
     const bus = new EventBus();
     const seen: Array<{ turnIndex?: number; systemPrompt: string }> = [];
