@@ -1,9 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
-import { CompanionShell } from '../src/app.ts';
-import { ScriptedProvider, makeTempDir } from './helpers.ts';
+import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
 
 function outputCollector() {
   let text = '';
@@ -29,28 +26,10 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<voi
 describe('terminal channel round trip', () => {
   test('a line becomes a turn, the reply is printed, and the turn is captured', async () => {
     const dir = makeTempDir();
-    const workspace = join(dir, 'ws');
-    mkdirSync(workspace, { recursive: true });
     const input = new PassThrough();
     const output = outputCollector();
     const provider = new ScriptedProvider([{ text: '你好，我在。', toolCalls: [] }]);
-    const shell = new CompanionShell({
-      config: {
-        workspaceRoot: workspace,
-        dataDir: join(dir, 'data'),
-        dbPath: join(dir, 'data', 'memory.sqlite'),
-        timeZone: 'UTC',
-        projectId: 'companion-test',
-        agentId: 'cogmem-companion-test',
-        sessionId: 'session-test',
-        terminalEnabled: true,
-        mcp: { enabled: false, port: 0, hostname: '127.0.0.1', path: '/mcp', profile: 'core' },
-      },
-      modelProvider: provider,
-      tick: false,
-      terminalInput: input,
-      terminalOutput: output.stream,
-    });
+    const shell = makeShell(dir, provider, { terminalEnabled: true }, { terminalInput: input, terminalOutput: output.stream });
     await shell.start();
     try {
       expect(shell.state).toBe('IDLE');

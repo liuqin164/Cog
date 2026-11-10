@@ -1,37 +1,19 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
-import { CompanionShell } from '../src/app.ts';
 import { EmergenceService } from '../src/plugins/emergence.ts';
-import { ScriptedProvider, makeTempDir } from './helpers.ts';
+import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
 
-function makeShell(dir: string, provider: ScriptedProvider, extra: Record<string, unknown> = {}) {
-  const workspace = join(dir, 'ws');
-  mkdirSync(workspace, { recursive: true });
-  return new CompanionShell({
-    config: {
-      workspaceRoot: workspace,
-      dataDir: join(dir, 'data'),
-      dbPath: join(dir, 'data', 'memory.sqlite'),
-      timeZone: 'UTC',
-      projectId: 'companion-test',
-      agentId: 'cogmem-companion-test',
-      sessionId: 'session-test',
-      terminalEnabled: false,
-      mcp: { enabled: false, port: 0, hostname: '127.0.0.1', path: '/mcp', profile: 'core' },
-      dream: { runKernelNight: false, maxEpisodes: 5, windowStartHour: 0, windowEndHour: 24 },
-      ...extra,
-    },
-    modelProvider: provider,
-    tick: false,
-  });
+/** The dream window is wide open here so a test can call `runDream` at any wall-clock hour. */
+const DREAM_ALL_DAY = { runKernelNight: false, maxEpisodes: 5, windowStartHour: 0, windowEndHour: 24 };
+
+function makeDreamShell(dir: string, provider: ScriptedProvider) {
+  return makeShell(dir, provider, { dream: DREAM_ALL_DAY });
 }
 
 describe('night integration (DREAMING)', () => {
   test('the product is written as the companion agent with full sourceRefs, once per day', async () => {
     const dir = makeTempDir();
     const provider = new ScriptedProvider([{ text: 'unused', toolCalls: [] }]);
-    const shell = makeShell(dir, provider);
+    const shell = makeDreamShell(dir, provider);
     await shell.start();
     try {
       const clock = shell.host.getService<{ localDate(at?: number): string }>('clock');
@@ -77,7 +59,7 @@ describe('dream and run do not collide', () => {
   test('a message arriving during the night integration wakes the shell without an illegal transition', async () => {
     const dir = makeTempDir();
     const provider = new ScriptedProvider([{ text: '我醒着，先回你。', toolCalls: [] }]);
-    const shell = makeShell(dir, provider);
+    const shell = makeDreamShell(dir, provider);
     await shell.start();
     try {
       // The integration is replaced with one that takes a message mid-flight: the state machine must
@@ -103,7 +85,7 @@ describe('emergence decision point (conservative mode)', () => {
   test('only a low-sensitivity item can surface; high-sensitivity items are suppressed; no model is asked', async () => {
     const dir = makeTempDir();
     const provider = new ScriptedProvider([{ text: 'unused', toolCalls: [] }]);
-    const shell = makeShell(dir, provider);
+    const shell = makeDreamShell(dir, provider);
     await shell.start();
     try {
       await shell.backend.rememberTurnWithResult({

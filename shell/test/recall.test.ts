@@ -1,28 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
-import { CompanionShell } from '../src/app.ts';
-import { ScriptedProvider, makeTempDir } from './helpers.ts';
-
-function makeShell(dir: string, provider: ScriptedProvider) {
-  const workspace = join(dir, 'ws');
-  mkdirSync(workspace, { recursive: true });
-  return new CompanionShell({
-    config: {
-      workspaceRoot: workspace,
-      dataDir: join(dir, 'data'),
-      dbPath: join(dir, 'data', 'memory.sqlite'),
-      timeZone: 'UTC',
-      projectId: 'companion-test',
-      agentId: 'cogmem-companion-test',
-      sessionId: 'session-test',
-      terminalEnabled: false,
-      mcp: { enabled: false, port: 0, hostname: '127.0.0.1', path: '/mcp', profile: 'core' },
-    },
-    modelProvider: provider,
-    tick: false,
-  });
-}
+import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
 
 describe('recall inside the loop', () => {
   test('the run context carries memory, and a steering message gets its own recall', async () => {

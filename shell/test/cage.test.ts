@@ -1,28 +1,17 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CompanionShell } from '../src/app.ts';
-import { ScriptedProvider, makeTempDir } from './helpers.ts';
+import type { CageConfig } from '../src/plugins/cage.ts';
+import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
 
-function makeShell(dir: string, provider: ScriptedProvider, budgets: { maxTurnsPerRun: number; maxTokensPerRun: number; toolWhitelist: string[] | null }) {
-  const workspace = join(dir, 'ws');
-  mkdirSync(workspace, { recursive: true });
-  return new CompanionShell({
-    config: {
-      workspaceRoot: workspace,
-      dataDir: join(dir, 'data'),
-      dbPath: join(dir, 'data', 'memory.sqlite'),
-      timeZone: 'UTC',
-      projectId: 'companion-test',
-      agentId: 'cogmem-companion-test',
-      sessionId: 'session-test',
-      terminalEnabled: false,
-      mcp: { enabled: false, port: 0, hostname: '127.0.0.1', path: '/mcp', profile: 'core' },
-      budgets,
-    },
-    modelProvider: provider,
-    tick: false,
-  });
+/** The cage axis is the whole point of these tests, so it stays a named argument. */
+function cageShell(dir: string, provider: ScriptedProvider, budgets: CageConfig) {
+  return makeShell(dir, provider, { budgets });
+}
+
+function cageViolations(shell: CompanionShell): Array<Record<string, unknown>> {
+  return shell.trace.read().filter((record) => record.kind === 'cage_violation');
 }
 
 describe('the cage (budgets and whitelist at hook points)', () => {
@@ -32,7 +21,7 @@ describe('the cage (budgets and whitelist at hook points)', () => {
       { text: 'trying bash', toolCalls: [{ toolCallId: 'c1', toolName: 'bash', input: { command: 'echo should-not-run' } }] },
       { text: 'understood', toolCalls: [] },
     ]);
-    const shell = makeShell(dir, provider, { maxTurnsPerRun: 5, maxTokensPerRun: 10_000, toolWhitelist: ['read'] });
+    const shell = cageShell(dir, provider, { maxTurnsPerRun: 5, maxTokensPerRun: 10_000, toolWhitelist: ['read'] });
     await shell.start();
     try {
       const summary = await shell.submit('run bash');
@@ -48,7 +37,7 @@ describe('the cage (budgets and whitelist at hook points)', () => {
   test('the turn budget forces the run out of RUNNING with budget_exceeded', async () => {
     const dir = makeTempDir();
     const provider = new ScriptedProvider([{ text: 'looping', toolCalls: [{ toolCallId: 'c', toolName: 'read', input: { path: 'missing.txt' } }] }]);
-    const shell = makeShell(dir, provider, { maxTurnsPerRun: 2, maxTokensPerRun: 10_000, toolWhitelist: ['read'] });
+    const shell = cageShell(dir, provider, { maxTurnsPerRun: 2, maxTokensPerRun: 10_000, toolWhitelist: ['read'] });
     await shell.start();
     try {
       const summary = await shell.submit('loop');
@@ -64,7 +53,7 @@ describe('the cage (budgets and whitelist at hook points)', () => {
   test('the token budget forces the run out of RUNNING', async () => {
     const dir = makeTempDir();
     const provider = new ScriptedProvider([{ text: 'expensive', toolCalls: [], usage: { input: 500_000, output: 1 } }]);
-    const shell = makeShell(dir, provider, { maxTurnsPerRun: 5, maxTokensPerRun: 1_000, toolWhitelist: null });
+    const shell = cageShell(dir, provider, { maxTurnsPerRun: 5, maxTokensPerRun: 1_000, toolWhitelist: null });
     await shell.start();
     try {
       const summary = await shell.submit('spend');
