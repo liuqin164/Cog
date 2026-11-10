@@ -35,6 +35,13 @@ export interface ModelTurn {
   text: string;
   toolCalls: ToolCall[];
   usage?: { input: number; output: number };
+  /**
+   * Pi's `AssistantMessage.stopReason`, narrowed to what the loop acts on. `length` means the output
+   * was cut off by the token limit, so tool-call arguments may have been silently truncated even
+   * when they parse (Pi agent-loop's `failToolCallsFromTruncatedMessage`).
+   */
+  stopReason?: 'stop' | 'length' | 'error' | 'aborted';
+  error?: string;
 }
 
 export interface ModelCompletionInput {
@@ -188,8 +195,22 @@ export class AgentRuntime {
         messages.push(assistantDraft);
 
         const toolResults: ToolResult[] = [];
+        // Pi: a `length` stop means every tool call in the message may carry truncated arguments —
+        // the streamed JSON is finalized by a best-effort salvage parser, so a call can parse and
+        // validate while being incomplete. None of them are safe to execute; fail the whole batch
+        // and let the model re-issue, rather than run a call with half its arguments.
+        const truncated = turn.stopReason === 'length';
+        if (truncated) {
+          this.options.trace?.append('tool_batch_truncated', { runId: input.runId, turnIndex, toolCalls: turn.toolCalls.map((call) => call.toolName) }, this.clock());
+        }
         for (const call of turn.toolCalls) {
           allToolCalls.push(call);
+          if (truncated) {
+            const refused = await this.refuseTruncatedCall(call, input.runId);
+            toolResults.push(refused);
+            allToolResults.push(refused);
+            continue;
+          }
           const before = await this.options.bus.emit('beforeToolCall', {
             type: 'beforeToolCall',
             toolCall: call,
@@ -316,9 +337,25 @@ export class AgentRuntime {
     this.options.trace?.append('steering_injected', { runId, afterTurn, beforeTurn: afterTurn + 1, count }, this.clock());
   }
 
+  /**
+   * Pi's `failToolCallsFromTruncatedMessage`: in a `length`-truncated message every call becomes an
+   * error the model can read and correct. `beforeToolCall` does not run because nothing executes, but
+   * the start/end pair is still emitted so capture records the call and its refusal.
+   */
+  private async refuseTruncatedCall(call: ToolCall, runId: string): Promise<ToolResult> {
+    await this.options.bus.emit('tool_execution_start', { type: 'tool_execution_start', toolCallId: call.toolCallId, toolName: call.toolName, input: call.input }, { runId });
+    const result: ToolResult = {
+      toolCallId: call.toolCallId,
+      toolName: call.toolName,
+      output: `tool_not_executed: "${call.toolName}" was not executed because the response hit the output token limit, so its arguments may be truncated. Re-issue the call with complete arguments.`,
+      isError: true,
+    };
+    await this.options.bus.emit('tool_execution_end', { type: 'tool_execution_end', toolCallId: call.toolCallId, toolName: call.toolName, result, isError: true }, { runId });
+    return result;
+  }
+
   /** Pi emits the user message on the same start/end pair the assistant uses. */
-  private async emitUserMessage(message: AgentMessage, runId: string): Promise<void> {
-    await this.options.bus.emit('message_start', { type: 'message_start', message }, { runId });
+  private async emitUserMessage(message: AgentMessage, runId: string): Promise<void> {    await this.options.bus.emit('message_start', { type: 'message_start', message }, { runId });
     await this.options.bus.emit('message_end', { type: 'message_end', message }, { runId });
   }
 

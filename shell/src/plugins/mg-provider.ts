@@ -82,7 +82,7 @@ export class MgModelProvider implements ModelProvider {
     });
     const text = await response.text();
     if (!response.ok) throw new Error(`mg_gateway_error: ${response.status} ${text.slice(0, 400)}`);
-    let parsed: { choices?: Array<{ message?: { content?: unknown; tool_calls?: unknown } }>; usage?: { prompt_tokens?: number; completion_tokens?: number } };
+    let parsed: { choices?: Array<{ message?: { content?: unknown; tool_calls?: unknown }; finish_reason?: string }>; usage?: { prompt_tokens?: number; completion_tokens?: number } };
     try {
       parsed = JSON.parse(text);
     } catch (error) {
@@ -90,9 +90,13 @@ export class MgModelProvider implements ModelProvider {
     }
     const message = parsed.choices?.[0]?.message;
     if (!message) throw new Error('mg_gateway_empty_choices');
+    // The OpenAI-compatible `finish_reason: "length"` is Pi's `stopReason: "length"`: the loop voids
+    // the whole tool batch rather than execute arguments the token limit may have cut in half.
+    const finishReason = parsed.choices?.[0]?.finish_reason;
     return {
       text: contentToText(message.content),
       toolCalls: parseToolCalls(message.tool_calls),
+      stopReason: finishReason === 'length' ? 'length' : 'stop',
       usage: parsed.usage
         ? { input: parsed.usage.prompt_tokens ?? 0, output: parsed.usage.completion_tokens ?? 0 }
         : undefined,

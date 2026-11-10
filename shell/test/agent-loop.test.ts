@@ -127,6 +127,43 @@ describe('Pi-aligned loop', () => {
     expect(summary.stopReason).toBe('run_complete');
   });
 
+  test('a length-truncated turn voids its whole tool batch, one correctable error each', async () => {
+    const bus = new EventBus();
+    let executed = 0;
+    const invoker = tools({
+      invoke: async (name, call) => {
+        executed += 1;
+        return { toolCallId: call.toolCallId, toolName: name, output: 'ran', isError: false };
+      },
+    });
+    const provider = new ScriptedProvider([
+      {
+        text: 'let me read',
+        stopReason: 'length',
+        toolCalls: [
+          { toolCallId: 'c1', toolName: 'echo', input: { path: 'half' } },
+          { toolCallId: 'c2', toolName: 'echo', input: { path: 'the-other-half' } },
+        ],
+      },
+      { text: 're-issued', toolCalls: [] },
+    ]);
+    const summary = await runtime(bus, provider, invoker).run({ runId: 'r', sessionId: 's', userText: 'go' });
+    // Before the fix both calls executed; now the batch is refused whole.
+    expect(executed).toBe(0);
+    expect(summary.toolResults).toHaveLength(2);
+    expect(summary.toolResults.every((result) => result.isError)).toBe(true);
+    for (const result of summary.toolResults) {
+      expect(result.output).toContain('output token limit');
+      expect(result.output).toContain('Re-issue the call with complete arguments');
+    }
+    // Each refusal is a tool message the model can read before re-issuing (one per call, in order).
+    const toolMessages = provider.calls[1].messages.filter((message) => message.role === 'tool');
+    expect(toolMessages.map((message) => message.toolCallId)).toEqual(['c1', 'c2']);
+    // The batch is voided, not the run: the model is asked again and can correct itself.
+    expect(summary.stopReason).toBe('run_complete');
+    expect(summary.assistantText).toContain('re-issued');
+  });
+
   test('a provider failure becomes run_error, not an unhandled rejection', async () => {
     const bus = new EventBus();
     const provider = new ScriptedProvider([() => {
