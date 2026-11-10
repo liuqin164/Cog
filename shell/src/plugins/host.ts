@@ -229,8 +229,15 @@ export class PluginHost {
     this.order.push(plugin.name);
   }
 
+  /**
+   * The provider of a service name, ignoring plugins that were unloaded. A stopped plugin's declared
+   * services are retired with it: looking one up must fail rather than name a dead plugin, and the
+   * name has to be free for the next plugin that provides it.
+   */
   private findProvider(service: string): string | undefined {
-    for (const [name, record] of this.plugins) if (record.provided.includes(service)) return name;
+    for (const [name, record] of this.plugins) {
+      if (record.status !== 'stopped' && record.provided.includes(service)) return name;
+    }
     return undefined;
   }
 

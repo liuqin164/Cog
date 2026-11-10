@@ -153,4 +153,41 @@ describe('native plugin host (Cordis-style)', () => {
     expect(host.bus.listenerCount('agent_start')).toBe(0);
     expect(order).toContain('disposed');
   });
+
+  test('an unloaded plugin holds no service name: the lookup refuses, the name is free again', async () => {
+    const host = new PluginHost();
+    const provided = { handle: 'live' };
+    const injected: unknown[] = [];
+    host.register({
+      name: 'provider',
+      provide: ['memory-x'],
+      apply(ctx) {
+        ctx.provide('memory-x', provided);
+      },
+    });
+    host.register({
+      name: 'consumer',
+      inject: ['memory-x'],
+      apply(ctx) {
+        // The documented way a native plugin gets a service: one reference, handed over at start.
+        ctx.inject(['memory-x'], (injectedCtx) => {
+          injected.push(injectedCtx.getService('memory-x'));
+        });
+      },
+    });
+    await host.start();
+    // The injected reference is the provider's own value, and the host serves that same object.
+    expect(injected).toEqual([provided]);
+    expect(host.getService('memory-x')).toBe(provided);
+
+    await host.unload('provider');
+    // The service is retired, not answered from a dead plugin's value...
+    expect(host.hasService('memory-x')).toBe(false);
+    expect(() => host.getService('memory-x')).toThrow(PluginDependencyError);
+    // ...and the host no longer names the stopped plugin as its provider, so nothing dangles.
+    const fresh = new PluginHost();
+    fresh.register({ name: 'stopped-provider', provide: ['memory-x'], apply() {} });
+    await fresh.unload('stopped-provider');
+    expect(() => fresh.register({ name: 'replacement', provide: ['memory-x'], apply() {} })).not.toThrow();
+  });
 });
