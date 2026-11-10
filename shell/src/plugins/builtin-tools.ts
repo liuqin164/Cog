@@ -6,12 +6,13 @@
  */
 import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, resolve, sep } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import type { NativePlugin, ToolDefinition } from './host.ts';
 
 const MAX_READ_BYTES = 256 * 1024;
 const MAX_OUTPUT_CHARS = 32 * 1024;
 const BASH_TIMEOUT_MS = 30_000;
+const BASH_OUTPUT_DIR = '.companion-shell/bash-output';
 
 export interface BuiltinToolsConfig {
   workspaceRoot: string;
@@ -32,8 +33,24 @@ function asString(args: unknown, key: string, required = true): string {
   return value;
 }
 
-function cap(text: string): string {
-  return text.length > MAX_OUTPUT_CHARS ? `${text.slice(0, MAX_OUTPUT_CHARS)}\n[truncated ${text.length - MAX_OUTPUT_CHARS} chars]` : text;
+/**
+ * Cap the text for the model; when it was cut, keep the whole thing inside the workspace and say
+ * where (Pi's bash `truncated` + `fullOutputPath`). The path is workspace-relative so the model can
+ * hand it straight to `read`. A failed write still returns the capped text and says so — the command
+ * did run, and losing the tail is not a reason to lose the result.
+ */
+function capWithPointer(text: string, workspaceRoot: string): string {
+  if (text.length <= MAX_OUTPUT_CHARS) return text;
+  const head = `${text.slice(0, MAX_OUTPUT_CHARS)}\n`;
+  const full = join(workspaceRoot, BASH_OUTPUT_DIR, `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}.log`);
+  try {
+    mkdirSync(dirname(full), { recursive: true });
+    writeFileSync(full, text, 'utf8');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return `${head}[truncated ${text.length - MAX_OUTPUT_CHARS} chars; full output could not be written: ${message}]`;
+  }
+  return `${head}[truncated ${text.length - MAX_OUTPUT_CHARS} chars; full output: ${relative(workspaceRoot, full)}]`;
 }
 
 function definitions(workspaceRoot: string): ToolDefinition[] {
@@ -86,7 +103,7 @@ function definitions(workspaceRoot: string): ToolDefinition[] {
     },
     {
       name: 'bash',
-      description: 'Run a bash command in the workspace with a 30s timeout. stdout/stderr are combined.',
+      description: 'Run a bash command in the workspace with a 30s timeout. stdout/stderr are combined; output over 32 KiB is capped, and the full text is written under .companion-shell/bash-output/ and named in the result.',
       parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] },
       execute({ args, signal }) {
         const command = asString(args, 'command');
@@ -109,7 +126,7 @@ function definitions(workspaceRoot: string): ToolDefinition[] {
           });
           child.on('close', (code) => {
             clearTimeout(timer);
-            resolvePromise(cap(`exit ${code}\n${output}`));
+            resolvePromise(capWithPointer(`exit ${code}\n${output}`, workspaceRoot));
           });
         });
       },
