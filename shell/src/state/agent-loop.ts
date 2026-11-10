@@ -246,11 +246,11 @@ export class AgentRuntime {
 
         if (turn.toolCalls.length > 0) {
           // Pi: steering drains after the tool batch, before the next turn begins.
-          if (this.steering.length > 0) await this.drainSteering(messages, input.runId);
+          if (this.steering.length > 0) await this.drainSteering(messages, input.runId, turnIndex);
           continue;
         }
         if (this.steering.length > 0) {
-          await this.drainSteering(messages, input.runId);
+          await this.drainSteering(messages, input.runId, turnIndex);
           continue;
         }
         if (this.followUps.length > 0) {
@@ -301,12 +301,19 @@ export class AgentRuntime {
     return summary;
   }
 
-  private async drainSteering(messages: AgentMessage[], runId: string): Promise<void> {
+  /**
+   * Steering drains here: after the turn's tool batch, before the next turn begins. The trace record
+   * makes the timing legible — a long tool call is exactly when a user types, and the survival run
+   * needs to read back which turn their line landed on.
+   */
+  private async drainSteering(messages: AgentMessage[], runId: string, afterTurn: number): Promise<void> {
+    const count = this.steering.length;
     while (this.steering.length > 0) {
       const queued: AgentMessage = { role: 'user', content: this.steering.shift()! };
       messages.push(queued);
       await this.emitUserMessage(queued, runId);
     }
+    this.options.trace?.append('steering_injected', { runId, afterTurn, beforeTurn: afterTurn + 1, count }, this.clock());
   }
 
   /** Pi emits the user message on the same start/end pair the assistant uses. */
