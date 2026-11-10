@@ -22,7 +22,7 @@ describe('Pi-aligned loop', () => {
     const bus = new EventBus();
     const seen = recordEvents(bus, [
       'before_agent_start', 'agent_start', 'turn_start', 'message_start', 'message_update', 'message_end',
-      'tool_execution_start', 'tool_execution_end', 'turn_end', 'agent_end',
+      'tool_execution_start', 'tool_execution_end', 'turn_end', 'agent_end', 'agent_settled',
     ]);
     const provider = new ScriptedProvider([
       { text: 'let me look', toolCalls: [{ toolCallId: 'c1', toolName: 'echo', input: { value: 1 } }] },
@@ -34,7 +34,7 @@ describe('Pi-aligned loop', () => {
       'message_start', 'message_end',
       'turn_start', 'message_start', 'message_update', 'message_end', 'tool_execution_start', 'tool_execution_end', 'turn_end',
       'turn_start', 'message_start', 'message_update', 'message_end', 'turn_end',
-      'agent_end',
+      'agent_end', 'agent_settled',
     ]);
     // The two leading message events are the user message entering the loop (Pi's tree: message_start/end).
     expect(seen[2].payload.message.role).toBe('user');
@@ -237,6 +237,23 @@ describe('Pi-aligned loop', () => {
     const summary = await runtime(bus, provider, invoker).run({ runId: 'r', sessionId: 's', userText: 'go' });
     expect(summary.toolResults[0].output).toContain('nested_tool_depth_exceeded');
     expect(summary.toolResults[0].isError).toBe(true);
+  });
+
+  test('agent_settled always follows agent_end and carries the abort', async () => {
+    const bus = new EventBus();
+    const seen: Array<{ name: string; aborted?: boolean }> = [];
+    bus.on('agent_end', () => {
+      seen.push({ name: 'agent_end' });
+    });
+    bus.on('agent_settled', (payload: { aborted?: boolean }) => {
+      seen.push({ name: 'agent_settled', aborted: payload.aborted });
+    });
+    const runner = runtime(bus, new ScriptedProvider([{ text: 'ok', toolCalls: [] }]));
+    bus.on('agent_start', () => runner.abort('test'));
+    const summary = await runner.run({ runId: 'r', sessionId: 's', userText: 'go' });
+    expect(summary.stopReason).toBe('run_aborted');
+    expect(seen.map((entry) => entry.name)).toEqual(['agent_end', 'agent_settled']);
+    expect(seen[1].aborted).toBe(true);
   });
 
   test('prepareRequest is the last gate before every request, the first included', async () => {

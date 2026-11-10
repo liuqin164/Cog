@@ -25,6 +25,46 @@ describe('shell wiring', () => {
     }
   });
 
+  test('a settle handler still sees RUNNING, and submit returns only after IDLE', async () => {
+    const dir = makeTempDir();
+    const shell = makeShell(dir, new ScriptedProvider([{ text: 'ok', toolCalls: [] }]));
+    await shell.start();
+    try {
+      const seen: Array<{ state: string; aborted: boolean }> = [];
+      shell.host.bus.on('agent_settled', (payload: { aborted?: boolean }) => {
+        seen.push({ state: shell.state, aborted: payload.aborted === true });
+      });
+      await shell.submit('hello');
+      // The boundary is settled, not end: the run is still RUNNING while its settle handler runs.
+      expect(seen).toEqual([{ state: 'RUNNING', aborted: false }]);
+      expect(shell.state).toBe('IDLE');
+    } finally {
+      await shell.stop();
+    }
+  });
+
+  test('agent_end failing still reaches agent_settled and the machine leaves RUNNING', async () => {
+    const dir = makeTempDir();
+    const shell = makeShell(dir, new ScriptedProvider([{ text: 'ok', toolCalls: [] }]));
+    await shell.start();
+    try {
+      const settled: string[] = [];
+      shell.host.bus.on('agent_end', () => {
+        throw new Error('ledger down');
+      });
+      shell.host.bus.on('agent_settled', () => {
+        settled.push(shell.state);
+      });
+      const summary = await shell.submit('hello');
+      expect(summary!.stopReason).toBe('run_error');
+      expect(summary!.error).toContain('agent_end_hook_failed');
+      expect(settled).toEqual(['RUNNING']);
+      expect(shell.state).toBe('IDLE');
+    } finally {
+      await shell.stop();
+    }
+  });
+
   test('a restart keeps the day and the last topic, and the next turn recalls the earlier one', async () => {
     const dir = makeTempDir();
     const first = makeShell(dir, new ScriptedProvider([{ text: '记下了。', toolCalls: [] }]));

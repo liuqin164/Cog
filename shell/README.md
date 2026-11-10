@@ -79,6 +79,11 @@ lost loudly. A one-retry version stood here first and was removed: `CODING_STAND
 survive the failure" rejects retry ladders, and a transient ledger error is better reported than
 papered over.
 
+**The settled boundary.** `agent_end` is emitted, its awaited handlers finish, and only then
+`agent_settled` — the run returns after that, which is the moment the machine leaves RUNNING (Pi's
+`agent_settled`, not `agent_end`). A settle handler therefore still sees RUNNING, and an `agent_end`
+handler that fails still reaches settled with `stopReason: run_error`.
+
 ## Tool-loadout declarations
 
 The transcript says what the model may call. When hot-plugging changes the executable set, the loop

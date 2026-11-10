@@ -559,6 +559,25 @@ export class AgentRuntime {
       summary.stopReason = 'run_error';
       summary.error = `agent_end_hook_failed: ${message}`;
     }
+    // Pi's `agent_settled`: the run is not over when the last event is *emitted*, only when its
+    // awaited listeners have finished. This is the boundary the outer machine leaves RUNNING on —
+    // `run()` does not return until this resolves — so a settle handler still sees RUNNING, and
+    // nothing it queues can be mistaken for the next run's.
+    try {
+      await this.options.bus.emit('agent_settled', {
+        type: 'agent_settled',
+        runId: input.runId,
+        aborted: stopReason === 'run_aborted',
+        stopReason,
+      }, { runId: input.runId });
+    } catch (caught) {
+      // The settled boundary is the last chance to leave RUNNING; a handler failing here must not be
+      // why the machine stays there. Same rule as the `agent_end` failure above: loud, not swallowed.
+      const message = caught instanceof Error ? caught.message : String(caught);
+      this.options.trace?.append('agent_settled_hook_failed', { runId: input.runId, message }, this.clock());
+      summary.stopReason = 'run_error';
+      summary.error = `agent_settled_hook_failed: ${message}`;
+    }
     return summary;
   }
 
