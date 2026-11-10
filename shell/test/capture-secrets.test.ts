@@ -133,4 +133,39 @@ describe('secret discipline: everything captured goes through the kernel redacte
       await shell.stop();
     }
   });
+
+  test('a failed flush is recorded with its counts and reported as the run error, and RUNNING is left', async () => {
+    const dir = makeTempDir();
+    const provider = new ScriptedProvider([{ text: 'noted', toolCalls: [] }]);
+    const shell = makeShell(dir, provider);
+    await shell.start();
+    try {
+      let attempts = 0;
+      (shell.backend as unknown as { rememberTurnWithResult: unknown }).rememberTurnWithResult = async () => {
+        attempts += 1;
+        throw new Error('ledger_unavailable_9911');
+      };
+      const summary = await shell.submit('hello through a broken ledger');
+      // No retry: one attempt, one loud record, and the failure reaches the run's boundary.
+      expect(attempts).toBe(1);
+      expect(summary!.stopReason).toBe('run_error');
+      expect(String(summary!.error)).toContain('agent_end_hook_failed');
+      expect(String(summary!.error)).toContain('ledger_unavailable_9911');
+      expect(shell.state, 'the machine is not wedged in RUNNING').toBe('IDLE');
+      const records = shell.trace.read();
+      const failed = records.find((record) => record.kind === 'capture_failed')!;
+      expect(String(failed.message)).toContain('ledger_unavailable_9911');
+      expect(Number(failed.userChars)).toBeGreaterThan(0);
+      expect(failed.turnId).toBe(summary!.turnId);
+      expect(records.some((record) => record.kind === 'agent_end_hook_failed')).toBe(true);
+      expect(records.some((record) => record.kind === 'transition' && record.trigger === 'run_error')).toBe(true);
+      // Not wedged: the next run starts from IDLE and ends there too, with the ledger still down.
+      const second = await shell.submit('again');
+      expect(second!.stopReason).toBe('run_error');
+      expect(shell.state).toBe('IDLE');
+      expect(attempts).toBe(2);
+    } finally {
+      await shell.stop();
+    }
+  });
 });

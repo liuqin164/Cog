@@ -41,5 +41,21 @@ Useful flags: `--workspace <dir>`, `--data <dir>`, `--db <file>`, `--project <id
 - `src/channels/terminal.ts` — the self-owned terminal channel.
 - `src/probes/gaps.ts` — the F1/F2/F6 (+F-SEC, F-MCP) probe and gap list.
 
+## Capture and redaction
+
+Every captured text — the user turn, the assistant reply, each `read`/`bash` tool observation and each
+terminal record — is redacted with the kernel's own pattern table before it is written, and the event
+carries `metadata.secretFindings.total`. The shapes exercised by the tests include connection strings,
+whole private-key blocks, bearer headers, assigned keys/passwords and secrets inside multi-line output.
+
+**Flush policy.** Capture buffers the raw event stream and writes it once, on `agent_end`. A failed
+write is neither retried nor swallowed: the plugin records `capture_failed` — the run, the turn and the
+counts of what was lost — and lets the failure reach the run's boundary, where it becomes
+`agent_end_hook_failed` in the trace and `stopReason: run_error` in the summary. The machine still
+leaves RUNNING through the legal edge, the channel sees the error, and the account for that turn is
+lost loudly. A one-retry version stood here first and was removed: `CODING_STANDARDS.md`'s "not a way to
+survive the failure" rejects retry ladders, and a transient ledger error is better reported than
+papered over.
+
 `COMPATIBILITY.md` records the pinned Pi version and the real-plugin test set.
 `SURVIVAL.md` is the startup script and care notes for the 7-day run (not started in this round).

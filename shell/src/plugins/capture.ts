@@ -228,7 +228,25 @@ export function capturePlugin(config: CapturePluginConfig): NativePlugin {
           error: event.summary?.error,
         };
         const threadId = `companion-day:${clock.localDate()}`;
-        await service.captureRun(summary, threadId);
+        try {
+          await service.captureRun(summary, threadId);
+        } catch (error) {
+          // No retry and no swallow. The turn's account is lost, so say which turn and how much, then
+          // let the failure reach the run's boundary, where it becomes the run's error and the machine
+          // still leaves RUNNING (`AgentRuntime` reports `run_error` for a failed `agent_end`). A retry
+          // ladder stood here and came out: CODING_STANDARDS.md's "not a way to survive the failure"
+          // is the reason, and a transient ledger error is better reported than papered over.
+          trace?.append('capture_failed', {
+            runId,
+            turnId: summary.turnId,
+            message: error instanceof Error ? error.message : String(error),
+            userChars: summary.userText.length,
+            assistantChars: summary.assistantText.length,
+            toolCalls: summary.toolCalls.length,
+            toolResults: summary.toolResults.length,
+          });
+          throw error;
+        }
       });
       ctx.provide('capture', service);
     },

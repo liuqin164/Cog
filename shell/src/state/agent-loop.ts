@@ -286,7 +286,19 @@ export class AgentRuntime {
       stopReason,
       error,
     };
-    await this.options.bus.emit('agent_end', { type: 'agent_end', runId: input.runId, messages, summary }, { runId: input.runId });
+    try {
+      await this.options.bus.emit('agent_end', { type: 'agent_end', runId: input.runId, messages, summary }, { runId: input.runId });
+    } catch (caught) {
+      // `agent_end` is where capture writes the run's account to the ledger. A handler failing there
+      // makes the account incomplete, so the run is reported as `run_error` and the caller leaves
+      // RUNNING through the legal edge. Letting the rejection escape `run()` instead is what wedged
+      // the machine in RUNNING with its exit transition never dispatched. Nothing is swallowed: the
+      // summary carries the message and the trace names the hook.
+      const message = caught instanceof Error ? caught.message : String(caught);
+      this.options.trace?.append('agent_end_hook_failed', { runId: input.runId, message }, this.clock());
+      summary.stopReason = 'run_error';
+      summary.error = `agent_end_hook_failed: ${message}`;
+    }
     return summary;
   }
 

@@ -18,7 +18,9 @@ The script runs `bun run src/cli.ts start` with `nohup`, keeps stdout/stderr in
 
 - `tail -f .cogmem-shell/survival.log` — the CLI's own lines.
 - `.cogmem-shell/shell-events.jsonl` — every transition, cage violation, capture, dream and
-  emergence decision (the state machine's evidence).
+  emergence decision (the state machine's evidence). Watch for `capture_failed` (a turn's ledger
+  write failed, with the counts of what was lost) and `agent_end_hook_failed` (the run then ends as
+  `run_error` instead of being wedged in RUNNING) — `README.md` has the flush policy.
 - `.cogmem-shell/checkpoint.json` — `state`, `activeRunId`, `wakeIntents`, `history`.
 - `cat .cogmem-shell/runtime.lock` — the owning pid; a live pid with a second `start` must be
   refused (`runtime_lock_held`).
