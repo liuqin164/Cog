@@ -194,8 +194,27 @@ export function capturePlugin(config: CapturePluginConfig): NativePlugin {
         buffers.set(runId, created);
         return created;
       };
-      ctx.on('message_end', (event: { message?: { role?: string; content?: string } }, busCtx?: { runId?: string }) => {
+      ctx.on('message_end', async (event: { message?: { role?: string; content?: string; toolsAdded?: string[]; toolsRemoved?: string[] } }, busCtx?: { runId?: string }) => {
         if (!busCtx?.runId) return;
+        const added = event.message?.toolsAdded ?? [];
+        const removed = event.message?.toolsRemoved ?? [];
+        if (event.message?.role === 'system' && (added.length > 0 || removed.length > 0)) {
+          // A tool-loadout declaration belongs in the transcript, not only in the run's context. The
+          // ledger is the shell's append-only transcript, so the loadout the model was told about has a
+          // durable record too (the checkpoint keeps the same set for recovery). A failed write is not
+          // swallowed: it reaches the run boundary like any other capture failure.
+          await backend.ingestTaskEvent({
+            agentId: config.agentId,
+            projectId: config.projectId,
+            workspaceId: config.projectId,
+            sessionId: config.sessionId,
+            threadId: `companion-day:${clock.localDate()}`,
+            title: 'tool-loadout declaration',
+            content: JSON.stringify({ toolsAdded: added, toolsRemoved: removed }),
+            metadata: { sourceAgent: config.agentId, source: 'companion-shell', kind: 'tool-loadout', toolsAdded: added, toolsRemoved: removed },
+          });
+          return;
+        }
         const buffer = ensure(busCtx.runId);
         if (event.message?.role === 'user') buffer.userText = event.message.content ?? '';
         if (event.message?.role === 'assistant' && event.message.content) buffer.assistantText.push(event.message.content);

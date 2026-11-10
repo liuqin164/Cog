@@ -85,6 +85,34 @@ describe('the tool-loadout declaration', () => {
   });
 });
 
+describe('the declaration is durable, not just contextual', () => {
+  test('a hot-plug declaration reaches the ledger transcript', async () => {
+    const dir = makeTempDir();
+    const provider = new ScriptedProvider([
+      { text: 'read', toolCalls: [{ toolCallId: 'c1', toolName: 'read', input: { path: 'missing.txt' } }] },
+      { text: 'done', toolCalls: [] },
+    ]);
+    const shell = makeShell(dir, provider);
+    await shell.start();
+    try {
+      let added = false;
+      shell.host.bus.on('tool_execution_end', () => {
+        if (added) return;
+        added = true;
+        shell.host.tools.register({ name: 'lateplug', description: 'late', parameters: {}, execute: () => 'ok' }, { source: 'plugin:late' });
+      });
+      await shell.submit('go');
+      const events = shell.kernel.searchRawEvents('lateplug', { projectId: shell.config.projectId, limit: 10 });
+      expect(events.length).toBeGreaterThan(0);
+      const event = JSON.stringify(events[0]);
+      expect(event).toContain('lateplug');
+      expect(event).toContain('tool-loadout');
+    } finally {
+      await shell.stop();
+    }
+  }, 30_000);
+});
+
 describe('checkpoint recovery compares the declared loadout', () => {
   test('a declared loadout the process cannot execute fails loudly', async () => {
     const dir = makeTempDir();
