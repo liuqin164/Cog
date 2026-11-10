@@ -54,9 +54,11 @@ with exponential backoff capped at 60 s. The pattern tables are ported from pinn
 
 An overflow gets exactly one recovery attempt per run (the **one-shot latch** — read it back in the
 trace as `provider_call_failed` with `next: "recover_overflow"`, then `next: "fail"` on the second
-overflow); a second overflow is a failure, not a loop. The shell has no compaction subsystem, so
-that one attempt is a single re-request rather than a compacted one — the latch is the safety property
-that survives compaction landing later.
+overflow); a second overflow is a failure, not a loop. The shell has no compaction subsystem, so the
+recovery makes the context actually shrink: it drops the oldest live call-plus-results exchange through
+the projection (paired, like any omission) and re-requests. With nothing left to drop the overflow
+fails as `overflow_recovery_unavailable` rather than re-sending the same bytes. The latch is the safety
+property that survives compaction landing later.
 
 **Retries are charged to the run, not to the cage.** A retry re-requests the *same* turn, so the turn
 counter — and therefore `maxTurnsPerRun` — moves once however many provider calls the turn took. The
@@ -91,7 +93,9 @@ The transcript says what the model may call. When hot-plugging changes the execu
 declares the difference to the model before the next request as `toolsAdded` / `toolsRemoved` on a
 system message — Pi's `declareToolChanges` — with an empty list omitting its field. The first run sets
 the baseline silently; a hot-plug (mid-run or while idle) is what produces a delta. Each declaration
-is a `tools_declared` trace record and updates `runtime.declaredTools` in the checkpoint.
+is a `tools_declared` trace record, updates `runtime.declaredTools` in the checkpoint, and is written to
+the ledger as a `tool-loadout` task event — the transcript the model was told about, durably, not only
+in the run's context.
 
 **Replay policy.** Every tool declares `replay: 'never' | 'safe'` (Pi's `AgentTool.replay`); the host
 defaults anything undeclared to `never`, `read` declares `safe`, and `bash`/`write`/`edit` declare
