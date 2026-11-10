@@ -53,7 +53,6 @@ export interface ModelProvider {
 
 export interface ToolInvoker {
   list(): Array<{ name: string; description: string; parameters: unknown; source: string }>;
-  has(name: string): boolean;
   invoke(name: string, call: ToolCall, ctx: { runId: string; signal: AbortSignal }): Promise<ToolResult>;
 }
 

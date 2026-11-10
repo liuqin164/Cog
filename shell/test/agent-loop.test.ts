@@ -8,7 +8,6 @@ function tools(overrides: Partial<ToolInvoker> = {}): ToolInvoker {
   const definitions = [{ name: 'echo', description: 'echo', parameters: {}, source: 'test' }];
   return {
     list: () => definitions,
-    has: (name: string) => name === 'echo',
     invoke: async (name, call) => ({ toolCallId: call.toolCallId, toolName: name, output: `echo:${JSON.stringify(call.input)}`, isError: false }),
     ...overrides,
   };
