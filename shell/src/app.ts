@@ -141,7 +141,16 @@ export class CompanionShell implements ShellControl {
     }
     // The executable set is complete only now (native tools, then Pi plugin tools). A checkpoint that
     // declared a different loadout is a loud failure, and the current one becomes the declaration.
-    this.assertDeclaredTools(restoredTools);
+    const mismatch = this.declaredToolMismatch(restoredTools);
+    if (mismatch) {
+      this.trace.append('tool_set_mismatch', mismatch);
+      // Unwind what start built before refusing, so an embedder does not inherit a half-started shell;
+      // the lock goes last, since releasing it is what admits the next process.
+      this.mcp?.stop();
+      await this.host.stop();
+      this.lock.release(process.pid);
+      throw new Error(`tool_set_mismatch: the checkpoint declared [${mismatch.declared.join(', ')}] but this process can execute [${mismatch.executable.join(', ')}]`);
+    }
     this.refuseRecoveryReplay(restored.previous);
     this.machine.updateRuntime({ declaredTools: this.executableToolNames() });
     if (this.machine.state === 'DORMANT') {
@@ -256,14 +265,12 @@ export class CompanionShell implements ShellControl {
    * removed, added or failed to load — the shell refuses to start with a transcript that names tools
    * it does not have, rather than run degraded and quiet.
    */
-  private assertDeclaredTools(restored: string[] | undefined): void {
-    if (!restored) return;
+  private declaredToolMismatch(restored: string[] | undefined): { declared: string[]; executable: string[] } | undefined {
+    if (!restored) return undefined;
     const executable = this.executableToolNames();
     const declared = [...restored].sort();
-    if (declared.length === executable.length && declared.every((name, index) => name === executable[index])) return;
-    this.trace.append('tool_set_mismatch', { declared, executable });
-    this.lock.release(process.pid);
-    throw new Error(`tool_set_mismatch: the checkpoint declared [${declared.join(', ')}] but this process can execute [${executable.join(', ')}]`);
+    if (declared.length === executable.length && declared.every((name, index) => name === executable[index])) return undefined;
+    return { declared, executable };
   }
 
   private async loadPiPlugins(): Promise<void> {
