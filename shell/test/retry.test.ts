@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { EventBus } from '../src/bus.ts';
-import { AgentRuntime, type ModelProvider, type ModelTurn, type ToolInvoker } from '../src/state/agent-loop.ts';
+import { AgentRuntime, type AgentMessage, type ModelProvider, type ModelTurn, type ToolInvoker } from '../src/state/agent-loop.ts';
 import { RunCage } from '../src/plugins/cage.ts';
 import type { TraceLog } from '../src/trace.ts';
 import {
@@ -58,6 +58,34 @@ describe('the failure ladder classification', () => {
   });
 });
 
+/** A provider whose recorded turns are returned in order; the last repeats. */
+class RecordingTurns implements ModelProvider {
+  readonly name = 'recording-turns';
+  readonly model = 'recording-turns/test';
+  calls = 0;
+  constructor(private readonly turns: ModelTurn[]) {}
+  async complete(): Promise<ModelTurn> {
+    const turn = this.turns[Math.min(this.calls, this.turns.length - 1)];
+    this.calls += 1;
+    return turn;
+  }
+}
+
+/** Overflows only while the big tool exchange is still in the request; that is what recovery drops. */
+class OverflowUntilToolExchangeGone implements ModelProvider {
+  readonly name = 'overflow-until-trimmed';
+  readonly model = 'overflow-until-trimmed/test';
+  readonly calls: AgentMessage[][] = [];
+  async complete(input: { messages: AgentMessage[] }): Promise<ModelTurn> {
+    this.calls.push(input.messages);
+    if (this.calls.length === 1) return { text: 'call', toolCalls: [{ toolCallId: 'c1', toolName: 'echo', input: {} }] };
+    if (input.messages.some((message) => message.role === 'tool' && message.content === 'BIG')) {
+      return { text: '', toolCalls: [], stopReason: 'error', error: 'Your input exceeds the context window of this model' };
+    }
+    return { text: 'recovered', toolCalls: [] };
+  }
+}
+
 /** A provider whose scripted outcomes are thrown error messages or a final turn. */
 class FlakyProvider implements ModelProvider {
   readonly name = 'flaky';
@@ -72,10 +100,17 @@ class FlakyProvider implements ModelProvider {
   }
 }
 
-function ladderRuntime(bus: EventBus, provider: ModelProvider, retry: RetryPolicy, cage: RunCage, delays: number[], trace?: TraceLog) {
+function echoTools(): ToolInvoker {
+  return {
+    list: () => [{ name: 'echo', description: 'echo', parameters: {}, source: 'test' }],
+    invoke: async (name, call) => ({ toolCallId: call.toolCallId, toolName: name, output: 'BIG', isError: false }),
+  };
+}
+
+function ladderRuntime(bus: EventBus, provider: ModelProvider, retry: RetryPolicy, cage: RunCage, delays: number[], trace?: TraceLog, tools?: ToolInvoker) {
   return new AgentRuntime({
     bus,
-    tools: { list: () => [], invoke: async () => ({ toolCallId: 'x', toolName: 'x', output: '', isError: false }) } as ToolInvoker,
+    tools: tools ?? ({ list: () => [], invoke: async () => ({ toolCallId: 'x', toolName: 'x', output: '', isError: false }) } as ToolInvoker),
     provider,
     budget: cage,
     systemPrompt: () => 'system',
@@ -119,16 +154,43 @@ describe('the failure ladder inside the run', () => {
     expect(bounded.stopReason).toBe('run_error');
   });
 
-  test('overflow recovers at most once per run', async () => {
+  test('an overflow with nothing left to drop fails as unavailable', async () => {
     const provider = new FlakyProvider(['Your input exceeds the context window of this model']);
+    const summary = await ladderRuntime(new EventBus(), provider, fast, new RunCage({ maxTurnsPerRun: 10, maxTokensPerRun: 10_000, toolWhitelist: null }), []).run({ runId: 'r', sessionId: 's', userText: 'go' });
+    expect(provider.calls).toBe(1); // re-sending the same bytes would not be a recovery
+    expect(summary.stopReason).toBe('run_error');
+    expect(summary.error).toContain('overflow_recovery_unavailable');
+  });
+
+  test('overflow recovers at most once per run', async () => {
+    const overflow = { text: '', toolCalls: [], stopReason: 'error' as const, error: 'Your input exceeds the context window of this model' };
+    const provider = new RecordingTurns([
+      { text: 'call', toolCalls: [{ toolCallId: 'c1', toolName: 'echo', input: {} }] },
+      overflow,
+      overflow,
+    ]);
     const records: Array<{ kind: string; record?: Record<string, unknown> }> = [];
     const trace = { append: (kind: string, record?: Record<string, unknown>) => { records.push({ kind, record }); } } as unknown as TraceLog;
-    const runtime = ladderRuntime(new EventBus(), provider, fast, new RunCage({ maxTurnsPerRun: 10, maxTokensPerRun: 10_000, toolWhitelist: null }), [], trace);
+    const runtime = ladderRuntime(new EventBus(), provider, fast, new RunCage({ maxTurnsPerRun: 10, maxTokensPerRun: 10_000, toolWhitelist: null }), [], trace, echoTools());
     const summary = await runtime.run({ runId: 'r', sessionId: 's', userText: 'go' });
-    expect(provider.calls).toBe(2); // the call, then its one recovery attempt
+    // turn 1's call, the overflowing request, then its one recovery attempt -- which overflows again.
+    expect(provider.calls).toBe(3);
     expect(summary.stopReason).toBe('run_error');
     expect(summary.error).toContain('overflow_recovery_exhausted');
     const ladder = records.filter((entry) => entry.kind === 'provider_call_failed').map((entry) => entry.record?.next);
     expect(ladder).toEqual(['recover_overflow', 'fail']);
+    expect(records.some((entry) => entry.kind === 'overflow_recovery' && Array.isArray(entry.record?.trimmed))).toBe(true);
+  });
+
+  test('the overflow recovery shrinks the context, so the retry can succeed', async () => {
+    const provider = new OverflowUntilToolExchangeGone();
+    const runtime = ladderRuntime(new EventBus(), provider, fast, new RunCage({ maxTurnsPerRun: 10, maxTokensPerRun: 10_000, toolWhitelist: null }), [], undefined, echoTools());
+    const summary = await runtime.run({ runId: 'r', sessionId: 's', userText: 'go' });
+    expect(provider.calls).toHaveLength(3);
+    expect(provider.calls[1].some((message) => message.role === 'tool' && message.content === 'BIG')).toBe(true);
+    // The retry no longer carries the exchange the recovery dropped.
+    expect(provider.calls[2].some((message) => message.role === 'tool' && message.content === 'BIG')).toBe(false);
+    expect(summary.stopReason).toBe('run_complete');
+    expect(summary.assistantText).toContain('recovered');
   });
 });

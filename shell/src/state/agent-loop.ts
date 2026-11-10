@@ -432,7 +432,19 @@ export class AgentRuntime {
             failedReason = plan.reason;
             break;
           }
-          if (plan.action === 'recover_overflow') this.overflowRecoveryUsed = true;
+          if (plan.action === 'recover_overflow') {
+            this.overflowRecoveryUsed = true;
+            // Without a compaction subsystem the only way to make an overflow recoverable is for the
+            // context to actually shrink, so drop the oldest call-plus-results exchange. Nothing to
+            // drop means the recovery is unavailable: fail, rather than re-send the same bytes and
+            // call it a recovery.
+            const trimmed = context.omitOldestToolExchange();
+            this.options.trace?.append('overflow_recovery', { runId: input.runId, turnIndex, trimmed: trimmed ?? null }, this.clock());
+            if (!trimmed) {
+              failedReason = `overflow_recovery_unavailable: no exchange left to omit — ${turn.error ?? "context overflow"}`;
+              break;
+            }
+          }
           // The failed attempt leaves the model's context together with any tool results it owns, but
           // stays in the log: Pi's `_omitRecoveryAttempt` applied as a `context_edit`. An unpaired
           // tool result would make the provider reject the retry, so the pairing is the projection's.

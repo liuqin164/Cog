@@ -84,6 +84,19 @@ export class ContextProjection {
     return edited;
   }
 
+  /**
+   * The oldest live assistant message that owns tool results, dropped with those results. Context
+   * overflow recovery needs the context to actually shrink, and a call plus its results is the
+   * smallest unit that can leave without an unpaired tool result behind. `undefined` when there is no
+   * exchange left to drop.
+   */
+  omitOldestToolExchange(): number[] | undefined {
+    const target = this.entries.find(
+      (entry) => entry.type === 'message' && entry.message.role === 'assistant' && (entry.message.toolCalls?.length ?? 0) > 0 && !this.edits.has(entry.id),
+    );
+    return target ? this.omitFailedAttempt(target.id) : undefined;
+  }
+
   /** Pure: the edit overlay applied to the log. A tool result whose call is gone is refused loudly. */
   project(): AgentMessage[] {
     const projected: AgentMessage[] = [];
