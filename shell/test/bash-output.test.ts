@@ -29,7 +29,7 @@ describe('bash output capping', () => {
     const match = /full output: (\S+)\]/u.exec(result.output);
     expect(match).not.toBeNull();
     // The pointer is inside the workspace, so the `read` tool can follow it.
-    expect(match![1].startsWith('.companion-shell/bash-output/')).toBe(true);
+    expect(match![1].startsWith('.cogmem-shell/bash-output/')).toBe(true);
     const full = readFileSync(join(workspace, match![1]), 'utf8');
     expect(full.startsWith('exit 0\n')).toBe(true);
     expect(full.length).toBeGreaterThan(40_000);

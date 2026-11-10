@@ -12,7 +12,7 @@ import type { NativePlugin, ToolDefinition } from './host.ts';
 const MAX_READ_BYTES = 256 * 1024;
 const MAX_OUTPUT_CHARS = 32 * 1024;
 const BASH_TIMEOUT_MS = 30_000;
-const BASH_OUTPUT_DIR = '.companion-shell/bash-output';
+const BASH_OUTPUT_DIR = '.cogmem-shell/bash-output';
 
 export interface BuiltinToolsConfig {
   workspaceRoot: string;
@@ -107,7 +107,7 @@ function definitions(workspaceRoot: string): ToolDefinition[] {
     {
       name: 'bash',
       replay: 'never',
-      description: 'Run a bash command in the workspace with a 30s timeout. stdout/stderr are combined; output over 32 KiB is capped, and the full text is written under .companion-shell/bash-output/ and named in the result.',
+      description: 'Run a bash command in the workspace with a 30s timeout. stdout/stderr are combined; output over 32 KiB is capped, and the full text is written under .cogmem-shell/bash-output/ and named in the result.',
       parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] },
       execute({ args, signal }) {
         const command = asString(args, 'command');
