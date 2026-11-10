@@ -38,6 +38,12 @@ export interface WakeIntent {
   consumedAt?: number;
 }
 
+/** A tool call a RUNNING run had started but not finished; the unit recovery judges for replay. */
+export interface InFlightToolCall {
+  toolCallId: string;
+  toolName: string;
+}
+
 export interface ShellRuntimeState {
   lastDreamDate?: string;
   lastInteractionAt?: number;
@@ -55,7 +61,7 @@ export interface ShellRuntimeState {
    * On recovery these are what a replay would have to be judged against; the shell refuses replay
    * for any whose policy is `never` (see `ToolDefinition.replay`).
    */
-  inFlightToolCalls?: Array<{ toolCallId: string; toolName: string }>;
+  inFlightToolCalls?: InFlightToolCall[];
 }
 
 export interface CheckpointState {

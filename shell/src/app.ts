@@ -10,7 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { createMemoryKernel, KernelAgentMemoryBackend, type MemoryKernel } from 'cogmem';
 import { defaultShellConfig, type ShellConfig } from './config.ts';
 import { StateMachine } from './state/machine.ts';
-import { CheckpointStore } from './state/checkpoint.ts';
+import { CheckpointStore, type InFlightToolCall } from './state/checkpoint.ts';
 import { ProcessLock } from './process-lock.ts';
 import { TraceLog } from './trace.ts';
 import { PluginHost } from './plugins/host.ts';
@@ -220,7 +220,8 @@ export class CompanionShell implements ShellControl {
       if (!event.toolCallId || !event.toolName) return;
       const inFlight = this.machine.runtime.inFlightToolCalls ?? [];
       if (inFlight.some((call) => call.toolCallId === event.toolCallId)) return;
-      this.machine.updateRuntime({ inFlightToolCalls: [...inFlight, { toolCallId: event.toolCallId, toolName: event.toolName }] });
+      const started: InFlightToolCall = { toolCallId: event.toolCallId, toolName: event.toolName };
+      this.machine.updateRuntime({ inFlightToolCalls: [...inFlight, started] });
     });
     this.host.bus.on('tool_execution_end', (event: { toolCallId?: string }) => {
       const inFlight = this.machine.runtime.inFlightToolCalls ?? [];
