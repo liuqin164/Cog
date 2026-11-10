@@ -33,13 +33,34 @@ Useful flags: `--workspace <dir>`, `--data <dir>`, `--db <file>`, `--project <id
 
 - `src/state/table.ts` — the declarative transition table, the single source of truth.
 - `src/state/machine.ts` — the only writer of the lifecycle; a failed checkpoint write halts.
-- `src/state/agent-loop.ts` — Pi's turn loop, event names and hook positions reused verbatim.
+- `src/state/agent-loop.ts` — Pi's turn loop, event names and hook positions reused verbatim
+  (the `prepareRequest` / `finishTurn` / `prepareNextTurn` triad, not the older `shouldStopAfterTurn`).
+- `src/state/retry.ts` — the failure ladder's classification and backoff, ported from pinned pi-ai.
 - `src/plugins/host.ts` — one registry, one bus; native Cordis-style plugins.
 - `src/pi/adapter.ts` — the removable Pi compatibility layer.
 - `src/plugins/*` — clock, recall, dream, emergence (conservative), cage, capture, the four tools,
   mg provider. Dream, emergence and recall are plugins like the rest: swap one by not loading it.
 - `src/channels/terminal.ts` — the self-owned terminal channel.
 - `src/probes/gaps.ts` — the F1/F2/F6 (+F-SEC, F-MCP) probe and gap list.
+
+## Failure ladder
+
+A failed model call goes down one ladder, in Pi's fixed order: **context overflow first**, then
+**retryability** (account/subscription limits are classified non-retryable and are checked before the
+transient table, because they reset in hours and retrying only burns the day), then a **bounded retry**
+with exponential backoff capped at 60 s. The pattern tables are ported from pinned
+`@earendil-works/pi-ai@1.5.0` (`utils/retry.ts`, `utils/overflow.ts`).
+
+An overflow gets exactly one recovery attempt per run (the **one-shot latch**, `overflow_recovery_used`
+in the trace); a second overflow is a failure, not a loop. The shell has no compaction subsystem, so
+that one attempt is a single re-request rather than a compacted one — the latch is the safety property
+that survives compaction landing later.
+
+**Retries are charged to the run, not to the cage.** A retry re-requests the *same* turn, so the turn
+counter — and therefore `maxTurnsPerRun` — moves once however many provider calls the turn took. The
+discriminating test runs with a one-turn budget and a provider that fails once: the run completes with
+`turns: 1`. Everything is legible in the trace as `provider_call_failed` with `kind`, `next`, `attempt`
+and `delayMs`.
 
 ## Capture and redaction
 

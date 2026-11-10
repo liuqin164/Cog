@@ -10,6 +10,7 @@
  */
 import type { EventBus } from '../bus.ts';
 import type { TraceLog } from '../trace.ts';
+import { DEFAULT_RETRY_POLICY, planFailure, sleepAbortable, type RetryPolicy } from './retry.ts';
 
 export interface AgentMessage {
   role: 'user' | 'assistant' | 'tool' | 'system';
@@ -122,6 +123,10 @@ export interface AgentRuntimeOptions {
   systemPrompt: () => string;
   trace?: TraceLog;
   clock?: () => number;
+  /** The failure ladder's budget (Pi's `RetrySettings`); defaults to the mg gateway's real one. */
+  retry?: RetryPolicy;
+  /** Injectable backoff sleep, so a test never waits a real second. */
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 }
 
 export class AgentRuntime {
@@ -130,6 +135,8 @@ export class AgentRuntime {
   private running = false;
   private abortController?: AbortController;
   private readonly clock: () => number;
+  /** The overflow recovery latch: one attempt per run, so a persistently oversized context cannot loop. */
+  private overflowRecoveryUsed = false;
 
   constructor(private readonly options: AgentRuntimeOptions) {
     this.clock = options.clock ?? Date.now;
@@ -161,6 +168,7 @@ export class AgentRuntime {
   async run(input: { runId: string; sessionId: string; userText: string; signal?: AbortSignal }): Promise<RunSummary> {
     if (this.running) throw new Error('agent_already_running: at most one RUNNING state exists');
     this.running = true;
+    this.overflowRecoveryUsed = false;
     const controller = new AbortController();
     this.abortController = controller;
     const signal = input.signal
@@ -207,9 +215,8 @@ export class AgentRuntime {
         turns = turnIndex;
         await this.options.bus.emit('turn_start', { type: 'turn_start', turnIndex }, { runId: input.runId });
 
-        const assistantDraft: AgentMessage = { role: 'assistant', content: '' };
+        let assistantDraft: AgentMessage = { role: 'assistant', content: '' };
         let terminateRequested = false;
-        await this.options.bus.emit('message_start', { type: 'message_start', message: assistantDraft }, { runId: input.runId });
         // Pi's `prepareRequest`: the last assembly gate before every request, including the first.
         // `transformContext` still owns the message pipeline; this hook owns the request's shape
         // (system prompt, model, tool list) and polls no queues.
@@ -221,21 +228,65 @@ export class AgentRuntime {
         };
         const requestUpdate = (await this.options.bus.pipeline('prepareRequest', requestSeed, { runId: input.runId, turnIndex })) as RequestUpdate | undefined;
         const request = requestUpdate && typeof requestUpdate === 'object' ? { ...requestSeed, ...requestUpdate } : requestSeed;
-        const turn = await this.options.provider.complete({
-          // A copy, so each request sees the context as of that call. Handing the live array over let a
-          // provider that keeps its input (and this suite's scripted provider) observe messages pushed
-          // after the call — the steering a later turn consumed looked like it had already been sent.
-          messages: await this.projectMessages([...request.messages], input.runId),
-          tools: request.tools ?? this.options.tools.list(),
-          systemPrompt: request.systemPrompt,
-          model: request.model,
-          signal,
-        });
-        assistantDraft.content = turn.text;
-        assistantDraft.toolCalls = turn.toolCalls;
-        await this.options.bus.emit('message_update', { type: 'message_update', message: assistantDraft, delta: turn.text }, { runId: input.runId });
-        await this.options.bus.emit('message_end', { type: 'message_end', message: assistantDraft }, { runId: input.runId });
-        messages.push(assistantDraft);
+        const requestMessages = await this.projectMessages([...request.messages], input.runId);
+        const policy = this.options.retry ?? DEFAULT_RETRY_POLICY;
+
+        // The failure ladder runs inside the turn: a retry re-requests the same turn, so `turns` — and
+        // therefore the cage's turn budget — is charged once however many provider calls it took.
+        let turn: ModelTurn = { text: '', toolCalls: [] };
+        let failedReason: string | undefined;
+        for (let attempt = 0; ; ) {
+          const draft: AgentMessage = { role: 'assistant', content: '' };
+          await this.options.bus.emit('message_start', { type: 'message_start', message: draft }, { runId: input.runId });
+          try {
+            turn = await this.options.provider.complete({
+              // A copy, so each attempt sees the context as of that call. Handing the live array over
+              // let a provider that keeps its input (and this suite's scripted provider) observe
+              // messages pushed after the call — steering a later turn consumed looked already sent.
+              messages: [...requestMessages],
+              tools: request.tools ?? this.options.tools.list(),
+              systemPrompt: request.systemPrompt,
+              model: request.model,
+              signal,
+            });
+          } catch (caught) {
+            // A thrown transport failure is the same failure as a provider that reports one in its
+            // turn; normalize it so one ladder classifies both.
+            turn = { text: '', toolCalls: [], stopReason: 'error', error: caught instanceof Error ? caught.message : String(caught) };
+          }
+          draft.content = turn.text;
+          draft.toolCalls = turn.toolCalls;
+          draft.isError = turn.stopReason === 'error';
+          await this.options.bus.emit('message_update', { type: 'message_update', message: draft, delta: turn.text }, { runId: input.runId });
+          await this.options.bus.emit('message_end', { type: 'message_end', message: draft }, { runId: input.runId });
+          messages.push(draft);
+          if (turn.stopReason !== 'error') {
+            assistantDraft = draft;
+            break;
+          }
+          const plan = planFailure({ message: turn.error ?? 'provider_error', attempt, policy, overflowRecoveryUsed: this.overflowRecoveryUsed });
+          this.options.trace?.append('provider_call_failed', {
+            runId: input.runId,
+            turnIndex,
+            kind: plan.kind,
+            next: plan.action,
+            attempt: plan.action === 'fail' ? attempt : plan.attempt,
+            delayMs: plan.action === 'fail' ? 0 : plan.delayMs,
+            message: turn.error,
+          }, this.clock());
+          if (plan.action === 'fail') {
+            failedReason = plan.reason;
+            break;
+          }
+          if (plan.action === 'recover_overflow') this.overflowRecoveryUsed = true;
+          attempt = plan.attempt;
+          if (plan.delayMs > 0) await (this.options.sleep ?? sleepAbortable)(plan.delayMs, signal);
+        }
+        if (failedReason !== undefined) {
+          stopReason = 'run_error';
+          error = failedReason;
+          break;
+        }
 
         const toolResults: ToolResult[] = [];
         // Pi: a `length` stop means every tool call in the message may carry truncated arguments —

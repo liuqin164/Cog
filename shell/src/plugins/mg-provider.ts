@@ -3,8 +3,8 @@
  * `auto/deepseek-v4.1-flash`.
  *
  * The provider is a plugin like any other; the core loop only knows `ModelProvider`. A failed call
- * throws, the loop records `run_error`, and the outer machine leaves RUNNING — no retry ladder, no
- * fallback model.
+ * throws, and the loop's failure ladder classifies it (`src/state/retry.ts`): overflow first, then
+ * account limits, then a bounded exponential-backoff retry. There is still no fallback model.
  */
 import type { AgentMessage, ModelCompletionInput, ModelProvider, ModelTurn, ToolCall } from '../state/agent-loop.ts';
 import type { NativePlugin } from './host.ts';
