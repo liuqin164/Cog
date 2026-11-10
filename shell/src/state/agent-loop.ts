@@ -2,8 +2,11 @@
  * The inner loop: Pi's turn lifecycle, event names and hook positions reused verbatim.
  *
  * A Pi extension that subscribes to `turn_end` or vetoes in `tool_call` sees the same points here.
- * What is new is only around it: the steering and follow-up queues are native (guidance §一), and
- * the run leaves through this loop's return value so the outer state machine owns the lifecycle.
+ * The loop's contract is Pi 1.5.0's turn-boundary triad — `prepareRequest` before every provider
+ * request, `finishTurn` for the turn decision, `prepareNextTurn` at the turn boundary — not the
+ * earlier `shouldStopAfterTurn` sketch. What is new is only around it: the steering and follow-up
+ * queues are native (guidance §一), and the run leaves through this loop's return value so the outer
+ * state machine owns the lifecycle.
  */
 import type { EventBus } from '../bus.ts';
 import type { TraceLog } from '../trace.ts';
@@ -66,6 +69,35 @@ export interface ToolInvoker {
 export interface RunBudget {
   checkTurn(turnIndex: number): { exceeded: boolean; reason?: string };
   addTokens(tokens: number): { exceeded: boolean; reason?: string };
+}
+
+/** Pi's `AgentTurnContext`: the completed turn handed to the boundary hooks. */
+export interface TurnContext {
+  turnIndex: number;
+  message: AgentMessage;
+  toolResults: ToolResult[];
+}
+
+/**
+ * Pi's `AgentTurnDecision`. `end` stops without polling the queues; `continue` guarantees one more
+ * request — satisfied by tool results, steering or follow-ups when any are pending, and otherwise by
+ * one context-only turn.
+ */
+export type TurnDecision = { action: 'end' | 'continue' } | void;
+
+/** Pi's `AgentLoopTurnUpdate`: replacement state for the next turn, applied at `prepareNextTurn`. */
+export interface TurnUpdate {
+  messages?: AgentMessage[];
+  systemPrompt?: string;
+  model?: string;
+}
+
+/** Pi's `AgentRequestUpdate`: replacement request state, applied at `prepareRequest` (polls no queues). */
+export interface RequestUpdate {
+  messages?: AgentMessage[];
+  tools?: Array<{ name: string; description: string; parameters: unknown; source: string }>;
+  systemPrompt?: string;
+  model?: string;
 }
 
 export interface RunSummary {
@@ -178,14 +210,25 @@ export class AgentRuntime {
         const assistantDraft: AgentMessage = { role: 'assistant', content: '' };
         let terminateRequested = false;
         await this.options.bus.emit('message_start', { type: 'message_start', message: assistantDraft }, { runId: input.runId });
+        // Pi's `prepareRequest`: the last assembly gate before every request, including the first.
+        // `transformContext` still owns the message pipeline; this hook owns the request's shape
+        // (system prompt, model, tool list) and polls no queues.
+        const requestSeed: RequestUpdate & { messages: AgentMessage[]; systemPrompt: string; model: string } = {
+          messages,
+          tools: this.options.tools.list(),
+          systemPrompt: this.options.systemPrompt(),
+          model: this.options.provider.model,
+        };
+        const requestUpdate = (await this.options.bus.pipeline('prepareRequest', requestSeed, { runId: input.runId, turnIndex })) as RequestUpdate | undefined;
+        const request = requestUpdate && typeof requestUpdate === 'object' ? { ...requestSeed, ...requestUpdate } : requestSeed;
         const turn = await this.options.provider.complete({
           // A copy, so each request sees the context as of that call. Handing the live array over let a
           // provider that keeps its input (and this suite's scripted provider) observe messages pushed
           // after the call — the steering a later turn consumed looked like it had already been sent.
-          messages: await this.projectMessages([...messages], input.runId),
-          tools: this.options.tools.list(),
-          systemPrompt: this.options.systemPrompt(),
-          model: this.options.provider.model,
+          messages: await this.projectMessages([...request.messages], input.runId),
+          tools: request.tools ?? this.options.tools.list(),
+          systemPrompt: request.systemPrompt,
+          model: request.model,
           signal,
         });
         assistantDraft.content = turn.text;
@@ -246,6 +289,14 @@ export class AgentRuntime {
             isError: toolResult.isError,
           });
         }
+        // Pi's `finishTurn`: after the assistant message and every tool result are in context, and
+        // before `turn_end`. `end` stops without polling the queues; `continue` guarantees one more
+        // request. Error and abort remain hard exits (they leave through the `catch`).
+        const decision = (await this.options.bus.emit(
+          'finishTurn',
+          { type: 'finishTurn', turnIndex, message: assistantDraft, toolResults },
+          { runId: input.runId },
+        )) as TurnDecision;
         await this.options.bus.emit('turn_end', { type: 'turn_end', turnIndex, message: assistantDraft, toolResults }, { runId: input.runId });
 
         if (turn.usage) {
@@ -259,21 +310,45 @@ export class AgentRuntime {
           }
         }
 
-        const stopDecision = await this.options.bus.emit('shouldStopAfterTurn', { type: 'shouldStopAfterTurn', turnIndex, message: assistantDraft, toolResults }, { runId: input.runId });
-        if ((stopDecision && (stopDecision as { stop?: boolean }).stop) || terminateRequested) {
+        if (terminateRequested || decision?.action === 'end') {
           stopReason = 'run_complete';
           break;
         }
 
-        if (turn.toolCalls.length > 0) {
-          // Pi: steering drains after the tool batch, before the next turn begins.
-          if (this.steering.length > 0) await this.drainSteering(messages, input.runId, turnIndex);
-          continue;
+        const steeringPending = this.steering.length > 0;
+        const followUpPending = this.followUps.length > 0;
+        const explicitContinue = decision?.action === 'continue';
+        if (turn.toolCalls.length === 0 && !steeringPending && !followUpPending && !explicitContinue) break;
+
+        // Pi's `prepareNextTurn`: after `turn_end` and before the next turn begins — the formal turn
+        // boundary (compaction is its canonical Pi user; here it is also where the steering boundary
+        // is settled). A long handler may take new steering while it runs, so the queue is read again
+        // after it: the re-poll is what keeps a line typed during a long prepare from being dropped,
+        // and it is the reason a steering message's own turn gets a fresh recall (guidance #7) — the
+        // next request runs `transformContext` against that new last user line.
+        const prepared = (await this.options.bus.emit(
+          'prepareNextTurn',
+          { type: 'prepareNextTurn', turnIndex, message: assistantDraft, toolResults },
+          { runId: input.runId },
+        )) as TurnUpdate | undefined;
+        for (const message of prepared?.messages ?? []) {
+          messages.push(message);
+          await this.emitUserMessage(message, input.runId);
         }
+        this.options.trace?.append('prepare_next_turn', {
+          runId: input.runId,
+          afterTurn: turnIndex,
+          preparedMessages: prepared?.messages?.length ?? 0,
+          steeringPending: this.steering.length,
+          followUpPending: this.followUps.length,
+          explicitContinue,
+        }, this.clock());
+
         if (this.steering.length > 0) {
           await this.drainSteering(messages, input.runId, turnIndex);
           continue;
         }
+        if (turn.toolCalls.length > 0) continue;
         if (this.followUps.length > 0) {
           const text = this.followUps.shift()!;
           const queued: AgentMessage = { role: 'user', content: text };
@@ -281,7 +356,8 @@ export class AgentRuntime {
           await this.emitUserMessage(queued, input.runId);
           continue;
         }
-        break;
+        // `{ action: 'continue' }` with nothing else to schedule: one context-only turn.
+        continue;
       }
     } catch (caught) {
       stopReason = signal.aborted ? 'run_aborted' : 'run_error';
@@ -355,7 +431,8 @@ export class AgentRuntime {
   }
 
   /** Pi emits the user message on the same start/end pair the assistant uses. */
-  private async emitUserMessage(message: AgentMessage, runId: string): Promise<void> {    await this.options.bus.emit('message_start', { type: 'message_start', message }, { runId });
+  private async emitUserMessage(message: AgentMessage, runId: string): Promise<void> {
+    await this.options.bus.emit('message_start', { type: 'message_start', message }, { runId });
     await this.options.bus.emit('message_end', { type: 'message_end', message }, { runId });
   }
 

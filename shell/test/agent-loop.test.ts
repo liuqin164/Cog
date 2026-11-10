@@ -164,6 +164,86 @@ describe('Pi-aligned loop', () => {
     expect(summary.assistantText).toContain('re-issued');
   });
 
+  test('prepareRequest is the last gate before every request, the first included', async () => {
+    const bus = new EventBus();
+    const seen: Array<{ turnIndex?: number; systemPrompt: string }> = [];
+    bus.on('prepareRequest', (request: { systemPrompt: string }, ctx: { turnIndex?: number }) => {
+      seen.push({ turnIndex: ctx.turnIndex, systemPrompt: request.systemPrompt });
+      return { systemPrompt: `system@turn${ctx.turnIndex}`, model: `model@turn${ctx.turnIndex}` };
+    });
+    const provider = new ScriptedProvider([
+      { text: 'tool', toolCalls: [{ toolCallId: 'c1', toolName: 'echo', input: {} }] },
+      { text: 'done', toolCalls: [] },
+    ]);
+    await runtime(bus, provider).run({ runId: 'r', sessionId: 's', userText: 'go' });
+    expect(seen.map((entry) => entry.turnIndex)).toEqual([1, 2]);
+    expect(seen[0].systemPrompt).toBe('system');
+    expect(provider.calls[0].systemPrompt).toBe('system@turn1');
+    expect(provider.calls[1].systemPrompt).toBe('system@turn2');
+    expect(provider.calls[0].model).toBe('model@turn1');
+    expect(provider.calls[1].model).toBe('model@turn2');
+  });
+
+  test('finishTurn { action: end } stops after the turn without polling the queues', async () => {
+    const bus = new EventBus();
+    bus.on('finishTurn', () => ({ action: 'end' }));
+    const provider = new ScriptedProvider([
+      { text: 'one', toolCalls: [{ toolCallId: 'c1', toolName: 'echo', input: {} }] },
+      { text: 'must never be asked for', toolCalls: [] },
+    ]);
+    const runner = runtime(bus, provider);
+    runner.steer('queued but the run ends');
+    const summary = await runner.run({ runId: 'r', sessionId: 's', userText: 'go' });
+    expect(summary.turns).toBe(1);
+    expect(provider.calls.length).toBe(1);
+    expect(summary.stopReason).toBe('run_complete');
+  });
+
+  test('finishTurn { action: continue } guarantees one more context-only request', async () => {
+    const bus = new EventBus();
+    bus.on('finishTurn', (payload: { turnIndex: number }) => (payload.turnIndex === 1 ? { action: 'continue' } : undefined));
+    const provider = new ScriptedProvider([
+      { text: 'first', toolCalls: [] },
+      { text: 'explicit second', toolCalls: [] },
+    ]);
+    const summary = await runtime(bus, provider).run({ runId: 'r', sessionId: 's', userText: 'go' });
+    expect(summary.turns).toBe(2);
+    expect(summary.assistantText).toContain('explicit second');
+  });
+
+  test('prepareNextTurn appends messages at the turn boundary, with lifecycle events', async () => {
+    const bus = new EventBus();
+    const seen = recordEvents(bus, ['message_start', 'message_end']);
+    bus.on('prepareNextTurn', (payload: { turnIndex: number }) => (payload.turnIndex === 1 ? { messages: [{ role: 'system', content: 'boundary-note' }] } : undefined));
+    const provider = new ScriptedProvider([
+      { text: 'tool', toolCalls: [{ toolCallId: 'c1', toolName: 'echo', input: {} }] },
+      { text: 'done', toolCalls: [] },
+    ]);
+    await runtime(bus, provider).run({ runId: 'r', sessionId: 's', userText: 'go' });
+    expect(provider.calls[1].messages.some((message) => message.content === 'boundary-note')).toBe(true);
+    expect(seen.some((event) => event.payload.message?.content === 'boundary-note')).toBe(true);
+  });
+
+  test('steering typed while prepareNextTurn runs is not dropped', async () => {
+    const bus = new EventBus();
+    const provider = new ScriptedProvider([
+      { text: 'tool', toolCalls: [{ toolCallId: 'c1', toolName: 'echo', input: {} }] },
+      { text: 'done', toolCalls: [] },
+    ]);
+    const runner = runtime(bus, provider);
+    let steered = false;
+    bus.on('prepareNextTurn', async () => {
+      if (steered) return undefined;
+      steered = true;
+      // The line arrives inside the prepare window; the queue is read again after it returns.
+      await new Promise<void>((resolve) => setTimeout(() => { runner.steer('typed during prepare'); resolve(); }, 5));
+      return undefined;
+    });
+    const summary = await runner.run({ runId: 'r', sessionId: 's', userText: 'go' });
+    expect(summary.turns).toBe(2);
+    expect(provider.calls[1].messages.some((message) => message.role === 'user' && message.content === 'typed during prepare')).toBe(true);
+  });
+
   test('a provider failure becomes run_error, not an unhandled rejection', async () => {
     const bus = new EventBus();
     const provider = new ScriptedProvider([() => {
