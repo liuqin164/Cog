@@ -164,6 +164,81 @@ describe('Pi-aligned loop', () => {
     expect(summary.assistantText).toContain('re-issued');
   });
 
+  test('a nested tool call goes through the cage instead of around it', async () => {
+    const bus = new EventBus();
+    const executed: string[] = [];
+    const seenByHooks: string[] = [];
+    bus.on('beforeToolCall', (payload: { toolName?: string }) => {
+      seenByHooks.push(payload.toolName ?? '');
+      return undefined;
+    });
+    const invoker: ToolInvoker = {
+      list: () => [
+        { name: 'outer', description: 'nest', parameters: {}, source: 'test' },
+        { name: 'bash', description: 'shell', parameters: {}, source: 'test' },
+      ],
+      invoke: async (name, call, ctx) => {
+        if (name === 'outer') {
+          const nested = await ctx.runToolCall!('bash', { command: 'printf nested > escaped.txt' });
+          return { toolCallId: call.toolCallId, toolName: name, output: `nested->${nested.output}`, isError: nested.isError };
+        }
+        executed.push(name);
+        return { toolCallId: call.toolCallId, toolName: name, output: 'ran', isError: false };
+      },
+    };
+    const cage = new RunCage({ maxTurnsPerRun: 5, maxTokensPerRun: 10_000, toolWhitelist: ['outer'] });
+    cage.register(bus);
+    const provider = new ScriptedProvider([
+      { text: 'nest', toolCalls: [{ toolCallId: 'c1', toolName: 'outer', input: {} }] },
+      { text: 'done', toolCalls: [] },
+    ]);
+    const summary = await runtime(bus, provider, invoker, cage).run({ runId: 'r', sessionId: 's', userText: 'go' });
+    expect(executed).toEqual([]); // the nested bash never ran
+    expect(seenByHooks).toEqual(['outer', 'bash']); // but the veto hook saw it
+    expect(summary.toolResults[0].output).toContain('tool_not_in_whitelist');
+  });
+
+  test('a nested call to an allowed tool runs and returns its result', async () => {
+    const bus = new EventBus();
+    const invoker: ToolInvoker = {
+      list: () => [
+        { name: 'outer', description: 'nest', parameters: {}, source: 'test' },
+        { name: 'bash', description: 'shell', parameters: {}, source: 'test' },
+      ],
+      invoke: async (name, call, ctx) => {
+        if (name === 'outer') {
+          const nested = await ctx.runToolCall!('bash', { command: 'echo hi' });
+          return { toolCallId: call.toolCallId, toolName: name, output: `nested->${nested.output}`, isError: nested.isError };
+        }
+        return { toolCallId: call.toolCallId, toolName: name, output: 'ran', isError: false };
+      },
+    };
+    const provider = new ScriptedProvider([
+      { text: 'nest', toolCalls: [{ toolCallId: 'c1', toolName: 'outer', input: {} }] },
+      { text: 'done', toolCalls: [] },
+    ]);
+    const summary = await runtime(bus, provider, invoker).run({ runId: 'r', sessionId: 's', userText: 'go' });
+    expect(summary.toolResults[0].output).toBe('nested->ran');
+  });
+
+  test('runaway nesting is refused at a bounded depth', async () => {
+    const bus = new EventBus();
+    const invoker: ToolInvoker = {
+      list: () => [{ name: 'recurse', description: 'nest', parameters: {}, source: 'test' }],
+      invoke: async (name, call, ctx) => {
+        const nested = await ctx.runToolCall!('recurse', {});
+        return { toolCallId: call.toolCallId, toolName: name, output: nested.output, isError: nested.isError };
+      },
+    };
+    const provider = new ScriptedProvider([
+      { text: 'nest', toolCalls: [{ toolCallId: 'c1', toolName: 'recurse', input: {} }] },
+      { text: 'done', toolCalls: [] },
+    ]);
+    const summary = await runtime(bus, provider, invoker).run({ runId: 'r', sessionId: 's', userText: 'go' });
+    expect(summary.toolResults[0].output).toContain('nested_tool_depth_exceeded');
+    expect(summary.toolResults[0].isError).toBe(true);
+  });
+
   test('prepareRequest is the last gate before every request, the first included', async () => {
     const bus = new EventBus();
     const seen: Array<{ turnIndex?: number; systemPrompt: string }> = [];

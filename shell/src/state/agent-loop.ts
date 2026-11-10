@@ -67,9 +67,83 @@ export interface ModelProvider {
   complete(input: ModelCompletionInput): Promise<ModelTurn>;
 }
 
+/** What a tool's `execute` sees: the run, the abort signal, and Pi's `runToolCall` when it nests. */
+export interface ToolInvocationContext {
+  runId: string;
+  signal: AbortSignal;
+  /** A call to another tool through the same hooks the model's calls take (cage included). */
+  runToolCall?(name: string, input: unknown): Promise<ToolResult>;
+}
+
 export interface ToolInvoker {
   list(): Array<{ name: string; description: string; parameters: unknown; source: string }>;
-  invoke(name: string, call: ToolCall, ctx: { runId: string; signal: AbortSignal }): Promise<ToolResult>;
+  invoke(name: string, call: ToolCall, ctx: ToolInvocationContext): Promise<ToolResult>;
+}
+
+export interface ToolCallPipelineContext {
+  bus: EventBus;
+  tools: ToolInvoker;
+  trace?: TraceLog;
+  clock: () => number;
+  runId: string;
+  signal: AbortSignal;
+  /** How deep a tool's nested `runToolCall` may go before the call is refused. */
+  maxDepth?: number;
+}
+
+export interface ExecutedToolCall {
+  result: ToolResult;
+  terminate: boolean;
+}
+
+const MAX_NESTED_TOOL_DEPTH = 8;
+
+/**
+ * One tool call through the same steps whether the model or another tool issued it: `beforeToolCall`
+ * (where the cage's whitelist lives), execution, `afterToolCall`.
+ *
+ * A nested call emits no events and adds no messages — Pi's `runToolCall` contract — but it does pass
+ * the hooks, which is what stops a tool from side-stepping the cage by calling a sibling directly.
+ */
+export async function executeToolCall(
+  context: ToolCallPipelineContext,
+  call: ToolCall,
+  options: { emitEvents: boolean; depth?: number } = { emitEvents: true },
+): Promise<ExecutedToolCall> {
+  const depth = options.depth ?? 0;
+  const before = await context.bus.emit('beforeToolCall', {
+    type: 'beforeToolCall',
+    toolCall: call,
+    toolCallId: call.toolCallId,
+    toolName: call.toolName,
+    input: call.input,
+  }, { runId: context.runId });
+  if (before?.block) {
+    const blocked: ToolResult = { toolCallId: call.toolCallId, toolName: call.toolName, output: before.reason ?? 'blocked', isError: true, blocked: { reason: before.reason ?? 'blocked' } };
+    context.trace?.append('tool_blocked', { runId: context.runId, toolName: call.toolName, reason: before.reason, nested: !options.emitEvents }, context.clock());
+    if (options.emitEvents) {
+      await context.bus.emit('tool_execution_end', { type: 'tool_execution_end', toolCallId: call.toolCallId, toolName: call.toolName, result: blocked, isError: true }, { runId: context.runId });
+    }
+    return { result: blocked, terminate: false };
+  }
+  if (options.emitEvents) {
+    await context.bus.emit('tool_execution_start', { type: 'tool_execution_start', toolCallId: call.toolCallId, toolName: call.toolName, input: call.input }, { runId: context.runId });
+  }
+  const nest = async (name: string, input: unknown): Promise<ToolResult> => {
+    if (depth >= (context.maxDepth ?? MAX_NESTED_TOOL_DEPTH)) {
+      return { toolCallId: `${call.toolCallId}:${name}`, toolName: name, output: `nested_tool_depth_exceeded: "${name}" is nested more than ${context.maxDepth ?? MAX_NESTED_TOOL_DEPTH} deep`, isError: true };
+    }
+    const nested = await executeToolCall(context, { toolCallId: `${call.toolCallId}:${depth + 1}:${name}`, toolName: name, input }, { emitEvents: false, depth: depth + 1 });
+    return nested.result;
+  };
+  let result = await context.tools.invoke(call.toolName, call, { runId: context.runId, signal: context.signal, runToolCall: nest });
+  const after = await context.bus.emit('afterToolCall', { type: 'afterToolCall', toolCall: call, result }, { runId: context.runId });
+  if (after && typeof after === 'object' && 'result' in after) result = after.result as ToolResult;
+  const terminate = Boolean(after && typeof after === 'object' && 'terminate' in after && after.terminate);
+  if (options.emitEvents) {
+    await context.bus.emit('tool_execution_end', { type: 'tool_execution_end', toolCallId: call.toolCallId, toolName: call.toolName, result, isError: result.isError }, { runId: context.runId });
+  }
+  return { result, terminate };
 }
 
 export interface RunBudget {
@@ -346,6 +420,14 @@ export class AgentRuntime {
         if (truncated) {
           this.options.trace?.append('tool_batch_truncated', { runId: input.runId, turnIndex, toolCalls: turn.toolCalls.map((call) => call.toolName) }, this.clock());
         }
+        const pipeline: ToolCallPipelineContext = {
+          bus: this.options.bus,
+          tools: this.options.tools,
+          trace: this.options.trace,
+          clock: this.clock,
+          runId: input.runId,
+          signal,
+        };
         for (const call of turn.toolCalls) {
           allToolCalls.push(call);
           if (truncated) {
@@ -354,29 +436,11 @@ export class AgentRuntime {
             allToolResults.push(refused);
             continue;
           }
-          const before = await this.options.bus.emit('beforeToolCall', {
-            type: 'beforeToolCall',
-            toolCall: call,
-            toolCallId: call.toolCallId,
-            toolName: call.toolName,
-            input: call.input,
-          }, { runId: input.runId });
-          if (before?.block) {
-            const blocked: ToolResult = { toolCallId: call.toolCallId, toolName: call.toolName, output: before.reason ?? 'blocked', isError: true, blocked: { reason: before.reason ?? 'blocked' } };
-            toolResults.push(blocked);
-            allToolResults.push(blocked);
-            this.options.trace?.append('tool_blocked', { runId: input.runId, toolName: call.toolName, reason: before.reason }, this.clock());
-            await this.options.bus.emit('tool_execution_end', { type: 'tool_execution_end', toolCallId: call.toolCallId, toolName: call.toolName, result: blocked, isError: true }, { runId: input.runId });
-            continue;
-          }
-          await this.options.bus.emit('tool_execution_start', { type: 'tool_execution_start', toolCallId: call.toolCallId, toolName: call.toolName, input: call.input }, { runId: input.runId });
-          let result = await this.options.tools.invoke(call.toolName, call, { runId: input.runId, signal });
-          const after = await this.options.bus.emit('afterToolCall', { type: 'afterToolCall', toolCall: call, result }, { runId: input.runId });
-          if (after && typeof after === 'object' && 'result' in after) result = after.result as ToolResult;
-          if (after && typeof after === 'object' && 'terminate' in after && after.terminate) terminateRequested = true;
-          toolResults.push(result);
-          allToolResults.push(result);
-          await this.options.bus.emit('tool_execution_end', { type: 'tool_execution_end', toolCallId: call.toolCallId, toolName: call.toolName, result, isError: result.isError }, { runId: input.runId });
+          // The same pipeline a nested `runToolCall` takes, so the cage sees both.
+          const executed = await executeToolCall(pipeline, call);
+          if (executed.terminate) terminateRequested = true;
+          toolResults.push(executed.result);
+          allToolResults.push(executed.result);
         }
         // Pi appends one tool message per result before the next provider call; without this the model
         // never sees what its own tool returned.
