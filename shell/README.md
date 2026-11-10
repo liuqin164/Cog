@@ -57,5 +57,23 @@ lost loudly. A one-retry version stood here first and was removed: `CODING_STAND
 survive the failure" rejects retry ladders, and a transient ledger error is better reported than
 papered over.
 
+## Baseline (measured)
+
+Reproduce with `bun run scripts/measure-baseline.ts` (`--no-mcp` to leave the MCP face out); the
+script prints one JSON line, with the terminal and the Pi adapter off like the resident defaults. The
+medians below are of eight runs (five for the `--no-mcp` row); the spread is what the same box gave
+across three measurement sessions, and a loaded box moves it by tens of milliseconds.
+
+| Measure | Value | Notes |
+|---|---|---|
+| Process start → IDLE, MCP face on | **432 ms** median (observed 421–465) | measured with `process.uptime()`, so bun's own start-up and the module graph are included |
+| Process start → IDLE, `--no-mcp` | 401 ms median (observed 397–422) | the loopback MCP face costs roughly 30 ms of the start |
+| `checkpoint.json` at boot (2 transitions) | 999 B | |
+| `checkpoint.json` at the history cap (242 transitions, 200 records kept) | 30,999 B | `trimHistory` caps the history, so the file is bounded rather than growing for the run's life |
+| Transition write | temp + fsync + rename + directory fsync | the durability the kill-recovery test depends on; ~150 B of JSON rewritten per transition at the cap |
+
+None of these needed fixing: a resident process pays the start once, and the checkpoint is bounded and
+human-readable on purpose (`SURVIVAL.md` tells the operator to `cat` it).
+
 `COMPATIBILITY.md` records the pinned Pi version and the real-plugin test set.
 `SURVIVAL.md` is the startup script and care notes for the 7-day run (not started in this round).
