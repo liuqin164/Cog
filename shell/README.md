@@ -52,8 +52,9 @@ transient table, because they reset in hours and retrying only burns the day), t
 with exponential backoff capped at 60 s. The pattern tables are ported from pinned
 `@earendil-works/pi-ai@1.5.0` (`utils/retry.ts`, `utils/overflow.ts`).
 
-An overflow gets exactly one recovery attempt per run (the **one-shot latch**, `overflow_recovery_used`
-in the trace); a second overflow is a failure, not a loop. The shell has no compaction subsystem, so
+An overflow gets exactly one recovery attempt per run (the **one-shot latch** — read it back in the
+trace as `provider_call_failed` with `next: "recover_overflow"`, then `next: "fail"` on the second
+overflow); a second overflow is a failure, not a loop. The shell has no compaction subsystem, so
 that one attempt is a single re-request rather than a compacted one — the latch is the safety property
 that survives compaction landing later.
 

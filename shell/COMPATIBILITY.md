@@ -23,8 +23,9 @@ version is `PI_TARGET_VERSION` by construction. The test records the version it 
 
 - `registerTool` with TypeBox `parameters`
 - `on(event, handler)` for the full lifecycle: `before_agent_start`, `agent_start`, `turn_start`,
-  `message_start/update/end`, `tool_execution_start/update/end`, `turn_end`, `agent_end`,
-  `session_start/shutdown`, plus `tool_call` → `beforeToolCall` and `tool_result` → `afterToolCall`
+  `message_start/update/end`, `tool_execution_start/update/end`, `turn_end`, `finishTurn`,
+  `prepareNextTurn`, `prepareRequest`, `agent_end`, `agent_settled`, `session_start/shutdown`, plus
+  `tool_call` → `beforeToolCall` and `tool_result` → `afterToolCall`
 - `registerCommand`, `registerProvider`, `registerFlag`/`getFlag`, `sendMessage`/`sendUserMessage`
   (`deliverAs: steer | followUp`), `exec`, `getSettings`, `events`
 - lifecycle: adapter load translates registration, then fires `session_start`
