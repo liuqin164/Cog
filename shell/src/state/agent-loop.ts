@@ -20,6 +20,10 @@ export interface AgentMessage {
   toolName?: string;
   toolCalls?: ToolCall[];
   isError?: boolean;
+  /** Pi's tool-loadout declaration: names this message adds to the executable set. */
+  toolsAdded?: string[];
+  /** Pi's tool-loadout declaration: names this message removes from the executable set. */
+  toolsRemoved?: string[];
 }
 
 export interface ToolCall {
@@ -128,6 +132,11 @@ export interface AgentRuntimeOptions {
   retry?: RetryPolicy;
   /** Injectable backoff sleep, so a test never waits a real second. */
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  /**
+   * Called when a tool-loadout declaration lands in the transcript (Pi's `declareToolChanges`), so
+   * the checkpoint can record the declared set; recovery compares it against the executable set.
+   */
+  onToolsDeclared?: (names: string[]) => void;
 }
 
 export class AgentRuntime {
@@ -138,6 +147,11 @@ export class AgentRuntime {
   private readonly clock: () => number;
   /** The overflow recovery latch: one attempt per run, so a persistently oversized context cannot loop. */
   private overflowRecoveryUsed = false;
+  /**
+   * What the transcript last declared the tool loadout to be. It survives across runs, so a hot-plug
+   * that happened while the shell was idle is declared on the next run's first request.
+   */
+  private declaredTools?: Set<string>;
 
   constructor(private readonly options: AgentRuntimeOptions) {
     this.clock = options.clock ?? Date.now;
@@ -231,7 +245,33 @@ export class AgentRuntime {
         const request = requestUpdate && typeof requestUpdate === 'object' ? { ...requestSeed, ...requestUpdate } : requestSeed;
         // A `prepareRequest` handler may replace the message list for this turn; otherwise the model
         // sees the live projection, re-read on every attempt so an omitted failed attempt is gone.
-        const handlerMessages = requestUpdate?.messages;
+        // `pipeline` returns the seed object when no handler ran, so identity — not truthiness — says
+        // whether a handler really replaced the list.
+        const handlerMessages = requestUpdate?.messages !== requestSeed.messages ? requestUpdate?.messages : undefined;
+
+        // Pi's `declareToolChanges`: the transcript says what the model may call, and the difference
+        // from the executable set becomes `toolsAdded`/`toolsRemoved` on a system message before the
+        // request. The first run sets the baseline silently; a hot-plug is what produces a delta.
+        const executableTools = (request.tools ?? this.options.tools.list()).map((tool) => tool.name);
+        if (!this.declaredTools) this.declaredTools = new Set(executableTools);
+        const added = executableTools.filter((name) => !this.declaredTools!.has(name));
+        const removed = [...this.declaredTools].filter((name) => !executableTools.includes(name));
+        if (added.length > 0 || removed.length > 0) {
+          // Empty lists omit the field (Pi's `withToolChanges`), so a declaration is `toolsAdded`
+          // only when something was added.
+          const declaration: AgentMessage = {
+            role: 'system',
+            content: '',
+            ...(added.length > 0 ? { toolsAdded: added } : {}),
+            ...(removed.length > 0 ? { toolsRemoved: removed } : {}),
+          };
+          context.append(declaration);
+          await this.options.bus.emit('message_start', { type: 'message_start', message: declaration }, { runId: input.runId });
+          await this.options.bus.emit('message_end', { type: 'message_end', message: declaration }, { runId: input.runId });
+          this.declaredTools = new Set(executableTools);
+          this.options.trace?.append('tools_declared', { runId: input.runId, turnIndex, toolsAdded: added, toolsRemoved: removed }, this.clock());
+          this.options.onToolsDeclared?.(executableTools);
+        }
         const policy = this.options.retry ?? DEFAULT_RETRY_POLICY;
 
         // The failure ladder runs inside the turn: a retry re-requests the same turn, so `turns` — and

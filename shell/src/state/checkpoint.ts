@@ -44,6 +44,12 @@ export interface ShellRuntimeState {
   lastInteractionText?: string;
   /** The block injected when the shell last woke; the system prompt reuses it until the next wake. */
   lastTimeContext?: string;
+  /**
+   * The tool loadout the transcript declared (Pi's `declareToolChanges`). Recovery compares it with
+   * the executable set: a loadout the checkpoint promised but the process can no longer run is a
+   * loud failure, not a silently degraded run.
+   */
+  declaredTools?: string[];
 }
 
 export interface CheckpointState {

@@ -119,6 +119,9 @@ export class CompanionShell implements ShellControl {
     const lock = this.lock.acquire(process.pid, this.now());
     if (lock.recoveredStalePid) this.trace.append('stale_lock_recovered', { pid: lock.recoveredStalePid });
     const restored = this.machine.restore();
+    // The loadout the checkpoint's transcript declared, read before any plugin registers a tool so
+    // the comparison below sees what the previous process promised, not what this one just built.
+    const restoredTools = this.machine.runtime.declaredTools ? [...this.machine.runtime.declaredTools] : undefined;
     if (restored.previous && ['RUNNING', 'DREAMING', 'WAKING'].includes(restored.previous)) {
       this.trace.append('recovery', { previous: restored.previous, seq: this.machine.seq });
       await this.machine.dispatch('recovered_run', { reason: `recovered_after_kill:${restored.previous}` });
@@ -136,6 +139,10 @@ export class CompanionShell implements ShellControl {
     if (this.config.pi.adapterEnabled && this.config.pi.plugins.length > 0) {
       await this.loadPiPlugins();
     }
+    // The executable set is complete only now (native tools, then Pi plugin tools). A checkpoint that
+    // declared a different loadout is a loud failure, and the current one becomes the declaration.
+    this.assertDeclaredTools(restoredTools);
+    this.machine.updateRuntime({ declaredTools: this.executableToolNames() });
     if (this.machine.state === 'DORMANT') {
       await this.machine.dispatch('boot', { reason: 'process_start' });
       this.injectTimeContext('process_start');
@@ -189,6 +196,9 @@ export class CompanionShell implements ShellControl {
       systemPrompt: () => this.systemPrompt(),
       trace: this.trace,
       clock: this.now,
+      // A mid-run hot-plug declares the delta in the transcript; the checkpoint keeps the same set so
+      // the next recovery can compare it against what the process can run.
+      onToolsDeclared: (names) => this.machine.updateRuntime({ declaredTools: [...names].sort() }),
     });
     this.dream = this.host.getService('dream');
     this.emergence = this.host.getService('emergence');
@@ -204,6 +214,27 @@ export class CompanionShell implements ShellControl {
 
   private get captureService() {
     return this.host.hasService('capture') ? this.host.getService<{ captureTerminalRecord(text: string, threadId: string): Promise<unknown> }>('capture') : undefined;
+  }
+
+  /** The names the process can actually execute, which is what a transcript declaration must match. */
+  private executableToolNames(): string[] {
+    return this.host.tools.list().map((tool) => tool.name).sort();
+  }
+
+  /**
+   * Pi restores the loadout a transcript declared (`_restoreToolsFromTranscript`). Here the rule is
+   * stricter: if the checkpoint promised a set the process can no longer execute exactly — a plugin
+   * removed, added or failed to load — the shell refuses to start with a transcript that names tools
+   * it does not have, rather than run degraded and quiet.
+   */
+  private assertDeclaredTools(restored: string[] | undefined): void {
+    if (!restored) return;
+    const executable = this.executableToolNames();
+    const declared = [...restored].sort();
+    if (declared.length === executable.length && declared.every((name, index) => name === executable[index])) return;
+    this.trace.append('tool_set_mismatch', { declared, executable });
+    this.lock.release(process.pid);
+    throw new Error(`tool_set_mismatch: the checkpoint declared [${declared.join(', ')}] but this process can execute [${executable.join(', ')}]`);
   }
 
   private async loadPiPlugins(): Promise<void> {

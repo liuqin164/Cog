@@ -79,6 +79,20 @@ lost loudly. A one-retry version stood here first and was removed: `CODING_STAND
 survive the failure" rejects retry ladders, and a transient ledger error is better reported than
 papered over.
 
+## Tool-loadout declarations
+
+The transcript says what the model may call. When hot-plugging changes the executable set, the loop
+declares the difference to the model before the next request as `toolsAdded` / `toolsRemoved` on a
+system message — Pi's `declareToolChanges` — with an empty list omitting its field. The first run sets
+the baseline silently; a hot-plug (mid-run or while idle) is what produces a delta. Each declaration
+is a `tools_declared` trace record and updates `runtime.declaredTools` in the checkpoint.
+
+**Recovery is strict here.** On start, the checkpoint's declared loadout is compared with the set the
+process can actually execute; any difference — a plugin removed, added or failed to load — is a
+`tool_set_mismatch` trace and a refused start, not a degraded run. Pi reconciles a transcript loadout
+with what registered; the shell deliberately refuses instead, because a transcript naming tools the
+process does not have is a lie the model would keep acting on.
+
 ## Baseline (measured)
 
 Reproduce with `bun run scripts/measure-baseline.ts` (`--no-mcp` to leave the MCP face out); the
