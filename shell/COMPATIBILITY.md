@@ -13,9 +13,11 @@
 |---|---|---|---|
 | `pi-web-access` | 0.47.0 | tool | loads, registers its tools/commands, and one tool executes through the adapter into the shell tool registry |
 | `@lalalic/channel` | 1.0.6 | channel | loads, receives a channel message over its own WebSocket protocol, and the message reaches the shell as an inbound turn |
+| `debug-provider` (the example shipped in `@earendil-works/pi-coding-agent`'s `examples/extensions`) | 1.5.0 | command | loads, registers the `debug-provider` command, drops its entry renderer with a trace, and the command's own handler runs against the shell's UI shim |
 
-Both are pinned in `package.json`; the test records the version it loaded (see `test/pi-adapter.test.ts`
-and the `pi_plugin_loaded` trace line).
+The two npm plugins are pinned in `package.json`; the third ships inside the pinned Pi package, so its
+version is `PI_TARGET_VERSION` by construction. The test records the version it loaded (see
+`test/pi-adapter.test.ts` and the `pi_plugin_loaded` trace line).
 
 ## In scope
 

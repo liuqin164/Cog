@@ -194,6 +194,36 @@ describe('Pi compatibility adapter', () => {
     expect(readFileSync(join(shellRoot, 'src', 'app.ts'), 'utf8')).toContain("await import('./pi/adapter.ts')");
   });
 
+  test('a real command-type plugin loads, and its own handler runs against the shell', async () => {
+    const dir = makeTempDir();
+    const trace = new TraceLog(dir);
+    const host = new PluginHost();
+    host.seedService('eventBus', host.bus);
+    const adapter = new PiCompatAdapter({ host, pluginName: 'debug-provider', cwd: shellRoot, sessionId: 's', trace });
+    const entry = resolvePiExtensionEntry(join(shellRoot, 'node_modules', PI_TARGET_PACKAGE, 'examples', 'extensions', 'debug-provider.ts'), shellRoot);
+    const result = await adapter.load(entry);
+    expect(result.status).toBe('loaded');
+    // The example ships inside the pinned Pi package, so its version is the pin by construction.
+    expect(result.version).toBe(PI_TARGET_VERSION);
+    expect(result.commands).toContain('debug-provider');
+    expect(result.tools).toEqual([]);
+    expect(result.dropped.some((item) => item.startsWith('registerEntryRenderer'))).toBe(true);
+    expect(trace.read().some((record) => record.kind === 'pi_capability_dropped' && record.capability === 'registerEntryRenderer')).toBe(true);
+    for (const event of ['turn_start', 'provider_stream_event', 'message_end', 'turn_end']) {
+      expect(host.bus.listenerCount(event), `${event} hook registered`).toBeGreaterThan(0);
+    }
+    await adapter.emitSessionStart();
+
+    // The command is the plugin's own code, not a stub: `on` enables capture, an empty argument
+    // toggles it back off, and both paths report through the shell's UI shim.
+    await host.commands.run('debug-provider', 'on', {});
+    await host.commands.run('debug-provider', '', {});
+    const uiRecords = trace.read().filter((record) => record.kind === 'pi_ui_notify');
+    expect(uiRecords.some((record) => String(record.message).includes('enabled'))).toBe(true);
+    expect(uiRecords.some((record) => String(record.message).includes('disabled'))).toBe(true);
+    expect(trace.read().some((record) => record.kind === 'pi_ui_status' && record.key === 'debug-provider')).toBe(true);
+  }, 30_000);
+
   test('a plugin that registers an MCP server is refused at load, disabled, and traced', async () => {
     const dir = makeTempDir();
     const pluginDir = join(dir, 'refusing-plugin');
