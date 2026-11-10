@@ -35,6 +35,7 @@ Useful flags: `--workspace <dir>`, `--data <dir>`, `--db <file>`, `--project <id
 - `src/state/machine.ts` — the only writer of the lifecycle; a failed checkpoint write halts.
 - `src/state/agent-loop.ts` — Pi's turn loop, event names and hook positions reused verbatim
   (the `prepareRequest` / `finishTurn` / `prepareNextTurn` triad, not the older `shouldStopAfterTurn`).
+- `src/state/projection.ts` — the append-only context log and its `context_edit` overlay.
 - `src/state/retry.ts` — the failure ladder's classification and backoff, ported from pinned pi-ai.
 - `src/plugins/host.ts` — one registry, one bus; native Cordis-style plugins.
 - `src/pi/adapter.ts` — the removable Pi compatibility layer.

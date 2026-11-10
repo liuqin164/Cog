@@ -10,6 +10,7 @@
  */
 import type { EventBus } from '../bus.ts';
 import type { TraceLog } from '../trace.ts';
+import { ContextProjection } from './projection.ts';
 import { DEFAULT_RETRY_POLICY, planFailure, sleepAbortable, type RetryPolicy } from './retry.ts';
 
 export interface AgentMessage {
@@ -174,7 +175,7 @@ export class AgentRuntime {
     const signal = input.signal
       ? AbortSignal.any([input.signal, controller.signal])
       : controller.signal;
-    const messages: AgentMessage[] = [];
+    const context = new ContextProjection();
     const allToolCalls: ToolCall[] = [];
     const allToolResults: ToolResult[] = [];
     let turns = 0;
@@ -183,7 +184,7 @@ export class AgentRuntime {
     let error: string | undefined;
     const turnId = `${input.runId}:0`;
     const userMessage: AgentMessage = { role: 'user', content: input.userText };
-    messages.push(userMessage);
+    context.append(userMessage);
     // Pi fires before_agent_start before agent_start; an extension may hand back one injected message
     // (the shape the Cogmem pi extension uses for recall context).
     const beforeStart = await this.options.bus.emit('before_agent_start', {
@@ -193,9 +194,9 @@ export class AgentRuntime {
     }, { runId: input.runId });
     const injected = (beforeStart as { message?: { content?: unknown } } | undefined)?.message;
     if (injected && injected.content !== undefined) {
-      messages.push({ role: 'system', content: typeof injected.content === 'string' ? injected.content : JSON.stringify(injected.content) });
+      context.append({ role: 'system', content: typeof injected.content === 'string' ? injected.content : JSON.stringify(injected.content) });
     }
-    await this.options.bus.emit('agent_start', { type: 'agent_start', runId: input.runId, messages }, { runId: input.runId });
+    await this.options.bus.emit('agent_start', { type: 'agent_start', runId: input.runId, messages: context.project() }, { runId: input.runId });
     await this.emitUserMessage(userMessage, input.runId);
 
     try {
@@ -221,14 +222,16 @@ export class AgentRuntime {
         // `transformContext` still owns the message pipeline; this hook owns the request's shape
         // (system prompt, model, tool list) and polls no queues.
         const requestSeed: RequestUpdate & { messages: AgentMessage[]; systemPrompt: string; model: string } = {
-          messages,
+          messages: context.project(),
           tools: this.options.tools.list(),
           systemPrompt: this.options.systemPrompt(),
           model: this.options.provider.model,
         };
         const requestUpdate = (await this.options.bus.pipeline('prepareRequest', requestSeed, { runId: input.runId, turnIndex })) as RequestUpdate | undefined;
         const request = requestUpdate && typeof requestUpdate === 'object' ? { ...requestSeed, ...requestUpdate } : requestSeed;
-        const requestMessages = await this.projectMessages([...request.messages], input.runId);
+        // A `prepareRequest` handler may replace the message list for this turn; otherwise the model
+        // sees the live projection, re-read on every attempt so an omitted failed attempt is gone.
+        const handlerMessages = requestUpdate?.messages;
         const policy = this.options.retry ?? DEFAULT_RETRY_POLICY;
 
         // The failure ladder runs inside the turn: a retry re-requests the same turn, so `turns` — and
@@ -237,13 +240,14 @@ export class AgentRuntime {
         let failedReason: string | undefined;
         for (let attempt = 0; ; ) {
           const draft: AgentMessage = { role: 'assistant', content: '' };
+          const attemptMessages = await this.projectMessages(handlerMessages ?? context.project(), input.runId);
           await this.options.bus.emit('message_start', { type: 'message_start', message: draft }, { runId: input.runId });
           try {
             turn = await this.options.provider.complete({
               // A copy, so each attempt sees the context as of that call. Handing the live array over
               // let a provider that keeps its input (and this suite's scripted provider) observe
               // messages pushed after the call — steering a later turn consumed looked already sent.
-              messages: [...requestMessages],
+              messages: [...attemptMessages],
               tools: request.tools ?? this.options.tools.list(),
               systemPrompt: request.systemPrompt,
               model: request.model,
@@ -259,7 +263,7 @@ export class AgentRuntime {
           draft.isError = turn.stopReason === 'error';
           await this.options.bus.emit('message_update', { type: 'message_update', message: draft, delta: turn.text }, { runId: input.runId });
           await this.options.bus.emit('message_end', { type: 'message_end', message: draft }, { runId: input.runId });
-          messages.push(draft);
+          const failedEntry = context.append(draft);
           if (turn.stopReason !== 'error') {
             assistantDraft = draft;
             break;
@@ -279,6 +283,11 @@ export class AgentRuntime {
             break;
           }
           if (plan.action === 'recover_overflow') this.overflowRecoveryUsed = true;
+          // The failed attempt leaves the model's context together with any tool results it owns, but
+          // stays in the log: Pi's `_omitRecoveryAttempt` applied as a `context_edit`. An unpaired
+          // tool result would make the provider reject the retry, so the pairing is the projection's.
+          const omitted = context.omitFailedAttempt(failedEntry.id);
+          this.options.trace?.append('recovery_attempt_omitted', { runId: input.runId, turnIndex, targetId: failedEntry.id, omitted }, this.clock());
           attempt = plan.attempt;
           if (plan.delayMs > 0) await (this.options.sleep ?? sleepAbortable)(plan.delayMs, signal);
         }
@@ -332,7 +341,7 @@ export class AgentRuntime {
         // Pi appends one tool message per result before the next provider call; without this the model
         // never sees what its own tool returned.
         for (const toolResult of toolResults) {
-          messages.push({
+          context.append({
             role: 'tool',
             content: toolResult.output,
             toolCallId: toolResult.toolCallId,
@@ -383,7 +392,7 @@ export class AgentRuntime {
           { runId: input.runId },
         )) as TurnUpdate | undefined;
         for (const message of prepared?.messages ?? []) {
-          messages.push(message);
+          context.append(message);
           await this.emitUserMessage(message, input.runId);
         }
         this.options.trace?.append('prepare_next_turn', {
@@ -396,14 +405,14 @@ export class AgentRuntime {
         }, this.clock());
 
         if (this.steering.length > 0) {
-          await this.drainSteering(messages, input.runId, turnIndex);
+          await this.drainSteering(context, input.runId, turnIndex);
           continue;
         }
         if (turn.toolCalls.length > 0) continue;
         if (this.followUps.length > 0) {
           const text = this.followUps.shift()!;
           const queued: AgentMessage = { role: 'user', content: text };
-          messages.push(queued);
+          context.append(queued);
           await this.emitUserMessage(queued, input.runId);
           continue;
         }
@@ -419,7 +428,7 @@ export class AgentRuntime {
       this.abortController = undefined;
     }
 
-    const assistantText = messages.filter((message) => message.role === 'assistant').map((message) => message.content).filter(Boolean).join('\n');
+    const assistantText = context.project().filter((message) => message.role === 'assistant').map((message) => message.content).filter(Boolean).join('\n');
     const summary: RunSummary = {
       runId: input.runId,
       sessionId: input.sessionId,
@@ -434,7 +443,7 @@ export class AgentRuntime {
       error,
     };
     try {
-      await this.options.bus.emit('agent_end', { type: 'agent_end', runId: input.runId, messages, summary }, { runId: input.runId });
+      await this.options.bus.emit('agent_end', { type: 'agent_end', runId: input.runId, messages: context.project(), summary }, { runId: input.runId });
     } catch (caught) {
       // `agent_end` is where capture writes the run's account to the ledger. A handler failing there
       // makes the account incomplete, so the run is reported as `run_error` and the caller leaves
@@ -454,11 +463,11 @@ export class AgentRuntime {
    * makes the timing legible — a long tool call is exactly when a user types, and the survival run
    * needs to read back which turn their line landed on.
    */
-  private async drainSteering(messages: AgentMessage[], runId: string, afterTurn: number): Promise<void> {
+  private async drainSteering(context: ContextProjection, runId: string, afterTurn: number): Promise<void> {
     const count = this.steering.length;
     while (this.steering.length > 0) {
       const queued: AgentMessage = { role: 'user', content: this.steering.shift()! };
-      messages.push(queued);
+      context.append(queued);
       await this.emitUserMessage(queued, runId);
     }
     this.options.trace?.append('steering_injected', { runId, afterTurn, beforeTurn: afterTurn + 1, count }, this.clock());
