@@ -48,6 +48,23 @@ describe('the append-only context projection', () => {
     expect(context.project().map((message) => message.content)).toEqual(['rewritten twice']);
   });
 
+  test('the oldest tool exchange can be dropped, paired, and is undefined when there is none', () => {
+    const context = new ContextProjection();
+    context.append({ role: 'user', content: 'go' });
+    const first = context.append(attempt('c1'));
+    context.append({ role: 'tool', content: 'result one', toolCallId: 'c1', toolName: 'echo', isError: false });
+    context.append({ role: 'assistant', content: 'later answer' });
+    const dropped = context.omitOldestToolExchange();
+    expect(dropped).toEqual([first.id, first.id + 1]);
+    expect(context.project().map((message) => message.content)).toEqual(['go', 'later answer']);
+    // With the only exchange already gone there is nothing left to drop.
+    expect(context.omitOldestToolExchange()).toBeUndefined();
+
+    const plain = new ContextProjection();
+    plain.append({ role: 'user', content: 'no tools here' });
+    expect(plain.omitOldestToolExchange()).toBeUndefined();
+  });
+
   test('editing a target that is not in the log fails loudly', () => {
     const context = new ContextProjection();
     expect(() => context.edit(99, null)).toThrow(ProjectionTargetMissingError);
