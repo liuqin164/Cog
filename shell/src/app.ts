@@ -142,6 +142,7 @@ export class CompanionShell implements ShellControl {
     // The executable set is complete only now (native tools, then Pi plugin tools). A checkpoint that
     // declared a different loadout is a loud failure, and the current one becomes the declaration.
     this.assertDeclaredTools(restoredTools);
+    this.refuseRecoveryReplay(restored.previous);
     this.machine.updateRuntime({ declaredTools: this.executableToolNames() });
     if (this.machine.state === 'DORMANT') {
       await this.machine.dispatch('boot', { reason: 'process_start' });
@@ -202,6 +203,21 @@ export class CompanionShell implements ShellControl {
     });
     this.dream = this.host.getService('dream');
     this.emergence = this.host.getService('emergence');
+    // Crash recovery needs to know what was running. The checkpoint records the calls that started and
+    // have not finished, which is the list a replay would have to be judged against (see
+    // `refuseRecoveryReplay`). ponytail: two checkpoint writes per tool call; batch them if a run ever
+    // issues tools fast enough for the fsyncs to show up.
+    this.host.bus.on('tool_execution_start', (event: { toolCallId?: string; toolName?: string }) => {
+      if (!event.toolCallId || !event.toolName) return;
+      const inFlight = this.machine.runtime.inFlightToolCalls ?? [];
+      if (inFlight.some((call) => call.toolCallId === event.toolCallId)) return;
+      this.machine.updateRuntime({ inFlightToolCalls: [...inFlight, { toolCallId: event.toolCallId, toolName: event.toolName }] });
+    });
+    this.host.bus.on('tool_execution_end', (event: { toolCallId?: string }) => {
+      const inFlight = this.machine.runtime.inFlightToolCalls ?? [];
+      if (!event.toolCallId || !inFlight.some((call) => call.toolCallId === event.toolCallId)) return;
+      this.machine.updateRuntime({ inFlightToolCalls: inFlight.filter((call) => call.toolCallId !== event.toolCallId) });
+    });
     // The terminal channel prints what the shell says; the app is the only place that knows a reply
     // finished, so it forwards the assistant text on the bus the channel already listens to.
     this.host.bus.on('message_end', (event: { message?: { role?: string; content?: string } }) => {
@@ -219,6 +235,19 @@ export class CompanionShell implements ShellControl {
   /** The names the process can actually execute, which is what a transcript declaration must match. */
   private executableToolNames(): string[] {
     return this.host.tools.list().map((tool) => tool.name).sort();
+  }
+
+  /**
+   * Crash recovery must not replay an effect whose outcome is unknown. Nothing in the shell replays a
+   * tool call today; this makes the refusal explicit and names what it would have replayed, using the
+   * policy each tool declares (`read` is safe; bash/write/edit and anything undeclared are not).
+   */
+  private refuseRecoveryReplay(previous: string | undefined): void {
+    const inFlight = this.machine.runtime.inFlightToolCalls ?? [];
+    if (previous !== 'RUNNING' || inFlight.length === 0) return;
+    const judged = inFlight.map((call) => ({ ...call, replay: this.host.tools.get(call.toolName)?.replay ?? 'never' }));
+    this.trace.append('recovery_no_replay', { previous, inFlight: judged, refused: judged.filter((call) => call.replay === 'never').map((call) => call.toolName) });
+    this.machine.updateRuntime({ inFlightToolCalls: [] });
   }
 
   /**

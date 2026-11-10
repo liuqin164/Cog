@@ -58,6 +58,7 @@ function definitions(workspaceRoot: string): ToolDefinition[] {
     {
       name: 'read',
       description: 'Read a UTF-8 text file inside the workspace. Output is capped at 256 KiB.',
+      replay: 'safe',
       parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
       execute({ args }) {
         const path = inside(workspaceRoot, asString(args, 'path'));
@@ -69,6 +70,7 @@ function definitions(workspaceRoot: string): ToolDefinition[] {
     {
       name: 'write',
       description: 'Write a UTF-8 text file inside the workspace, creating parent directories.',
+      replay: 'never',
       parameters: {
         type: 'object',
         properties: { path: { type: 'string' }, content: { type: 'string' } },
@@ -85,6 +87,7 @@ function definitions(workspaceRoot: string): ToolDefinition[] {
     {
       name: 'edit',
       description: 'Replace exactly one occurrence of old_string with new_string in a workspace file. Fails loud when it does not match exactly once.',
+      replay: 'never',
       parameters: {
         type: 'object',
         properties: { path: { type: 'string' }, old_string: { type: 'string' }, new_string: { type: 'string' } },
@@ -103,6 +106,7 @@ function definitions(workspaceRoot: string): ToolDefinition[] {
     },
     {
       name: 'bash',
+      replay: 'never',
       description: 'Run a bash command in the workspace with a 30s timeout. stdout/stderr are combined; output over 32 KiB is capped, and the full text is written under .companion-shell/bash-output/ and named in the result.',
       parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] },
       execute({ args, signal }) {

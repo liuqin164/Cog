@@ -92,6 +92,13 @@ system message — Pi's `declareToolChanges` — with an empty list omitting its
 the baseline silently; a hot-plug (mid-run or while idle) is what produces a delta. Each declaration
 is a `tools_declared` trace record and updates `runtime.declaredTools` in the checkpoint.
 
+**Replay policy.** Every tool declares `replay: 'never' | 'safe'` (Pi's `AgentTool.replay`); the host
+defaults anything undeclared to `never`, `read` declares `safe`, and `bash`/`write`/`edit` declare
+`never`. The checkpoint records the tool calls a RUNNING run had started but not finished, and on
+recovery the shell refuses replay for the `never` ones by name in a `recovery_no_replay` trace. Nothing
+replays a tool call today — the policy is what a future recovery would have to obey, and the refusal is
+recorded rather than assumed.
+
 **Recovery is strict here.** On start, the checkpoint's declared loadout is compared with the set the
 process can actually execute; any difference — a plugin removed, added or failed to load — is a
 `tool_set_mismatch` trace and a refused start, not a degraded run. Pi reconciles a transcript loadout

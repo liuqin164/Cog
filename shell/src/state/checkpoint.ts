@@ -50,6 +50,12 @@ export interface ShellRuntimeState {
    * loud failure, not a silently degraded run.
    */
   declaredTools?: string[];
+  /**
+   * The tool calls a RUNNING run had started but not finished when the checkpoint was last written.
+   * On recovery these are what a replay would have to be judged against; the shell refuses replay
+   * for any whose policy is `never` (see `ToolDefinition.replay`).
+   */
+  inFlightToolCalls?: Array<{ toolCallId: string; toolName: string }>;
 }
 
 export interface CheckpointState {

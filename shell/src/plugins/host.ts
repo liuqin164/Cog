@@ -50,12 +50,19 @@ export interface ToolDefinition {
   name: string;
   description: string;
   parameters: unknown;
+  /**
+   * Recovery policy for a call whose durable intent exists but whose outcome is unknown (Pi's
+   * `AgentTool.replay`). The host defaults anything undeclared to `never`: a read is safe to repeat,
+   * an effect is not, and a tool that knows it is idempotent says so.
+   */
+  replay?: 'never' | 'safe';
   execute(input: ToolExecuteInput): Promise<ToolResult | string> | ToolResult | string;
 }
 
 export interface RegisteredTool extends ToolDefinition {
   source: string;
   builtin: boolean;
+  replay: 'never' | 'safe';
 }
 
 export interface CommandDefinition {
@@ -77,7 +84,7 @@ export class ToolRegistry {
     if (wantsBuiltin && options.source !== BUILTIN_SOURCE) {
       throw new Error(`builtin_flag_forbidden: "${definition.name}" from ${options.source} cannot claim to be a builtin`);
     }
-    const registered: RegisteredTool = { ...definition, source: options.source, builtin: options.builtin === true };
+    const registered: RegisteredTool = { ...definition, source: options.source, builtin: options.builtin === true, replay: definition.replay ?? 'never' };
     this.registry.set(definition.name, registered);
     return registered;
   }
