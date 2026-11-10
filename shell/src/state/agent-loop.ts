@@ -87,8 +87,6 @@ export interface ToolCallPipelineContext {
   clock: () => number;
   runId: string;
   signal: AbortSignal;
-  /** How deep a tool's nested `runToolCall` may go before the call is refused. */
-  maxDepth?: number;
 }
 
 export interface ExecutedToolCall {
@@ -97,6 +95,31 @@ export interface ExecutedToolCall {
 }
 
 const MAX_NESTED_TOOL_DEPTH = 8;
+
+async function emitToolStart(context: ToolCallPipelineContext, call: ToolCall): Promise<void> {
+  await context.bus.emit('tool_execution_start', { type: 'tool_execution_start', toolCallId: call.toolCallId, toolName: call.toolName, input: call.input }, { runId: context.runId });
+}
+
+async function emitToolEnd(context: ToolCallPipelineContext, call: ToolCall, result: ToolResult): Promise<void> {
+  await context.bus.emit('tool_execution_end', { type: 'tool_execution_end', toolCallId: call.toolCallId, toolName: call.toolName, result, isError: result.isError }, { runId: context.runId });
+}
+
+/**
+ * Pi's `failToolCallsFromTruncatedMessage`: in a `length`-truncated message every call becomes an
+ * error the model can read and correct. `beforeToolCall` does not run because nothing executes, but
+ * the start/end pair is still emitted so capture records the call and its refusal.
+ */
+export async function refuseTruncatedCall(context: ToolCallPipelineContext, call: ToolCall): Promise<ToolResult> {
+  await emitToolStart(context, call);
+  const result: ToolResult = {
+    toolCallId: call.toolCallId,
+    toolName: call.toolName,
+    output: `tool_not_executed: "${call.toolName}" was not executed because the response hit the output token limit, so its arguments may be truncated. Re-issue the call with complete arguments.`,
+    isError: true,
+  };
+  await emitToolEnd(context, call, result);
+  return result;
+}
 
 /**
  * One tool call through the same steps whether the model or another tool issued it: `beforeToolCall`
@@ -121,17 +144,13 @@ export async function executeToolCall(
   if (before?.block) {
     const blocked: ToolResult = { toolCallId: call.toolCallId, toolName: call.toolName, output: before.reason ?? 'blocked', isError: true, blocked: { reason: before.reason ?? 'blocked' } };
     context.trace?.append('tool_blocked', { runId: context.runId, toolName: call.toolName, reason: before.reason, nested: !options.emitEvents }, context.clock());
-    if (options.emitEvents) {
-      await context.bus.emit('tool_execution_end', { type: 'tool_execution_end', toolCallId: call.toolCallId, toolName: call.toolName, result: blocked, isError: true }, { runId: context.runId });
-    }
+    if (options.emitEvents) await emitToolEnd(context, call, blocked);
     return { result: blocked, terminate: false };
   }
-  if (options.emitEvents) {
-    await context.bus.emit('tool_execution_start', { type: 'tool_execution_start', toolCallId: call.toolCallId, toolName: call.toolName, input: call.input }, { runId: context.runId });
-  }
+  if (options.emitEvents) await emitToolStart(context, call);
   const nest = async (name: string, input: unknown): Promise<ToolResult> => {
-    if (depth >= (context.maxDepth ?? MAX_NESTED_TOOL_DEPTH)) {
-      return { toolCallId: `${call.toolCallId}:${name}`, toolName: name, output: `nested_tool_depth_exceeded: "${name}" is nested more than ${context.maxDepth ?? MAX_NESTED_TOOL_DEPTH} deep`, isError: true };
+    if (depth >= MAX_NESTED_TOOL_DEPTH) {
+      return { toolCallId: `${call.toolCallId}:${name}`, toolName: name, output: `nested_tool_depth_exceeded: "${name}" is nested more than ${MAX_NESTED_TOOL_DEPTH} deep`, isError: true };
     }
     const nested = await executeToolCall(context, { toolCallId: `${call.toolCallId}:${depth + 1}:${name}`, toolName: name, input }, { emitEvents: false, depth: depth + 1 });
     return nested.result;
@@ -140,9 +159,7 @@ export async function executeToolCall(
   const after = await context.bus.emit('afterToolCall', { type: 'afterToolCall', toolCall: call, result }, { runId: context.runId });
   if (after && typeof after === 'object' && 'result' in after) result = after.result as ToolResult;
   const terminate = Boolean(after && typeof after === 'object' && 'terminate' in after && after.terminate);
-  if (options.emitEvents) {
-    await context.bus.emit('tool_execution_end', { type: 'tool_execution_end', toolCallId: call.toolCallId, toolName: call.toolName, result, isError: result.isError }, { runId: context.runId });
-  }
+  if (options.emitEvents) await emitToolEnd(context, call, result);
   return { result, terminate };
 }
 
@@ -165,11 +182,14 @@ export interface TurnContext {
  */
 export type TurnDecision = { action: 'end' | 'continue' } | void;
 
-/** Pi's `AgentLoopTurnUpdate`: replacement state for the next turn, applied at `prepareNextTurn`. */
+/**
+ * Pi's `AgentLoopTurnUpdate`, narrowed to what this shell's `prepareNextTurn` applies: messages to
+ * append before the next request. Pi also lets it replace the model and thinking level; the shell has
+ * one mg provider and no thinking-level concept, so those fields are deliberately absent rather than
+ * declared and ignored.
+ */
 export interface TurnUpdate {
   messages?: AgentMessage[];
-  systemPrompt?: string;
-  model?: string;
 }
 
 /** Pi's `AgentRequestUpdate`: replacement request state, applied at `prepareRequest` (polls no queues). */
@@ -431,7 +451,7 @@ export class AgentRuntime {
         for (const call of turn.toolCalls) {
           allToolCalls.push(call);
           if (truncated) {
-            const refused = await this.refuseTruncatedCall(call, input.runId);
+            const refused = await refuseTruncatedCall(pipeline, call);
             toolResults.push(refused);
             allToolResults.push(refused);
             continue;
@@ -456,9 +476,10 @@ export class AgentRuntime {
         // Pi's `finishTurn`: after the assistant message and every tool result are in context, and
         // before `turn_end`. `end` stops without polling the queues; `continue` guarantees one more
         // request. Error and abort remain hard exits (they leave through the `catch`).
+        const completedTurn: TurnContext = { turnIndex, message: assistantDraft, toolResults };
         const decision = (await this.options.bus.emit(
           'finishTurn',
-          { type: 'finishTurn', turnIndex, message: assistantDraft, toolResults },
+          { type: 'finishTurn', ...completedTurn },
           { runId: input.runId },
         )) as TurnDecision;
         await this.options.bus.emit('turn_end', { type: 'turn_end', turnIndex, message: assistantDraft, toolResults }, { runId: input.runId });
@@ -492,7 +513,7 @@ export class AgentRuntime {
         // next request runs `transformContext` against that new last user line.
         const prepared = (await this.options.bus.emit(
           'prepareNextTurn',
-          { type: 'prepareNextTurn', turnIndex, message: assistantDraft, toolResults },
+          { type: 'prepareNextTurn', ...completedTurn },
           { runId: input.runId },
         )) as TurnUpdate | undefined;
         for (const message of prepared?.messages ?? []) {
@@ -594,23 +615,6 @@ export class AgentRuntime {
       await this.emitUserMessage(queued, runId);
     }
     this.options.trace?.append('steering_injected', { runId, afterTurn, beforeTurn: afterTurn + 1, count }, this.clock());
-  }
-
-  /**
-   * Pi's `failToolCallsFromTruncatedMessage`: in a `length`-truncated message every call becomes an
-   * error the model can read and correct. `beforeToolCall` does not run because nothing executes, but
-   * the start/end pair is still emitted so capture records the call and its refusal.
-   */
-  private async refuseTruncatedCall(call: ToolCall, runId: string): Promise<ToolResult> {
-    await this.options.bus.emit('tool_execution_start', { type: 'tool_execution_start', toolCallId: call.toolCallId, toolName: call.toolName, input: call.input }, { runId });
-    const result: ToolResult = {
-      toolCallId: call.toolCallId,
-      toolName: call.toolName,
-      output: `tool_not_executed: "${call.toolName}" was not executed because the response hit the output token limit, so its arguments may be truncated. Re-issue the call with complete arguments.`,
-      isError: true,
-    };
-    await this.options.bus.emit('tool_execution_end', { type: 'tool_execution_end', toolCallId: call.toolCallId, toolName: call.toolName, result, isError: true }, { runId });
-    return result;
   }
 
   /** Pi emits the user message on the same start/end pair the assistant uses. */
