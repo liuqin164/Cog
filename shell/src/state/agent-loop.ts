@@ -163,7 +163,7 @@ export class AgentRuntime {
         if (budgetCheck.exceeded) {
           stopReason = 'budget_exceeded';
           error = budgetCheck.reason;
-          this.options.trace?.append('cage_violation', { runId: input.runId, kind: 'turn_budget', reason: budgetCheck.reason, turnIndex }, this.clock());
+          // The budget owns the `cage_violation` record; the loop only obeys the verdict.
           break;
         }
         turns = turnIndex;
@@ -173,7 +173,10 @@ export class AgentRuntime {
         let terminateRequested = false;
         await this.options.bus.emit('message_start', { type: 'message_start', message: assistantDraft }, { runId: input.runId });
         const turn = await this.options.provider.complete({
-          messages: await this.projectMessages(messages, input.runId),
+          // A copy, so each request sees the context as of that call. Handing the live array over let a
+          // provider that keeps its input (and this suite's scripted provider) observe messages pushed
+          // after the call — the steering a later turn consumed looked like it had already been sent.
+          messages: await this.projectMessages([...messages], input.runId),
           tools: this.options.tools.list(),
           systemPrompt: this.options.systemPrompt(),
           model: this.options.provider.model,
@@ -232,7 +235,6 @@ export class AgentRuntime {
           if (tokenCheck.exceeded) {
             stopReason = 'budget_exceeded';
             error = tokenCheck.reason;
-            this.options.trace?.append('cage_violation', { runId: input.runId, kind: 'token_budget', reason: tokenCheck.reason, tokens }, this.clock());
             break;
           }
         }
