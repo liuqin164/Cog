@@ -91,4 +91,46 @@ describe('secret discipline: everything captured goes through the kernel redacte
     expect(result.metadata.secretFindings).toEqual({ total: (result.metadata.secretFindings as { total: number }).total });
     expect((result.metadata.secretFindings as { total: number }).total).toBeGreaterThanOrEqual(2);
   });
+
+  test('every stage-1.5 redaction shape is caught through both the read and the bash path', async () => {
+    const dir = makeTempDir();
+    const provider = new ScriptedProvider([
+      { text: 'reading it', toolCalls: [{ toolCallId: 'c1', toolName: 'read', input: { path: 'secrets.env' } }] },
+      { text: 'read it', toolCalls: [] },
+      { text: 'catting it', toolCalls: [{ toolCallId: 'c2', toolName: 'bash', input: { command: 'cat secrets.env' } }] },
+      { text: 'catted it', toolCalls: [] },
+    ]);
+    const shell = makeShell(dir, provider);
+    writeFileSync(join(dir, 'ws', 'secrets.env'), SECRETS_ENV, 'utf8');
+    await shell.start();
+    try {
+      const clock = shell.host.getService<{ localDate(at?: number): string }>('clock');
+      const threadId = `companion-day:${clock.localDate()}`;
+      const viaRead = await shell.submit('read the secrets file');
+      const viaBash = await shell.submit('now cat it');
+      // Both paths really did carry the raw text into the tool result; only the ledger is redacted.
+      expect(viaRead!.toolResults[0].output).toContain(FAKE_CONNECTION);
+      expect(viaBash!.toolResults[0].output).toContain(FAKE_AWS_SECRET);
+
+      const ledger = payloadTexts(shell, threadId).join('\n');
+      for (const [name, secret] of [
+        ['connection string', FAKE_CONNECTION],
+        ['aws secret', FAKE_AWS_SECRET],
+        ['bearer header', FAKE_BEARER_2],
+        ['private key body', 'MIIEowIBAAKCAQEAx7Zq8mQvN3sTpLdW1yVk9bRf4hJ2mC5nQ8wX1zA6oP'],
+        ['private key header', '-----BEGIN RSA PRIVATE KEY-----'],
+        ['connection password', 's3cretPass9911'],
+      ] as Array<[string, string]>) {
+        expect(ledger, `${name} must not reach the ledger`).not.toContain(secret);
+      }
+      expect(ledger).toContain('REDACTED');
+      const markedEvents = shell.kernel
+        .getThreadEvents(threadId, { projectId: shell.config.projectId, limit: 500 })
+        .filter((event) => Number((event.payload as { metadata?: { secretFindings?: { total?: number } } }).metadata?.secretFindings?.total ?? 0) > 0);
+      // One marked event for the read observation and one for the bash observation.
+      expect(markedEvents.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      await shell.stop();
+    }
+  });
 });
