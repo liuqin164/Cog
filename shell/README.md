@@ -15,7 +15,7 @@ bun test test
 # one turn against the mg gateway (magpie at 127.0.0.1:3425)
 bun run src/cli.ts once "今天过得怎么样？"
 
-# resident (terminal channel + in-process kernel + MCP face on 7338)
+# resident (terminal channel + in-process kernel + loopback HTTP face on 7338)
 bun run src/cli.ts start
 
 # F1/F2/F6 gap list (throwaway in-memory kernel unless --db is passed, so run it freely)
@@ -26,7 +26,7 @@ The mg routing group measured ~2.5 minutes for a one-word reply on this box; the
 opt-in (`SHELL_LIVE_MODEL=1 bun test test/mg-live.test.ts`) so the suite stays fast.
 
 Useful flags: `--workspace <dir>`, `--data <dir>`, `--db <file>`, `--project <id>`, `--agent <id>`,
-`--tools read,write,edit,bash`, `--turns <n>`, `--tokens <n>`, `--mcp-port <n>`, `--no-mcp`,
+`--tools read,write,edit,bash`, `--turns <n>`, `--tokens <n>`, `--http-port <n>`, `--no-http`,
 `--no-terminal`, `--attach`, `--no-pi`, `--pi-plugin <pkg-or-path>` (repeatable).
 
 ## `install`: the F21 bootstrap (#203)
@@ -41,8 +41,8 @@ bun run bin/install --uninstall     # stop the service, remove the unit, keep th
 ```
 
 0. **预检** — OS (macOS/Linux only; Windows is refused, its service story is not this round), bun,
-   free disk, and whether the MCP port is free. No old-install branch: every version so far has no
-   users, so there is one path and no migration.
+   free disk, and whether the loopback HTTP port is free. No old-install branch: every version so far
+   has no users, so there is one path and no migration.
 1. **落位** — install the package deps, create the data directory (`0700`) and `snapshots/` (`0700`),
    initialize an empty kernel through `createMemoryKernel`, and write the default soul.
 2. **模型** — pick mg or an OpenAI-compatible endpoint, take the key through a masked prompt, and make
@@ -55,8 +55,9 @@ bun run bin/install --uninstall     # stop the service, remove the unit, keep th
    resident's env file; the quiet window is recorded (the shell has no silence gate yet — that is F16).
 4. **常驻** — register a **user-level** service (`systemd --user` on Linux, launchd agent on macOS; no
    sudo), start it, run the shell-side doctor, and print the star-sea and health addresses.
-5. **自检式首醒** — write a probe memory through the resident's own MCP face, restart the process, and
-   recall it. Only then does the installer print success; the endpoint is a first `cog` attach.
+5. **自检式首醒** — write a probe memory through the resident's own control socket (its in-process
+   kernel keeps the single writer), restart the process, and recall it. Only then does the installer
+   print success; the endpoint is a first `cog` attach.
 
 Each step is idempotent and its completion is written to `<dataDir>/install.json` only after it fully
 succeeded, so a re-run resumes at the first unfinished step.
@@ -143,19 +144,20 @@ numbers.
 - `src/tui/*` — the `cog` interface: frame/theme, markdown, the view reducer, layout and virtualization,
   the input editor, the palette, and the raw-mode app. Pure `render(view, size, env)` core, so the
   snapshots are text comparisons.
-- `src/attach/*` — the resident's control socket and the client `cog` connects with.
+- `src/attach/*` — the resident's control socket (the channel `cog` and the install's first-wake probe
+  speak) and the client `cog` connects with.
 - `src/cog.ts` — the `cog` entry point: attach-or-spawn, `--headless`, and the non-TTY line mode.
 - `src/presence.ts` — "while you were away", read back from the trace, the runtime and the kernel.
-- `src/probes/gaps.ts` — the F1/F2/F6 (+F-SEC, F-MCP) probe and gap list.
-- `src/kernel-host.ts` — the loopback MCP face over the in-process kernel. **One `Server` per
-  session**: `Protocol.connect` refuses a second transport, and a single shared `Server` answered
-  every session after the first with the SDK's *Already connected to a transport* error (fixed this
-  round; the face is what the install's first-wake probe drives). It answers `GET /health` (kernel
-  status without opening a second kernel, which two-writer discipline forbids) and mounts the
-  read-only observatory at `/observatory` when the kernel source is beside it. Plain JSON responses
-  (`enableJsonResponse`), so a one-call client reads one object.
+- `src/probes/gaps.ts` — the F1/F2/F6 (+F-SEC) probe and gap list.
+- `src/kernel-host.ts` — the loopback HTTP face over the in-process kernel: `GET /health` (kernel
+  status without opening a second kernel, which two-writer discipline forbids) and, when the kernel
+  source is beside the shell, the read-only observatory at `/observatory`. Plain JSON, no tool
+  surface. It used to also serve MCP to other hosts; that endpoint (and the per-session `Server`
+  behind it) was removed by #200 R2 — the shell and the kernel are one process, so it was a second
+  way in with no second reader.
 - `src/install/*` — the F21 bootstrap: the six-step installer, the versioned soul table, the model
-  probe, the systemd/launchd unit renderers, the shell-side doctor, and the minimal MCP client.
+  probe, the systemd/launchd unit renderers, the shell-side doctor, and the attach-socket probe
+  client the first-wake check speaks.
 
 ## Failure ladder
 
@@ -234,17 +236,17 @@ process does not have is a lie the model would keep acting on.
 
 ## Baseline (measured)
 
-Reproduce with `bun run scripts/measure-baseline.ts` (`--no-mcp` to leave the MCP face out); the
-script prints one JSON line, with the terminal and the Pi adapter off like the resident defaults. The
-medians below are of eight runs (five for the `--no-mcp` row); the spread is what the same box gave
-across three measurement sessions, and a loaded box moves it by tens of milliseconds.
+Reproduce with `bun run scripts/measure-baseline.ts` (`--no-http` to leave the loopback HTTP face
+out); the script prints one JSON line, with the terminal and the Pi adapter off like the resident
+defaults. The medians below are of eight runs of this round's head; the spread is what the same box
+gave in one measurement session, and a loaded box moves it by tens of milliseconds.
 
 | Measure | Value | Notes |
 |---|---|---|
-| Process start → IDLE, MCP face on | **432 ms** median (observed 421–465) | measured with `process.uptime()`, so bun's own start-up and the module graph are included |
-| Process start → IDLE, `--no-mcp` | 401 ms median (observed 397–422) | the loopback MCP face costs roughly 30 ms of the start |
-| `checkpoint.json` at boot (2 transitions) | 999 B | |
-| `checkpoint.json` at the history cap (242 transitions, 200 records kept) | 30,999 B | `trimHistory` caps the history, so the file is bounded rather than growing for the run's life |
+| Process start → IDLE, HTTP face on | **354 ms** median (observed 331–386) | measured with `process.uptime()`, so bun's own start-up and the module graph are included |
+| Process start → IDLE, `--no-http` | 318 ms median (observed 311–329) | the loopback status/star-map face costs roughly 35 ms of the start |
+| `checkpoint.json` at boot (2 transitions) | 1,083 B | |
+| `checkpoint.json` at the history cap (242 transitions, 200 records kept) | 31,083 B | `trimHistory` caps the history, so the file is bounded rather than growing for the run's life |
 | Transition write | temp + fsync + rename + directory fsync | the durability the kill-recovery test depends on; ~150 B of JSON rewritten per transition at the cap |
 
 None of these needed fixing: a resident process pays the start once, and the checkpoint is bounded and

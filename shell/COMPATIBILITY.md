@@ -35,12 +35,13 @@ version is `PI_TARGET_VERSION` by construction. The test records the version it 
 Every capability named below is asserted against the trace in `test/pi-adapter.test.ts`, so this list
 and the log cannot drift apart.
 
-- **Refused** (`PiCapabilityUnsupported`), traced as `pi_capability_refused`: `registerMcpServer` and
-  `registerVirtualModel` are refused while the plugin loads, so the plugin is disabled and the reason is
-  additionally recorded as `pi_plugin_refused`. The interactive UI surface is only reachable from a
-  call the adapter hands a context to — an event handler, a tool's `execute`, or a command handler:
-  `ui.select`, `ui.confirm`, `ui.input`, `ui.editor` and `ui.custom` are refused at the
-  call and traced there, and the plugin keeps running without a user.
+- **Refused** (`PiCapabilityUnsupported`), traced as `pi_capability_refused`: `registerMcpServer`
+  (the shell is not an MCP host — it has no MCP client, and since #200 R2 it serves no outward MCP
+  face either) and `registerVirtualModel` are refused while the plugin loads, so the plugin is
+  disabled and the reason is additionally recorded as `pi_plugin_refused`. The interactive UI surface
+  is only reachable from a call the adapter hands a context to — an event handler, a tool's `execute`,
+  or a command handler: `ui.select`, `ui.confirm`, `ui.input`, `ui.editor` and `ui.custom` are refused
+  at the call and traced there, and the plugin keeps running without a user.
 - **Dropped** (traced as `pi_capability_dropped`, plugin keeps running): rendering-only
   registrations — `registerMessageRenderer`, `registerEntryRenderer`, `registerToolRenderer`,
   `registerMarkdownTransformer`, `registerShortcut` — because a resident headless process has no renderer

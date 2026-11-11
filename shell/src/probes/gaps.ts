@@ -169,19 +169,8 @@ export async function runGapProbes(input: GapProbeInput): Promise<GapProbeResult
     proposal: 'New ticket: promote redactSecretText/countSecretFindings to the public surface so every host can redact at capture time; until then the shell borrows cogmem/internal and refuses to write unredacted text.',
   });
 
-  // ── F-MCP: no public host-mode MCP transport or profile table ───────────────
-  probes.push({
-    id: 'F-MCP',
-    title: '宿主态 MCP 面（新缺口，部署拓扑需要）',
-    disposition: 'new-ticket',
-    evidence: [
-      `cogmem exports startCogmemMcpHttpServer: ${typeof publicApi.startCogmemMcpHttpServer === 'function'}`,
-      `cogmem exports the core tool profile table: ${typeof publicApi.CORE_TOOLS !== 'undefined'}`,
-      'callCogmemMcpTool/listCogmemMcpTools are exported, so a host can build its own transport, but must restate the profile list to do it',
-    ],
-    kernelMissing: ['a host-mode MCP server factory on the public surface', 'the profile table / isToolAllowed helper'],
-    proposal: 'New ticket: export the MCP HTTP/stdio server factory and the profile table for in-process hosts (the shell is the first, not the last).',
-  });
+  // F-MCP (no public host-mode MCP transport or profile table) was withdrawn by #200 R2: the shell
+  // no longer serves an outward MCP face, so a public transport factory is not a gap for it.
 
   return { generatedAt: new Date().toISOString(), probes };
 }

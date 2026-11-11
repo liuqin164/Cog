@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { CompanionShell } from '../src/app.ts';
 import type { ModelProvider } from '../src/state/agent-loop.ts';
 
-const mcpEnabled = !process.argv.includes('--no-mcp');
+const httpEnabled = !process.argv.includes('--no-http');
 const dir = mkdtempSync(join(tmpdir(), 'companion-shell-baseline-'));
 const provider: ModelProvider = {
   name: 'baseline',
@@ -33,7 +33,7 @@ const shell = new CompanionShell({
     agentId: 'cogmem-companion-baseline',
     sessionId: 'baseline',
     terminalEnabled: false,
-    mcp: { enabled: mcpEnabled, port: 0, hostname: '127.0.0.1', path: '/mcp', profile: 'core' },
+    http: { enabled: httpEnabled, port: 0, hostname: '127.0.0.1' },
     pi: { adapterEnabled: false, plugins: [] },
   },
   modelProvider: provider,
@@ -58,7 +58,7 @@ try {
   await shell.stop();
   console.log(
     JSON.stringify({
-      mcp: mcpEnabled,
+      http: httpEnabled,
       startToIdleMs: Math.round(startToIdleMs),
       bootCheckpointBytes,
       bootTransitions,

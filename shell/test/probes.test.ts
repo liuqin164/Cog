@@ -20,7 +20,6 @@ describe('F1/F2/F6 probes', () => {
       expect(ids).toContain('F2');
       expect(ids).toContain('F6');
       expect(ids).toContain('F-SEC');
-      expect(ids).toContain('F-MCP');
       for (const probe of result.probes) {
         expect(probe.evidence.length).toBeGreaterThan(0);
         expect(probe.kernelMissing.length).toBeGreaterThan(0);
@@ -54,6 +53,6 @@ describe('the probe command', () => {
     // The command drives real writes to show what fires; with no --db they land in a throwaway kernel.
     expect(existsSync(join(dir, 'memory.sqlite'))).toBe(false);
     const gaps = JSON.parse(readFileSync(join(dir, 'gaps.json'), 'utf8')) as { probes: Array<{ id: string }> };
-    expect(gaps.probes.map((probe) => probe.id)).toEqual(['F1', 'F2', 'F6', 'F-SEC', 'F-MCP']);
+    expect(gaps.probes.map((probe) => probe.id)).toEqual(['F1', 'F2', 'F6', 'F-SEC']);
   }, 30_000);
 });
