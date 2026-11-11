@@ -79,8 +79,11 @@ export interface TestShellOptions {
 /**
  * The one test shell: temp dirs inside the managed prefix, no terminal, no MCP face and no Pi adapter
  * unless the test asks for them. Six copies of this config literal had already started to drift.
+ *
+ * `provider` may be omitted: then the shell builds its own model router (mg from config plus the
+ * `routes.json` in its data dir), which is what the route-switching tests exercise.
  */
-export function makeShell(dir: string, provider: ModelProvider, config: Partial<ShellConfig> = {}, options: TestShellOptions = {}): CompanionShell {
+export function makeShell(dir: string, provider: ModelProvider | undefined, config: Partial<ShellConfig> = {}, options: TestShellOptions = {}): CompanionShell {
   const workspace = join(dir, 'ws');
   mkdirSync(workspace, { recursive: true });
   return new CompanionShell({

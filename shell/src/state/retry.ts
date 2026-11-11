@@ -30,6 +30,36 @@ export const DEFAULT_RETRY_POLICY: RetryPolicy = {
 /** What a failed provider call is, decided before anything is retried. */
 export type FailureKind = 'overflow' | 'retryable' | 'fatal';
 
+/**
+ * The named class of an endpoint failure, for diagnosis only — the ladder above still decides what
+ * happens. A custom OpenAI-compatible endpoint fails in a handful of distinguishable ways, and "查钥"
+ * and "查模型名" are the two hints a user cannot guess from `fatal` alone.
+ */
+export type EndpointFailureKind = 'timeout' | 'unreachable' | 'auth' | 'model_not_found' | 'rate_limit' | 'http' | 'unknown';
+
+/**
+ * Order matters: a transport failure carries no status, and a timeout's text can also look like a
+ * connection error, so the transport shapes are read before the HTTP status.
+ */
+export function classifyEndpointFailure(message: string): EndpointFailureKind {
+  if (/abort|timeout|timed? ?out/i.test(message)) return 'timeout';
+  if (/fetch failed|unable to connect|connection (refused|reset|closed)|ECONNREFUSED|ENOTFOUND|EAI_AGAIN/i.test(message)) return 'unreachable';
+  const status = /(?<![a-z0-9])(\d{3})(?![a-z0-9])/i.exec(message)?.[1];
+  switch (status) {
+    case '401':
+    case '403':
+      return 'auth';
+    case '404':
+      return 'model_not_found';
+    case '429':
+      return 'rate_limit';
+    case undefined:
+      return 'unknown';
+    default:
+      return 'http';
+  }
+}
+
 export type FailurePlan =
   | { action: 'retry'; attempt: number; delayMs: number; kind: 'retryable' }
   | { action: 'recover_overflow'; attempt: number; delayMs: number; kind: 'overflow' }
@@ -95,6 +125,9 @@ const RETRYABLE_PATTERNS = [
   /connection.?error/i,
   /connection.?refused/i,
   /connection.?lost/i,
+  // Bun's fetch says this for a refused connection; Pi's ported table predates it, and a user's own
+  // OpenAI-compatible endpoint being down is exactly the transient case this rung exists for.
+  /unable to connect/i,
   /other side closed/i,
   /fetch failed/i,
   /request to \S+ failed, reason:/i,

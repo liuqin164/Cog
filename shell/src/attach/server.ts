@@ -60,7 +60,7 @@ export type AttachServerMessage =
 /** What the server needs from the shell; `CompanionShell` implements it. */
 export interface AttachShell {
   submit(text: string): Promise<unknown>;
-  commandText(name: string): { text: string; data?: Record<string, unknown> };
+  commandText(name: string, args?: string): { text: string; data?: Record<string, unknown> };
   withdrawSteering(): string | undefined;
   sleep(): Promise<void>;
   awayReport(): PresenceReport;
@@ -177,7 +177,7 @@ export class AttachServer {
           await this.options.shell.sleep();
           break;
         }
-        const result = this.options.shell.commandText(message.name);
+        const result = this.options.shell.commandText(message.name, message.args);
         this.send(socket, { t: 'event', name: 'companion_command_result', payload: { name: message.name, text: result.text } });
         if (result.data) {
           for (const [name, payload] of Object.entries(result.data)) this.send(socket, { t: 'event', name, payload });

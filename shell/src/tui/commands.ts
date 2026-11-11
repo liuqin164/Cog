@@ -45,7 +45,7 @@ export function filterCommands(query: string, commands: TuiCommand[] = COMMANDS)
 /** The palette for the current view, including the model switch only when >1 route is configured. */
 export function paletteCommands(view: TuiView): TuiCommand[] {
   const commands = [...COMMANDS];
-  if ((view.modelRoutes?.length ?? 0) > 1) commands.push({ name: 'model', description: '切换会话模型（不写回默认）' });
+  if ((view.modelRoutes?.length ?? 0) > 1) commands.push({ name: 'model', description: '查看 / 切换模型路线（不重启、不断会话）' });
   return commands;
 }
 

@@ -195,7 +195,8 @@ export class TuiApp {
   }
 
   private runCommand(text: string): void {
-    const name = text.slice(1).trim().split(/\s+/u)[0] ?? '';
+    const [name = '', ...rest] = text.slice(1).trim().split(/\s+/u);
+    const args = rest.join(' ');
     this.editor.setText('');
     if (name === 'exit') {
       this.stop('exit');
@@ -212,7 +213,7 @@ export class TuiApp {
     if (name === 'dream') this.view.overlay = { kind: 'dream' };
     if (name === 'commitments') this.view.overlay = { kind: 'commitments' };
     if (name === 'soul' || name === 'memory' || name === 'model') this.view.overlay = { kind: 'info', title: name };
-    this.client.send({ t: 'command', name });
+    this.client.send({ t: 'command', name, args });
     this.scheduleRender();
   }
 

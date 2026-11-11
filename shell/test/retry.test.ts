@@ -4,6 +4,7 @@ import { AgentRuntime, type AgentMessage, type ModelProvider, type ModelTurn, ty
 import { RunCage } from '../src/plugins/cage.ts';
 import type { TraceLog } from '../src/trace.ts';
 import {
+  classifyEndpointFailure,
   classifyProviderError,
   planFailure,
   retryDelayMs,
@@ -55,6 +56,32 @@ describe('the failure ladder classification', () => {
     const waiting = sleepAbortable(60_000, controller.signal);
     controller.abort();
     await expect(waiting).rejects.toThrow('aborted');
+  });
+});
+
+describe('the endpoint failure classes (named for diagnosis, decided by the ladder)', () => {
+  const cases: Array<{ message: string; kind: string; ladder: string; action: 'retry' | 'fail' | 'recover_overflow' }> = [
+    { message: 'mg_gateway_error: 401 unauthorized', kind: 'auth', ladder: 'fatal', action: 'fail' },
+    { message: 'mg_gateway_error: 403 forbidden', kind: 'auth', ladder: 'fatal', action: 'fail' },
+    { message: 'mg_gateway_error: 404 {"error":{"message":"model not found"}}', kind: 'model_not_found', ladder: 'fatal', action: 'fail' },
+    { message: 'mg_gateway_error: 429 rate limit exceeded', kind: 'rate_limit', ladder: 'retryable', action: 'retry' },
+    { message: 'Unable to connect. Is the computer able to access the url?', kind: 'unreachable', ladder: 'retryable', action: 'retry' },
+    { message: 'TimeoutError: The operation was aborted due to timeout', kind: 'timeout', ladder: 'retryable', action: 'retry' },
+    { message: 'mg_gateway_error: 500 internal server error', kind: 'http', ladder: 'retryable', action: 'retry' },
+  ];
+
+  test('each class is named, and the ladder owns the retry decision', () => {
+    for (const entry of cases) {
+      expect(`${entry.message} -> ${classifyEndpointFailure(entry.message)}`).toBe(`${entry.message} -> ${entry.kind}`);
+      expect(`${entry.message} -> ${classifyProviderError(entry.message)}`).toBe(`${entry.message} -> ${entry.ladder}`);
+      expect(planFailure({ message: entry.message, attempt: 0, policy, overflowRecoveryUsed: false }).action).toBe(entry.action);
+    }
+  });
+
+  test('a status code must not be read out of a longer number', () => {
+    // A request id or byte count containing "404"/"429" is not an HTTP status.
+    expect(classifyEndpointFailure('request id req_abc404def failed')).toBe('unknown');
+    expect(classifyEndpointFailure('read 1404 bytes and then died')).toBe('unknown');
   });
 });
 

@@ -7,6 +7,7 @@
  * behaviour; the app decides which transition that behaviour is.
  */
 import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
 import { createMemoryKernel, KernelAgentMemoryBackend, type MemoryKernel } from 'cogmem';
 import { defaultShellConfig, type ShellConfig } from './config.ts';
 import { StateMachine } from './state/machine.ts';
@@ -15,7 +16,9 @@ import { ProcessLock } from './process-lock.ts';
 import { TraceLog } from './trace.ts';
 import { PluginHost } from './plugins/host.ts';
 import { clockPlugin, ClockService } from './plugins/clock.ts';
-import { mgProviderPlugin, providedModelPlugin } from './plugins/mg-provider.ts';
+import { providedModelPlugin } from './plugins/mg-provider.ts';
+import { ModelRouter, modelRouterPlugin, routeLine } from './model/router.ts';
+import { RouteStore, redactUrl } from './model/routes.ts';
 import { cagePlugin, RunCage } from './plugins/cage.ts';
 import { builtinToolsPlugin } from './plugins/builtin-tools.ts';
 import { capturePlugin } from './plugins/capture.ts';
@@ -67,6 +70,8 @@ export class CompanionShell implements ShellControl, AttachShell {
   private terminal?: TerminalChannel;
   private attach?: AttachServer;
   private modelLabel = 'unknown';
+  /** Present only when this process built its own provider; an injected test provider has no routes. */
+  private modelRouter?: ModelRouter;
   /** An estimate of the assembled context; the kernel has no F14 budget controller to ask. */
   private contextTokenEstimate = 0;
   private workLabel = '';
@@ -210,7 +215,20 @@ export class CompanionShell implements ShellControl, AttachShell {
   }
 
   private async startPlugins(): Promise<void> {
-    const provider = this.options.modelProvider ? providedModelPlugin(this.options.modelProvider) : mgProviderPlugin();
+    // An injected provider (tests, an embedding host) is used as-is and has no route table. The real
+    // resident gets a router: the mg route from env plus whatever named routes the user stored.
+    let provider = this.options.modelProvider ? providedModelPlugin(this.options.modelProvider) : undefined;
+    if (!provider) {
+      this.modelRouter = new ModelRouter({
+        store: new RouteStore(join(this.config.dataDir, 'routes.json')).load(),
+        builtin: { name: 'mg', baseUrl: this.config.model.baseUrl, apiKey: this.config.model.apiKey, model: this.config.model.model },
+        timeoutMs: this.config.model.timeoutMs,
+      });
+      // A routes file that did not parse is a real problem the user must see, but it must not stop the
+      // resident: mg is available either way.
+      if (this.modelRouter.storeError) this.trace.append('model_routes_load_failed', { message: this.modelRouter.storeError });
+      provider = modelRouterPlugin(this.modelRouter);
+    }
     this.host.register(clockPlugin({ timeZone: this.config.timeZone, idleWakeIntervalMs: this.config.idleWakeIntervalMs, dreamWindow: { startHour: this.config.dream.windowStartHour, endHour: this.config.dream.windowEndHour } }));
     this.host.register(provider, this.config.model);
     this.host.register(cagePlugin(this.config.budgets, this.trace));
@@ -627,8 +645,29 @@ export class CompanionShell implements ShellControl, AttachShell {
     }
   }
 
+  /** The TUI route list; with no router (an injected provider) it is just the one label, as before. */
   modelRoutes(): string[] {
-    return [this.modelLabel];
+    return this.modelRouter ? this.modelRouter.labels() : [this.modelLabel];
+  }
+
+  /**
+   * Switch the active route in place. The runtime holds this router object, so the next turn's request
+   * uses the new endpoint: no restart, no checkpoint rewrite, the session is untouched. A stored
+   * switch is remembered by the route store; the built-in mg route is not persisted because it is not
+   * user configuration.
+   */
+  switchModelRoute(name: string): { ok: true; name: string; model: string } | { ok: false; message: string } {
+    if (!this.modelRouter) return { ok: false, message: '本进程用的是注入的模型提供者，没有路线表可切。' };
+    try {
+      const route = this.modelRouter.switchTo(name);
+      this.modelLabel = `${route.name}/${route.model}`;
+      // The key is not in any of these fields; the URL is redacted in case it carries one.
+      this.trace.append('model_route_switched', { name: route.name, model: route.model, baseUrl: redactUrl(route.baseUrl, [route.apiKey]) });
+      void this.host.bus.emit('companion_model_routes', { routes: this.modelRoutes(), active: route.name });
+      return { ok: true, name: route.name, model: route.model };
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) };
+    }
   }
 
   snapshotNote(): string | undefined {
@@ -636,7 +675,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   }
 
   /** A `/` command answered by the resident; the TUI renders the text in its own overlay. */
-  commandText(name: string): { text: string; data?: Record<string, unknown> } {
+  commandText(name: string, args?: string): { text: string; data?: Record<string, unknown> } {
     switch (name) {
       case 'dream': {
         const product = this.lastDreamProduct();
@@ -667,8 +706,25 @@ export class CompanionShell implements ShellControl, AttachShell {
         return { text: `生命周期 ${this.machine.state}，checkpoint seq ${this.machine.seq}，本日 ${this.machine.runtime.costDayTokens ?? 0} token。` };
       case 'context':
         return { text: `当前组装上下文约 ${this.contextTokenEstimate} token（甜点带宽 ${this.config.contextSweetSpot}）。本壳未接入 F14 车道控制器。` };
-      case 'model':
-        return { text: `会话模型：${this.modelLabel}（当前仅一条路线，切换需配置多条）。` };
+      case 'model': {
+        if (!this.modelRouter) return { text: `会话模型：${this.modelLabel}（本进程未接入路线表，切换需重装或重启）。` };
+        const requested = args?.trim() ?? '';
+        if (requested !== '') {
+          const switched = this.switchModelRoute(requested);
+          if (!switched.ok) return { text: `切换失败：${switched.message}` };
+          return {
+            text: `已切到路线「${switched.name}」（${switched.model}）。下一回合生效：进程没重启，会话没断。`,
+            data: { companion_model_routes: { routes: this.modelRoutes(), active: switched.name } },
+          };
+        }
+        const routes = this.modelRouter.routes();
+        const lines = routes.map((route) => routeLine(route, route.name === this.modelRouter!.active));
+        const warning = this.modelRouter.storeError ? [`⚠ 路线表有问题：${this.modelRouter.storeError}（内置 mg 仍可用；修好或删掉这个文件再重试）`] : [];
+        return {
+          text: [`当前路线：${this.modelRouter.active}`, ...lines, ...warning, '用 /model <名称> 切换（不重启、不断会话）'].join('\n'),
+          data: { companion_model_routes: { routes: this.modelRoutes(), active: this.modelRouter.active } },
+        };
+      }
       case 'help':
         return { text: 'Enter 发送 · Shift+Enter 换行 · / 命令面板 · Esc 撤回排队消息 · /exit 断开附着 · /sleep 进 DORMANT' };
       default:
