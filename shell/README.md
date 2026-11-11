@@ -47,7 +47,10 @@ bun run bin/install --uninstall     # stop the service, remove the unit, keep th
    initialize an empty kernel through `createMemoryKernel`, and write the default soul.
 2. **模型** — pick mg or an OpenAI-compatible endpoint, take the key through a masked prompt, and make
    **one real call** right there. A failure stops the install at this step with a named diagnosis
-   (`model_unreachable`, `model_unauthorized`, …) instead of surfacing after "success".
+   (`model_unreachable`, `model_unauthorized`, `model_not_found`, `model_rate_limited`, `model_timeout`,
+   …) instead of surfacing after "success". A custom endpoint is saved as a **named route** (name,
+   baseUrl, key, model) in `<dataDir>/routes.json` (`0600`) and becomes the active one; mg remains the
+   built-in default and is not rewritten.
 3. **节律** — time zone, dream window, do-not-disturb window. TZ and the dream window go to the
    resident's env file; the quiet window is recorded (the shell has no silence gate yet — that is F16).
 4. **常驻** — register a **user-level** service (`systemd --user` on Linux, launchd agent on macOS; no
@@ -65,7 +68,29 @@ default text is `DEFAULT_SOUL` in `src/install/soul.ts`, verbatim; `/soul` in th
 
 **Security posture, printed at install time:** every service face is loopback only; the data and
 snapshot directories are `0700`; the model key is taken through masked input and lives only in the
-`0600` `<dataDir>/env` file — it is never printed and never enters the trace.
+`0600` `<dataDir>/env` file (mg) or the `0600` `<dataDir>/routes.json` (a custom route) — it is never
+printed and never enters the trace.
+
+## Model routes (OpenAI protocol)
+
+Beyond the built-in mg gateway, a user can keep named routes: **name, baseUrl, apiKey, model** and
+nothing else. They live in `<dataDir>/routes.json` (`0600`), mg is always present as the built-in route
+and is never written to that file, and a route whose name is `mg` is refused. The installer's model step
+is the entry point for adding one.
+
+In the TUI, `/model` lists the routes with the active one marked and `/model <name>` switches. The
+switch moves the live `ModelRouter` — the object the agent loop already calls — so it takes effect on
+the next turn: the process is not restarted and the session's checkpoint is not touched. A stored route
+switch is remembered for the next process; switching back to mg is not persisted (it is not user
+configuration). The route list is also in the attach snapshot and broadcast as `companion_model_routes`.
+
+`src/model/routes.ts` is the store and the redaction helpers; `src/model/router.ts` is the switchable
+provider and its plugin face. A URL printed anywhere goes through `redactUrl`, and a provider error body
+is redacted with the route's own key before it can reach a trace or a transcript.
+
+A `routes.json` that does not parse does not stop the resident: mg answers, `/model` says what is wrong
+(`routes_unreadable` / `routes_schema` / `routes_invalid_entries`), the trace records it, and the next
+write moves the unreadable bytes to `routes.json.broken` instead of losing them.
 
 ## `cog`: the terminal TUI (F20 #197)
 
@@ -86,7 +111,8 @@ Four sections: a status bar (name · lifecycle in human words · kernel · next 
 the input box (1–8 lines, inner-scrolling), and a footer (context bandwidth gauge · model route ·
 today's token cost · workspace). `RUNNING` shows a work indicator with the cage's turn and token bars;
 a line sent while working is queued visibly and `Esc` withdraws it. `/` opens the command palette
-(`/soul /memory /commitments /status /context /sleep /dream /help /exit`); attaching while `DREAMING`
+(`/soul /memory /commitments /status /context /sleep /dream /help /exit`, plus `/model` when more than
+one route is configured); attaching while `DREAMING`
 shows a sleep screen and any input wakes it through the legal `DREAMING→WAKING` edge. Attaching plays
 "你不在时发生了什么" — the dreams, the held emergence candidates and the fulfilled commitments read back
 from the ledger, not replayed into the conversation.
@@ -111,6 +137,8 @@ numbers.
 - `src/pi/adapter.ts` — the removable Pi compatibility layer.
 - `src/plugins/*` — clock, recall, dream, emergence (conservative), cage, capture, the four tools,
   mg provider. Dream, emergence and recall are plugins like the rest: swap one by not loading it.
+- `src/model/routes.ts` / `router.ts` — the named-route store (`0600`), the redaction helpers, and the
+  switchable provider the resident's `model` service is.
 - `src/channels/terminal.ts` — the self-owned terminal channel (line mode, for `--no-terminal`-off residents).
 - `src/tui/*` — the `cog` interface: frame/theme, markdown, the view reducer, layout and virtualization,
   the input editor, the palette, and the raw-mode app. Pure `render(view, size, env)` core, so the
@@ -150,6 +178,15 @@ counter — and therefore `maxTurnsPerRun` — moves once however many provider 
 discriminating test runs with a one-turn budget and a provider that fails once: the run completes with
 `turns: 1`. Everything is legible in the trace as `provider_call_failed` with `kind`, `next`, `attempt`
 and `delayMs`.
+
+**A custom endpoint's classes are named, and the ladder still decides.** `classifyEndpointFailure`
+(`src/state/retry.ts`) names what a failure is — `auth` (401/403), `model_not_found` (404),
+`rate_limit` (429), `unreachable`, `timeout`, `http` — for the diagnosis that says "check the key" or
+"check the model name". It does not replace the ladder: 401/403/404 stay `fatal` (no retry), while a
+refused connection and a timeout stay `retryable` with the same capped exponential backoff as any other
+transient failure. The route probe uses the same classifier, so the install's wording and the runtime's
+behaviour cannot drift apart. (One pattern was added to the ported table: Bun's fetch says "Unable to
+connect" for a refused connection, and Pi's table predates that phrasing.)
 
 ## Capture and redaction
 
