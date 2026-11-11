@@ -10,7 +10,7 @@ import { DEFAULT_SOUL, readSoul, writeDefaultSoul } from '../src/install/soul.ts
 import { probeModel } from '../src/install/model.ts';
 import { renderLaunchdPlist, renderSystemdUnit, launchdLabel, type Runner, type ServiceSpec } from '../src/install/service.ts';
 import { createScriptedIO } from '../src/install/io.ts';
-import { Installer, parseInstallFlags, type InstallerHooks } from '../src/install/installer.ts';
+import { Installer, parseInstallFlags, type InstallerHooks, type InstallFlags } from '../src/install/installer.ts';
 import { makeTempDir } from './helpers.ts';
 
 const SHELL_DIR = fileURLToPath(new URL('..', import.meta.url));
@@ -65,12 +65,12 @@ interface Harness {
   stored: { text: string };
 }
 
-function makeHarness(options: { probeOk: boolean; hooks?: Partial<InstallerHooks> } = { probeOk: true }): Harness {
+function makeHarness(options: { probeOk: boolean; hooks?: Partial<InstallerHooks>; io?: ReturnType<typeof createScriptedIO>; flags?: Partial<InstallFlags> } = { probeOk: true }): Harness {
   const dir = makeTempDir();
   const dataDir = join(dir, 'data');
   const workspace = join(dir, 'ws');
   mkdirSync(workspace, { recursive: true });
-  const io = createScriptedIO([]);
+  const io = options.io ?? createScriptedIO([]);
   const { runner, calls } = fakeRunner();
   const stored = { text: '' };
   const dbPath = join(dataDir, 'memory.sqlite');
@@ -104,7 +104,7 @@ function makeHarness(options: { probeOk: boolean; hooks?: Partial<InstallerHooks
   const installer = new Installer({
     io,
     run: runner,
-    flags: { yes: true, skipService: true, dataDir, workspace, mcpPort: 0 },
+    flags: { yes: true, skipService: true, dataDir, workspace, mcpPort: 0, ...options.flags },
     shellDir: SHELL_DIR,
     bunPath: '/usr/local/bin/bun',
     cwd: workspace,
@@ -195,6 +195,62 @@ describe('model probe diagnosis', () => {
       expect(result.hint).toContain('127.0.0.1:3425');
     }
   });
+
+  test('a missing model is named as a model problem, not a generic HTTP error', async () => {
+    const result = await probeModel(
+      { provider: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', apiKey: 'x', model: 'nope' },
+      { provider: { name: 'stub', model: 'nope', async complete() { throw new Error('mg_gateway_error: 404 {"error":{"message":"model not found"}}'); } } },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe('model_not_found');
+      expect(result.hint).toContain('模型名');
+    }
+  });
+
+  test('a timeout is named as a timeout, and 429 keeps its rate-limit name', async () => {
+    const timedOut = await probeModel(
+      { provider: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', apiKey: 'x', model: 'm' },
+      { provider: { name: 'stub', model: 'm', async complete() { throw new Error('TimeoutError: The operation was aborted due to timeout'); } } },
+    );
+    expect(timedOut.ok).toBe(false);
+    if (!timedOut.ok) expect(timedOut.code).toBe('model_timeout');
+
+    const limited = await probeModel(
+      { provider: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', apiKey: 'x', model: 'm' },
+      { provider: { name: 'stub', model: 'm', async complete() { throw new Error('mg_gateway_error: 429 rate limit exceeded'); } } },
+    );
+    expect(limited.ok).toBe(false);
+    if (!limited.ok) expect(limited.code).toBe('model_rate_limited');
+  });
+
+  test('a diagnosis never echoes the key, even when the endpoint does', async () => {
+    const result = await probeModel(
+      { provider: 'openai_compatible', baseUrl: 'http://127.0.0.1:1/v1', apiKey: 'sk-leak-me', model: 'm' },
+      { provider: { name: 'stub', model: 'm', async complete() { throw new Error('mg_gateway_error: 401 {"error":{"message":"bad key sk-leak-me"}}'); } } },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe('model_unauthorized');
+      expect(`${result.message} ${result.hint}`).not.toContain('sk-leak-me');
+      expect(result.hint).toContain('钥匙');
+    }
+  });
+
+  test('the real probe passes against a local fake OpenAI endpoint (no stub)', async () => {
+    const server = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      fetch: () => new Response(JSON.stringify({ choices: [{ message: { content: 'OK' }, finish_reason: 'stop' }] }), { status: 200, headers: { 'content-type': 'application/json' } }),
+    });
+    try {
+      const result = await probeModel({ provider: 'openai_compatible', baseUrl: `http://127.0.0.1:${server.port}/v1`, apiKey: 'sk-real', model: 'test-model' });
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.sample).toBe('OK');
+    } finally {
+      server.stop(true);
+    }
+  });
 });
 
 describe('the six-step install', () => {
@@ -215,6 +271,8 @@ describe('the six-step install', () => {
     expect(env).toContain('MG_MODEL=auto/deepseek-v4.1-flash');
     expect(env).toContain('COGMEM_SHELL_TZ=');
     expect(env).toContain('COGMEM_SHELL_DREAM_START=2');
+    // mg is the built-in route: a default install writes no custom-route file at all.
+    expect(existsSync(join(harness.dataDir, 'routes.json'))).toBe(false);
 
     const output = harness.io.lines.join('\n');
     expect(output).toContain('默认 soul');
@@ -296,6 +354,74 @@ describe('the six-step install', () => {
     expect(flags.dataDir).toBe('/tmp/d');
     expect(flags.mcpPort).toBe(17338);
     expect(flags.platform).toBe('darwin');
+  });
+});
+
+describe('the model step: a custom OpenAI-protocol route', () => {
+  test('collects name / baseUrl / model / key, probes, persists a 0600 route, and never prints the key', async () => {
+    const io = createScriptedIO([
+      'openai_compatible',
+      'http://127.0.0.1:9/v1',
+      'my-model',
+      'myroute',
+      'sk-custom-secret',
+      '', // time zone -> default
+      '', // dream start -> default
+      '', // dream end -> default
+      '', // quiet window -> off
+      'y', // confirm rhythm
+    ]);
+    const probed: Array<{ provider: string; baseUrl: string; model: string }> = [];
+    const harness = makeHarness({
+      probeOk: true,
+      io,
+      flags: { yes: false },
+      hooks: {
+        probe: async (choice) => {
+          probed.push({ provider: choice.provider, baseUrl: choice.baseUrl, model: choice.model });
+          return { ok: true, latencyMs: 3, sample: 'OK' };
+        },
+      },
+    });
+
+    expect(await harness.installer.run()).toBe(0);
+    expect(probed).toEqual([{ provider: 'openai_compatible', baseUrl: 'http://127.0.0.1:9/v1', model: 'my-model' }]);
+
+    const routesPath = join(harness.dataDir, 'routes.json');
+    expect(statSync(routesPath).mode & 0o777).toBe(0o600);
+    const routes = JSON.parse(readFileSync(routesPath, 'utf8')) as { active: string; routes: unknown[] };
+    expect(routes.active).toBe('myroute');
+    expect(routes.routes).toEqual([{ name: 'myroute', baseUrl: 'http://127.0.0.1:9/v1', apiKey: 'sk-custom-secret', model: 'my-model' }]);
+
+    const output = io.lines.join('\n');
+    expect(output).toContain('自定义路线「myroute」');
+    expect(output).toContain('内置 mg 网关路线原样保留');
+    expect(output).not.toContain('sk-custom-secret');
+
+    // The built-in mg route is untouched: the env file keeps mg's own pointer, not the custom endpoint.
+    const env = readFileSync(join(harness.dataDir, 'env'), 'utf8');
+    expect(env).not.toContain('sk-custom-secret');
+    expect(env).not.toContain('http://127.0.0.1:9/v1');
+    expect(env).not.toContain('MG_API_KEY=sk-custom-secret');
+  });
+
+  test('a custom route that fails its probe stops at the model step and writes no route', async () => {
+    const io = createScriptedIO(['openai_compatible', 'http://127.0.0.1:1/v1', 'my-model', 'myroute', 'sk-dead']);
+    const harness = makeHarness({
+      probeOk: false,
+      io,
+      flags: { yes: false },
+      hooks: {
+        probe: async () => ({ ok: false, code: 'model_unreachable', message: '连不上这个端点。', hint: '检查 base URL、端口与进程。' }),
+      },
+    });
+
+    expect(await harness.installer.run()).toBe(1);
+    expect(existsSync(join(harness.dataDir, 'routes.json'))).toBe(false);
+    const state = JSON.parse(readFileSync(join(harness.dataDir, 'install.json'), 'utf8')) as { done: string[]; failedAt: string };
+    expect(state.done).toEqual(['preflight', 'place']);
+    expect(state.failedAt).toBe('model');
+    expect(io.lines.join('\n')).not.toContain('sk-dead');
   });
 });
 

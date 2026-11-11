@@ -19,6 +19,7 @@ import { randomUUID } from 'node:crypto';
 import { createMemoryKernel } from 'cogmem';
 import { DEFAULT_SOUL, readSoul, writeDefaultSoul } from './soul.ts';
 import { MG_DEFAULT_BASE_URL, MG_DEFAULT_MODEL, MODEL_PRESETS, modelEnv, probeModel, type ModelChoice, type ModelProviderKind } from './model.ts';
+import { RouteStore, safeRouteName, type ModelRoute } from '../model/routes.ts';
 import {
   installService,
   residentArgs,
@@ -221,6 +222,11 @@ export class Installer {
 
   private get envPath(): string {
     return join(this.choices.dataDir, 'env');
+  }
+
+  /** Where user-defined routes live (0600). The mg route is never written here. */
+  private get routesPath(): string {
+    return join(this.choices.dataDir, 'routes.json');
   }
 
   private get dbPath(): string {
@@ -445,6 +451,7 @@ export class Installer {
     let provider = this.choices.model.provider;
     let baseUrl = this.choices.model.baseUrl;
     let model = this.choices.model.model;
+    let routeName = 'custom';
     let apiKey = parseEnvFile(this.envPath).MG_API_KEY ?? '';
 
     if (!this.flags.yes) {
@@ -454,8 +461,9 @@ export class Installer {
       });
       provider = (picked === 'openai_compatible' ? 'openai_compatible' : 'mg') as ModelProviderKind;
       baseUrl = await this.io.ask('base URL（OpenAI 兼容，通常以 /v1 结尾）', { default: provider === 'mg' ? MG_DEFAULT_BASE_URL : baseUrl || 'http://127.0.0.1:3425/v1' });
-      model = await this.io.ask('模型名', { default: provider === 'mg' ? MG_DEFAULT_MODEL : model || MG_DEFAULT_MODEL });
+      model = await this.io.ask('模型名（自由文本，不查目录）', { default: provider === 'mg' ? MG_DEFAULT_MODEL : model || MG_DEFAULT_MODEL });
       if (MODEL_PRESETS[provider].needsKey) {
+        routeName = safeRouteName(await this.io.ask('路线名（/model 切换用；mg 留给内置网关）', { default: routeName }));
         apiKey = await this.io.askSecret('模型钥匙（安全输入，不回显、不入日志）: ');
       } else {
         apiKey = apiKey || 'magpie';
@@ -467,7 +475,7 @@ export class Installer {
 
     this.choices.model = { provider, baseUrl, model };
     const choice: ModelChoice = { provider, baseUrl, apiKey, model };
-    this.io.say(`探活：向 ${baseUrl} 打一发真实调用（模型 ${model}）…本地网关可能要几分钟，请等它答话，不通就停在本步`);
+    this.io.say(`探活：向这条路线打一发真实调用（模型 ${model}）…本地网关可能要几分钟，请等它答话，不通就停在本步`);
     const probe = await (this.hooks.probe ?? probeModel)(choice);
     if (!probe.ok) {
       return {
@@ -477,9 +485,24 @@ export class Installer {
       };
     }
     this.io.say(`探活通过：${probe.latencyMs} ms，端点回了「${probe.sample}」`);
-    this.writeEnvFile(modelEnv(choice));
-    this.io.say(`模型配置已写入 ${this.envPath}（0600；钥匙只在这里，不出现在任何输出里）`);
+    if (provider === 'mg') {
+      // The built-in route is the existing env config, untouched: no routes file is created for it.
+      this.writeEnvFile(modelEnv(choice));
+      this.io.say(`模型配置已写入 ${this.envPath}（0600；钥匙只在这里，不出现在任何输出里）`);
+    } else {
+      const route = this.saveRoute({ name: routeName, baseUrl, apiKey, model });
+      this.io.say(`自定义路线「${route.name}」已写入 ${this.routesPath}（0600，钥匙只在这里）并设为当前路线。`);
+      this.io.say('内置 mg 网关路线原样保留，随时可用 /model 切回。');
+    }
     return { ok: true };
+  }
+
+  /** Upsert a named route and make it the active one; the file is 0600 and never printed. */
+  private saveRoute(route: ModelRoute): ModelRoute {
+    const store = new RouteStore(this.routesPath).load();
+    const saved = store.add(route);
+    store.setActive(saved.name);
+    return saved;
   }
 
   // ── Step 3: 节律 ──────────────────────────────────────────────────────────

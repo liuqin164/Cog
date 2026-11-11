@@ -9,6 +9,7 @@
  */
 import { MgModelProvider } from '../plugins/mg-provider.ts';
 import type { ModelProvider } from '../state/agent-loop.ts';
+import { classifyEndpointFailure } from '../state/retry.ts';
 
 export type ModelProviderKind = 'mg' | 'openai_compatible';
 
@@ -50,26 +51,30 @@ export function modelEnv(choice: ModelChoice): Record<string, string> {
   return { MG_BASE_URL: choice.baseUrl, MG_API_KEY: choice.apiKey, MG_MODEL: choice.model };
 }
 
+/**
+ * One failure, said in plain language. The class comes from the ladder's own `classifyEndpointFailure`
+ * (`src/state/retry.ts`); this layer only turns a class into a sentence a user can act on. A URL is
+ * never echoed here, so a key embedded in one cannot leak through a diagnosis.
+ */
 function classify(error: unknown): { code: string; message: string; hint: string } {
   const message = error instanceof Error ? error.message : String(error);
-  if (/abort|timeout|timed? ?out/i.test(message)) {
-    return { code: 'model_timeout', message: '调用超时，端点没有在时限内回答。', hint: '核对 base URL 与网络；本地网关要先把模型路由跑起来。' };
+  const status = /(?<![a-z0-9])(\d{3})(?![a-z0-9])/i.exec(message)?.[1];
+  switch (classifyEndpointFailure(message)) {
+    case 'timeout':
+      return { code: 'model_timeout', message: '调用超时，端点没有在时限内回答。', hint: '核对 base URL 与网络；本地网关要先把模型路由跑起来。' };
+    case 'unreachable':
+      return { code: 'model_unreachable', message: '连不上这个端点。', hint: '检查 base URL、端口与进程是否在跑；本地网关默认 127.0.0.1:3425。' };
+    case 'auth':
+      return { code: 'model_unauthorized', message: `端点拒绝了这枚钥匙（HTTP ${status}）。`, hint: '钥匙只在安全输入里填一次，不会打印；错了就重跑本步换一枚。' };
+    case 'model_not_found':
+      return { code: 'model_not_found', message: '端点没有这个路径或这个模型。', hint: 'OpenAI 兼容端点的 base URL 通常要以 /v1 结尾，模型名要与端点提供的一致。' };
+    case 'rate_limit':
+      return { code: 'model_rate_limited', message: '端点限流（HTTP 429），这一发没打进去。', hint: '限流是端点侧的状态，不是钥匙或模型名的问题；等一会儿重跑本步。' };
+    case 'http':
+      return { code: 'model_http_error', message: `端点回了 HTTP ${status}。`, hint: '看下面的原始应答；多半是模型名、配额或端点侧配置。' };
+    default:
+      return { code: 'model_call_failed', message, hint: '这是一次真实调用，失败了就不是配置问题就是链路问题。' };
   }
-  if (/fetch failed|unable to connect|connection (refused|reset|closed)|ECONNREFUSED|ENOTFOUND|EAI_AGAIN/i.test(message)) {
-    return { code: 'model_unreachable', message: '连不上这个端点。', hint: '检查 base URL、端口与进程是否在跑；本地网关默认 127.0.0.1:3425。' };
-  }
-  const http = /(\d{3})/.exec(message);
-  const status = http ? Number(http[1]) : undefined;
-  if (status === 401 || status === 403) {
-    return { code: 'model_unauthorized', message: `端点拒绝了这枚钥匙（HTTP ${status}）。`, hint: '钥匙只在安全输入里填一次，不会打印；错了就重跑本步换一枚。' };
-  }
-  if (status === 404) {
-    return { code: 'model_not_found', message: '端点没有这个路径或这个模型。', hint: 'OpenAI 兼容端点的 base URL 通常要以 /v1 结尾，模型名要与端点提供的一致。' };
-  }
-  if (status !== undefined) {
-    return { code: 'model_http_error', message: `端点回了 HTTP ${status}。`, hint: '看下面的原始应答；多半是模型名、配额或端点侧配置。' };
-  }
-  return { code: 'model_call_failed', message, hint: '这是一次真实调用，失败了就不是配置问题就是链路问题。' };
 }
 
 /**
