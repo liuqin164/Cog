@@ -8,6 +8,7 @@ import { statSync } from 'node:fs';
 import { join } from 'node:path';
 import { AttachClient } from '../src/attach/client.ts';
 import type { AttachServerMessage, AttachSnapshot } from '../src/attach/server.ts';
+import { openProbeSession } from '../src/install/attach.ts';
 import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
 
 const NO_DREAM = { windowStartHour: 0, windowEndHour: 0, runKernelNight: false, maxEpisodes: 5 };
@@ -284,4 +285,32 @@ describe('sleep and wake (spec §0, §8)', () => {
       await shell.stop();
     }
   });
+});
+
+/**
+ * The install's first-wake probe (#203) over a real socket: the installer is out of process, and the
+ * resident must stay the only writer, so both halves go through the control channel the probe added.
+ */
+describe('the install first-wake probe (spec §0)', () => {
+  test('remember then recall over the control socket, with the resident as the only writer', async () => {
+    const dir = makeTempDir();
+    const shell = attachShell(dir, new ScriptedProvider([{ text: 'unused', toolCalls: [] }]));
+    await shell.start();
+    try {
+      const probe = await openProbeSession(socketPathOf(dir));
+      try {
+        const token = 'install-probe-test-token';
+        const wrote = await probe.remember(`安装自检记忆：口令 ${token}，备用钥匙放在蓝色花盆下面。`, token);
+        expect(wrote.ok).toBe(true);
+        // The snapshot the resident sends first is not the reply; the probe matches its own message type.
+        const recalled = await probe.recall(token);
+        expect(recalled.ok).toBe(true);
+        expect(recalled.text).toContain(token);
+      } finally {
+        probe.close();
+      }
+    } finally {
+      await shell.stop();
+    }
+  }, 30_000);
 });

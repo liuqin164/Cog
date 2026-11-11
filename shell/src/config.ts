@@ -27,7 +27,11 @@ export interface ShellConfig {
   idleWakeIntervalMs: number;
   /** Tick interval for due intents/dream/emergence. Deterministic; tests drive ticks directly. */
   tickIntervalMs: number;
-  mcp: { enabled: boolean; port: number; hostname: string; path: string; profile: 'core' | 'admin' | 'full' };
+  /**
+   * The resident's loopback HTTP face: status and the read-only observatory, and nothing else. It
+   * carried an MCP endpoint until #200 R2 removed the shell's outward MCP face.
+   */
+  http: { enabled: boolean; port: number; hostname: string };
   pi: { adapterEnabled: boolean; plugins: string[] };
   terminalEnabled: boolean;
   /**
@@ -71,12 +75,10 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
     },
     idleWakeIntervalMs: overrides.idleWakeIntervalMs ?? 30 * 60_000,
     tickIntervalMs: overrides.tickIntervalMs ?? 30_000,
-    mcp: overrides.mcp ?? {
-      enabled: env('COGMEM_SHELL_MCP') !== 'off',
-      port: Number(env('COGMEM_SHELL_MCP_PORT') ?? 7338),
+    http: overrides.http ?? {
+      enabled: env('COGMEM_SHELL_HTTP') !== 'off',
+      port: Number(env('COGMEM_SHELL_HTTP_PORT') ?? 7338),
       hostname: '127.0.0.1',
-      path: '/mcp',
-      profile: 'core',
     },
     pi: overrides.pi ?? {
       adapterEnabled: env('COGMEM_SHELL_PI_ADAPTER') !== 'off',

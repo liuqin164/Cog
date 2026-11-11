@@ -39,7 +39,7 @@ describe('cog command (spec §0)', () => {
     await shell.start();
     let child: ChildProcessWithoutNullStreams | undefined;
     try {
-      child = spawn(process.execPath, ['run', COG, '--data', join(dir, 'data'), '--no-mcp'], { cwd: SHELL_DIR });
+      child = spawn(process.execPath, ['run', COG, '--data', join(dir, 'data'), '--no-http'], { cwd: SHELL_DIR });
       let stdout = '';
       let stderr = '';
       child.stdout.on('data', (chunk: Buffer) => {
@@ -66,7 +66,7 @@ describe('cog command (spec §0)', () => {
     const shell = makeShell(dir, provider, { attach: { enabled: true } });
     await shell.start();
     try {
-      const child = spawn(process.execPath, ['run', COG, '--headless', '--data', join(dir, 'data'), '--no-mcp'], { cwd: SHELL_DIR });
+      const child = spawn(process.execPath, ['run', COG, '--headless', '--data', join(dir, 'data'), '--no-http'], { cwd: SHELL_DIR });
       let stdout = '';
       child.stdout.on('data', (chunk: Buffer) => {
         stdout += chunk.toString();

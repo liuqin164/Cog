@@ -1,6 +1,6 @@
 /**
- * F21 install bootstrap (#203). The six steps are driven with injected IO, runner, probe and MCP
- * session, so the test owns the boundaries and the real kernel/DB work still happens on disk.
+ * F21 install bootstrap (#203). The six steps are driven with injected IO, runner, probe and attach
+ * probe session, so the test owns the boundaries and the real kernel/DB work still happens on disk.
  */
 import { describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
@@ -48,7 +48,7 @@ function serviceSpec(homeDir: string): ServiceSpec {
     workspaceRoot: '/home/u/work',
     projectId: 'companion',
     agentId: 'cogmem-companion',
-    mcpPort: 7338,
+    httpPort: 7338,
     envFile: join(homeDir, '.cogmem', 'companion', 'env'),
     logFile: join(homeDir, '.cogmem', 'companion', 'service.log'),
     homeDir,
@@ -84,14 +84,13 @@ function makeHarness(options: { probeOk: boolean; hooks?: Partial<InstallerHooks
       state: 'IDLE',
       kernel: { status: 'ok', package: 'cogmem', dbPath },
     }),
-    openSession: async () => ({
-      sessionId: 'test-session',
-      async callTool(name, args) {
-        if (name === 'cogmem_remember_turn') {
-          stored.text = String(args.userText);
-          return { isError: false, text: '{"ok":true}' };
-        }
-        return { isError: false, text: stored.text };
+    openProbe: async () => ({
+      async remember(text) {
+        stored.text = text;
+        return { ok: true, text: 'evt-1' };
+      },
+      async recall() {
+        return { ok: true, text: stored.text };
       },
       close() {},
     }),
@@ -104,7 +103,7 @@ function makeHarness(options: { probeOk: boolean; hooks?: Partial<InstallerHooks
   const installer = new Installer({
     io,
     run: runner,
-    flags: { yes: true, skipService: true, dataDir, workspace, mcpPort: 0, ...options.flags },
+    flags: { yes: true, skipService: true, dataDir, workspace, httpPort: 0, ...options.flags },
     shellDir: SHELL_DIR,
     bunPath: '/usr/local/bin/bun',
     cwd: workspace,
@@ -145,7 +144,7 @@ describe('service units', () => {
     expect(unit).toContain('Restart=always');
     expect(unit).toContain('EnvironmentFile=/home/u/.cogmem/companion/env');
     expect(unit).toContain('--attach --no-terminal');
-    expect(unit).toContain('--mcp-port 7338');
+    expect(unit).toContain('--http-port 7338');
     expect(unit).toContain('--data /home/u/.cogmem/companion');
     expect(unit).not.toContain('sudo');
     expect(unit).not.toContain('User=');
@@ -313,7 +312,7 @@ describe('the six-step install', () => {
     const build = (probeOk: boolean) => new Installer({
       io,
       run: fakeRunner().runner,
-      flags: { yes: true, skipService: true, dataDir, workspace, mcpPort: 0 },
+      flags: { yes: true, skipService: true, dataDir, workspace, httpPort: 0 },
       shellDir: SHELL_DIR,
       bunPath: '/usr/local/bin/bun',
       cwd: workspace,
@@ -324,11 +323,13 @@ describe('the six-step install', () => {
           ? { ok: true, latencyMs: 1, sample: 'OK' }
           : { ok: false, code: 'model_timeout', message: '超时。', hint: '再试。' }),
         fetchHealth: async () => ({ status: 'ok', bind: '127.0.0.1', kernel: { status: 'ok', package: 'cogmem', dbPath: join(dataDir, 'memory.sqlite') } }),
-        openSession: async () => ({
-          sessionId: 's',
-          async callTool(name, args) {
-            if (name === 'cogmem_remember_turn') stored.text = String(args.userText);
-            return { isError: false, text: stored.text };
+        openProbe: async () => ({
+          async remember(text) {
+            stored.text = text;
+            return { ok: true, text: 'evt-1' };
+          },
+          async recall() {
+            return { ok: true, text: stored.text };
           },
           close() {},
         }),
@@ -348,11 +349,11 @@ describe('the six-step install', () => {
   });
 
   test('parser keeps booleans and values in their own slots', () => {
-    const flags = parseInstallFlags(['--yes', '--skip-service', '--data', '/tmp/d', '--mcp-port', '17338', '--platform', 'darwin']);
+    const flags = parseInstallFlags(['--yes', '--skip-service', '--data', '/tmp/d', '--http-port', '17338', '--platform', 'darwin']);
     expect(flags.yes).toBe(true);
     expect(flags.skipService).toBe(true);
     expect(flags.dataDir).toBe('/tmp/d');
-    expect(flags.mcpPort).toBe(17338);
+    expect(flags.httpPort).toBe(17338);
     expect(flags.platform).toBe('darwin');
   });
 });

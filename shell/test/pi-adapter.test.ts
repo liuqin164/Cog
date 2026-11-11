@@ -153,7 +153,7 @@ describe('Pi compatibility adapter', () => {
         'const dir = process.argv[2]!;',
         "const provider = { name: 'scripted', model: 'scripted/detached', async complete() { return { text: 'detached reply', toolCalls: [] }; } };",
         'const shell = new CompanionShell({',
-        '  config: { workspaceRoot: dir, dataDir: dir + "/data", dbPath: dir + "/data/memory.sqlite", timeZone: "UTC", projectId: "detached", agentId: "detached-agent", sessionId: "s", terminalEnabled: false, mcp: { enabled: false, port: 0, hostname: "127.0.0.1", path: "/mcp", profile: "core" }, pi: { adapterEnabled: false, plugins: [] } },',
+        '  config: { workspaceRoot: dir, dataDir: dir + "/data", dbPath: dir + "/data/memory.sqlite", timeZone: "UTC", projectId: "detached", agentId: "detached-agent", sessionId: "s", terminalEnabled: false, http: { enabled: false, port: 0, hostname: "127.0.0.1" }, pi: { adapterEnabled: false, plugins: [] } },',
         '  modelProvider: provider,',
         '  tick: false,',
         '});',

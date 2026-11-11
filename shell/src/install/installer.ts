@@ -31,7 +31,7 @@ import {
   type ServiceSpec,
 } from './service.ts';
 import { runDoctor, type DoctorReport, type HealthPayload } from './doctor.ts';
-import { openMcpSession, type McpSession } from './mcp.ts';
+import { openProbeSession, type ProbeSession } from './attach.ts';
 import { createTerminalIO, type InstallIO, type TerminalStreams } from './io.ts';
 
 export const INSTALL_STEPS = ['preflight', 'place', 'model', 'rhythm', 'resident', 'awake'] as const;
@@ -51,7 +51,7 @@ export interface InstallFlags {
   workspace?: string;
   project?: string;
   agent?: string;
-  mcpPort?: number;
+  httpPort?: number;
   /** `linux` | `darwin` | `win32`; the last is refused with a plain reason. */
   platform?: string;
   serviceName?: string;
@@ -69,7 +69,7 @@ export interface InstallChoices {
   workspaceRoot: string;
   projectId: string;
   agentId: string;
-  mcpPort: number;
+  httpPort: number;
   platform: string;
   serviceName: string;
   timeZone: string;
@@ -99,7 +99,8 @@ export interface ResidentHandle {
 export interface InstallerHooks {
   probe?: typeof probeModel;
   fetchHealth?: (url: string) => Promise<HealthPayload>;
-  openSession?: (url: string) => Promise<McpSession>;
+  /** The first-wake probe's channel to the running resident: its attach control socket. */
+  openProbe?: (socketPath: string) => Promise<ProbeSession>;
   /** `--skip-service` only: how to start and stop the resident without a service manager. */
   spawnResident?: (args: string[], env: Record<string, string>, cwd: string) => ResidentHandle;
 }
@@ -198,7 +199,7 @@ export class Installer {
       workspaceRoot: resolve(this.flags.workspace ?? this.cwd),
       projectId: this.flags.project ?? 'companion',
       agentId: this.flags.agent ?? 'cogmem-companion',
-      mcpPort: this.flags.mcpPort ?? 7338,
+      httpPort: this.flags.httpPort ?? 7338,
       platform: this.flags.platform ?? options.platform,
       serviceName: this.flags.serviceName ?? 'cogmem-companion',
       timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC',
@@ -241,12 +242,8 @@ export class Installer {
     return join(this.choices.dataDir, 'service.log');
   }
 
-  private get mcpUrl(): string {
-    return `http://127.0.0.1:${this.choices.mcpPort}/mcp`;
-  }
-
   private get healthUrl(): string {
-    return `http://127.0.0.1:${this.choices.mcpPort}/health`;
+    return `http://127.0.0.1:${this.choices.httpPort}/health`;
   }
 
   private loadState(): InstallState {
@@ -370,15 +367,15 @@ export class Installer {
       this.io.say(`磁盘：无法探测（${error instanceof Error ? error.message : String(error)}），跳过`);
     }
 
-    const portState = await this.portState(this.choices.mcpPort);
+    const portState = await this.portState(this.choices.httpPort);
     if (portState === 'taken') {
       return {
         ok: false,
-        message: `端口 ${this.choices.mcpPort} 已被别的进程占用（回环地址不通 health，也不是本壳）`,
-        hint: `换一个端口：--mcp-port <n>；或先停掉占用者。`,
+        message: `端口 ${this.choices.httpPort} 已被别的进程占用（回环地址不通 health，也不是本壳）`,
+        hint: `换一个端口：--http-port <n>；或先停掉占用者。`,
       };
     }
-    this.io.say(`端口：127.0.0.1:${this.choices.mcpPort} ${portState === 'ours' ? '已有本壳在跑（续装）' : '空闲'}`);
+    this.io.say(`端口：127.0.0.1:${this.choices.httpPort} ${portState === 'ours' ? '已有本壳在跑（续装）' : '空闲'}`);
     return { ok: true };
   }
 
@@ -570,7 +567,7 @@ export class Installer {
       workspaceRoot: this.choices.workspaceRoot,
       projectId: this.choices.projectId,
       agentId: this.choices.agentId,
-      mcpPort: this.choices.mcpPort,
+      httpPort: this.choices.httpPort,
       envFile: this.envPath,
       logFile: this.logPath,
       homeDir: this.homeDir,
@@ -595,7 +592,7 @@ export class Installer {
       return {
         ok: false,
         message: `常驻进程在 40 秒内没有回 health（${this.healthUrl}）`,
-        hint: `看日志 ${this.logPath}；也确认 ${this.choices.mcpPort} 没被占。`,
+        hint: `看日志 ${this.logPath}；也确认 ${this.choices.httpPort} 没被占。`,
       };
     }
     this.io.say(`常驻已起：state=${health.state ?? '?'} kernel=${health.kernel?.status ?? '?'} db=${health.kernel?.dbPath ?? '?'}`);
@@ -607,7 +604,7 @@ export class Installer {
       return { ok: false, message: 'doctor 没有全绿', hint: `先看上面 FAIL 的项；日志 ${this.logPath}` };
     }
 
-    this.io.say(`星海（观测台）：http://127.0.0.1:${this.choices.mcpPort}/observatory/`);
+    this.io.say(`星海（观测台）：http://127.0.0.1:${this.choices.httpPort}/observatory/`);
     this.io.say(`健康页：${this.healthUrl}`);
     this.io.say('两处都只回环；快照目录 0700；模型钥匙只在 0600 的 env 文件里。');
     return { ok: true };
@@ -648,17 +645,14 @@ export class Installer {
 
   private async stepAwake(): Promise<StepResult> {
     const token = `install-probe-${randomUUID().slice(0, 8)}`;
-    const openSession = this.hooks.openSession ?? openMcpSession;
-    const session = await openSession(this.mcpUrl);
-    const wrote = await session.callTool('cogmem_remember_turn', {
-      userText: `安装自检记忆：口令 ${token}，备用钥匙放在蓝色花盆下面。`,
-      assistantText: '已记下。',
-      turnId: token,
-    });
-    if (wrote.isError) {
+    const openProbe = this.hooks.openProbe ?? openProbeSession;
+    const probe = await openProbe(this.socketPath);
+    const wrote = await probe.remember(`安装自检记忆：口令 ${token}，备用钥匙放在蓝色花盆下面。`, token);
+    probe.close();
+    if (!wrote.ok) {
       return { ok: false, message: `落账失败：${wrote.text.slice(0, 300)}`, hint: `resident health ${this.healthUrl}` };
     }
-    this.io.say(`落账：${token}（经常驻的 MCP 面写入，单一写者）`);
+    this.io.say(`落账：${token}（经常驻的 attach 控制口写进它的内核，单一写者）`);
 
     this.io.say('重启进程…');
     await this.restartResident();
@@ -666,9 +660,10 @@ export class Installer {
       return { ok: false, message: '重启后进程没有回 health', hint: `日志 ${this.logPath}` };
     }
 
-    const after = await openSession(this.mcpUrl);
-    const recalled = await after.callTool('cogmem_recall', { query: token });
-    if (recalled.isError || !recalled.text.includes(token)) {
+    const after = await openProbe(this.socketPath);
+    const recalled = await after.recall(token);
+    after.close();
+    if (!recalled.ok || !recalled.text.includes(token)) {
       return {
         ok: false,
         message: `重启后召回没有对上（${token} 不在召回结果里）`,
@@ -735,7 +730,7 @@ export async function defaultFetchHealth(url: string): Promise<HealthPayload> {
 
 export const INSTALL_USAGE = [
   '用法: install [--data <dir>] [--workspace <dir>] [--project <id>] [--agent <id>]',
-  '              [--mcp-port <n>] [--service-name <name>] [--home <dir>] [--platform linux|darwin]',
+  '              [--http-port <n>] [--service-name <name>] [--home <dir>] [--platform linux|darwin]',
   '              [--yes] [--skip-service] [--uninstall] [--help]',
   '  --data         数据目录（默认 ~/.cogmem/companion）',
   '  --yes          非交互：取默认（mg 网关、系统时区、做梦 2:00-5:00）',
@@ -769,8 +764,8 @@ export function parseInstallFlags(argv: string[]): InstallFlags {
     const parsed = value(name);
     if (parsed !== undefined) (flags as Record<string, unknown>)[key] = parsed;
   }
-  const port = value('mcp-port');
-  if (port !== undefined) flags.mcpPort = Number(port);
+  const port = value('http-port');
+  if (port !== undefined) flags.httpPort = Number(port);
   return flags;
 }
 

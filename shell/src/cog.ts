@@ -50,21 +50,21 @@ function shellOverrides(parsed: Parsed): Partial<ShellConfig> {
     const value = stringFlag(parsed, flag);
     if (value !== undefined) (overrides as Record<string, unknown>)[field] = value;
   }
-  const mcpPort = stringFlag(parsed, 'mcp-port');
+  const httpPort = stringFlag(parsed, 'http-port');
   const base = defaultShellConfig();
-  if (mcpPort !== undefined) overrides.mcp = { ...base.mcp, enabled: true, port: Number(mcpPort) };
-  if (parsed.flags.get('no-mcp')) overrides.mcp = { ...base.mcp, enabled: false };
+  if (httpPort !== undefined) overrides.http = { ...base.http, enabled: true, port: Number(httpPort) };
+  if (parsed.flags.get('no-http')) overrides.http = { ...base.http, enabled: false };
   return overrides;
 }
 
 /** The resident flags `cog` passes through so the two processes agree on dirs and identity. */
 function residentArgs(parsed: Parsed): string[] {
   const args = ['--attach', '--no-terminal'];
-  for (const flag of ['workspace', 'data', 'db', 'project', 'agent', 'mcp-port']) {
+  for (const flag of ['workspace', 'data', 'db', 'project', 'agent', 'http-port']) {
     const value = stringFlag(parsed, flag);
     if (value !== undefined) args.push(`--${flag}`, value);
   }
-  if (parsed.flags.get('no-mcp')) args.push('--no-mcp');
+  if (parsed.flags.get('no-http')) args.push('--no-http');
   return args;
 }
 
@@ -109,7 +109,7 @@ async function main(): Promise<number> {
   const socketPath = config.attach.socketPath ?? defaultSocketPath(config.dataDir);
 
   if (parsed.flags.get('help')) {
-    process.stdout.write('cog [--headless] [--workspace d] [--data d] [--db f] [--project id] [--agent id] [--mcp-port n] [--no-mcp]\n');
+    process.stdout.write('cog [--headless] [--workspace d] [--data d] [--db f] [--project id] [--agent id] [--http-port n] [--no-http]\n');
     return 0;
   }
 

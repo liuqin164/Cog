@@ -50,8 +50,8 @@ function overridesFrom(parsed: ParsedArgs): Partial<ShellConfig> {
   if (stringFlag('agent')) overrides.agentId = stringFlag('agent');
   if (flags.get('no-terminal')) overrides.terminalEnabled = false;
   if (flags.get('attach')) overrides.attach = { ...base.attach, enabled: true };
-  if (flags.get('no-mcp')) overrides.mcp = { ...base.mcp, enabled: false };
-  if (stringFlag('mcp-port')) overrides.mcp = { ...base.mcp, enabled: true, port: Number(stringFlag('mcp-port')) };
+  if (flags.get('no-http')) overrides.http = { ...base.http, enabled: false };
+  if (stringFlag('http-port')) overrides.http = { ...base.http, enabled: true, port: Number(stringFlag('http-port')) };
   const piPlugins = piPluginSpecs(parsed);
   if (piPlugins.length > 0) overrides.pi = { adapterEnabled: true, plugins: piPlugins };
   if (flags.get('no-pi')) overrides.pi = { adapterEnabled: false, plugins: [] };
@@ -104,7 +104,7 @@ async function main(): Promise<number> {
     await shell.stop();
     return 0;
   }
-  process.stdout.write(`companion shell started: state=${shell.state} data=${config.dataDir}${shell.mcpUrl ? ` mcp=${shell.mcpUrl}` : ''}\n`);
+  process.stdout.write(`companion shell started: state=${shell.state} data=${config.dataDir}${shell.httpUrl ? ` http=${shell.httpUrl}` : ''}\n`);
   for (const plugin of shell.piPluginResults) {
     process.stdout.write(`pi plugin ${plugin.pluginName}: ${plugin.status} tools=[${plugin.tools.join(', ')}] commands=[${plugin.commands.join(', ')}]\n`);
   }

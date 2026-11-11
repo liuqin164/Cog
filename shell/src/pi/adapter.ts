@@ -261,7 +261,7 @@ export class PiCompatAdapter {
         adapter.drop('registerShortcut', shortcut);
       },
       registerMcpServer() {
-        adapter.refuse('registerMcpServer', 'the shell has no MCP client; only the kernel-facing MCP server');
+        adapter.refuse('registerMcpServer', 'the shell has no MCP client and serves no outward MCP face to add a server to');
       },
       unregisterMcpServer() {},
       getMcpServers() {

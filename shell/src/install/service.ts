@@ -34,7 +34,7 @@ export interface ServiceSpec {
   workspaceRoot: string;
   projectId: string;
   agentId: string;
-  mcpPort: number;
+  httpPort: number;
   envFile: string;
   logFile: string;
   /** The HOME the service files go under; overridable so a sandbox does not touch the real one. */
@@ -64,7 +64,7 @@ export function residentArgs(spec: ServiceSpec): string[] {
     '--workspace', spec.workspaceRoot,
     '--project', spec.projectId,
     '--agent', spec.agentId,
-    '--mcp-port', String(spec.mcpPort),
+    '--http-port', String(spec.httpPort),
   ];
 }
 

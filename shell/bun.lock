@@ -4,9 +4,6 @@
   "workspaces": {
     "": {
       "name": "@cogmem/companion-shell",
-      "dependencies": {
-        "@modelcontextprotocol/sdk": "1.32.2",
-      },
       "devDependencies": {
         "@earendil-works/pi-ai": "1.5.0",
         "@earendil-works/pi-coding-agent": "1.5.0",

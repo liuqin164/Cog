@@ -27,7 +27,7 @@ import { dreamPlugin } from './plugins/dream.ts';
 import { emergencePlugin } from './plugins/emergence.ts';
 import { terminalPlugin, TerminalChannel, type ShellControl } from './channels/terminal.ts';
 import { AgentRuntime, type ModelProvider, type RunSummary } from './state/agent-loop.ts';
-import { startKernelMcpFace, type McpFaceHandle } from './kernel-host.ts';
+import { startKernelHttpFace, type HttpFaceHandle } from './kernel-host.ts';
 import { readSoul } from './install/soul.ts';
 import { AttachServer, defaultSocketPath, type AttachShell } from './attach/server.ts';
 import { buildAwayReport, enqueueAway } from './presence.ts';
@@ -66,7 +66,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   private clock?: ClockService;
   private dream?: { integrate(...args: [string, string, number?]): Promise<{ localDate: string; eventCount: number; sourceRefs: unknown[]; summary: string }> };
   private emergence?: { decide(query: string | undefined, now?: number): { candidates: Array<{ id: string; text: string; reason: string }>; suppressed: unknown[] } };
-  private mcp?: McpFaceHandle;
+  private http?: HttpFaceHandle;
   private terminal?: TerminalChannel;
   private attach?: AttachServer;
   private modelLabel = 'unknown';
@@ -140,8 +140,9 @@ export class CompanionShell implements ShellControl, AttachShell {
     return this.runtime;
   }
 
-  get mcpUrl(): string | undefined {
-    return this.mcp?.url;
+  /** The loopback HTTP face's address (status + star map), when this process started one. */
+  get httpUrl(): string | undefined {
+    return this.http?.baseUrl;
   }
 
   async start(): Promise<void> {
@@ -162,12 +163,12 @@ export class CompanionShell implements ShellControl, AttachShell {
       this.lock.release(process.pid);
       throw error;
     }
-    if (this.config.mcp.enabled) {
-      this.mcp = await startKernelMcpFace(this.kernel, this.config.projectId, {
-        ...this.config.mcp,
+    if (this.config.http.enabled) {
+      this.http = await startKernelHttpFace(this.kernel, {
+        ...this.config.http,
         health: () => ({ state: this.machine.state }),
       });
-      this.trace.append('mcp_started', { url: this.mcp.url, port: this.mcp.port });
+      this.trace.append('http_face_started', { url: this.http.baseUrl, port: this.http.port });
     }
     if (this.config.pi.adapterEnabled && this.config.pi.plugins.length > 0) {
       await this.loadPiPlugins();
@@ -179,7 +180,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       this.trace.append('tool_set_mismatch', mismatch);
       // Unwind what start built before refusing, so an embedder does not inherit a half-started shell;
       // the lock goes last, since releasing it is what admits the next process.
-      this.mcp?.stop();
+      this.http?.stop();
       await this.host.stop();
       this.lock.release(process.pid);
       throw new Error(`tool_set_mismatch: the checkpoint declared [${mismatch.declared.join(', ')}] but this process can execute [${mismatch.executable.join(', ')}]`);
@@ -634,6 +635,36 @@ export class CompanionShell implements ShellControl, AttachShell {
     }
   }
 
+  // ---- The install's first-wake probe (#203), asked over the same control socket. ----
+  //
+  // The installer is out of process and the resident holds the one writer on the database, so the
+  // probe is a request to the resident rather than a second kernel opened on the same file. Both
+  // halves are deterministic (`rememberTurnWithResult` / `recall`), so nothing here needs a model.
+
+  async probeRemember(text: string, turnId?: string): Promise<{ ok: boolean; text: string }> {
+    try {
+      const result = await this.backend.rememberTurnWithResult({
+        agentId: this.config.agentId,
+        projectId: this.config.projectId,
+        sessionId: this.config.sessionId,
+        ...(turnId ? { turnId } : {}),
+        userText: text,
+      });
+      return { ok: true, text: result.rawEventIds.join(',') };
+    } catch (error) {
+      return { ok: false, text: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  async probeRecall(query: string): Promise<{ ok: boolean; text: string }> {
+    try {
+      const result = this.backend.recall({ agentId: this.config.agentId, projectId: this.config.projectId, query, limit: 5 });
+      return { ok: true, text: result.items.map((item) => item.text).join('\n') };
+    } catch (error) {
+      return { ok: false, text: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
   commitments(): Array<{ candidateId: string; title: string; status: string; updatedAt: number }> {
     try {
       return this.kernel.prospectiveMemoryService
@@ -760,7 +791,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     } finally {
       for (const adapter of this.adapters) await adapter.emitSessionShutdown();
       this.adapters.length = 0;
-      this.mcp?.stop();
+      this.http?.stop();
       await this.host.stop();
       this.kernel.close();
       this.lock.release(process.pid);

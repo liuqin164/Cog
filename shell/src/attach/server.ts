@@ -50,11 +50,18 @@ export type AttachClientMessage =
   | { t: 'command'; name: string; args?: string }
   | { t: 'withdraw' }
   | { t: 'wake' }
-  | { t: 'detach' };
+  | { t: 'detach' }
+  // The install's first-wake probe (#203): a deterministic write / recall the resident runs on its
+  // own in-process kernel, because the installer is out of process and a second kernel on the same
+  // file is the two-writer case CONCURRENT_ACCESS.md forbids. `turnId` is the probe's token, so a
+  // replay of the same attempt is a replay instead of a second row.
+  | { t: 'probe-remember'; text: string; turnId?: string }
+  | { t: 'probe-recall'; query: string };
 
 export type AttachServerMessage =
   | ({ t: 'snapshot' } & AttachSnapshot)
   | { t: 'event'; name: string; payload: any; ctx?: { runId?: string } }
+  | { t: 'probe'; op: 'remember' | 'recall'; ok: boolean; text: string }
   | { t: 'bye'; reason: string };
 
 /** What the server needs from the shell; `CompanionShell` implements it. */
@@ -72,6 +79,8 @@ export interface AttachShell {
   snapshotNote(): string | undefined;
   /** Called when the attached-client count changes, so the shell can date its own absence. */
   attachChanged(count: number): void;
+  probeRemember(text: string, turnId?: string): Promise<{ ok: boolean; text: string }>;
+  probeRecall(query: string): Promise<{ ok: boolean; text: string }>;
 }
 
 export interface AttachServerOptions {
@@ -194,6 +203,16 @@ export class AttachServer {
         // A wake is a submit with no text: DREAMING -> WAKING is the legal message_received edge.
         await this.options.shell.submit('');
         break;
+      case 'probe-remember': {
+        const result = await this.options.shell.probeRemember(message.text, message.turnId);
+        this.send(socket, { t: 'probe', op: 'remember', ok: result.ok, text: result.text });
+        break;
+      }
+      case 'probe-recall': {
+        const result = await this.options.shell.probeRecall(message.query);
+        this.send(socket, { t: 'probe', op: 'recall', ok: result.ok, text: result.text });
+        break;
+      }
       case 'detach':
         this.send(socket, { t: 'bye', reason: 'detached' });
         socket.end();

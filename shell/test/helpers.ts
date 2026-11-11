@@ -77,8 +77,9 @@ export interface TestShellOptions {
 }
 
 /**
- * The one test shell: temp dirs inside the managed prefix, no terminal, no MCP face and no Pi adapter
- * unless the test asks for them. Six copies of this config literal had already started to drift.
+ * The one test shell: temp dirs inside the managed prefix, no terminal, no HTTP face and no Pi
+ * adapter unless the test asks for them. Six copies of this config literal had already started to
+ * drift.
  *
  * `provider` may be omitted: then the shell builds its own model router (mg from config plus the
  * `routes.json` in its data dir), which is what the route-switching tests exercise.
@@ -96,7 +97,7 @@ export function makeShell(dir: string, provider: ModelProvider | undefined, conf
       agentId: 'cogmem-companion-test',
       sessionId: 'session-test',
       terminalEnabled: false,
-      mcp: { enabled: false, port: 0, hostname: '127.0.0.1', path: '/mcp', profile: 'core' },
+      http: { enabled: false, port: 0, hostname: '127.0.0.1' },
       pi: { adapterEnabled: false, plugins: [] },
       ...config,
     },
