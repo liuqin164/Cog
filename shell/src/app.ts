@@ -25,6 +25,7 @@ import { emergencePlugin } from './plugins/emergence.ts';
 import { terminalPlugin, TerminalChannel, type ShellControl } from './channels/terminal.ts';
 import { AgentRuntime, type ModelProvider, type RunSummary } from './state/agent-loop.ts';
 import { startKernelMcpFace, type McpFaceHandle } from './kernel-host.ts';
+import { readSoul } from './install/soul.ts';
 import { AttachServer, defaultSocketPath, type AttachShell } from './attach/server.ts';
 import { buildAwayReport, enqueueAway } from './presence.ts';
 import type { PresenceReport, StatusState, WorkState } from './tui/view.ts';
@@ -157,7 +158,10 @@ export class CompanionShell implements ShellControl, AttachShell {
       throw error;
     }
     if (this.config.mcp.enabled) {
-      this.mcp = await startKernelMcpFace(this.kernel, this.config.projectId, this.config.mcp);
+      this.mcp = await startKernelMcpFace(this.kernel, this.config.projectId, {
+        ...this.config.mcp,
+        health: () => ({ state: this.machine.state }),
+      });
       this.trace.append('mcp_started', { url: this.mcp.url, port: this.mcp.port });
     }
     if (this.config.pi.adapterEnabled && this.config.pi.plugins.length > 0) {
@@ -646,8 +650,17 @@ export class CompanionShell implements ShellControl, AttachShell {
         const fulfilled = items.filter((item) => item.status === 'completed').length;
         return { text: `承诺册 ${items.length} 条（已兑现 ${fulfilled} 条）`, data: { companion_commitments: { items } } };
       }
-      case 'soul':
-        return { text: `soul 子系统尚未在壳内落地（F19/F20 规格项）。当前身份 ${this.config.agentId}，称呼风格为默认。` };
+      case 'soul': {
+        // Read back what the installer wrote. F17's editor is the star sea's job; until then the
+        // v0 row is what the resident can show, and showing it beats claiming it is not there.
+        const row = readSoul(this.config.dbPath, this.config.agentId);
+        if (!row) return { text: `soul 尚未写入。当前身份 ${this.config.agentId}。` };
+        const bytes = Buffer.byteLength(row.content);
+        return {
+          text: `soul v${row.version}（${bytes} 字节）：${row.content.split('\n')[0]}`,
+          data: { companion_soul: { version: row.version, bytes, agentId: row.agentId } },
+        };
+      }
       case 'memory':
         return { text: `星海（记忆图）前端不在本壳内；记忆库文件：${this.config.dbPath}` };
       case 'status':

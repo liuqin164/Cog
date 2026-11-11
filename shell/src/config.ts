@@ -61,7 +61,14 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
     },
     budgets: overrides.budgets ?? { maxTurnsPerRun: 6, maxTokensPerRun: 20_000, toolWhitelist: ['read', 'write', 'edit', 'bash'] },
     contextSweetSpot: overrides.contextSweetSpot ?? 6_000,
-    dream: overrides.dream ?? { windowStartHour: 2, windowEndHour: 5, runKernelNight: true, maxEpisodes: 25 },
+    // The install's rhythm step is what fills these; the literals stay the fallback for a hand-run
+    // shell that was never installed.
+    dream: overrides.dream ?? {
+      windowStartHour: Number(env('COGMEM_SHELL_DREAM_START') ?? 2),
+      windowEndHour: Number(env('COGMEM_SHELL_DREAM_END') ?? 5),
+      runKernelNight: env('COGMEM_SHELL_DREAM_KERNEL') !== 'off',
+      maxEpisodes: Number(env('COGMEM_SHELL_DREAM_MAX_EPISODES') ?? 25),
+    },
     idleWakeIntervalMs: overrides.idleWakeIntervalMs ?? 30 * 60_000,
     tickIntervalMs: overrides.tickIntervalMs ?? 30_000,
     mcp: overrides.mcp ?? {

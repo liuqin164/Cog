@@ -29,6 +29,44 @@ Useful flags: `--workspace <dir>`, `--data <dir>`, `--db <file>`, `--project <id
 `--tools read,write,edit,bash`, `--turns <n>`, `--tokens <n>`, `--mcp-port <n>`, `--no-mcp`,
 `--no-terminal`, `--attach`, `--no-pi`, `--pi-plugin <pkg-or-path>` (repeatable).
 
+## `install`: the F21 bootstrap (#203)
+
+`bin/install` is the install guide for a self-owned companion — six steps, text in / text out, no TUI
+framework. It is *not* wired into the main tree's `cogmem` bin; that integration is a post-4.2 step.
+
+```sh
+bun run bin/install                 # interactive
+bun run bin/install --yes           # defaults: mg gateway, system TZ, dream 2:00–5:00
+bun run bin/install --uninstall     # stop the service, remove the unit, keep the memory
+```
+
+0. **预检** — OS (macOS/Linux only; Windows is refused, its service story is not this round), bun,
+   free disk, and whether the MCP port is free. No old-install branch: every version so far has no
+   users, so there is one path and no migration.
+1. **落位** — install the package deps, create the data directory (`0700`) and `snapshots/` (`0700`),
+   initialize an empty kernel through `createMemoryKernel`, and write the default soul.
+2. **模型** — pick mg or an OpenAI-compatible endpoint, take the key through a masked prompt, and make
+   **one real call** right there. A failure stops the install at this step with a named diagnosis
+   (`model_unreachable`, `model_unauthorized`, …) instead of surfacing after "success".
+3. **节律** — time zone, dream window, do-not-disturb window. TZ and the dream window go to the
+   resident's env file; the quiet window is recorded (the shell has no silence gate yet — that is F16).
+4. **常驻** — register a **user-level** service (`systemd --user` on Linux, launchd agent on macOS; no
+   sudo), start it, run the shell-side doctor, and print the star-sea and health addresses.
+5. **自检式首醒** — write a probe memory through the resident's own MCP face, restart the process, and
+   recall it. Only then does the installer print success; the endpoint is a first `cog` attach.
+
+Each step is idempotent and its completion is written to `<dataDir>/install.json` only after it fully
+succeeded, so a re-run resumes at the first unfinished step.
+
+**Soul.** F17's versioned kernel table and star-sea editor have not landed, and this round may not
+touch the kernel, so the installer writes the v0 row into a shell-owned `companion_soul` table in the
+same database file (`v0`, `supersedes` NULL). `ponytail:` interim — F17 moves it into the kernel. The
+default text is `DEFAULT_SOUL` in `src/install/soul.ts`, verbatim; `/soul` in the TUI now reads it back.
+
+**Security posture, printed at install time:** every service face is loopback only; the data and
+snapshot directories are `0700`; the model key is taken through masked input and lives only in the
+`0600` `<dataDir>/env` file — it is never printed and never enters the trace.
+
 ## `cog`: the terminal TUI (F20 #197)
 
 `cog` is the terminal front end. It attaches to a running resident over a Unix socket in the data
@@ -81,6 +119,15 @@ numbers.
 - `src/cog.ts` — the `cog` entry point: attach-or-spawn, `--headless`, and the non-TTY line mode.
 - `src/presence.ts` — "while you were away", read back from the trace, the runtime and the kernel.
 - `src/probes/gaps.ts` — the F1/F2/F6 (+F-SEC, F-MCP) probe and gap list.
+- `src/kernel-host.ts` — the loopback MCP face over the in-process kernel. **One `Server` per
+  session**: `Protocol.connect` refuses a second transport, and a single shared `Server` answered
+  every session after the first with the SDK's *Already connected to a transport* error (fixed this
+  round; the face is what the install's first-wake probe drives). It answers `GET /health` (kernel
+  status without opening a second kernel, which two-writer discipline forbids) and mounts the
+  read-only observatory at `/observatory` when the kernel source is beside it. Plain JSON responses
+  (`enableJsonResponse`), so a one-call client reads one object.
+- `src/install/*` — the F21 bootstrap: the six-step installer, the versioned soul table, the model
+  probe, the systemd/launchd unit renderers, the shell-side doctor, and the minimal MCP client.
 
 ## Failure ladder
 
