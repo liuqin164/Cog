@@ -49,6 +49,7 @@ function overridesFrom(parsed: ParsedArgs): Partial<ShellConfig> {
   if (stringFlag('project')) overrides.projectId = stringFlag('project');
   if (stringFlag('agent')) overrides.agentId = stringFlag('agent');
   if (flags.get('no-terminal')) overrides.terminalEnabled = false;
+  if (flags.get('attach')) overrides.attach = { ...base.attach, enabled: true };
   if (flags.get('no-mcp')) overrides.mcp = { ...base.mcp, enabled: false };
   if (stringFlag('mcp-port')) overrides.mcp = { ...base.mcp, enabled: true, port: Number(stringFlag('mcp-port')) };
   const piPlugins = piPluginSpecs(parsed);

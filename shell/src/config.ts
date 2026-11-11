@@ -20,6 +20,8 @@ export interface ShellConfig {
   /** IANA time zone for the time context and the dream window. */
   timeZone: string;
   model: { baseUrl: string; apiKey: string; model: string; timeoutMs: number };
+  /** The context bandwidth gauge's denominator (spec §6's "甜点带宽"); F14 has no controller yet. */
+  contextSweetSpot: number;
   budgets: { maxTurnsPerRun: number; maxTokensPerRun: number; toolWhitelist: string[] | null };
   dream: { windowStartHour: number; windowEndHour: number; runKernelNight: boolean; maxEpisodes: number };
   idleWakeIntervalMs: number;
@@ -28,6 +30,11 @@ export interface ShellConfig {
   mcp: { enabled: boolean; port: number; hostname: string; path: string; profile: 'core' | 'admin' | 'full' };
   pi: { adapterEnabled: boolean; plugins: string[] };
   terminalEnabled: boolean;
+  /**
+   * The control socket the `cog` TUI attaches to. Off by default (a plain `start` is still the
+   * line-mode resident); `cog` starts the resident with `--attach`, and tests opt in explicitly.
+   */
+  attach: { enabled: boolean; socketPath?: string };
 }
 
 function env(name: string): string | undefined {
@@ -53,6 +60,7 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
       timeoutMs: 120_000,
     },
     budgets: overrides.budgets ?? { maxTurnsPerRun: 6, maxTokensPerRun: 20_000, toolWhitelist: ['read', 'write', 'edit', 'bash'] },
+    contextSweetSpot: overrides.contextSweetSpot ?? 6_000,
     dream: overrides.dream ?? { windowStartHour: 2, windowEndHour: 5, runKernelNight: true, maxEpisodes: 25 },
     idleWakeIntervalMs: overrides.idleWakeIntervalMs ?? 30 * 60_000,
     tickIntervalMs: overrides.tickIntervalMs ?? 30_000,
@@ -68,5 +76,9 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
       plugins: (env('COGMEM_SHELL_PI_PLUGINS') ?? '').split(',').map((item) => item.trim()).filter(Boolean),
     },
     terminalEnabled: overrides.terminalEnabled ?? env('COGMEM_SHELL_TERMINAL') !== 'off',
+    attach: overrides.attach ?? {
+      enabled: env('COGMEM_SHELL_ATTACH') === 'on',
+      socketPath: env('COGMEM_SHELL_ATTACH_SOCKET'),
+    },
   };
 }

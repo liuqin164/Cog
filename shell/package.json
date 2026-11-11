@@ -4,6 +4,9 @@
   "version": "0.1.0-spike",
   "type": "module",
   "description": "Companion shell spike (F11 #165 stage one): state machine, plugin host, minimal resident loop.",
+  "bin": {
+    "cog": "src/cog.ts"
+  },
   "scripts": {
     "start": "bun run src/cli.ts start",
     "once": "bun run src/cli.ts once",

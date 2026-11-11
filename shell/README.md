@@ -27,7 +27,39 @@ opt-in (`SHELL_LIVE_MODEL=1 bun test test/mg-live.test.ts`) so the suite stays f
 
 Useful flags: `--workspace <dir>`, `--data <dir>`, `--db <file>`, `--project <id>`, `--agent <id>`,
 `--tools read,write,edit,bash`, `--turns <n>`, `--tokens <n>`, `--mcp-port <n>`, `--no-mcp`,
-`--no-terminal`, `--no-pi`, `--pi-plugin <pkg-or-path>` (repeatable).
+`--no-terminal`, `--attach`, `--no-pi`, `--pi-plugin <pkg-or-path>` (repeatable).
+
+## `cog`: the terminal TUI (F20 #197)
+
+`cog` is the terminal front end. It attaches to a running resident over a Unix socket in the data
+directory (`<dataDir>/attach.sock`); if none is running it brings one up detached with `--attach`, then
+attaches. The TUI is a separate process on purpose: closing the window, `Ctrl+C` twice, or `/exit` only
+detaches, and a crashed view cannot take the companion down — the resident keeps its state, its lock
+and its memory.
+
+```sh
+cd shell
+bun run src/cog.ts              # attach (starting the resident if needed)
+bun run src/cog.ts --headless   # start the resident detached and exit, no界面
+bun run src/cli.ts start --attach   # an attachable resident, run directly
+```
+
+Four sections: a status bar (name · lifecycle in human words · kernel · next wake), the transcript,
+the input box (1–8 lines, inner-scrolling), and a footer (context bandwidth gauge · model route ·
+today's token cost · workspace). `RUNNING` shows a work indicator with the cage's turn and token bars;
+a line sent while working is queued visibly and `Esc` withdraws it. `/` opens the command palette
+(`/soul /memory /commitments /status /context /sleep /dream /help /exit`); attaching while `DREAMING`
+shows a sleep screen and any input wakes it through the legal `DREAMING→WAKING` edge. Attaching plays
+"你不在时发生了什么" — the dreams, the held emergence candidates and the fulfilled commitments read back
+from the ledger, not replayed into the conversation.
+
+The renderer is self-owned (ANSI + differential repaint, no TUI framework): the transcript is
+virtualized, so a scroll frame over ten thousand entries costs ~0.07 ms regardless of length.
+`NO_COLOR` drops the palette to plain text and `TERM=dumb` degrades the borders and markers to ASCII.
+
+`bun test test/tui-*.test.ts` covers the layout snapshots (`test/snapshots/`, regenerate deliberately
+with `COG_UPDATE_SNAPSHOTS=1`), steering, the sleep screen, the attach protocol and the frame-cost
+numbers.
 
 ## Shape
 
@@ -41,7 +73,13 @@ Useful flags: `--workspace <dir>`, `--data <dir>`, `--db <file>`, `--project <id
 - `src/pi/adapter.ts` — the removable Pi compatibility layer.
 - `src/plugins/*` — clock, recall, dream, emergence (conservative), cage, capture, the four tools,
   mg provider. Dream, emergence and recall are plugins like the rest: swap one by not loading it.
-- `src/channels/terminal.ts` — the self-owned terminal channel.
+- `src/channels/terminal.ts` — the self-owned terminal channel (line mode, for `--no-terminal`-off residents).
+- `src/tui/*` — the `cog` interface: frame/theme, markdown, the view reducer, layout and virtualization,
+  the input editor, the palette, and the raw-mode app. Pure `render(view, size, env)` core, so the
+  snapshots are text comparisons.
+- `src/attach/*` — the resident's control socket and the client `cog` connects with.
+- `src/cog.ts` — the `cog` entry point: attach-or-spawn, `--headless`, and the non-TTY line mode.
+- `src/presence.ts` — "while you were away", read back from the trace, the runtime and the kernel.
 - `src/probes/gaps.ts` — the F1/F2/F6 (+F-SEC, F-MCP) probe and gap list.
 
 ## Failure ladder

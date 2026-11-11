@@ -269,6 +269,19 @@ export class AgentRuntime {
     this.followUps.push(text);
   }
 
+  /** The steering queue as the view shows it; FIFO, so the newest is last. */
+  get steeringMessages(): readonly string[] {
+    return this.steering;
+  }
+
+  /**
+   * Withdraw the newest not-yet-injected steer. The queue is drained at the turn boundary, so an item
+   * pulled here is one the model has certainly not seen.
+   */
+  withdrawSteering(): string | undefined {
+    return this.steering.pop();
+  }
+
   abort(reason = 'aborted'): void {
     this.options.trace?.append('run_abort_requested', { reason }, this.clock());
     this.abortController?.abort();
@@ -520,6 +533,9 @@ export class AgentRuntime {
         if (turn.usage) {
           const tokenTotal = (turn.usage.input ?? 0) + (turn.usage.output ?? 0);
           tokens += tokenTotal;
+          // The cage owns the verdict; this event only tells the view where the running total is, so
+          // the budget bars move while the run is still going rather than only at the boundary.
+          await this.options.bus.emit('turn_usage', { type: 'turn_usage', runId: input.runId, turnIndex, tokens: tokenTotal, totalTokens: tokens }, { runId: input.runId });
           const tokenCheck = this.options.budget.addTokens(tokenTotal);
           if (tokenCheck.exceeded) {
             stopReason = 'budget_exceeded';

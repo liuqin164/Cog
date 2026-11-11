@@ -25,6 +25,9 @@ import { emergencePlugin } from './plugins/emergence.ts';
 import { terminalPlugin, TerminalChannel, type ShellControl } from './channels/terminal.ts';
 import { AgentRuntime, type ModelProvider, type RunSummary } from './state/agent-loop.ts';
 import { startKernelMcpFace, type McpFaceHandle } from './kernel-host.ts';
+import { AttachServer, defaultSocketPath, type AttachShell } from './attach/server.ts';
+import { buildAwayReport, enqueueAway } from './presence.ts';
+import type { PresenceReport, StatusState, WorkState } from './tui/view.ts';
 
 export interface PiPluginLoadResult {
   pluginName: string;
@@ -46,7 +49,7 @@ export interface CompanionShellOptions {
   terminalOutput?: NodeJS.WritableStream;
 }
 
-export class CompanionShell implements ShellControl {
+export class CompanionShell implements ShellControl, AttachShell {
   readonly config: ShellConfig;
   readonly trace: TraceLog;
   readonly machine: StateMachine;
@@ -58,9 +61,17 @@ export class CompanionShell implements ShellControl {
   private cage?: RunCage;
   private clock?: ClockService;
   private dream?: { integrate(...args: [string, string, number?]): Promise<{ localDate: string; eventCount: number; sourceRefs: unknown[]; summary: string }> };
-  private emergence?: { decide(query: string | undefined, now?: number): { candidates: Array<{ id: string; text: string }>; suppressed: unknown[] } };
+  private emergence?: { decide(query: string | undefined, now?: number): { candidates: Array<{ id: string; text: string; reason: string }>; suppressed: unknown[] } };
   private mcp?: McpFaceHandle;
   private terminal?: TerminalChannel;
+  private attach?: AttachServer;
+  private modelLabel = 'unknown';
+  /** An estimate of the assembled context; the kernel has no F14 budget controller to ask. */
+  private contextTokenEstimate = 0;
+  private workLabel = '';
+  private runTurns = 0;
+  private runTokens = 0;
+  private runStartedAt?: number;
   private readonly adapters: Array<{ emitSessionShutdown(): Promise<void> }> = [];
   private tickTimer?: ReturnType<typeof setInterval>;
   private started = false;
@@ -94,12 +105,25 @@ export class CompanionShell implements ShellControl {
     // Every transition is also a bus event, so a plugin can observe the lifecycle without reading the
     // checkpoint file. The Pi-aligned names are untouched; this one carries the companion prefix.
     this.machine.onTransition((record) => {
+      if (record.to === 'RUNNING') {
+        this.runStartedAt = record.at;
+        this.runTurns = 0;
+        this.runTokens = 0;
+        this.workLabel = '思考中';
+      }
       void this.host.bus.emit('companion_transition', { ...record, state: record.to });
+      this.emitWork();
+      this.emitStatus();
     });
   }
 
   get state(): string {
     return this.machine.state;
+  }
+
+  /** How many TUI clients are attached; zero is what makes the shell hold emergence. */
+  get attachedClients(): number {
+    return this.attach?.clientCount ?? 0;
   }
 
   isRunning(): boolean {
@@ -160,6 +184,15 @@ export class CompanionShell implements ShellControl {
     }
     this.clock!.scheduleIdleWake();
     this.terminal?.start();
+    if (this.config.attach.enabled) {
+      this.attach = new AttachServer({
+        socketPath: this.config.attach.socketPath ?? defaultSocketPath(this.config.dataDir),
+        shell: this,
+        bus: this.host.bus,
+        trace: this.trace,
+      });
+      await this.attach.start();
+    }
     if (this.options.tick !== false) {
       // The tick is what keeps a headless resident process alive: it is the scheduler that fires a
       // persisted wake intent, not an unref'd convenience timer. An unref here let `--no-terminal`
@@ -210,6 +243,8 @@ export class CompanionShell implements ShellControl {
       // the next recovery can compare it against what the process can run.
       onToolsDeclared: (names) => this.machine.updateRuntime({ declaredTools: [...names].sort() }),
     });
+    this.modelLabel = `${this.host.getService<ModelProvider>('model').name}/${model.model}`;
+    this.attachWorkListeners();
     this.dream = this.host.getService('dream');
     this.emergence = this.host.getService('emergence');
     // Crash recovery needs to know what was running. The checkpoint records the calls that started and
@@ -323,6 +358,7 @@ export class CompanionShell implements ShellControl {
   async submit(text: string): Promise<RunSummary | undefined> {
     if (this.machine.state === 'RUNNING') {
       this.runtime!.steer(text);
+      this.emitSteering();
       return undefined;
     }
     this.clock!.markInteraction(text, this.now());
@@ -367,6 +403,16 @@ export class CompanionShell implements ShellControl {
       const decision = this.emergence!.decide(this.machine.runtime.lastInteractionText, at);
       if (decision.candidates.length > 0) {
         const candidate = decision.candidates[0];
+        if (this.shouldHoldForAbsence()) {
+          // Nobody is attached, so speaking now would be talking to an empty room. Hold it in the
+          // durable away queue and let the next attach's "你不在时" broadcast carry it.
+          this.machine.updateRuntime({
+            awayQueue: enqueueAway(this.machine.runtime, { id: candidate.id, text: candidate.text, reason: candidate.reason, at }),
+          });
+          this.trace.append('emergence_accumulated', { id: candidate.id, reason: candidate.reason, at });
+          return;
+        }
+        void this.host.bus.emit('companion_emergence', { id: candidate.id, reason: candidate.reason, text: candidate.text });
         await this.executeRun(candidate.text, 'emergence_due', `emergence:${candidate.id}`);
       }
     }
@@ -397,6 +443,7 @@ export class CompanionShell implements ShellControl {
       this.clock!.markDreamed(at);
       this.clock!.setWakeIntent(at + 8 * 60 * 60_000, 'morning_after_dream');
       this.trace.append('dream_complete', { localDate, eventCount: result.eventCount, sourceRefs: result.sourceRefs.length });
+      void this.host.bus.emit('companion_dream', { product: { localDate, eventCount: result.eventCount, summary: result.summary } });
       // A message that arrived while the integration was awaiting wakes the shell out of DREAMING.
       // The product is already written; the transition belongs to whoever moved the state, not to us.
       if (this.machine.state !== 'DREAMING') {
@@ -411,10 +458,228 @@ export class CompanionShell implements ShellControl {
     }
   }
 
+  // ---- The attach surface (`AttachShell`): everything the TUI process is allowed to ask for. ----
+
+  /**
+   * The work indicator and the context gauge are fed from the same events the transcript is, so the
+   * TUI never has to poll state: a turn starts, a tool starts, tokens are charged, a run settles.
+   */
+  private attachWorkListeners(): void {
+    this.host.bus.on('agent_start', () => {
+      this.contextTokenEstimate = 500; // the system prompt's own weight, the one part no message carries
+      this.emitStatus();
+    });
+    this.host.bus.on('turn_start', (event: { turnIndex?: number }) => {
+      this.runTurns = event.turnIndex ?? this.runTurns;
+      this.workLabel = '思考中';
+      this.emitWork();
+    });
+    this.host.bus.on('turn_usage', (event: { totalTokens?: number }) => {
+      this.runTokens = event.totalTokens ?? this.runTokens;
+      this.emitWork();
+    });
+    this.host.bus.on('tool_execution_start', (event: { toolName?: string }) => {
+      this.workLabel = event.toolName ?? '工具';
+      this.emitWork();
+    });
+    this.host.bus.on('tool_execution_end', () => {
+      this.workLabel = '思考中';
+      this.emitWork();
+    });
+    this.host.bus.on('message_end', (event: { message?: { role?: string; content?: string } }) => {
+      if (event.message?.content) {
+        this.contextTokenEstimate += Math.ceil(event.message.content.length / 4);
+        this.emitStatus();
+      }
+    });
+    this.host.bus.on('turn_end', () => this.emitSteering());
+    this.host.bus.on('agent_end', (event: { summary?: RunSummary }) => {
+      const tokens = event.summary?.tokens ?? 0;
+      if (tokens > 0) this.chargeCost(tokens);
+    });
+    this.host.bus.on('agent_settled', () => {
+      this.workLabel = '思考中';
+      this.emitWork();
+      this.emitSteering();
+      this.emitStatus();
+    });
+  }
+
+  private chargeCost(tokens: number): void {
+    try {
+      const today = this.clock?.localDate() ?? new Date().toISOString().slice(0, 10);
+      const previous = this.machine.runtime.costDayDate === today ? this.machine.runtime.costDayTokens ?? 0 : 0;
+      this.machine.updateRuntime({ costDayDate: today, costDayTokens: previous + tokens });
+    } catch (error) {
+      this.trace.append('cost_charge_failed', { tokens, message: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  private emitWork(): void {
+    void this.host.bus.emit('companion_work', this.currentWork());
+  }
+
+  private emitStatus(): void {
+    void this.host.bus.emit('companion_status', { status: this.currentStatus() });
+  }
+
+  private emitSteering(): void {
+    void this.host.bus.emit('companion_steering', { queued: this.currentQueued() });
+  }
+
+  private shouldHoldForAbsence(): boolean {
+    return this.config.attach.enabled && (this.attach?.clientCount ?? 0) === 0;
+  }
+
+  currentStatus(): StatusState {
+    const next = this.clock?.nextPendingIntent();
+    const today = this.clock?.localDate() ?? new Date().toISOString().slice(0, 10);
+    return {
+      name: this.config.agentId,
+      lifecycle: this.machine.state,
+      kernelConnected: !this.machine.isHalted,
+      nextWakeAt: next?.at,
+      nextWakeReason: next?.reason,
+      model: this.modelLabel,
+      workspace: this.config.workspaceRoot,
+      showWorkspace: true,
+      contextTokens: this.contextTokenEstimate,
+      contextSweetSpot: this.config.contextSweetSpot,
+      costTokens: this.machine.runtime.costDayDate === today ? this.machine.runtime.costDayTokens ?? 0 : 0,
+      timeZone: this.config.timeZone,
+    };
+  }
+
+  currentWork(): WorkState {
+    return {
+      active: this.machine.state === 'RUNNING',
+      label: this.workLabel,
+      startedAt: this.runStartedAt,
+      turns: this.runTurns,
+      maxTurns: this.config.budgets.maxTurnsPerRun,
+      tokens: this.runTokens,
+      maxTokens: this.config.budgets.maxTokensPerRun,
+    };
+  }
+
+  currentQueued(): string[] {
+    return [...(this.runtime?.steeringMessages ?? [])];
+  }
+
+  /** The TUI's Esc on a queued line: withdraw the newest steer the model has not seen. */
+  withdrawSteering(): string | undefined {
+    const withdrawn = this.runtime?.withdrawSteering();
+    this.emitSteering();
+    return withdrawn;
+  }
+
+  /** `/sleep` is the command that puts it into DORMANT; closing the window is only a detach. */
+  async sleep(): Promise<void> {
+    if (this.machine.state === 'DORMANT') return;
+    if (this.machine.state !== 'IDLE') throw new Error(`sleep_requires_idle: state is ${this.machine.state}`);
+    await this.machine.dispatch('shutdown', { reason: 'sleep_command' });
+    this.trace.append('sleep_command', { state: this.machine.state });
+  }
+
+  /**
+   * The report shown before the conversation resumes. Building it consumes the away queue: it is
+   * reported once, because "what happened while you were away" is not a recurring banner.
+   */
+  awayReport(): PresenceReport {
+    const report = buildAwayReport({
+      projectId: this.config.projectId,
+      runtime: this.machine.runtime,
+      trace: this.trace.read(),
+      kernel: this.kernel,
+      now: this.now(),
+    });
+    const patch: Record<string, unknown> = { lastAttachAt: this.now() };
+    if ((this.machine.runtime.awayQueue?.length ?? 0) > 0) patch.awayQueue = [];
+    try {
+      this.machine.updateRuntime(patch);
+    } catch (error) {
+      this.trace.append('attach_state_write_failed', { message: error instanceof Error ? error.message : String(error) });
+    }
+    return report;
+  }
+
+  /** Date the absence when the last client leaves, so the next report has a window to read. */
+  attachChanged(count: number): void {
+    try {
+      this.machine.updateRuntime(count > 0 ? { lastAttachAt: this.now() } : { lastDetachAt: this.now() });
+    } catch (error) {
+      this.trace.append('attach_state_write_failed', { count, message: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  commitments(): Array<{ candidateId: string; title: string; status: string; updatedAt: number }> {
+    try {
+      return this.kernel.prospectiveMemoryService
+        .list({ projectId: this.config.projectId, statuses: ['pending', 'confirmed', 'deferred', 'completed'], limit: 100 })
+        .map((record) => ({ candidateId: record.candidateId, title: record.title, status: record.status, updatedAt: record.updatedAt }));
+    } catch (error) {
+      this.trace.append('commitments_read_failed', { message: error instanceof Error ? error.message : String(error) });
+      return [];
+    }
+  }
+
+  modelRoutes(): string[] {
+    return [this.modelLabel];
+  }
+
+  snapshotNote(): string | undefined {
+    return `checkpoint seq ${this.machine.seq}`;
+  }
+
+  /** A `/` command answered by the resident; the TUI renders the text in its own overlay. */
+  commandText(name: string): { text: string; data?: Record<string, unknown> } {
+    switch (name) {
+      case 'dream': {
+        const product = this.lastDreamProduct();
+        return {
+          text: product ? `${product.localDate}：${product.summary}` : '本会话尚无做梦产物。',
+          data: product ? { companion_dream: { product } } : undefined,
+        };
+      }
+      case 'commitments': {
+        const items = this.commitments();
+        const fulfilled = items.filter((item) => item.status === 'completed').length;
+        return { text: `承诺册 ${items.length} 条（已兑现 ${fulfilled} 条）`, data: { companion_commitments: { items } } };
+      }
+      case 'soul':
+        return { text: `soul 子系统尚未在壳内落地（F19/F20 规格项）。当前身份 ${this.config.agentId}，称呼风格为默认。` };
+      case 'memory':
+        return { text: `星海（记忆图）前端不在本壳内；记忆库文件：${this.config.dbPath}` };
+      case 'status':
+        return { text: `生命周期 ${this.machine.state}，checkpoint seq ${this.machine.seq}，本日 ${this.machine.runtime.costDayTokens ?? 0} token。` };
+      case 'context':
+        return { text: `当前组装上下文约 ${this.contextTokenEstimate} token（甜点带宽 ${this.config.contextSweetSpot}）。本壳未接入 F14 车道控制器。` };
+      case 'model':
+        return { text: `会话模型：${this.modelLabel}（当前仅一条路线，切换需配置多条）。` };
+      case 'help':
+        return { text: 'Enter 发送 · Shift+Enter 换行 · / 命令面板 · Esc 撤回排队消息 · /exit 断开附着 · /sleep 进 DORMANT' };
+      default:
+        return { text: `unknown command: /${name}` };
+    }
+  }
+
+  private lastDreamProduct(): { localDate: string; eventCount: number; summary: string } | undefined {
+    const records = this.trace.read().filter((record) => record.kind === 'dream_complete');
+    const last = records[records.length - 1];
+    if (!last) return undefined;
+    const localDate = String(last.localDate ?? '');
+    const events = this.kernel.getThreadEvents(`companion-dream:${localDate}`, { projectId: this.config.projectId, limit: 50 });
+    const product = events.find((event) => (event.payload as { metadata?: { kind?: unknown } } | undefined)?.metadata?.kind === 'dream-integration');
+    const summary = (product?.payload as { text?: unknown } | undefined)?.text;
+    return { localDate, eventCount: Number(last.eventCount ?? 0), summary: typeof summary === 'string' ? summary : `夜间整合 ${localDate}` };
+  }
+
   async stop(): Promise<void> {
     if (!this.started) return;
     this.started = false;
     if (this.tickTimer) clearInterval(this.tickTimer);
+    await this.attach?.stop();
+    this.attach = undefined;
     this.terminal?.stop();
     try {
       if (this.machine.state === 'RUNNING') {

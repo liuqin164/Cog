@@ -62,6 +62,17 @@ export interface ShellRuntimeState {
    * for any whose policy is `never` (see `ToolDefinition.replay`).
    */
   inFlightToolCalls?: InFlightToolCall[];
+  /** Last attach/detach of a TUI, so "while you were away" has a window to read. */
+  lastAttachAt?: number;
+  lastDetachAt?: number;
+  /**
+   * Emergence candidates that arrived with nobody attached. Talking to an empty room is not
+   * presence, so they are held here and reported on the next attach instead of spoken into the void.
+   */
+  awayQueue?: Array<{ id: string; text: string; reason: string; at: number }>;
+  /** Today's cumulative token cost and its local date, so the footer's "本日" survives a restart. */
+  costDayDate?: string;
+  costDayTokens?: number;
 }
 
 export interface CheckpointState {
