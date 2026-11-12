@@ -825,13 +825,26 @@ export class CompanionShell implements ShellControl, AttachShell {
   /**
    * The resident's one command entry point, shared by the attach socket and the terminal channel.
    * Core names come from the table (`commands.ts`); plugin commands from the host registry; anything
-   * else gets the same unknown-command receipt the other two faces give.
+   * else gets the same unknown-command receipt the other two faces give. A handler that throws is
+   * attributed to its command name in both the receipt and the trace — never a nameless error.
    */
   async runCommand(name: string, args = ''): Promise<CommandReply> {
     const core = coreCommandFor(name, 'resident');
-    if (core) return core.run(this.commandHost, args);
-    if (this.host.commands.has(name)) return { text: (await this.host.commands.run(name, args, this)) ?? '' };
+    if (core) return this.runCommandGuarded(name, () => core.run(this.commandHost, args));
+    if (this.host.commands.has(name)) {
+      return this.runCommandGuarded(name, async () => ({ text: (await this.host.commands.run(name, args, this)) ?? '', receipt: true }));
+    }
     return unknownCommandReply(name);
+  }
+
+  private async runCommandGuarded(name: string, invoke: () => CommandReply | Promise<CommandReply>): Promise<CommandReply> {
+    try {
+      return await invoke();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.trace.append('command_failed', { command: name, message });
+      return { text: `命令 /${name} 失败：${message}`, receipt: true };
+    }
   }
 
   /**
@@ -867,8 +880,8 @@ export class CompanionShell implements ShellControl, AttachShell {
   };
 
   /** The palette's plugin half: the resident is the only process that holds the registry. */
-  pluginCommands(): Array<{ name: string; description?: string }> {
-    return this.host.commands.list().map(({ name, description }) => ({ name, description }));
+  pluginCommands(): Array<{ name: string; description?: string; argumentHint?: string }> {
+    return this.host.commands.list().map(({ name, description, argumentHint }) => ({ name, description, argumentHint }));
   }
 
   /**

@@ -44,7 +44,7 @@ export interface AttachSnapshot {
   lastDream?: { localDate: string; eventCount: number; summary: string };
   modelRoutes: string[];
   /** The plugin half of the palette, which only the resident can enumerate (spec §7). */
-  commands: Array<{ name: string; description?: string }>;
+  commands: Array<{ name: string; description?: string; argumentHint?: string }>;
   snapshotNote?: string;
 }
 
@@ -80,7 +80,7 @@ export interface AttachShell {
   currentQueued(): string[];
   commitments(): Array<{ candidateId: string; title: string; status: string; updatedAt: number }>;
   modelRoutes(): string[];
-  pluginCommands(): Array<{ name: string; description?: string }>;
+  pluginCommands(): Array<{ name: string; description?: string; argumentHint?: string }>;
   snapshotNote(): string | undefined;
   /** Called when the attached-client count changes, so the shell can date its own absence. */
   attachChanged(count: number): void;

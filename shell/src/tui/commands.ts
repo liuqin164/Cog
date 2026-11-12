@@ -26,7 +26,7 @@ const CORE_PALETTE = corePaletteCommands(false);
 
 /** The palette for the current view: the core table, then the plugin commands the resident reported. */
 export function paletteCommands(view: TuiView): TuiCommand[] {
-  const plugins = view.pluginCommands.map((command) => ({ name: command.name, description: command.description ?? '插件命令' }));
+  const plugins = view.pluginCommands.map((command) => ({ name: command.name, description: command.description ?? '插件命令', argumentHint: command.argumentHint }));
   return [...corePaletteCommands((view.modelRoutes?.length ?? 0) > 1), ...plugins];
 }
 

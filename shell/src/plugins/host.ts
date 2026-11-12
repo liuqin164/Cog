@@ -123,6 +123,8 @@ export interface RegisteredTool extends ToolDefinition {
 export interface CommandDefinition {
   name: string;
   description?: string;
+  /** What the argument looks like; the palette shows it beside the command (spec §7). */
+  argumentHint?: string;
   handler(args: string, ctx: any): Promise<string | void> | string | void;
 }
 
@@ -190,6 +192,8 @@ export class ToolRegistry {
 export class CommandRegistry {
   private readonly registry = new Map<string, CommandDefinition & { source: string }>();
 
+  constructor(private readonly trace?: { append(kind: string, record?: Record<string, unknown>, now?: number): void }) {}
+
   register(definition: CommandDefinition, source: string): void {
     // The core check comes first: a core name is never free, whether or not anything registered it.
     if (RESERVED_CORE_COMMANDS.includes(definition.name)) {
@@ -216,8 +220,16 @@ export class CommandRegistry {
   async run(name: string, args: string, ctx: any): Promise<string | undefined> {
     const command = this.registry.get(name);
     if (!command) return undefined;
-    const result = await command.handler(args, ctx);
-    return result ?? undefined;
+    try {
+      const result = await command.handler(args, ctx);
+      return result ?? undefined;
+    } catch (error) {
+      // A handler that throws is attributed to its command name, in the receipt the caller prints
+      // and in the trace. A bare rethrow here left only a nameless error at the transport layer.
+      const message = error instanceof Error ? error.message : String(error);
+      this.trace?.append('command_failed', { command: name, source: command.source, message });
+      return `命令 /${name} 失败：${message}`;
+    }
   }
 }
 
@@ -259,14 +271,18 @@ export interface PluginHostOptions {
 export class PluginHost {
   readonly bus = new EventBus();
   readonly tools = new ToolRegistry();
-  readonly commands = new CommandRegistry();
+  readonly commands: CommandRegistry;
   readonly providers = new Map<string, unknown>();
   readonly plugins = new Map<string, PluginRecord>();
   private readonly services = new Map<string, { value: unknown; source: string }>();
   private readonly order: string[] = [];
   private started = false;
 
-  constructor(private readonly options: PluginHostOptions = {}) {}
+  constructor(private readonly options: PluginHostOptions = {}) {
+    // The trace is the command registry's too: a handler failure has to name its command in the
+    // ledger, not only in the receipt the caller happens to print.
+    this.commands = new CommandRegistry(this.options.trace);
+  }
 
   /** Core services exist before any plugin starts; only the kernel connection and the shell are core. */
   seedService(name: string, value: unknown, source = 'core'): void {

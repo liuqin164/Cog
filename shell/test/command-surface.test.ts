@@ -1,6 +1,8 @@
 /**
- * The command面 closure (20-165): one table behind the palette, the resident and the TUI, and one
- * unknown-command receipt on all three faces (`/foo` never becomes a model turn by accident).
+ * The command面 closure (20-165): one table behind the palette, the resident and the TUI; one
+ * unknown-command receipt on all three faces (`/foo` never becomes a model turn by accident); a
+ * plugin command's argument hint in the palette; and a throwing handler attributed to its command
+ * name in both the receipt and the trace.
  *
  * The discriminator for the table is deletion and rename: drop a row or change a name and the spec
  * list, the per-surface dispatch or the palette check below goes red.
@@ -8,8 +10,10 @@
 import { describe, expect, test } from 'bun:test';
 import { PassThrough } from 'node:stream';
 import { CORE_COMMANDS, coreCommandFor, unknownCommandReply } from '../src/commands.ts';
-import { RESERVED_CORE_COMMANDS } from '../src/plugins/host.ts';
-import { dispatchTuiCommand, paletteCommands } from '../src/tui/commands.ts';
+import { PluginHost, RESERVED_CORE_COMMANDS } from '../src/plugins/host.ts';
+import { TraceLog } from '../src/trace.ts';
+import { dispatchTuiCommand, paletteCommands, paletteRows } from '../src/tui/commands.ts';
+import { defaultRenderEnv } from '../src/tui/frame.ts';
 import { TuiView } from '../src/tui/view.ts';
 import { TerminalChannel } from '../src/channels/terminal.ts';
 import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
@@ -123,6 +127,66 @@ describe('unknown /foo is one receipt on every face and never reaches the model'
       expect(submitted).toEqual([]);
     } finally {
       channel.stop();
+    }
+  });
+});
+
+describe('plugin commands: the hint reaches the palette, a failure names the command (spec §7)', () => {
+  test('a plugin command is dispatched by the resident and its argument hint reaches the palette', async () => {
+    const dir = makeTempDir();
+    const shell = makeShell(dir, new ScriptedProvider([{ text: 'unused', toolCalls: [] }]), { dream: NO_DREAM });
+    shell.host.register({
+      name: 'weather',
+      apply(ctx) {
+        ctx.registerCommand({ name: 'sunny', description: '今天的天气', argumentHint: '<城市>', handler: (args: string) => `晴：${args}` });
+      },
+    });
+    await shell.start();
+    try {
+      const snapshot = shell.pluginCommands();
+      expect(snapshot).toContainEqual({ name: 'sunny', description: '今天的天气', argumentHint: '<城市>' });
+
+      const result = await shell.runCommand('sunny', '上海');
+      expect(result.text).toBe('晴：上海');
+      expect(result.receipt).toBe(true);
+
+      const view = new TuiView();
+      view.pluginCommands = snapshot;
+      expect(paletteCommands(view).find((command) => command.name === 'sunny')?.argumentHint).toBe('<城市>');
+      const rendered = paletteRows(view, '/sunny', 80, defaultRenderEnv({}), 0)
+        .map((row) => row.map((segment) => segment.text).join(''))
+        .join('\n');
+      expect(rendered).toContain('sunny <城市>');
+      expect(dispatchTuiCommand('sunny', '上海', view).forward).toBe(true);
+    } finally {
+      await shell.stop();
+    }
+  });
+
+  test('a throwing handler is attributed to its command in the receipt and the trace', async () => {
+    const dir = makeTempDir();
+    const trace = new TraceLog(dir);
+    const host = new PluginHost({ trace });
+    host.register({
+      name: 'broken',
+      apply(ctx) {
+        ctx.registerCommand({
+          name: 'boom',
+          handler: () => {
+            throw new Error('kaboom');
+          },
+        });
+      },
+    });
+    await host.start();
+    try {
+      expect(await host.commands.run('boom', '', {})).toBe('命令 /boom 失败：kaboom');
+      const recorded = trace.read().find((record) => record.kind === 'command_failed');
+      expect(recorded?.command).toBe('boom');
+      expect(String(recorded?.message)).toContain('kaboom');
+      expect(String(recorded?.source)).toContain('broken');
+    } finally {
+      await host.stop();
     }
   });
 });

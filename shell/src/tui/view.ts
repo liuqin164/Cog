@@ -135,7 +135,7 @@ export class TuiView {
   commandResult?: { name: string; text: string };
   modelRoutes: string[] = [];
   /** Plugin commands the resident reported; the palette lists them beside the core table. */
-  pluginCommands: Array<{ name: string; description?: string }> = [];
+  pluginCommands: Array<{ name: string; description?: string; argumentHint?: string }> = [];
   snapshotNote?: string;
 
   private nextId = 1;
@@ -154,7 +154,7 @@ export class TuiView {
   }
 
   /** Attach-time state: the resident's history replaces whatever this view had. */
-  load(snapshot: { status?: Partial<StatusState>; entries?: TranscriptEntry[]; queued?: string[]; work?: Partial<WorkState>; presence?: PresenceReport; commands?: Array<{ name: string; description?: string }> }): void {
+  load(snapshot: { status?: Partial<StatusState>; entries?: TranscriptEntry[]; queued?: string[]; work?: Partial<WorkState>; presence?: PresenceReport; commands?: Array<{ name: string; description?: string; argumentHint?: string }> }): void {
     if (snapshot.status) this.status = { ...this.status, ...snapshot.status };
     if (snapshot.entries) {
       this.entries.length = 0;
