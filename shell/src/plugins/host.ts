@@ -13,6 +13,35 @@ import type { ToolResult } from '../state/agent-loop.ts';
 export const RESERVED_BUILTIN_TOOLS: readonly string[] = ['read', 'write', 'edit', 'bash'];
 const BUILTIN_SOURCE = 'plugin:builtin-tools';
 
+/**
+ * The core command namespace, per TUI spec §7: the commands that manage the shell rather than the
+ * conversation. A plugin may not take one — the core set is what the palette and the resident's
+ * dispatcher answer to, and a plugin command shadowing `/pause` would make the same word mean two
+ * things depending on which layer saw it first.
+ *
+ * The last three are the spec's §7 addendum (Ryu 2026-11-12): they belong to F9 (#163) and F14
+ * (#191) and are **not implemented this round**, so they are reserved but deliberately absent from
+ * the palette (`tui/commands.ts`), which must never present an unimplemented command as available.
+ */
+export const RESERVED_CORE_COMMANDS: readonly string[] = [
+  'soul',
+  'memory',
+  'commitments',
+  'status',
+  'context',
+  'sleep',
+  'dream',
+  'help',
+  'exit',
+  'model',
+  'pause',
+  'resume',
+  'why',
+  'forget',
+  'pin',
+  'unpin',
+];
+
 export class ToolNameConflictError extends Error {
   readonly code = 'tool_name_conflict';
   constructor(readonly toolName: string, readonly existingSource: string, readonly nextSource: string, readonly existingBuiltin = false) {
@@ -28,6 +57,22 @@ export class ServiceConflictError extends Error {
   readonly code = 'service_conflict';
   constructor(readonly serviceName: string, readonly existingSource: string, readonly nextSource: string) {
     super(`service_conflict: "${serviceName}" is already provided by ${existingSource} (from ${nextSource})`);
+  }
+}
+
+/**
+ * A plugin command collided with the core namespace or with another plugin. `reservedCore` says which
+ * rule fired, because the two mean different things to a reader: one is "the core owns this word",
+ * the other is "someone already registered it".
+ */
+export class CommandNameConflictError extends Error {
+  readonly code = 'command_name_conflict';
+  constructor(readonly commandName: string, readonly existingSource: string, readonly nextSource: string, readonly reservedCore = false) {
+    super(
+      reservedCore
+        ? `command_name_conflict: "${commandName}" is a core command and cannot be taken by ${nextSource}`
+        : `command_name_conflict: "${commandName}" is already registered by ${existingSource} (from ${nextSource})`,
+    );
   }
 }
 
@@ -146,8 +191,12 @@ export class CommandRegistry {
   private readonly registry = new Map<string, CommandDefinition & { source: string }>();
 
   register(definition: CommandDefinition, source: string): void {
+    // The core check comes first: a core name is never free, whether or not anything registered it.
+    if (RESERVED_CORE_COMMANDS.includes(definition.name)) {
+      throw new CommandNameConflictError(definition.name, 'core', source, true);
+    }
     if (this.registry.has(definition.name)) {
-      throw new Error(`command_name_conflict: "${definition.name}" is already registered by ${this.registry.get(definition.name)!.source}`);
+      throw new CommandNameConflictError(definition.name, this.registry.get(definition.name)!.source, source);
     }
     this.registry.set(definition.name, { ...definition, source });
   }
@@ -304,7 +353,7 @@ export class PluginHost {
         await this.stop();
         // A conflict is the host's own rule and keeps its type; anything else is wrapped with the
         // plugin name so the CLI can say who failed.
-        if (error instanceof ServiceConflictError || error instanceof ToolNameConflictError || error instanceof PluginDependencyError || error instanceof PluginCycleError) throw error;
+        if (error instanceof ServiceConflictError || error instanceof ToolNameConflictError || error instanceof CommandNameConflictError || error instanceof PluginDependencyError || error instanceof PluginCycleError) throw error;
         throw new Error(`plugin_failed: ${name}: ${record.error}`);
       }
     }
@@ -375,7 +424,22 @@ export class PluginHost {
         return host.tools.register(definition, { source: `plugin:${name}`, builtin: options?.builtin === true });
       },
       registerCommand(definition: CommandDefinition) {
-        host.commands.register(definition, `plugin:${name}`);
+        try {
+          host.commands.register(definition, `plugin:${name}`);
+        } catch (error) {
+          // Refusing the registration is the rule; the trace is so the refusal is not a silent drop.
+          // The throw still travels, so a native plugin that named a core command fails loudly
+          // instead of half-loading (the host's own conflict style, as with tool names).
+          if (error instanceof CommandNameConflictError) {
+            host.options.trace?.append('plugin_command_refused', {
+              plugin: name,
+              command: definition.name,
+              reservedCore: error.reservedCore,
+              existingSource: error.existingSource,
+            });
+          }
+          throw error;
+        }
       },
       registerProvider(providerName: string, value: unknown) {
         host.providers.set(providerName, value);

@@ -18,6 +18,7 @@ import { createRequire } from 'node:module';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import type { PluginHost } from '../plugins/host.ts';
+import { CommandNameConflictError } from '../plugins/host.ts';
 import { PI_TARGET_VERSION } from './target.ts';
 import { contentToText } from '../content.ts';
 
@@ -195,7 +196,24 @@ export class PiCompatAdapter {
         adapter.registeredTools.push(registered.name);
       },
       registerCommand(name: string, command: any) {
-        host.commands.register({ name, description: command?.description, handler: (args) => command.handler(args, adapter.extensionContext()) }, `pi:${adapter.options.pluginName}`);
+        try {
+          host.commands.register({ name, description: command?.description, handler: (args) => command.handler(args, adapter.extensionContext()) }, `pi:${adapter.options.pluginName}`);
+        } catch (error) {
+          // A refused command does not take the extension down: Pi's own loader drops what it cannot
+          // register and keeps the rest of the plugin, and a name collision is exactly that case. The
+          // core namespace (spec §7) is never free, so the word stays the core's.
+          if (error instanceof CommandNameConflictError) {
+            adapter.options.trace?.append('pi_command_refused', {
+              plugin: adapter.options.pluginName,
+              command: name,
+              reservedCore: error.reservedCore,
+              existingSource: error.existingSource,
+            });
+            adapter.dropped.push(`command:${name}`);
+            return;
+          }
+          throw error;
+        }
         adapter.registeredCommands.push(name);
       },
       registerProvider(nameOrProvider: any, config?: any) {
