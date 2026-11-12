@@ -12,7 +12,14 @@ import { join } from 'node:path';
 import { AttachClient } from '../src/attach/client.ts';
 import type { AttachServerMessage, AttachSnapshot } from '../src/attach/server.ts';
 import { availableCoreCommand } from '../src/commands.ts';
-import { executeProposal, type CommandProposal, type ProposalConfirmation } from '../src/proposals.ts';
+import {
+  CommandProposals,
+  MAX_SETTLED_PROPOSALS,
+  SETTLED_PROPOSAL_TTL_MS,
+  executeProposal,
+  type CommandProposal,
+  type ProposalConfirmation,
+} from '../src/proposals.ts';
 import { TuiView, flattenEntry, type TranscriptEntry } from '../src/tui/view.ts';
 import { defaultRenderEnv } from '../src/tui/frame.ts';
 import { paletteCommands } from '../src/tui/commands.ts';
@@ -254,5 +261,52 @@ describe('the user answer crosses the control socket', () => {
     } finally {
       await shell.stop();
     }
+  });
+});
+
+/**
+ * Round 23's retention discipline, at the registry level. Both tests inject the clock, so the TTL is
+ * exercised without waiting, and both keep a pending offer alive across the sweep that must not
+ * touch it — the "never executed, never discarded, never dropped" half of the rule.
+ */
+describe('settled proposals are retained under a bound (round 23)', () => {
+  function registryAt(clock: { at: number }): CommandProposals {
+    return new CommandProposals(() => true, { append: () => {} }, () => clock.at);
+  }
+
+  test('the cap drops the oldest settled entries and keeps every pending one', () => {
+    const clock = { at: 1_000_000 };
+    const registry = registryAt(clock);
+    const waiting = registry.propose({ command: 'pause', reason: '还没回答' }).proposal;
+    const settledIds: string[] = [];
+    for (let index = 0; index < MAX_SETTLED_PROPOSALS + 5; index += 1) {
+      clock.at += 1_000;
+      const { proposal } = registry.propose({ command: 'status', reason: `第 ${index} 条` });
+      registry.discard(proposal.id);
+      settledIds.push(proposal.id);
+    }
+
+    const alive = settledIds.filter((id) => registry.get(id) !== undefined);
+    expect(alive).toHaveLength(MAX_SETTLED_PROPOSALS);
+    expect(alive[0]).toBe(settledIds[5]); // the five oldest settled entries are the ones that went
+    expect(registry.get(settledIds.at(-1)!)).toBeDefined();
+    // The pending offer predates all of them and is still exactly as it was.
+    expect(registry.get(waiting.id)?.status).toBe('pending');
+    expect(registry.pending()).toHaveLength(1);
+  });
+
+  test('a settled entry expires once its TTL passes, and the sweep can never touch a pending one', () => {
+    const clock = { at: 2_000_000 };
+    const registry = registryAt(clock);
+    const old = registry.propose({ command: 'pause', reason: '很久以前' }).proposal;
+    const waiting = registry.propose({ command: 'resume', reason: '没人回答' }).proposal;
+    registry.discard(old.id);
+    expect(registry.get(old.id)?.status).toBe('discarded');
+
+    clock.at += SETTLED_PROPOSAL_TTL_MS + 1;
+    // The lookup itself is the sweep: this is a late confirm asking about an old offer.
+    expect(registry.get(old.id)).toBeUndefined();
+    expect(registry.get(waiting.id)?.status).toBe('pending');
+    expect(registry.pending()).toHaveLength(1);
   });
 });

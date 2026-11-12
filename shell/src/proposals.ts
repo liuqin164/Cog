@@ -42,6 +42,19 @@ export interface ProposalConfirmation {
   at: number;
 }
 
+/**
+ * Retention for settled proposals (#165 round 23). A settled entry is kept for one reason: a late
+ * confirm can be told *why* it refused (`proposal_not_pending: executed`) instead of "no such
+ * proposal". That is worth a bounded amount of memory, not the process's lifetime. Pending
+ * proposals are never touched by retention — nothing here can execute or discard one.
+ */
+// ponytail: 64 entries and 24h are sized for a companion that offers a command a few times a day and
+// lives for months: 64 covers every offer of a day and more, well past when a late confirm matters,
+// and the TTL releases the rest early. Constants rather than constructor options because nothing has
+// needed to tune them; lift them into `CommandProposals`' options the day something does.
+export const MAX_SETTLED_PROPOSALS = 64;
+export const SETTLED_PROPOSAL_TTL_MS = 24 * 60 * 60 * 1000;
+
 export interface ProposalTrace {
   append(kind: string, record?: Record<string, unknown>, now?: number): void;
 }
@@ -67,9 +80,6 @@ export interface ProposeResult {
 export class CommandProposals {
   private readonly byId = new Map<string, CommandProposal>();
   private seq = 0;
-  // ponytail: settled proposals stay in the map for the process's life, so a late confirm can say
-  // *why* it refused (`proposal_not_pending: executed`) instead of "no such proposal". Add a cap or
-  // TTL here if a months-long resident ever shows this map in a heap profile.
 
   constructor(
     private readonly isAvailable: (command: string) => boolean,
@@ -77,6 +87,22 @@ export class CommandProposals {
     private readonly now: () => number,
     private readonly onChange?: (proposal: CommandProposal) => void,
   ) {}
+
+  /**
+   * Bounded retention, enforced lazily at the two points that can observe it: a new offer, and a
+   * lookup (which is what a late confirm is). No timer — a resident that offers nothing accumulates
+   * nothing. The map's insertion order is offer order, so the head of the settled list is the oldest.
+   * The TTL is measured from the offer: an offer that sat pending past the TTL is swept the next time
+   * the registry prunes, once it is settled. Pending entries are skipped, never pruned.
+   */
+  private prune(): void {
+    const at = this.now();
+    const settled = [...this.byId].filter(([, proposal]) => proposal.status !== 'pending');
+    const overCap = settled.length - MAX_SETTLED_PROPOSALS;
+    settled.forEach(([id, proposal], index) => {
+      if (index < overCap || at - proposal.createdAt > SETTLED_PROPOSAL_TTL_MS) this.byId.delete(id);
+    });
+  }
 
   propose(input: ProposeInput): ProposeResult {
     const at = this.now();
@@ -92,16 +118,20 @@ export class CommandProposals {
       this.byId.set(id, proposal);
       this.trace.append('command_proposal_rejected', { id, command, args, reason, detail }, at);
       this.onChange?.(proposal);
+      this.prune();
       return { proposal, accepted: false };
     }
     const proposal: CommandProposal = { ...base, status: 'pending' };
     this.byId.set(id, proposal);
     this.trace.append('command_proposed', { id, command, args, reason }, at);
     this.onChange?.(proposal);
+    this.prune();
     return { proposal, accepted: true };
   }
 
+  /** Prunes first, so a confirm for an expired settled entry answers "no such proposal". */
   get(id: string): CommandProposal | undefined {
+    this.prune();
     return this.byId.get(id);
   }
 
