@@ -46,6 +46,16 @@ export interface ToolExecuteInput {
   ctx: any;
 }
 
+/**
+ * What a tool hands back: text is a successful result, the object names the error flag too (a bash
+ * command that exited non-zero is an error even though it produced output — Pi's `isError`,
+ * `bash.js:295-302`). The host stamps the ids and normalizes a missing flag to `false`.
+ */
+export interface ToolOutcome {
+  output: string;
+  isError?: boolean;
+}
+
 export interface ToolDefinition {
   name: string;
   description: string;
@@ -56,7 +66,7 @@ export interface ToolDefinition {
    * an effect is not, and a tool that knows it is idempotent says so.
    */
   replay?: 'never' | 'safe';
-  execute(input: ToolExecuteInput): Promise<ToolResult | string> | ToolResult | string;
+  execute(input: ToolExecuteInput): Promise<ToolResult | ToolOutcome | string> | ToolResult | ToolOutcome | string;
 }
 
 export interface RegisteredTool extends ToolDefinition {
@@ -120,7 +130,7 @@ export class ToolRegistry {
     try {
       const raw = await tool.execute({ toolCallId: call.toolCallId, args: call.input, signal: ctx.signal, ctx });
       if (typeof raw === 'string') return { toolCallId: call.toolCallId, toolName: name, output: raw, isError: false };
-      return { ...raw, toolCallId: call.toolCallId, toolName: name };
+      return { ...raw, toolCallId: call.toolCallId, toolName: name, isError: raw.isError === true };
     } catch (error) {
       return {
         toolCallId: call.toolCallId,

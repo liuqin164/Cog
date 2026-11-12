@@ -5,15 +5,15 @@ import { PluginHost } from '../src/plugins/host.ts';
 import { builtinToolsPlugin } from '../src/plugins/builtin-tools.ts';
 import { makeTempDir } from './helpers.ts';
 
-/** The four tools on a bare host: no kernel, so a 32 KiB result is a tool test, not an ingest test. */
-async function runBash(command: string) {
+/** The four tools on a bare host: no kernel, so a 50 KiB result is a tool test, not an ingest test. */
+async function runBash(input: string | { command: string; timeout?: number }) {
   const workspace = join(makeTempDir(), 'ws');
   mkdirSync(workspace, { recursive: true });
   const host = new PluginHost();
   host.register(builtinToolsPlugin(), { workspaceRoot: workspace });
   await host.start();
   try {
-    const result = await host.tools.invoke('bash', { toolCallId: 'c1', input: { command } }, { runId: 'r' });
+    const result = await host.tools.invoke('bash', { toolCallId: 'c1', input: typeof input === 'string' ? { command: input } : input }, { runId: 'r' });
     return { workspace, result };
   } finally {
     await host.stop();
@@ -21,24 +21,50 @@ async function runBash(command: string) {
 }
 
 describe('bash output capping', () => {
-  test('a long output is capped and the whole thing is named on disk', async () => {
-    // 40 000 bytes of 'a' plus the exit line is past the 32 KiB cap.
-    const { workspace, result } = await runBash("head -c 40000 /dev/zero | tr '\\0' 'a'");
+  test('a long output keeps the tail and the whole thing is named on disk', async () => {
+    // Past the 2000-line cap, so the last lines win: for bash the end is where the errors are
+    // (Pi's `truncateTail`, truncate.js:118-181).
+    const { workspace, result } = await runBash('seq 1 5000');
     expect(result.isError).toBe(false);
-    expect(result.output).toContain('[truncated ');
+    expect(result.output).toContain('[showing lines ');
     const match = /full output: (\S+)\]/u.exec(result.output);
     expect(match).not.toBeNull();
     // The pointer is inside the workspace, so the `read` tool can follow it.
     expect(match![1].startsWith('.cogmem-shell/bash-output/')).toBe(true);
+    expect(result.output).toContain('5000');
+    expect(result.output).not.toContain('\n3\n');
     const full = readFileSync(join(workspace, match![1]), 'utf8');
-    expect(full.startsWith('exit 0\n')).toBe(true);
-    expect(full.length).toBeGreaterThan(40_000);
-    expect(full.endsWith('a')).toBe(true);
+    expect(full.startsWith('1\n')).toBe(true);
+    expect(full.endsWith('5000\n')).toBe(true);
+  }, 30_000);
+
+  test('a single line past the byte cap is cut at the tail, not through a character', async () => {
+    // 50 000 '日' joined into one line = 150 000 bytes. The last 50 KiB starts two bytes into a
+    // 3-byte character, so a byte slice naive about UTF-8 would leave a replacement character.
+    const { result } = await runBash("yes 日 | head -n 50000 | tr -d '\\n'");
+    expect(result.isError).toBe(false);
+    expect(result.output).toContain('[showing the last ');
+    expect(result.output.length).toBeLessThan(150_000);
+    expect(result.output).not.toContain('\uFFFD');
   }, 30_000);
 
   test('a short output is returned whole, with no pointer', async () => {
     const { result } = await runBash('echo short-and-complete');
-    expect(result.output).toBe('exit 0\nshort-and-complete\n');
+    expect(result.output).toBe('short-and-complete\n');
     expect(result.output).not.toContain('full output:');
   }, 30_000);
+
+  test('a non-zero exit is a tool error (Pi sets isError, bash.js:295-302)', async () => {
+    const { result } = await runBash('echo went-wrong >&2; exit 7');
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain('went-wrong');
+    expect(result.output).toContain('Command exited with code 7');
+  }, 30_000);
+
+  test('a timeout keeps what the command printed before it was killed', async () => {
+    const { result } = await runBash({ command: 'echo before-hang; sleep 30', timeout: 1 });
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain('before-hang');
+    expect(result.output).toContain('timed out after 1');
+  }, 20_000);
 });

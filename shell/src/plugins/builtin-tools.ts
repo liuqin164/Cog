@@ -7,11 +7,15 @@
 import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
-import type { NativePlugin, ToolDefinition } from './host.ts';
+import type { NativePlugin, ToolDefinition, ToolOutcome } from './host.ts';
 
 const MAX_READ_BYTES = 256 * 1024;
-const MAX_OUTPUT_CHARS = 32 * 1024;
+/** Pi's bash output cap: 2000 lines or 50 KiB, whichever is hit first (`truncate.js:13-14`). */
+const MAX_OUTPUT_BYTES = 50 * 1024;
+const MAX_OUTPUT_LINES = 2000;
+/** The shell keeps a default timeout where Pi has none, so a hung command cannot wedge a run. */
 const BASH_TIMEOUT_MS = 30_000;
+const MAX_BASH_TIMEOUT_MS = 2_147_483_647;
 const BASH_OUTPUT_DIR = '.cogmem-shell/bash-output';
 
 export interface BuiltinToolsConfig {
@@ -33,24 +37,77 @@ function asString(args: unknown, key: string, required = true): string {
   return value;
 }
 
+/** Pi's bash `timeout` is optional seconds with no default (`resolveTimeoutMs`, bash.js:16-27); the
+ * shell keeps its own 30s default so an unasked-for hang cannot wedge a resident run. */
+function resolveBashTimeoutMs(args: unknown): number {
+  const raw = (args as Record<string, unknown> | undefined)?.['timeout'];
+  if (raw === undefined) return BASH_TIMEOUT_MS;
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw <= 0) throw new Error('invalid_arguments: "timeout" must be a finite number of seconds');
+  const timeoutMs = raw * 1000;
+  if (timeoutMs > MAX_BASH_TIMEOUT_MS) throw new Error(`invalid_arguments: "timeout" maximum is ${MAX_BASH_TIMEOUT_MS / 1000} seconds`);
+  return timeoutMs;
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+}
+
+/** The last `maxBytes` bytes of `text`, moved forward to the next character boundary. */
+function tailBytes(text: string, maxBytes: number): string {
+  const buffer = Buffer.from(text, 'utf8');
+  let start = buffer.length - maxBytes;
+  while (start < buffer.length && (buffer[start] & 0xc0) === 0x80) start += 1;
+  return buffer.subarray(start).toString('utf8');
+}
+
 /**
- * Cap the text for the model; when it was cut, keep the whole thing inside the workspace and say
- * where (Pi's bash `truncated` + `fullOutputPath`). The path is workspace-relative so the model can
- * hand it straight to `read`. A failed write still returns the capped text and says so — the command
- * did run, and losing the tail is not a reason to lose the result.
+ * Keep the tail of a command's output for the model: Pi's `truncateTail`, 2000 lines or 50 KiB
+ * whichever is hit first (`truncate.js:118-181`). Bash keeps the tail because that is where errors
+ * and final results are. The complete text goes to a workspace file and the pointer says which
+ * lines are showing, so nothing is lost silently. The cut never lands inside a line or a multi-byte
+ * character, except the one documented case Pi also allows: a single line longer than the byte cap,
+ * where the last bytes of that line are shown.
  */
-function capWithPointer(text: string, workspaceRoot: string): string {
-  if (text.length <= MAX_OUTPUT_CHARS) return text;
-  const head = `${text.slice(0, MAX_OUTPUT_CHARS)}\n`;
+function capBashOutput(fullText: string, workspaceRoot: string): string {
+  const lines = (fullText.endsWith('\n') ? fullText.slice(0, -1) : fullText).split('\n');
+  const totalLines = lines.length;
+  if (totalLines <= MAX_OUTPUT_LINES && Buffer.byteLength(fullText, 'utf8') <= MAX_OUTPUT_BYTES) return fullText;
+
+  const visible: string[] = [];
+  let bytes = 0;
+  let partial = false;
+  let truncatedByBytes = false;
+  for (let index = lines.length - 1; index >= 0 && visible.length < MAX_OUTPUT_LINES; index -= 1) {
+    const line = lines[index];
+    const lineBytes = Buffer.byteLength(line, 'utf8') + (visible.length > 0 ? 1 : 0);
+    if (bytes + lineBytes > MAX_OUTPUT_BYTES) {
+      truncatedByBytes = true;
+      if (visible.length === 0) {
+        visible.unshift(tailBytes(line, MAX_OUTPUT_BYTES));
+        bytes = Buffer.byteLength(visible[0], 'utf8');
+        partial = true;
+      }
+      break;
+    }
+    visible.unshift(line);
+    bytes += lineBytes;
+  }
+  const shown = visible.join('\n');
+  const limit = truncatedByBytes ? ` (${formatSize(MAX_OUTPUT_BYTES)} limit)` : '';
   const full = join(workspaceRoot, BASH_OUTPUT_DIR, `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}.log`);
+  let pointer: string;
   try {
     mkdirSync(dirname(full), { recursive: true });
-    writeFileSync(full, text, 'utf8');
+    writeFileSync(full, fullText, 'utf8');
+    pointer = relative(workspaceRoot, full);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return `${head}[truncated ${text.length - MAX_OUTPUT_CHARS} chars; full output could not be written: ${message}]`;
+    return `${shown}\n\n[output truncated${limit}; full output could not be written: ${error instanceof Error ? error.message : String(error)}]`;
   }
-  return `${head}[truncated ${text.length - MAX_OUTPUT_CHARS} chars; full output: ${relative(workspaceRoot, full)}]`;
+  if (partial) return `${shown}\n\n[showing the last ${formatSize(bytes)} of line ${totalLines}; full output: ${pointer}]`;
+  const startLine = totalLines - visible.length + 1;
+  return `${shown}\n\n[showing lines ${startLine}-${totalLines} of ${totalLines}${limit}; full output: ${pointer}]`;
 }
 
 function definitions(workspaceRoot: string): ToolDefinition[] {
@@ -107,17 +164,30 @@ function definitions(workspaceRoot: string): ToolDefinition[] {
     {
       name: 'bash',
       replay: 'never',
-      description: 'Run a bash command in the workspace with a 30s timeout. stdout/stderr are combined; output over 32 KiB is capped, and the full text is written under .cogmem-shell/bash-output/ and named in the result.',
-      parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] },
+      description: 'Run a bash command in the workspace, 30s timeout by default. stdout/stderr are combined; the last 2000 lines or 50 KiB (whichever is hit first) are returned, and the full text is written under .cogmem-shell/bash-output/ and named in the result. A non-zero exit is an error. The optional `timeout` is in seconds.',
+      parameters: { type: 'object', properties: { command: { type: 'string' }, timeout: { type: 'number' } }, required: ['command'] },
       execute({ args, signal }) {
         const command = asString(args, 'command');
-        return new Promise<string>((resolvePromise, rejectPromise) => {
+        const timeoutMs = resolveBashTimeoutMs(args);
+        return new Promise<ToolOutcome>((resolvePromise, rejectPromise) => {
           const child = spawn('/bin/bash', ['-lc', command], { cwd: workspaceRoot, signal, stdio: ['ignore', 'pipe', 'pipe'] });
           let output = '';
-          const timer = setTimeout(() => {
+          let settled = false;
+          let timer: ReturnType<typeof setTimeout>;
+          // Pi appends the status after truncating (`formatOutput`, bash.js:233-253) so the tail that
+          // matters is not itself pushed out of the cap, and the command's output is kept even when it
+          // timed out — the process ran, and losing what it printed is not a reason to lose the result.
+          const settle = (note: string | undefined, isError: boolean) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            const capped = capBashOutput(output, workspaceRoot);
+            resolvePromise({ output: note ? `${capped}\n\n${note}` : capped, isError });
+          };
+          timer = setTimeout(() => {
             child.kill('SIGKILL');
-            rejectPromise(new Error(`bash_timeout: command exceeded ${BASH_TIMEOUT_MS}ms`));
-          }, BASH_TIMEOUT_MS);
+            settle(`Command timed out after ${timeoutMs / 1000} seconds`, true);
+          }, timeoutMs);
           child.stdout.on('data', (chunk: Buffer) => {
             output += chunk.toString();
           });
@@ -125,12 +195,17 @@ function definitions(workspaceRoot: string): ToolDefinition[] {
             output += chunk.toString();
           });
           child.on('error', (error) => {
+            // An abort (`signal`) arrives here: the run is unwinding, so reject and let the pipeline
+            // record `tool_call_failed` rather than dressing the kill up as the command's verdict.
+            if (settled) return;
+            settled = true;
             clearTimeout(timer);
             rejectPromise(error);
           });
           child.on('close', (code) => {
-            clearTimeout(timer);
-            resolvePromise(capWithPointer(`exit ${code}\n${output}`, workspaceRoot));
+            if (code === null) settle('Command terminated without an exit code', true);
+            else if (code === 0) settle(undefined, false);
+            else settle(`Command exited with code ${code}`, true);
           });
         });
       },
