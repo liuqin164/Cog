@@ -21,6 +21,12 @@ export interface CaptureServiceOptions {
   sessionId: string;
   redactor?: SecretRedactor;
   trace?: TraceLog;
+  /**
+   * The shell's ingest gate (`/pause`). Read at every write, never cached: a turn that started before
+   * the pause must not slip its write in after it, and a resume must take effect on the next write
+   * without reopening anything.
+   */
+  paused?: () => boolean;
 }
 
 export interface CaptureResult {
@@ -39,7 +45,30 @@ export class CaptureService {
     this.redactor = options.redactor ?? new SecretRedactor();
   }
 
+  /** The gate the pause command closes; the only predicate every write path in this module reads. */
+  paused(): boolean {
+    return this.options.paused?.() === true;
+  }
+
+  /**
+   * The pause gate, at the one place a run's content reaches the kernel. Nothing is buffered for
+   * later: a pause means "do not write", and replaying the held turns on resume would be a decision
+   * the user did not make. What was skipped is written down (counts, not text) so the silence is
+   * visible in the trace rather than looking like a lost turn.
+   */
   async captureRun(summary: RunSummary, threadId: string): Promise<CaptureResult> {
+    if (this.paused()) {
+      this.options.trace?.append('capture_paused', {
+        kind: 'run',
+        runId: summary.runId,
+        turnId: summary.turnId,
+        toolCalls: summary.toolCalls.length,
+        toolResults: summary.toolResults.length,
+        userChars: summary.userText.length,
+        assistantChars: summary.assistantText.length,
+      });
+      return { turnId: summary.turnId, toolCallEventIds: [], toolResultEventIds: [], redactionCount: 0 };
+    }
     const { backend, agentId, projectId, sessionId } = this.options;
     const user = this.redactor.mark(summary.userText);
     const assistant = this.redactor.mark(summary.assistantText);
@@ -119,7 +148,11 @@ export class CaptureService {
   }
 
   /** A terminal session record: same redaction and marking, written as a task event. */
-  async captureTerminalRecord(text: string, threadId: string, title = 'terminal record'): Promise<MemoryEvent> {
+  async captureTerminalRecord(text: string, threadId: string, title = 'terminal record'): Promise<MemoryEvent | undefined> {
+    if (this.paused()) {
+      this.options.trace?.append('capture_paused', { kind: 'terminal-record', threadId, chars: text.length });
+      return undefined;
+    }
     const { backend, agentId, projectId, sessionId } = this.options;
     const redacted = this.redactor.mark(text);
     return backend.ingestTaskEvent({
@@ -154,6 +187,8 @@ export interface CapturePluginConfig {
   agentId: string;
   projectId: string;
   sessionId: string;
+  /** The shell's `/pause` gate; see {@link CaptureServiceOptions.paused}. */
+  paused?: () => boolean;
 }
 
 /**
@@ -179,6 +214,7 @@ export function capturePlugin(config: CapturePluginConfig): NativePlugin {
         projectId: config.projectId,
         sessionId: config.sessionId,
         trace,
+        paused: config.paused,
       });
       interface Buffer {
         userText: string;
@@ -203,6 +239,12 @@ export function capturePlugin(config: CapturePluginConfig): NativePlugin {
           // ledger is the shell's append-only transcript, so the loadout the model was told about has a
           // durable record too (the checkpoint keeps the same set for recovery). A failed write is not
           // swallowed: it reaches the run boundary like any other capture failure.
+          if (service.paused()) {
+            // It is still an ingest call, so the gate covers it: while paused the capture plugin
+            // writes nothing at all, which is what makes "the ledger gained no row" checkable.
+            trace?.append('capture_paused', { kind: 'tool-loadout', toolsAdded: added.length, toolsRemoved: removed.length });
+            return;
+          }
           await backend.ingestTaskEvent({
             agentId: config.agentId,
             projectId: config.projectId,

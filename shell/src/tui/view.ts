@@ -33,6 +33,8 @@ export interface StatusState {
   contextSweetSpot: number;
   costTokens: number;
   timeZone: string;
+  /** `/pause`: the status bar shows it while it is true, because a silent pause looks like a bug. */
+  capturePaused?: boolean;
 }
 
 export interface WorkState {
@@ -61,7 +63,16 @@ export type TranscriptEntry =
   | { kind: 'user'; id: string; text: string }
   | { kind: 'assistant'; id: string; text: string; emergenceReason?: string }
   | { kind: 'tool'; id: string; block: ToolBlock }
-  | { kind: 'notice'; id: string; text: string; tone: 'info' | 'warn' };
+  | { kind: 'notice'; id: string; text: string; tone: 'info' | 'warn' }
+  /**
+   * The third visual style (spec §7): a system receipt for a command the shell ran. It is not agent
+   * speech and not a banner — it is the shell telling the user what a command did, so it lives in the
+   * transcript where the command was typed and reads differently from both.
+   */
+  | { kind: 'receipt'; id: string; text: string };
+
+/** Commands whose answer is a receipt, not an overlay or a model turn. */
+export const RECEIPT_COMMANDS: readonly string[] = ['pause', 'resume', 'why'];
 
 export interface PresenceReport {
   awaySince?: number;
@@ -221,6 +232,7 @@ export class TuiView {
         break;
       case 'companion_command_result':
         this.commandResult = { name: String(event.payload?.name ?? ''), text: String(event.payload?.text ?? '') };
+        if (RECEIPT_COMMANDS.includes(this.commandResult.name)) this.push({ kind: 'receipt', id: this.id(), text: this.commandResult.text });
         break;
       case 'companion_model_routes':
         this.modelRoutes = Array.isArray(event.payload?.routes) ? [...event.payload.routes] : [];
@@ -436,6 +448,18 @@ export function flattenEntry(entry: TranscriptEntry, width: number, env: RenderE
     for (const line of entry.text.split('\n')) {
       for (const wrapped of wrapPlain(line, Math.max(1, width - 2))) rows.push([seg('· ', tone), seg(wrapped, tone)]);
     }
+    rows.push([]);
+    return rows;
+  }
+  if (entry.kind === 'receipt') {
+    // The receipt's marker carries the meaning when color is off: an accent `⌁` (ASCII `#`) and an
+    // indented body, so it is never mistaken for the agent speaking or for the notice banner.
+    const marker = env.unicode ? '⌁ ' : '# ';
+    const lines: string[] = [];
+    for (const line of entry.text.split('\n')) lines.push(...wrapPlain(line, Math.max(1, width - 2)));
+    lines.forEach((line, index) => {
+      rows.push(index === 0 ? [seg(marker, 'accent'), seg(line, 'plain')] : [seg('  ', 'dim'), seg(line, 'plain')]);
+    });
     rows.push([]);
     return rows;
   }

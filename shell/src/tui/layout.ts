@@ -251,13 +251,23 @@ function statusRow(view: TuiView, width: number): Row {
     seg(' · ', 'dim'),
     seg(kernel, view.status.kernelConnected ? 'dim' : 'warn'),
   ];
+  // `/pause` is always visible: a pause the user cannot see is indistinguishable from a broken shell.
+  if (view.status.capturePaused) {
+    left.push(seg(' · ', 'dim'), seg(`${envGlyph(view)} 暂停捕获`, 'warn'));
+  }
   const wake = view.status.nextWakeAt === undefined ? '下次唤醒 无安排' : `下次唤醒 ${formatWakeAt(view.status.nextWakeAt, view.status.timeZone)}`;
   const leftWidth = left.reduce((sum, item) => sum + cellWidth(item.text), 0);
   if (cellWidth(wake) + leftWidth + 1 > width) {
-    return [seg(truncate(`${view.status.name} · ${LIFECYCLE_WORD[state]} · ${kernel}`, width), 'bold')];
+    const pause = view.status.capturePaused ? ` · ${envGlyph(view)} 暂停捕获` : '';
+    return [seg(truncate(`${view.status.name} · ${LIFECYCLE_WORD[state]} · ${kernel}${pause}`, width), 'bold')];
   }
   const gap = Math.max(1, width - leftWidth - cellWidth(wake) - 1);
   return [seg(' ', 'plain'), ...left, seg(' '.repeat(gap)), seg(wake, 'dim'), seg(' ', 'plain')];
+}
+
+/** The pause mark without the render env to hand; a plain triangle reads in both modes. */
+function envGlyph(_view: TuiView): string {
+  return '⏸';
 }
 
 function workRow(view: TuiView, width: number, env: RenderEnv): Row {

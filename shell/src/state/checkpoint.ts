@@ -87,6 +87,12 @@ export interface ShellRuntimeState {
   /** Today's cumulative token cost and its local date, so the footer's "本日" survives a restart. */
   costDayDate?: string;
   costDayTokens?: number;
+  /**
+   * `/pause`: while true the shell's ingest call points write nothing to the kernel. It is state, not
+   * a UI toggle — a pause that a restart forgot would resume capturing behind the user's back, so it
+   * lives in the checkpoint with everything else the next process must honour.
+   */
+  capturePaused?: boolean;
 }
 
 export interface CheckpointState {

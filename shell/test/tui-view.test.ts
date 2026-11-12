@@ -87,3 +87,34 @@ describe('presence broadcast (spec §0, §8)', () => {
     expect(view.entries[0].kind).toBe('notice');
   });
 });
+
+describe('command receipts (spec §7)', () => {
+  test('a /pause receipt is its own transcript entry, and other command results are not', () => {
+    const view = fixtureView('IDLE');
+    const before = view.entries.length;
+    view.applyEvent({ name: 'companion_command_result', payload: { name: 'pause', text: '已暂停捕获：壳不再把新的会话内容写进内核。' } });
+    const receipt = view.entries[view.entries.length - 1];
+    expect(receipt.kind).toBe('receipt');
+    expect(view.entries.length).toBe(before + 1);
+    // The third style is a marker of its own, not the notice bullet and not a user block.
+    expect(text(view)).toContain('⌁ 已暂停捕获');
+
+    // A command whose answer is an overlay (or nothing) does not add a transcript entry.
+    view.applyEvent({ name: 'companion_command_result', payload: { name: 'status', text: '生命周期 IDLE' } });
+    expect(view.entries.filter((entry) => entry.kind === 'receipt')).toHaveLength(1);
+  });
+
+  test('the status bar shows the pause marker while capture is paused', () => {
+    const view = new TuiView();
+    view.applyEvent({
+      name: 'companion_status',
+      payload: {
+        status: { lifecycle: 'IDLE', name: 'cogmem', kernelConnected: true, model: 'mg/x', workspace: '/w', showWorkspace: true, contextTokens: 0, contextSweetSpot: 6_000, costTokens: 0, timeZone: 'UTC', capturePaused: true },
+      },
+    });
+    expect(text(view)).toContain('暂停捕获');
+    view.applyEvent({ name: 'companion_status', payload: { status: { capturePaused: false } } });
+    expect(text(view)).not.toContain('暂停捕获');
+  });
+});
+

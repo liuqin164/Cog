@@ -144,6 +144,11 @@ export class CompanionShell implements ShellControl, AttachShell {
     return this.machine.state === 'RUNNING';
   }
 
+  /** The `/pause` gate, read from the checkpoint so a restart cannot forget it. */
+  get capturePaused(): boolean {
+    return this.machine.runtime.capturePaused === true;
+  }
+
   get runtimeInstance(): AgentRuntime | undefined {
     return this.runtime;
   }
@@ -276,7 +281,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.host.register(provider, this.config.model);
     this.host.register(cagePlugin(this.config.budgets, this.trace));
     this.host.register(builtinToolsPlugin(), { workspaceRoot: this.config.workspaceRoot });
-    this.host.register(capturePlugin({ agentId: this.config.agentId, projectId: this.config.projectId, sessionId: this.config.sessionId }));
+    this.host.register(capturePlugin({ agentId: this.config.agentId, projectId: this.config.projectId, sessionId: this.config.sessionId, paused: () => this.capturePaused }));
     this.host.register(recallPlugin({ agentId: this.config.agentId, projectId: this.config.projectId, limit: 3 }));
     this.host.register(dreamPlugin({ agentId: this.config.agentId, projectId: this.config.projectId, sessionId: this.config.sessionId, runKernelNight: this.config.dream.runKernelNight, maxEpisodes: this.config.dream.maxEpisodes }));
     this.host.register(emergencePlugin({ agentId: this.config.agentId, projectId: this.config.projectId }));
@@ -668,6 +673,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       contextSweetSpot: this.config.contextSweetSpot,
       costTokens: this.machine.runtime.costDayDate === today ? this.machine.runtime.costDayTokens ?? 0 : 0,
       timeZone: this.config.timeZone,
+      capturePaused: this.capturePaused,
     };
   }
 
@@ -868,6 +874,22 @@ export class CompanionShell implements ShellControl, AttachShell {
       }
       case 'help':
         return { text: 'Enter 发送 · Shift+Enter 换行 · / 命令面板 · Esc 撤回排队消息 · /exit 断开附着 · /sleep 进 DORMANT' };
+      case 'pause': {
+        if (this.capturePaused) return { text: '已在暂停捕获中：此刻壳不把会话内容写进内核。/resume 恢复。' };
+        // The write is the receipt's precondition: if the checkpoint write fails the machine halts
+        // and this never claims a pause that the next process would not know about.
+        this.machine.updateRuntime({ capturePaused: true });
+        this.trace.append('capture_paused_command', { at: this.now() });
+        this.emitStatus();
+        return { text: '已暂停捕获：壳不再把新的会话内容写进内核。这个状态随 checkpoint 持久化，重启后仍是暂停；/resume 恢复。' };
+      }
+      case 'resume': {
+        if (!this.capturePaused) return { text: '捕获本来就在进行中，没有需要恢复的暂停。' };
+        this.machine.updateRuntime({ capturePaused: false });
+        this.trace.append('capture_resumed_command', { at: this.now() });
+        this.emitStatus();
+        return { text: '已恢复捕获：接下来的回合会照常写进内核。' };
+      }
       default:
         return { text: `unknown command: /${name}` };
     }
