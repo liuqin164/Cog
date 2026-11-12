@@ -74,6 +74,8 @@ export class CompanionShell implements ShellControl, AttachShell {
   private modelRouter?: ModelRouter;
   /** An estimate of the assembled context; the kernel has no F14 budget controller to ask. */
   private contextTokenEstimate = 0;
+  /** Whether a soul-read failure has been traced; the read itself is retried on the next turn. */
+  private soulFailureTraced = false;
   private workLabel = '';
   private runTurns = 0;
   private runTokens = 0;
@@ -428,14 +430,57 @@ export class CompanionShell implements ShellControl, AttachShell {
     void this.submit(text).catch((error) => this.trace.append('pi_message_failed', { message: error instanceof Error ? error.message : String(error) }));
   }
 
-  systemPrompt(): string {
-    return [
+  /**
+   * The system prompt is assembled from two sections, and the split is a contract, not a layout
+   * choice. The **pinned zone** is the soul (verbatim, at its head), the identity and the rules: its
+   * bytes must be identical from one request to the next, which is what F14's lane order starts with
+   * (#191) and the half of it a provider-side prompt cache can hit. The **variable tail** is the only
+   * place per-turn content may live; today that is the time context, which is why it is rebuilt from
+   * the live clock on every call instead of reusing the block written at the last wake — a prompt
+   * that froze "now" at boot kept telling the model it was still morning three hours later.
+   *
+   * Pi holds the same property structurally: named sections rendered in a fixed order, diffed so a
+   * changed section travels as an update instead of the prompt being re-sent (`core/system-prompt.js`
+   * `buildSystemPromptSections` / `diffSystemPromptSections`), and a tool list frozen so "the cached
+   * prefix survives every tool change" (`pi-ai/dist/api/anthropic-messages.js:947-951`). The shell has
+   * one seam and no mid-run prompt mutation, so the pinned zone is what plays that part.
+   */
+  systemPromptSections(): { pinned: string; tail: string } {
+    const pinned = [
+      this.soulText(),
       'You are a resident companion agent whose memory is Cogmem. Memory comes first: recall before you answer, and let what you remember shape how you say it.',
       'You are present at all hours; when nothing needs you, you are quiet rather than chatty.',
       'You have four basic tools (read, write, edit, bash). Use them when the moment needs real work; otherwise just talk.',
       'Never invent a memory. If recall is empty, say so plainly.',
-      this.machine.runtime.lastTimeContext ?? (this.clock ? this.clock.timeContextBlock(this.now()) : ''),
-    ].filter(Boolean).join('\n\n');
+    ].filter(Boolean);
+    const tail = [this.clock ? this.clock.timeContextBlock(this.now()) : ''].filter(Boolean);
+    return { pinned: pinned.join('\n\n'), tail: tail.join('\n\n') };
+  }
+
+  systemPrompt(): string {
+    const { pinned, tail } = this.systemPromptSections();
+    return [pinned, tail].filter(Boolean).join('\n\n');
+  }
+
+  /**
+   * The newest soul row, read where it is: it is the pinned zone's head, so it is injected verbatim,
+   * and F17's editor has to reach the next request without a restart. A database the installer never
+   * wrote the table into is not a turn failure — the pinned zone is simply shorter — but it is
+   * recorded once, so an absent soul is distinguishable from a soul that failed to load.
+   */
+  private soulText(): string {
+    try {
+      return readSoul(this.config.dbPath, this.config.agentId)?.content ?? '';
+    } catch (error) {
+      // The read is retried every turn — a lock held for a moment must not cost the soul for the rest
+      // of the process's life — but the trace entry is one-shot, or a database the installer never
+      // wrote would file the same record on every turn forever.
+      if (!this.soulFailureTraced) {
+        this.soulFailureTraced = true;
+        this.trace.append('soul_read_failed', { message: error instanceof Error ? error.message : String(error) });
+      }
+      return '';
+    }
   }
 
   async submit(text: string): Promise<RunSummary | undefined> {
