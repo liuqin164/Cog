@@ -83,6 +83,45 @@ describe('kill matrix: every kill point comes back to one IDLE state', () => {
     }
   }, 60_000);
 
+  test('killed mid-stream: the whole prompt is in the session log, so the interrupted turn rebuilds', async () => {
+    const dir = makeTempDir('companion-kill-');
+    const first = spawnFixture('shell-kill-process.ts', [dir, 'stream']);
+    try {
+      await first.waitFor('idle');
+      await first.waitFor('streaming');
+      const atKill = new CheckpointStore(dir).load()!;
+      expect(atKill.state).toBe('RUNNING');
+      expect(atKill.activeRunId).toBeTruthy();
+
+      first.child.kill('SIGKILL');
+      await first.exited();
+
+      const { recovered } = await recover(dir);
+      expect(recovered.state).toBe('IDLE');
+      // The display copy in the checkpoint is still the 500-char ceiling; the storage layer is not,
+      // and that is the difference #210 asked for.
+      const runtime = new CheckpointStore(dir).load()!.runtime;
+      expect(runtime.lastInteractionText!.length).toBe(500);
+      expect(runtime.lastInteractionText).not.toContain('TAIL-MARKER');
+
+      // The session log holds the full prompt from before the model call, and recovery says so.
+      const trace = new TraceLog(dir).read();
+      const prompt = trace.find((record) => record.kind === 'run_prompt' && record.runId === atKill.activeRunId)!;
+      expect(prompt, 'the prompt was persisted before the model call').toBeDefined();
+      expect(prompt.chars).toBeGreaterThan(1200);
+      expect(String(prompt.text)).toContain('TAIL-MARKER-被打断的原话');
+      expect(recovered.promptRecovered, 'recovery writes the fact down, not silently').toBe(1);
+      // Rebuilt from the log: same run, whole text, tail included.
+      expect(recovered.interrupted).toBeTruthy();
+      expect(recovered.interrupted.runId).toBe(atKill.activeRunId);
+      expect(recovered.interrupted.chars).toBe(prompt.chars);
+      expect(recovered.interrupted.text).toContain('TAIL-MARKER-被打断的原话');
+      expect(recovered.interrupted.text.length).toBe(prompt.chars);
+    } finally {
+      if (!first.child.killed) first.child.kill('SIGKILL');
+    }
+  }, 60_000);
+
   test('killed while a checkpoint write is in flight: the shell comes back to one IDLE state', async () => {
     const dir = makeTempDir('companion-kill-');
     const first = spawnFixture('shell-kill-process.ts', [dir, 'write']);

@@ -220,6 +220,11 @@ export interface AgentRuntimeOptions {
   provider: ModelProvider;
   budget: RunBudget;
   systemPrompt: () => string;
+  /**
+   * The prompt is durable before the model call (Pi #10000's requirement). The callback owns
+   * redaction and the log, so a crash cannot leave only the checkpoint's 500-char display copy.
+   */
+  onPrompt?: (prompt: { runId: string; sessionId: string; text: string }) => void;
   trace?: TraceLog;
   clock?: () => number;
   /** The failure ladder's budget (Pi's `RetrySettings`); defaults to the mg gateway's real one. */
@@ -312,6 +317,9 @@ export class AgentRuntime {
   async run(input: { runId: string; sessionId: string; userText: string; signal?: AbortSignal }): Promise<RunSummary> {
     if (this.running) throw new Error('agent_already_running: at most one RUNNING state exists');
     this.running = true;
+    // Pi #10000: the prompt is durable before the model call. The callback redacts and writes the
+    // session log, so an interrupted run keeps its whole prompt and not only the display copy.
+    this.options.onPrompt?.({ runId: input.runId, sessionId: input.sessionId, text: input.userText });
     this.overflowRecoveryUsed = false;
     const controller = new AbortController();
     this.abortController = controller;

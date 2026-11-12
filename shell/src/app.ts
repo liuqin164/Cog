@@ -27,7 +27,7 @@ import { dreamPlugin } from './plugins/dream.ts';
 import { emergencePlugin } from './plugins/emergence.ts';
 import { terminalPlugin, TerminalChannel, type ShellControl } from './channels/terminal.ts';
 import { AgentRuntime, type ModelProvider, type RunSummary } from './state/agent-loop.ts';
-import { startKernelHttpFace, type HttpFaceHandle } from './kernel-host.ts';
+import { SecretRedactor, startKernelHttpFace, type HttpFaceHandle } from './kernel-host.ts';
 import { readSoul } from './install/soul.ts';
 import { AttachServer, defaultSocketPath, type AttachShell } from './attach/server.ts';
 import { buildAwayReport, enqueueAway } from './presence.ts';
@@ -78,6 +78,12 @@ export class CompanionShell implements ShellControl, AttachShell {
   private runTurns = 0;
   private runTokens = 0;
   private runStartedAt?: number;
+  /**
+   * The killed run's prompt, rebuilt from the session log at recovery (#210). Delivery is a product
+   * decision the shell does not make; holding it means the interrupted turn is reconstructable.
+   */
+  private interrupted?: { runId: string; text: string; chars: number };
+  private readonly redactor = new SecretRedactor();
   private readonly adapters: Array<{ emitSessionShutdown(): Promise<void> }> = [];
   private tickTimer?: ReturnType<typeof setInterval>;
   private started = false;
@@ -150,11 +156,12 @@ export class CompanionShell implements ShellControl, AttachShell {
     const lock = this.lock.acquire(process.pid, this.now());
     if (lock.recoveredStalePid) this.trace.append('stale_lock_recovered', { pid: lock.recoveredStalePid });
     let restored: ReturnType<StateMachine['restore']>;
+    let traceScan: ReturnType<TraceLog['recover']>;
     try {
       // The session log is read before the state machine is: a log damaged while nothing was watching
       // is repaired and written down here, and a checkpoint that cannot be recovered still leaves that
       // record behind (the lock goes with the failure, since this process will not run).
-      this.trace.recover();
+      traceScan = this.trace.recover();
       restored = this.machine.restore();
     } catch (error) {
       this.lock.release(process.pid);
@@ -164,7 +171,17 @@ export class CompanionShell implements ShellControl, AttachShell {
     // the comparison below sees what the previous process promised, not what this one just built.
     const restoredTools = this.machine.runtime.declaredTools ? [...this.machine.runtime.declaredTools] : undefined;
     if (restored.previous && ['RUNNING', 'DREAMING', 'WAKING'].includes(restored.previous)) {
-      this.trace.append('recovery', { previous: restored.previous, seq: this.machine.seq });
+      const recoveredRunId = this.machine.activeRunId;
+      this.trace.append('recovery', { previous: restored.previous, seq: this.machine.seq, runId: recoveredRunId ?? null });
+      if (restored.previous === 'RUNNING' && recoveredRunId) {
+        // Pi #10000's durable prompt is what the interrupted turn hangs on: the checkpoint's display
+        // copy stops at 500 chars, the session log does not.
+        const prompt = traceScan.records.find((record) => record.kind === 'run_prompt' && record.runId === recoveredRunId);
+        if (prompt && typeof prompt.text === 'string') {
+          this.interrupted = { runId: recoveredRunId, text: prompt.text, chars: Number(prompt.chars ?? prompt.text.length) };
+          this.trace.append('prompt_recovered', { runId: recoveredRunId, chars: this.interrupted.chars });
+        }
+      }
       await this.machine.dispatch('recovered_run', { reason: `recovered_after_kill:${restored.previous}` });
     }
     try {
@@ -279,6 +296,12 @@ export class CompanionShell implements ShellControl, AttachShell {
     const model = this.host.getService<ModelProvider>('model');
     this.runtime = new AgentRuntime({
       bus: this.host.bus,
+      // Pi #10000: the whole prompt is durable before the model call, redacted so the log never holds a
+      // secret the ledger would have stripped. The checkpoint keeps only the 500-char display copy.
+      onPrompt: ({ runId, sessionId, text }) => {
+        const marked = this.redactor.mark(text);
+        this.trace.append('run_prompt', { runId, sessionId, chars: text.length, text: marked.value, ...marked.metadata });
+      },
       tools: this.host.tools,
       provider: model,
       budget: this.cage,
@@ -624,6 +647,15 @@ export class CompanionShell implements ShellControl, AttachShell {
     const withdrawn = this.runtime?.withdrawSteering();
     this.emitSteering();
     return withdrawn;
+  }
+
+  /**
+   * The prompt of the run a kill interrupted, rebuilt from the session log (#210). `undefined` when
+   * the last start was not a recovery of a RUNNING run with a prompt on record. What to *do* with it
+   * — a new turn, the away report, or nothing — is a product decision this method does not make.
+   */
+  interruptedRun(): { runId: string; text: string; chars: number } | undefined {
+    return this.interrupted;
   }
 
   /** `/sleep` is the command that puts it into DORMANT; closing the window is only a detach. */
