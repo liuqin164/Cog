@@ -149,7 +149,17 @@ export class CompanionShell implements ShellControl, AttachShell {
     if (this.started) return;
     const lock = this.lock.acquire(process.pid, this.now());
     if (lock.recoveredStalePid) this.trace.append('stale_lock_recovered', { pid: lock.recoveredStalePid });
-    const restored = this.machine.restore();
+    let restored: ReturnType<StateMachine['restore']>;
+    try {
+      // The session log is read before the state machine is: a log damaged while nothing was watching
+      // is repaired and written down here, and a checkpoint that cannot be recovered still leaves that
+      // record behind (the lock goes with the failure, since this process will not run).
+      this.trace.recover();
+      restored = this.machine.restore();
+    } catch (error) {
+      this.lock.release(process.pid);
+      throw error;
+    }
     // The loadout the checkpoint's transcript declared, read before any plugin registers a tool so
     // the comparison below sees what the previous process promised, not what this one just built.
     const restoredTools = this.machine.runtime.declaredTools ? [...this.machine.runtime.declaredTools] : undefined;

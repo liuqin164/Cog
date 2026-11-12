@@ -79,10 +79,21 @@ export class StateMachine {
   }
 
   restore(): { previous?: State; recovered: boolean } {
-    const loaded = this.options.checkpoint.load();
+    const loaded = this.options.checkpoint.loadRecovered();
     if (!loaded) return { recovered: false };
-    this.checkpointState = loaded;
-    return { previous: loaded.state, recovered: loaded.state !== 'DORMANT' };
+    if (loaded.fallback) {
+      // Recovered from the previous generation: the fact is written down before the state is adopted,
+      // so the trace names the damage even if the process dies again a moment later.
+      this.options.trace.append('checkpoint_corrupt_recovered', {
+        reason: loaded.fallback.reason,
+        from: loaded.fallback.from,
+        damaged: loaded.fallback.damaged,
+        recoveredState: loaded.state.state,
+        recoveredSeq: loaded.state.seq,
+      });
+    }
+    this.checkpointState = loaded.state;
+    return { previous: loaded.state.state, recovered: loaded.state.state !== 'DORMANT' };
   }
 
   /** Persist a runtime-only change (interaction time, dream day). Fails loudly like a transition. */

@@ -68,6 +68,11 @@ describe('transition table', () => {
     const machine = new StateMachine({
       checkpoint: {
         load: () => store.load(),
+        // The recovery load is the same file here: this stub exists to fail the *write*, not the read.
+        loadRecovered: () => {
+          const state = store.load();
+          return state ? { state } : undefined;
+        },
         save: () => {
           throw new CheckpointWriteError(store.path, new Error('disk full'));
         },

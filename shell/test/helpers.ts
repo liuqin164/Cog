@@ -1,6 +1,8 @@
 import { mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { createInterface } from 'node:readline';
 import { CompanionShell } from '../src/app.ts';
 import type { ShellConfig } from '../src/config.ts';
 import { CheckpointStore, emptyCheckpoint, type CheckpointState } from '../src/state/checkpoint.ts';
@@ -22,6 +24,79 @@ import type { ModelCompletionInput, ModelProvider, ModelTurn } from '../src/stat
  */
 export function makeTempDir(prefix = 'companion-shell-test-'): string {
   return mkdtempSync(join(tmpdir(), prefix));
+}
+
+export interface FixtureHarness {
+  child: ChildProcess;
+  /** Every JSON line the fixture printed, in order. */
+  events: any[];
+  /** Anything the fixture wrote to stderr, for a failure message. */
+  stderr: string;
+  /** Resolve on the first `event` (or the one already seen). */
+  waitFor(event: string, timeoutMs?: number): Promise<any>;
+  /** Resolve once `count` lines carrying `event` have been seen. */
+  waitForCount(event: string, count: number, timeoutMs?: number): Promise<void>;
+  exited(): Promise<number | null>;
+}
+
+/**
+ * Spawn a fixture that speaks one JSON line per step on stdout and drives a real process boundary —
+ * the only way to test a SIGKILL. The harness is the shared half of recovery.test.ts's local one.
+ */
+export function spawnFixture(fixture: string, args: string[], timeoutMs = 20_000): FixtureHarness {
+  const child = spawn('bun', [join(import.meta.dir, 'fixtures', fixture), ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const events: any[] = [];
+  let stderr = '';
+  const waiters: Array<{ event: string; count: number; resolve: (value: any) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }> = [];
+  const check = (): void => {
+    for (const waiter of [...waiters]) {
+      const matches = events.filter((event) => event.event === waiter.event);
+      if (matches.length >= waiter.count) {
+        clearTimeout(waiter.timer);
+        waiters.splice(waiters.indexOf(waiter), 1);
+        waiter.resolve(matches[waiter.count - 1]);
+      }
+    }
+  };
+  createInterface({ input: child.stdout! }).on('line', (line: string) => {
+    try {
+      events.push(JSON.parse(line));
+      check();
+    } catch {
+      // A non-JSON banner is kept only through stderr; it is never an event.
+    }
+  });
+  child.stderr!.on('data', (chunk: Buffer) => {
+    stderr += chunk.toString();
+  });
+  return {
+    child,
+    events,
+    get stderr() {
+      return stderr;
+    },
+    waitFor(event: string, limit = timeoutMs) {
+      const seen = events.find((entry) => entry.event === event);
+      if (seen) return Promise.resolve(seen);
+      return this.waitForCount(event, events.filter((entry) => entry.event === event).length + 1, limit).then(
+        () => events.find((entry) => entry.event === event),
+      );
+    },
+    waitForCount(event: string, count: number, limit = timeoutMs) {
+      if (events.filter((entry) => entry.event === event).length >= count) return Promise.resolve();
+      return new Promise<void>((resolvePromise, rejectPromise) => {
+        const timer = setTimeout(() => {
+          const index = waiters.findIndex((waiter) => waiter.timer === timer);
+          if (index >= 0) waiters.splice(index, 1);
+          rejectPromise(new Error(`timeout waiting for ${count}x ${event}; saw ${events.map((entry) => entry.event).join(', ')}; stderr: ${stderr}`));
+        }, limit);
+        waiters.push({ event, count, resolve: () => resolvePromise(), reject: rejectPromise, timer });
+      });
+    },
+    exited() {
+      return new Promise((resolvePromise) => child.once('exit', (code) => resolvePromise(code)));
+    },
+  };
 }
 
 /** A deterministic provider: the script is the model. Calls are recorded for assertions. */

@@ -5,11 +5,17 @@
  * state that says what it was doing, its wake intents, and an active run id that can be retired.
  * A write that fails means the state on disk is not the state in memory, so the caller halts and
  * alarms instead of running on with a checkpoint nobody can trust.
+ *
+ * Publishing is atomic (temp + fsync + rename), and one previous generation is kept by hard link, so
+ * the live path holds either the previous complete checkpoint or the new one — never a half file, and
+ * never nothing. A live file damaged from outside falls back one generation and reports it; two bad
+ * generations are a loud `CheckpointCorruptError` instead of a guess.
  */
 import {
   closeSync,
   existsSync,
   fsyncSync,
+  linkSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -98,6 +104,16 @@ export class CheckpointCorruptError extends Error {
   readonly code = 'checkpoint_corrupt';
 }
 
+/** Where a recovered checkpoint came from, so the trace can name the damage instead of hiding it. */
+export interface CheckpointFallback {
+  /** Why the live file was rejected. */
+  reason: string;
+  /** The generation that was used instead (`checkpoint.json.prev`). */
+  from: string;
+  /** The live file, moved aside to `<path>.corrupt` so the next save cannot inherit it. */
+  damaged: string;
+}
+
 const MAX_HISTORY = 200;
 
 export function emptyCheckpoint(now = Date.now()): CheckpointState {
@@ -106,16 +122,57 @@ export function emptyCheckpoint(now = Date.now()): CheckpointState {
 
 export class CheckpointStore {
   readonly path: string;
+  /** The previous generation, kept by hard link so publishing still never has a window with no file. */
+  readonly previousPath: string;
 
   constructor(readonly dir: string) {
     this.path = join(dir, 'checkpoint.json');
+    this.previousPath = `${this.path}.prev`;
   }
 
   load(): CheckpointState | undefined {
     if (!existsSync(this.path)) return undefined;
+    return this.parse(readFileSync(this.path, 'utf8'));
+  }
+
+  /**
+   * The recovery load: the live file, or the previous generation when the live one cannot be parsed.
+   *
+   * The atomic publish already means a kill can only leave a whole file, so damage here is damage
+   * from outside (bit rot, a hand edit, a truncated copy). One generation of fallback is what keeps
+   * "the checkpoint will not parse" from meaning "the resident never comes up"; if neither file is
+   * usable the corruption is loud, and the caller's machine stays in DORMANT with nothing dispatched.
+   */
+  loadRecovered(): { state: CheckpointState; fallback?: CheckpointFallback } | undefined {
+    if (!existsSync(this.path)) return undefined;
+    let reason: string;
+    try {
+      return { state: this.parse(readFileSync(this.path, 'utf8')) };
+    } catch (error) {
+      reason = error instanceof Error ? error.message : String(error);
+    }
+    if (existsSync(this.previousPath)) {
+      try {
+        const state = this.parse(readFileSync(this.previousPath, 'utf8'));
+        // Move the damaged file aside before returning: otherwise the next save would hard-link it
+        // into `.prev` and poison the one generation that is known to be good.
+        try {
+          renameSync(this.path, `${this.path}.corrupt`);
+        } catch {
+          // Keeping the damaged file in place is safe; the next successful save replaces it.
+        }
+        return { state, fallback: { reason, from: this.previousPath, damaged: this.path } };
+      } catch {
+        // Both generations are unusable; fall through to the loud failure.
+      }
+    }
+    throw new CheckpointCorruptError(`checkpoint_corrupt: ${this.path}: ${reason}`);
+  }
+
+  private parse(raw: string): CheckpointState {
     let parsed: unknown;
     try {
-      parsed = JSON.parse(readFileSync(this.path, 'utf8'));
+      parsed = JSON.parse(raw);
     } catch (error) {
       throw new CheckpointCorruptError(`checkpoint_corrupt: ${this.path}: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -139,6 +196,7 @@ export class CheckpointStore {
       } finally {
         closeSync(fd);
       }
+      this.keepPrevious();
       renameSync(temp, this.path);
       const dirFd = openSync(dirname(this.path), 'r');
       try {
@@ -153,6 +211,25 @@ export class CheckpointStore {
         // The temp file is best-effort cleanup; the save failure is what the caller must hear.
       }
       throw new CheckpointWriteError(this.path, error);
+    }
+  }
+
+  /**
+   * Keep exactly one previous generation, by hard link rather than copy: the old file's bytes are
+   * already durable, and a link costs no data write on the hot path. It happens *before* the rename,
+   * so the live path is never absent — a kill between the two leaves the old complete checkpoint
+   * where `load()` expects it.
+   *
+   * Best effort by design: a filesystem without hard links loses the fallback generation, it does
+   * not fail the save (durability of the new checkpoint is what the caller is waiting on).
+   */
+  private keepPrevious(): void {
+    if (!existsSync(this.path)) return;
+    try {
+      rmSync(this.previousPath, { force: true });
+      linkSync(this.path, this.previousPath);
+    } catch {
+      // See above: the fallback generation is a convenience, the publish is the contract.
     }
   }
 
