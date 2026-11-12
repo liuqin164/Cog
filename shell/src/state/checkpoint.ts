@@ -68,6 +68,14 @@ export interface ShellRuntimeState {
    * for any whose policy is `never` (see `ToolDefinition.replay`).
    */
   inFlightToolCalls?: InFlightToolCall[];
+  /**
+   * Lines typed while RUNNING and not yet injected, FIFO. They are state, not memory (#210): the
+   * run's context lives in the process, so a kill before the turn boundary would otherwise lose a
+   * line the model never saw. Restored in order on the next start and drained at the next boundary.
+   */
+  pendingSteering?: string[];
+  /** Follow-up lines waiting for the run to end, same contract as `pendingSteering`. */
+  pendingFollowUps?: string[];
   /** Last attach/detach of a TUI, so "while you were away" has a window to read. */
   lastAttachAt?: number;
   lastDetachAt?: number;

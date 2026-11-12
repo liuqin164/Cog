@@ -231,6 +231,13 @@ export interface AgentRuntimeOptions {
    * the checkpoint can record the declared set; recovery compares it against the executable set.
    */
   onToolsDeclared?: (names: string[]) => void;
+  /**
+   * The queues as the checkpoint left them (#210). A killed run's typed lines are state, so the next
+   * start drains them in order instead of losing them with the process.
+   */
+  initialQueues?: { steering?: readonly string[]; followUps?: readonly string[] };
+  /** Called on every queue change so the checkpoint can hold it; a failed write stays loud. */
+  onQueueChange?: (queues: { steering: readonly string[]; followUps: readonly string[] }) => void;
 }
 
 export class AgentRuntime {
@@ -249,6 +256,8 @@ export class AgentRuntime {
 
   constructor(private readonly options: AgentRuntimeOptions) {
     this.clock = options.clock ?? Date.now;
+    this.steering = [...(options.initialQueues?.steering ?? [])];
+    this.followUps = [...(options.initialQueues?.followUps ?? [])];
   }
 
   get isRunning(): boolean {
@@ -262,11 +271,13 @@ export class AgentRuntime {
   /** RUNNING steer: injected after the current tool batch, before the next turn. */
   steer(text: string): void {
     this.steering.push(text);
+    this.persistQueues();
   }
 
   /** Follow-up: injected only when the loop would otherwise end. */
   followUp(text: string): void {
     this.followUps.push(text);
+    this.persistQueues();
   }
 
   /** The steering queue as the view shows it; FIFO, so the newest is last. */
@@ -279,7 +290,18 @@ export class AgentRuntime {
    * pulled here is one the model has certainly not seen.
    */
   withdrawSteering(): string | undefined {
-    return this.steering.pop();
+    const withdrawn = this.steering.pop();
+    if (withdrawn !== undefined) this.persistQueues();
+    return withdrawn;
+  }
+
+  /**
+   * Every queue change lands in the checkpoint, under the same atomic-publish discipline as a
+   * transition (#210). A failed write throws: the caller hears it, the machine halts, and no line is
+   * silently remembered only in this process.
+   */
+  private persistQueues(): void {
+    this.options.onQueueChange?.({ steering: [...this.steering], followUps: [...this.followUps] });
   }
 
   abort(reason = 'aborted'): void {
@@ -585,6 +607,7 @@ export class AgentRuntime {
         if (turn.toolCalls.length > 0) continue;
         if (this.followUps.length > 0) {
           const text = this.followUps.shift()!;
+          this.persistQueues();
           const queued: AgentMessage = { role: 'user', content: text };
           context.append(queued);
           await this.emitUserMessage(queued, input.runId);
@@ -663,6 +686,8 @@ export class AgentRuntime {
       context.append(queued);
       await this.emitUserMessage(queued, runId);
     }
+    // Injected is durable too: a kill after this point must not re-deliver what the model already saw.
+    this.persistQueues();
     this.options.trace?.append('steering_injected', { runId, afterTurn, beforeTurn: afterTurn + 1, count }, this.clock());
   }
 

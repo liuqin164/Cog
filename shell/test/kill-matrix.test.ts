@@ -19,11 +19,12 @@ import { CheckpointStore } from '../src/state/checkpoint.ts';
 import { TraceLog } from '../src/trace.ts';
 import { makeTempDir, spawnFixture } from './helpers.ts';
 
-async function recover(dir: string) {
-  const harness = spawnFixture('shell-kill-process.ts', [dir, 'recover']);
+async function recover(dir: string, mode = 'recover') {
+  const harness = spawnFixture('shell-kill-process.ts', [dir, mode]);
   const recovered = await harness.waitFor('recovered');
+  const drained = mode === 'recover-steer' ? await harness.waitFor('drained') : undefined;
   await harness.exited();
-  return { recovered, stderr: harness.stderr };
+  return { recovered, drained, stderr: harness.stderr };
 }
 
 describe('kill matrix: every kill point comes back to one IDLE state', () => {
@@ -134,32 +135,35 @@ describe('kill matrix: every kill point comes back to one IDLE state', () => {
     }
   }, 60_000);
 
-  test('steering typed during the run is in memory only, so a kill loses it — recorded, not hidden', async () => {
+  test('steering typed during the run survives the kill, item by item, and is consumed in order', async () => {
     const dir = makeTempDir('companion-kill-');
-    // The stream mode holds RUNNING; the parent queues a line into the running shell through the same
-    // path the TUI uses, then kills without the queue ever draining.
+    // The stream mode holds RUNNING; the parent queues two lines into the running shell through the
+    // same path the TUI uses, then kills without the queue ever draining.
     const first = spawnFixture('shell-kill-process.ts', [dir, 'stream-steer']);
     try {
       await first.waitFor('idle');
       await first.waitFor('streaming');
       await first.waitFor('steered');
       const steering = first.events.find((event) => event.event === 'steered');
-      expect(steering.queued, 'the shell reports the line as queued while RUNNING').toEqual(['撤回前先看一眼']);
+      expect(steering.queued, 'the shell reports both lines as queued while RUNNING').toEqual(['撤回前先看一眼', '第二句排在后面']);
 
       first.child.kill('SIGKILL');
       await first.exited();
 
-      const { recovered } = await recover(dir);
+      const { recovered, drained } = await recover(dir, 'recover-steer');
       expect(recovered.state).toBe('IDLE');
-      // The finding, stated as evidence: the queue did not survive, because the checkpoint never held
-      // it. A resident that must not lose a typed line needs it persisted; that is filed, not patched
-      // with a guess here.
-      expect(recovered.steering).toEqual([]);
+      // The fix, stated as evidence: the queue was in the checkpoint, so it comes back in order.
+      expect(recovered.steering).toEqual(['撤回前先看一眼', '第二句排在后面']);
+      expect(recovered.steeringRestored, 'the recovery fact is in the trace, not silent').toBe(1);
       const trace = new TraceLog(dir).read();
-      expect(trace.some((record) => record.kind === 'steering_injected'), 'the line was never injected').toBe(false);
-      expect(trace.some((record) => record.kind === 'steering_lost'), 'and nothing pretends it was delivered').toBe(false);
-      // The typed text is not anywhere durable: lastInteractionText belongs to the *previous* turn's
-      // mark, which the checkpoint did keep.
+      const restored = trace.find((record) => record.kind === 'steering_restored')!;
+      expect(restored.steering).toBe(2);
+      expect(restored.followUps).toBe(0);
+      // And they are consumed in order by the next run: the model's second request sees them FIFO.
+      expect(drained.steering).toEqual([]);
+      expect(drained.calls[1], 'the restored lines reach the next request in order').toEqual(['继续', '撤回前先看一眼', '第二句排在后面']);
+      expect(drained.injected).toEqual([{ afterTurn: 1, beforeTurn: 2, count: 2 }]);
+      // The typed text never was the display copy; the display copy is the previous turn's mark.
       const runtime = new CheckpointStore(dir).load()!.runtime;
       expect(runtime.lastInteractionText ?? '').not.toContain('撤回前先看一眼');
     } finally {
