@@ -22,6 +22,7 @@ export const COMMANDS: TuiCommand[] = [
   { name: 'dream', description: '最近一次做梦产物' },
   { name: 'pause', description: '暂停捕获（壳不再写内核；重启后仍是暂停）' },
   { name: 'resume', description: '恢复捕获（/pause 之后）' },
+  { name: 'why', description: '看最近一次召回决策痕迹（只读）' },
   { name: 'help', description: '快捷键与命令', local: true },
   { name: 'exit', description: '断开附着（常驻进程继续）', local: true },
 ];

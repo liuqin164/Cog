@@ -9,6 +9,7 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { createMemoryKernel, KernelAgentMemoryBackend, type MemoryKernel } from 'cogmem';
+import { TraceStore } from 'cogmem/internal';
 import { defaultShellConfig, type ShellConfig } from './config.ts';
 import { StateMachine } from './state/machine.ts';
 import { CheckpointStore, type InFlightToolCall } from './state/checkpoint.ts';
@@ -890,8 +891,56 @@ export class CompanionShell implements ShellControl, AttachShell {
         this.emitStatus();
         return { text: '已恢复捕获：接下来的回合会照常写进内核。' };
       }
+      case 'why':
+        return { text: this.whyReport() };
       default:
         return { text: `unknown command: /${name}` };
+    }
+  }
+
+  /**
+   * `/why`: read back the newest recall decision. This goes through the kernel's own `TraceStore`
+   * read face — `trace_events` is written by `RecallDecisionTrace` for every recall, and the
+   * emergence decision point calls the same recall lane, so both a recall and a surfacing have a row
+   * here. It is a read of what was decided, not a re-run (which would write a fresh row); no row is
+   * an answer the receipt gives plainly instead of guessing at one.
+   */
+  whyReport(): string {
+    try {
+      const db = this.kernel.factStore.getDatabase();
+      const hasTraceTable = (db.query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'trace_events'`).all() as unknown[]).length > 0;
+      if (!hasTraceTable) return '本会话尚无召回决策痕迹（内核还没有 trace_events 表）。不编造。';
+      const store = new TraceStore(db);
+      const rows = store.queryByEventType('recall.result').filter((event) => {
+        if (event.projectId !== undefined && event.projectId !== this.config.projectId) return false;
+        // The trace table has no agent column, so the payload is where an owner can be named (the same
+        // reading the observatory uses): an unnamed row is project-level and shown, a named other is not.
+        const payload = event.payload as Record<string, unknown>;
+        const named = [payload.agentId, payload.agent, payload.sourceAgent].filter((value): value is string => typeof value === 'string');
+        return named.length === 0 || named.includes(this.config.agentId);
+      });
+      const last = rows[rows.length - 1];
+      if (!last) return '本会话尚无召回决策痕迹。不编造。';
+      const payload = last.payload as Record<string, unknown>;
+      const selected = Array.isArray(payload.selectedIds) ? payload.selectedIds.map(String) : [];
+      const suppressed = Array.isArray(payload.suppressed) ? (payload.suppressed as Array<Record<string, unknown>>) : [];
+      const chain = store.getDecisionChain(last.id);
+      const lines = [
+        `最近一次召回决策 · ${new Date(last.timestamp).toISOString()}`,
+        `查询：${typeof payload.query === 'string' && payload.query !== '' ? payload.query : '（空）'}`,
+        `车道：${String(payload.lane ?? 'unknown')} · 理由：${String(payload.reason ?? 'unknown')}`,
+        `选中 ${selected.length} 条${selected.length > 0 ? `：${selected.join(', ')}` : ''}`,
+      ];
+      if (suppressed.length > 0) {
+        lines.push(`抑制 ${suppressed.length} 类：${suppressed.map((entry) => `${String(entry.reason ?? 'unknown')}×${Number(entry.count ?? 0)}`).join('、')}`);
+      }
+      lines.push(`来源链：${chain.length <= 1 ? '无父事件' : chain.map((event) => event.eventType).join(' ← ')}`);
+      return lines.join('\n');
+    } catch (error) {
+      // A read that failed is not "no trace": the receipt says which it was, or a broken database
+      // would read as an empty history.
+      this.trace.append('why_read_failed', { message: error instanceof Error ? error.message : String(error) });
+      return '读决策痕迹失败（内核读取报错）；没有可展示的内容。';
     }
   }
 
