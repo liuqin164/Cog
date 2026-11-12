@@ -28,7 +28,7 @@ import { recallPlugin } from './plugins/recall.ts';
 import { dreamPlugin } from './plugins/dream.ts';
 import { emergencePlugin } from './plugins/emergence.ts';
 import { terminalPlugin, TerminalChannel, type ShellControl } from './channels/terminal.ts';
-import { AgentRuntime, type ModelProvider, type RunSummary } from './state/agent-loop.ts';
+import { AgentRuntime, type ModelProvider, type RunSummary, type TurnUsage } from './state/agent-loop.ts';
 import { SecretRedactor, startKernelHttpFace, type HttpFaceHandle } from './kernel-host.ts';
 import { readSoul } from './install/soul.ts';
 import { AttachServer, defaultSocketPath, type AttachShell } from './attach/server.ts';
@@ -81,6 +81,14 @@ export class CompanionShell implements ShellControl, AttachShell {
   private workLabel = '';
   private runTurns = 0;
   private runTokens = 0;
+  /**
+   * The provider's own prompt-cache account for the run in flight (#165 round 21): `hit` is what the
+   * endpoint reported served from cache, `miss` the remainder of the prompt, `percent` their ratio.
+   * Absent until a provider reports a cache field — and absent is shown as nothing, never as 0%, so a
+   * provider that never reports caching cannot look like a provider that always misses. Round 17's
+   * estimate is not this number and never fills it.
+   */
+  private promptCache?: { hit: number; miss: number; percent: number };
   private runStartedAt?: number;
   /**
    * The killed run's prompt, rebuilt from the session log at recovery (#210). Delivery is a product
@@ -125,6 +133,9 @@ export class CompanionShell implements ShellControl, AttachShell {
         this.runStartedAt = record.at;
         this.runTurns = 0;
         this.runTokens = 0;
+        // A new run's cache account starts empty: the previous run's ratio is not evidence about this
+        // one, and a stale percentage in the footer would read as if it were.
+        this.promptCache = undefined;
         this.workLabel = '思考中';
       }
       void this.host.bus.emit('companion_transition', { ...record, state: record.to });
@@ -607,8 +618,13 @@ export class CompanionShell implements ShellControl, AttachShell {
       this.workLabel = '思考中';
       this.emitWork();
     });
-    this.host.bus.on('turn_usage', (event: { totalTokens?: number }) => {
+    this.host.bus.on('turn_usage', (event: { totalTokens?: number; usage?: TurnUsage }) => {
       this.runTokens = event.totalTokens ?? this.runTokens;
+      const cache = promptCacheAccount(event.usage);
+      if (cache) {
+        this.promptCache = cache;
+        this.emitStatus();
+      }
       this.emitWork();
     });
     this.host.bus.on('tool_execution_start', (event: { toolName?: string }) => {
@@ -672,6 +688,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       showWorkspace: true,
       contextTokens: this.contextTokenEstimate,
       contextSweetSpot: this.config.contextSweetSpot,
+      promptCache: this.promptCache ?? null,
       costTokens: this.machine.runtime.costDayDate === today ? this.machine.runtime.costDayTokens ?? 0 : 0,
       timeZone: this.config.timeZone,
       capturePaused: this.capturePaused,
@@ -856,6 +873,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     config: () => this.config,
     lifecycle: () => ({ state: this.machine.state, seq: this.machine.seq, costDayTokens: this.machine.runtime.costDayTokens ?? 0 }),
     contextTokens: () => this.contextTokenEstimate,
+    promptCache: () => this.promptCache,
     lastDream: () => this.lastDreamProduct(),
     commitments: () => this.commitments(),
     whyReport: () => this.whyReport(),
@@ -965,5 +983,20 @@ export class CompanionShell implements ShellControl, AttachShell {
       this.trace.append('shell_stopped', { state: this.machine.state });
     }
   }
+}
+
+/**
+ * The reported prompt-cache ratio, or `undefined` when the provider reported no cache field. `miss`
+ * is the provider's own miss count when it sends one (DeepSeek), otherwise the prompt less the hit —
+ * the same denominator Pi's hit-rate display uses (`pi-coding-agent/dist/modes/interactive/components/
+ * footer.js:105-107`: `cacheRead / (input + cacheRead + cacheWrite)`). A hit with no prompt size
+ * yields no ratio: the divisor would be invented, and an invented ratio is worse than none.
+ */
+function promptCacheAccount(usage: TurnUsage | undefined): { hit: number; miss: number; percent: number } | undefined {
+  const hit = usage?.cacheHit;
+  if (hit === undefined) return undefined;
+  const miss = usage?.cacheMiss ?? (usage?.input === undefined ? undefined : Math.max(0, usage.input - hit));
+  if (miss === undefined || hit + miss <= 0) return undefined;
+  return { hit, miss, percent: Math.round((hit / (hit + miss)) * 100) };
 }
 

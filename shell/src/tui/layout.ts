@@ -307,7 +307,14 @@ function footerRow(view: TuiView, width: number, env: RenderEnv): Row {
   const status = view.status;
   const ratioValue = ratio(status.contextTokens, status.contextSweetSpot);
   const newMessage = view.newMessages ? '有新消息 ↓ ' : '';
-  const left: Row = [seg(`${newMessage}上下文 `, 'dim'), seg(`${bar(status.contextTokens, status.contextSweetSpot, env)} ${Math.round(ratioValue * 100)}% ${compactNumber(status.contextTokens)}/${compactNumber(status.contextSweetSpot)}`, ratioValue > 1 ? 'error' : ratioValue > 0.8 ? 'warn' : 'barFull')];
+  // The cache segment exists only while a provider has reported one (#165 round 21). No report, no
+  // segment: a fabricated 0% would look like a measured all-miss.
+  const cache = status.promptCache ? [seg(` 缓存 ${status.promptCache.percent}%`, 'dim')] : [];
+  const left: Row = [
+    seg(`${newMessage}上下文 `, 'dim'),
+    seg(`${bar(status.contextTokens, status.contextSweetSpot, env)} ${Math.round(ratioValue * 100)}% ${compactNumber(status.contextTokens)}/${compactNumber(status.contextSweetSpot)}`, ratioValue > 1 ? 'error' : ratioValue > 0.8 ? 'warn' : 'barFull'),
+    ...cache,
+  ];
   const middle = `模型 ${status.model}`;
   const cost = `本日 ${compactNumber(status.costTokens)} tok`;
   const workspace = status.showWorkspace ? status.workspace : '';

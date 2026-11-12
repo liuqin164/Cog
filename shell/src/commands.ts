@@ -28,6 +28,12 @@ export interface CommandHost {
   config(): { dbPath: string; agentId: string; contextSweetSpot: number };
   lifecycle(): { state: string; seq: number; costDayTokens: number };
   contextTokens(): number;
+  /**
+   * The provider-reported prompt-cache account for the run in flight (#165 round 21); `undefined`
+   * when no provider reported a cache field. Never filled from round 17's estimate: the estimate is
+   * not a cache measurement, and a made-up ratio is worse than no line.
+   */
+  promptCache(): { hit: number; miss: number; percent: number } | undefined;
   lastDream(): { localDate: string; eventCount: number; summary: string } | undefined;
   commitments(): Array<{ candidateId: string; title: string; status: string; updatedAt: number }>;
   whyReport(): string;
@@ -99,7 +105,14 @@ export const CORE_COMMANDS: readonly CoreCommand[] = [
     name: 'context',
     description: '上下文车道构成',
     surfaces: ['palette', 'resident', 'tui'],
-    run: (host) => ({ text: `当前组装上下文约 ${host.contextTokens()} token（甜点带宽 ${host.config().contextSweetSpot}）。本壳未接入 F14 车道控制器。` }),
+    run(host) {
+      const lines = [`当前组装上下文约 ${host.contextTokens()} token（甜点带宽 ${host.config().contextSweetSpot}）。本壳未接入 F14 车道控制器。`];
+      const cache = host.promptCache();
+      // Only a provider-reported account earns a line. With nothing reported there is none, because
+      // "0%" is a claim the provider never made.
+      if (cache) lines.push(`provider 实报 prompt 缓存命中 ${cache.percent}%（命中 ${cache.hit} / 未命中 ${cache.miss} token）。`);
+      return { text: lines.join('\n') };
+    },
   },
   {
     name: 'sleep',

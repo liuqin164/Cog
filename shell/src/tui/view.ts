@@ -31,6 +31,14 @@ export interface StatusState {
   showWorkspace: boolean;
   contextTokens: number;
   contextSweetSpot: number;
+  /**
+   * The provider's own prompt-cache account for the run in flight (#165 round 21). `null` when the
+   * provider reported no cache field, and null is drawn as nothing: a provider that never reports
+   * caching must not read as one that always misses. It is `null` rather than absent because this
+   * crosses the attach socket as JSON, and JSON drops an `undefined` — the next run's "no report"
+   * would then leave the previous run's ratio on screen as if it were this run's.
+   */
+  promptCache?: { hit: number; miss: number; percent: number } | null;
   costTokens: number;
   timeZone: string;
   /** `/pause`: the status bar shows it while it is true, because a silent pause looks like a bug. */

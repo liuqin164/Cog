@@ -41,10 +41,32 @@ export interface ToolResult {
   blocked?: { reason: string };
 }
 
+/**
+ * What the provider itself reported for one request (#165 round 21). Every field is optional and
+ * present only when the provider sent it: a field it did not report stays absent, never zero. An
+ * absent number and a reported zero are different facts, and the trace this feeds has to keep them
+ * apart. Round 17's request-side estimate (`context-budget.ts`) is a separate number and never fills
+ * these slots.
+ */
+export interface TurnUsage {
+  /**
+   * The prompt as the provider counts it (OpenAI `prompt_tokens`), cached tokens included. Pi nets
+   * the cache out of `input` (`pi-ai/dist/api/openai-completions.js:1171`); the shell keeps the raw
+   * prompt count so the run's charged total does not shrink on a cache hit, and so the hit ratio uses
+   * the same denominator Pi's display does: the whole prompt.
+   */
+  input?: number;
+  output?: number;
+  /** Prompt tokens served from the provider's cache: `prompt_cache_hit_tokens` / `cached_tokens`. */
+  cacheHit?: number;
+  /** Prompt tokens that missed the cache (`prompt_cache_miss_tokens`); DeepSeek reports it, OpenAI does not. */
+  cacheMiss?: number;
+}
+
 export interface ModelTurn {
   text: string;
   toolCalls: ToolCall[];
-  usage?: { input: number; output: number };
+  usage?: TurnUsage;
   /**
    * Pi's `AssistantMessage.stopReason`, narrowed to what the loop acts on. `length` means the output
    * was cut off by the token limit, so tool-call arguments may have been silently truncated even
@@ -479,6 +501,11 @@ export class AgentRuntime {
           draft.content = turn.text;
           draft.toolCalls = turn.toolCalls;
           draft.isError = turn.stopReason === 'error';
+          // The provider's own account, next to `context_assembled`'s estimate (#165 round 21). The two
+          // pair by runId/turnIndex/attempt and are never added together: one is what the provider
+          // charged, the other is what the shell measured. A response that carried no usage leaves no
+          // record — a zero-filled one would read as a real measurement of zero.
+          if (turn.usage) this.options.trace?.append('provider_usage', { runId: input.runId, turnIndex, attempt, ...turn.usage }, this.clock());
           await this.options.bus.emit('message_update', { type: 'message_update', message: draft, delta: turn.text }, { runId: input.runId });
           await this.options.bus.emit('message_end', { type: 'message_end', message: draft }, { runId: input.runId });
           const failedEntry = context.append(draft);
@@ -602,8 +629,10 @@ export class AgentRuntime {
           const tokenTotal = (turn.usage.input ?? 0) + (turn.usage.output ?? 0);
           tokens += tokenTotal;
           // The cage owns the verdict; this event only tells the view where the running total is, so
-          // the budget bars move while the run is still going rather than only at the boundary.
-          await this.options.bus.emit('turn_usage', { type: 'turn_usage', runId: input.runId, turnIndex, tokens: tokenTotal, totalTokens: tokens }, { runId: input.runId });
+          // the budget bars move while the run is still going rather than only at the boundary. The
+          // provider's cache split rides along so the status face can show it without re-reading the
+          // trace (#165 round 21).
+          await this.options.bus.emit('turn_usage', { type: 'turn_usage', runId: input.runId, turnIndex, tokens: tokenTotal, totalTokens: tokens, usage: turn.usage }, { runId: input.runId });
           const tokenCheck = this.options.budget.addTokens(tokenTotal);
           if (tokenCheck.exceeded) {
             stopReason = 'budget_exceeded';
