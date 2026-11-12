@@ -543,6 +543,7 @@ export class AgentRuntime {
           runId: input.runId,
           signal,
         };
+        const batchTerminates: boolean[] = [];
         for (const call of turn.toolCalls) {
           allToolCalls.push(call);
           if (truncated) {
@@ -553,10 +554,15 @@ export class AgentRuntime {
           }
           // The same pipeline a nested `runToolCall` takes, so the cage sees both.
           const executed = await executeToolCall(pipeline, call);
-          if (executed.terminate) terminateRequested = true;
+          batchTerminates.push(executed.terminate);
           toolResults.push(executed.result);
           allToolResults.push(executed.result);
         }
+        // Pi's `shouldTerminateToolBatch` (`agent-loop.js:471-473`): early termination is a property
+        // of the whole batch — a rejected call ends the run only when every result asked to stop,
+        // because the model asked for the others too. A truncated batch is all refusals and never
+        // terminates, so the model still gets to re-issue.
+        if (batchTerminates.length > 0 && batchTerminates.every(Boolean)) terminateRequested = true;
         // Pi appends one tool message per result before the next provider call; without this the model
         // never sees what its own tool returned.
         for (const toolResult of toolResults) {

@@ -50,3 +50,54 @@ describe('the tool call event pair is whole for every call', () => {
     expect(seen.map((event) => (event.payload as { toolCallId?: string }).toolCallId)).toEqual(['c1', 'c1']);
   });
 });
+
+describe('a tool batch terminates early only when every call asks to', () => {
+  test('one of two calls asking to terminate leaves the loop running', async () => {
+    const bus = new EventBus();
+    bus.on('afterToolCall', (payload: { tool?: { toolCallId?: string } }) =>
+      payload.tool?.toolCallId === 'c1' ? { terminate: true } : undefined,
+    );
+    const provider = new ScriptedProvider([
+      {
+        text: 'two tools',
+        toolCalls: [
+          { toolCallId: 'c1', toolName: 'echo', input: {} },
+          { toolCallId: 'c2', toolName: 'echo', input: {} },
+        ],
+      },
+      { text: 'second turn', toolCalls: [] },
+    ]);
+    const summary = await runtime(bus, provider).run({ runId: 'r', sessionId: 's', userText: 'go' });
+    expect(summary.turns).toBe(2);
+    expect(summary.toolResults).toHaveLength(2);
+  });
+
+  test('every call asking to terminate ends the batch after one turn', async () => {
+    const bus = new EventBus();
+    bus.on('afterToolCall', () => ({ terminate: true }));
+    const provider = new ScriptedProvider([
+      {
+        text: 'two tools',
+        toolCalls: [
+          { toolCallId: 'c1', toolName: 'echo', input: {} },
+          { toolCallId: 'c2', toolName: 'echo', input: {} },
+        ],
+      },
+    ]);
+    const summary = await runtime(bus, provider).run({ runId: 'r', sessionId: 's', userText: 'go' });
+    expect(summary.turns).toBe(1);
+    expect(summary.toolResults).toHaveLength(2);
+  });
+
+  test('a blocked call that asks to terminate ends the batch too', async () => {
+    const bus = new EventBus();
+    bus.on('beforeToolCall', () => ({ block: true, reason: 'stop here', terminate: true }));
+    const provider = new ScriptedProvider([
+      { text: 'try a tool', toolCalls: [{ toolCallId: 'c1', toolName: 'echo', input: {} }] },
+      { text: 'never asked for', toolCalls: [] },
+    ]);
+    const summary = await runtime(bus, provider).run({ runId: 'r', sessionId: 's', userText: 'go' });
+    expect(summary.turns).toBe(1);
+    expect(summary.toolResults[0].output).toBe('stop here');
+  });
+});
