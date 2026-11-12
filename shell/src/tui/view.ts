@@ -9,6 +9,7 @@
  */
 import { type RenderEnv, type Row, cellWidth, seg } from './frame.ts';
 import { renderMarkdown } from './markdown.ts';
+import type { CommandProposal } from '../proposals.ts';
 
 export type Lifecycle = 'DORMANT' | 'WAKING' | 'IDLE' | 'RUNNING' | 'DREAMING';
 
@@ -77,7 +78,14 @@ export type TranscriptEntry =
    * speech and not a banner — it is the shell telling the user what a command did, so it lives in the
    * transcript where the command was typed and reads differently from both.
    */
-  | { kind: 'receipt'; id: string; text: string };
+  | { kind: 'receipt'; id: string; text: string }
+  /**
+   * The agent's offer of a command (spec §7, #165 round 22). The receipt's visual family, but
+   * actionable: while pending it is the element Enter executes and Esc discards; executed, discarded
+   * or refused it is a receipt of that decision and nothing more. It is never a message: the command
+   * text is structured state, not something the model said.
+   */
+  | { kind: 'proposal'; id: string; proposal: CommandProposal };
 
 export interface PresenceReport {
   awaySince?: number;
@@ -244,6 +252,9 @@ export class TuiView {
         // so an unknown `/foo` shows as a receipt on this face too instead of being swallowed.
         if (event.payload?.receipt === true) this.push({ kind: 'receipt', id: this.id(), text: this.commandResult.text });
         break;
+      case 'companion_command_proposal':
+        this.applyProposal(event.payload?.proposal);
+        break;
       case 'companion_model_routes':
         this.modelRoutes = Array.isArray(event.payload?.routes) ? [...event.payload.routes] : [];
         break;
@@ -360,6 +371,37 @@ export class TuiView {
     return this.entries.find((item): item is Extract<TranscriptEntry, { kind: 'assistant' }> => item.kind === 'assistant' && item.id === this.activeAssistantId);
   }
 
+  /**
+   * The proposal event is both the birth and every later state of one element: the entry is keyed by
+   * the proposal id, so executed/discarded/refused updates land in place instead of appending a
+   * second element. A fresh pending proposal becomes the selected element, because it is the one
+   * thing the keyboard is for right now — but only while the user is following the tail.
+   */
+  private applyProposal(proposal: CommandProposal | undefined): void {
+    if (!proposal || typeof proposal.id !== 'string') return;
+    const existing = this.entries.find(
+      (item): item is Extract<TranscriptEntry, { kind: 'proposal' }> => item.kind === 'proposal' && item.proposal.id === proposal.id,
+    );
+    if (existing) {
+      existing.proposal = proposal;
+      this.dirty.add(existing.id);
+      return;
+    }
+    this.push({ kind: 'proposal', id: `proposal-${proposal.id}`, proposal });
+    if (proposal.status === 'pending' && this.follow) this.selected = this.entries.length - 1;
+  }
+
+  /** The proposal the keyboard acts on: the selected one, else the newest still-pending one. */
+  pendingProposal(): Extract<TranscriptEntry, { kind: 'proposal' }> | undefined {
+    const selected = this.entries[this.selected];
+    if (selected?.kind === 'proposal' && selected.proposal.status === 'pending') return selected;
+    for (let index = this.entries.length - 1; index >= 0; index -= 1) {
+      const entry = this.entries[index];
+      if (entry.kind === 'proposal' && entry.proposal.status === 'pending') return entry;
+    }
+    return undefined;
+  }
+
   push(entry: TranscriptEntry): void {
     this.entries.push(entry);
     this.dirty.add(entry.id);
@@ -473,7 +515,47 @@ export function flattenEntry(entry: TranscriptEntry, width: number, env: RenderE
     rows.push([]);
     return rows;
   }
+  if (entry.kind === 'proposal') return renderProposal(entry.proposal, width, env);
   return renderTool(entry.block, width, env);
+}
+
+/**
+ * A proposal in the receipt's visual family: the same `⌁` marker, but the pending one carries its
+ * answer keys inline so "this is an offer, not an execution" is legible at a glance and in ASCII
+ * (the marker degrades to `#`, the labels are words). The command text is drawn even after it
+ * settled, so the receipt always says what was offered before it says what happened.
+ */
+function renderProposal(proposal: CommandProposal, width: number, env: RenderEnv): Row[] {
+  const marker = env.unicode ? '⌁ ' : '# ';
+  const target = `/${proposal.command}${proposal.args === '' ? '' : ` ${proposal.args}`}`;
+  const head = `提议 ${target} · ${proposal.reason}`;
+  const body = (text: string, style: 'plain' | 'dim' = 'plain'): Row[] =>
+    wrapPlain(text, Math.max(1, width - 2)).map((line) => [seg('  ', 'dim'), seg(line, style)]);
+  switch (proposal.status) {
+    case 'pending':
+      return [
+        [seg(marker, 'accent'), seg(truncatePlain(head, Math.max(1, width - 2)), 'accent')],
+        ...body('Enter 执行 · Esc 放弃（尚未执行）', 'dim'),
+        [],
+      ];
+    case 'executed':
+      return [
+        [seg(marker, 'accent'), seg(truncatePlain(`${head} · 已执行`, Math.max(1, width - 2)), 'accent')],
+        ...body(proposal.resultText ?? '（命令已执行）'),
+        [],
+      ];
+    case 'discarded':
+      return [
+        [seg(marker, 'dim'), seg(truncatePlain(`${head} · 已放弃，提议失效`, Math.max(1, width - 2)), 'dim')],
+        [],
+      ];
+    default:
+      return [
+        [seg(marker, 'warn'), seg(truncatePlain(`${head} · 已拒绝，未执行`, Math.max(1, width - 2)), 'warn')],
+        ...body(proposal.rejectedReason ?? '命令不可用。', 'dim'),
+        [],
+      ];
+  }
 }
 
 function renderTool(block: ToolBlock, width: number, env: RenderEnv): Row[] {

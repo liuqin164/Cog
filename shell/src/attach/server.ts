@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import type { EventBus } from '../bus.ts';
 import type { TraceLog } from '../trace.ts';
 import type { CommandReply } from '../commands.ts';
+import type { CommandProposal } from '../proposals.ts';
 import { TuiView, type PresenceReport, type StatusState, type TranscriptEntry, type WorkState } from '../tui/view.ts';
 
 /** Every event the TUI consumes. One list, so a new event is forwarded by adding it here. */
@@ -30,6 +31,7 @@ export const TUI_EVENTS = [
   'companion_commitments',
   'companion_dream',
   'companion_command_result',
+  'companion_command_proposal',
   'companion_model_routes',
   'companion_snapshot_note',
 ] as const;
@@ -51,6 +53,9 @@ export interface AttachSnapshot {
 export type AttachClientMessage =
   | { t: 'submit'; text: string }
   | { t: 'command'; name: string; args?: string }
+  /** The user's answer to a command proposal (spec §7): Enter or Esc on the element. */
+  | { t: 'command-confirm'; id: string }
+  | { t: 'command-discard'; id: string }
   | { t: 'withdraw' }
   | { t: 'wake' }
   | { t: 'detach' }
@@ -72,6 +77,10 @@ export interface AttachShell {
   submit(text: string): Promise<unknown>;
   /** One dispatch for core and plugin commands alike; an unknown name answers with a receipt. */
   runCommand(name: string, args?: string): Promise<CommandReply>;
+  /** The user's confirmation of a command proposal; the only path that runs one. */
+  confirmProposal(id: string): Promise<{ ok: boolean; proposal?: CommandProposal; reason?: string }>;
+  /** The user's discard of a command proposal; it is retired and never runs. */
+  discardProposal(id: string): CommandProposal | undefined;
   withdrawSteering(): string | undefined;
   sleep(): Promise<void>;
   awayReport(): PresenceReport;
@@ -194,6 +203,18 @@ export class AttachServer {
         }
         break;
       }
+      case 'command-confirm': {
+        // The shell emits the updated proposal on the bus (mirror included), so only a refusal needs
+        // its own line: an accepted proposal's element already carries the command's receipt text.
+        const result = await this.options.shell.confirmProposal(message.id);
+        if (!result.ok) {
+          this.send(socket, { t: 'event', name: 'companion_command_result', payload: { name: 'proposal', text: `提议未执行：${result.reason ?? 'unknown'}`, receipt: true } });
+        }
+        break;
+      }
+      case 'command-discard':
+        this.options.shell.discardProposal(message.id);
+        break;
       case 'withdraw': {
         const withdrawn = this.options.shell.withdrawSteering();
         this.pushSteering();

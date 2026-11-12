@@ -109,9 +109,13 @@ export class TuiApp {
     this.detachArmed = false;
 
     const palette = this.paletteOpen();
+    // A pending proposal is the actionable element: Enter runs it, Esc retires it. Both keys act on
+    // the selected proposal, or on the newest pending one when nothing is selected.
+    const pendingProposal = this.editor.isEmpty() ? this.view.pendingProposal() : undefined;
     if (key.name === 'esc') {
       if (this.view.overlay) this.view.overlay = undefined;
       else if (palette) this.editor.setText('');
+      else if (pendingProposal) this.client.send({ t: 'command-discard', id: pendingProposal.proposal.id });
       else if (this.view.queued.length > 0) {
         this.client.send({ t: 'withdraw' });
         this.view.queued = this.view.queued.slice(0, -1);
@@ -152,6 +156,11 @@ export class TuiApp {
       }
       if (!this.editor.isEmpty()) {
         this.submit();
+        return;
+      }
+      if (pendingProposal) {
+        this.client.send({ t: 'command-confirm', id: pendingProposal.proposal.id });
+        this.scheduleRender();
         return;
       }
       this.view.toggleSelected();

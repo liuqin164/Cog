@@ -36,7 +36,7 @@ function atCapacity(seq: number): CheckpointState {
       // Every field carries the same seq, so a reader can tell a whole document from a mixture.
       lastInteractionText: big ? `${seq}:`.padEnd(200_000, 'x') : 'x'.repeat(500),
       lastTimeContext: big ? `${seq}:`.padEnd(600_000, 'y') : 'y'.repeat(400),
-      declaredTools: ['bash', 'edit', 'read', 'write'],
+      declaredTools: ['bash', 'edit', 'propose_command', 'read', 'write'],
     },
     history,
   };

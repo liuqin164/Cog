@@ -22,7 +22,9 @@ import { ModelRouter, modelRouterPlugin, routeLine } from './model/router.ts';
 import { RouteStore, redactUrl } from './model/routes.ts';
 import { cagePlugin, RunCage } from './plugins/cage.ts';
 import { builtinToolsPlugin } from './plugins/builtin-tools.ts';
-import { coreCommandFor, unknownCommandReply, type CommandHost, type CommandReply } from './commands.ts';
+import { coreCommandFor, availableCoreCommand, unknownCommandReply, type CommandHost, type CommandReply } from './commands.ts';
+import { proposalPlugin } from './plugins/proposal.ts';
+import { CommandProposals, executeProposal, type CommandProposal, type ProposalConfirmation } from './proposals.ts';
 import { capturePlugin } from './plugins/capture.ts';
 import { recallPlugin } from './plugins/recall.ts';
 import { dreamPlugin } from './plugins/dream.ts';
@@ -63,6 +65,8 @@ export class CompanionShell implements ShellControl, AttachShell {
   readonly kernel: MemoryKernel;
   readonly backend: KernelAgentMemoryBackend;
   readonly lock: ProcessLock;
+  /** The agent's command offers and the user's answers; the transcript element's source of truth. */
+  readonly proposals: CommandProposals;
   private runtime?: AgentRuntime;
   private cage?: RunCage;
   private clock?: ClockService;
@@ -126,6 +130,16 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.host.seedService('shell', this);
     this.host.seedService('commands', this.host.commands);
     this.host.seedService('trace', this.trace);
+    // The proposal registry (spec §7, #165 round 22). Its availability rule is the palette's, asked
+    // on the resident's face — the face a confirmed proposal executes on — so the panel and the
+    // proposal path cannot disagree about what is runnable.
+    this.proposals = new CommandProposals(
+      (command) => availableCoreCommand(command, 'resident', { multipleRoutes: this.modelRoutes().length > 1 }) !== undefined,
+      this.trace,
+      this.now,
+      (proposal) => void this.host.bus.emit('companion_command_proposal', { proposal }),
+    );
+    this.host.seedService('proposals', this.proposals);
     // Every transition is also a bus event, so a plugin can observe the lifecycle without reading the
     // checkpoint file. The Pi-aligned names are untouched; this one carries the companion prefix.
     this.machine.onTransition((record) => {
@@ -294,6 +308,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.host.register(provider, this.config.model);
     this.host.register(cagePlugin(this.config.budgets, this.trace));
     this.host.register(builtinToolsPlugin(), { workspaceRoot: this.config.workspaceRoot });
+    this.host.register(proposalPlugin());
     this.host.register(capturePlugin({ agentId: this.config.agentId, projectId: this.config.projectId, sessionId: this.config.sessionId, paused: () => this.capturePaused }));
     this.host.register(recallPlugin({ agentId: this.config.agentId, projectId: this.config.projectId, limit: 3 }));
     this.host.register(dreamPlugin({ agentId: this.config.agentId, projectId: this.config.projectId, sessionId: this.config.sessionId, runKernelNight: this.config.dream.runKernelNight, maxEpisodes: this.config.dream.maxEpisodes }));
@@ -468,6 +483,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       'You are a resident companion agent whose memory is Cogmem. Memory comes first: recall before you answer, and let what you remember shape how you say it.',
       'You are present at all hours; when nothing needs you, you are quiet rather than chatty.',
       'You have four basic tools (read, write, edit, bash). Use them when the moment needs real work; otherwise just talk.',
+      'To hand the user a shell command, call `propose_command` with the command and a one-line reason. It is only an offer: the command runs when the user confirms it, never before, so never say it already ran.',
       'Never invent a memory. If recall is empty, say so plainly.',
     ].filter(Boolean);
     const tail = [this.clock ? this.clock.timeContextBlock(this.now()) : ''].filter(Boolean);
@@ -862,6 +878,43 @@ export class CompanionShell implements ShellControl, AttachShell {
       this.trace.append('command_failed', { command: name, message });
       return { text: `命令 /${name} 失败：${message}`, receipt: true };
     }
+  }
+
+  // ---- Command proposals (spec §7, #165 round 22): the agent offers, the user decides. ----
+
+  /**
+   * The user's "Enter". This is the only caller of `executeProposal`, and the confirmation event it
+   * builds is the user's key — there is no other way for a proposal to reach the dispatcher, which
+   * reuses `runCommand` so a confirmed proposal and a typed `/pause` are the same execution. The
+   * agent's side is the `propose_command` tool (`plugins/proposal.ts`), which only records.
+   */
+  async confirmProposal(id: string): Promise<{ ok: boolean; proposal?: CommandProposal; reason?: string; reply?: CommandReply }> {
+    const proposal = this.proposals.get(id);
+    const confirmation: ProposalConfirmation | undefined = proposal
+      ? { kind: 'user-confirm', proposalId: proposal.id, at: this.now() }
+      : undefined;
+    const outcome = await executeProposal(proposal, confirmation, {
+      dispatch: (command, args) => this.runCommand(command, args),
+      trace: this.trace,
+      now: this.now,
+    });
+    if (outcome.ok && proposal) this.proposals.settled(proposal);
+    return {
+      ok: outcome.ok,
+      ...(proposal ? { proposal } : {}),
+      ...(outcome.reason !== undefined ? { reason: outcome.reason } : {}),
+      ...(outcome.reply ? { reply: outcome.reply } : {}),
+    };
+  }
+
+  /** The user's "Esc": retire a pending proposal; it can never be confirmed after this. */
+  discardProposal(id: string): CommandProposal | undefined {
+    return this.proposals.discard(id);
+  }
+
+  /** The pending offers, for tests and any face that wants the list rather than the transcript. */
+  currentProposals(): CommandProposal[] {
+    return [...this.proposals.pending()];
   }
 
   /**

@@ -121,16 +121,16 @@ describe('checkpoint recovery compares the declared loadout', () => {
     await expect(shell.start()).rejects.toThrow('tool_set_mismatch');
     const record = shell.trace.read().find((entry) => entry.kind === 'tool_set_mismatch');
     expect(record?.declared).toEqual(['read', 'write']);
-    expect(record?.executable).toEqual(['bash', 'edit', 'read', 'write']);
+    expect(record?.executable).toEqual(['bash', 'edit', 'propose_command', 'read', 'write']);
   });
 
   test('a matching declared loadout starts, and the current set becomes the declaration', async () => {
     const dir = makeTempDir();
-    new CheckpointStore(join(dir, 'data')).save({ ...emptyCheckpoint(), runtime: { declaredTools: ['read', 'write', 'edit', 'bash'] } });
+    new CheckpointStore(join(dir, 'data')).save({ ...emptyCheckpoint(), runtime: { declaredTools: ['read', 'write', 'edit', 'bash', 'propose_command'] } });
     const shell = makeShell(dir, new ScriptedProvider([{ text: 'x', toolCalls: [] }]));
     await shell.start();
     try {
-      expect([...shell.machine.runtime.declaredTools!].sort()).toEqual(['bash', 'edit', 'read', 'write']);
+      expect([...shell.machine.runtime.declaredTools!].sort()).toEqual(['bash', 'edit', 'propose_command', 'read', 'write']);
     } finally {
       await shell.stop();
     }

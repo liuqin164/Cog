@@ -41,7 +41,7 @@ describe('crash recovery and replay', () => {
       state: 'RUNNING',
       activeRunId: 'run-crash',
       runtime: {
-        declaredTools: ['read', 'write', 'edit', 'bash'],
+        declaredTools: ['read', 'write', 'edit', 'bash', 'propose_command'],
         inFlightToolCalls: [
           { toolCallId: 'c1', toolName: 'read' },
           { toolCallId: 'c2', toolName: 'bash' },

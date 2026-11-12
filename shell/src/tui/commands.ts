@@ -4,7 +4,7 @@
  * from what the view already knows, so opening one never blocks the resident.
  */
 import { cellWidth, compactNumber, formatWakeAt, seg, truncate, type RenderEnv, type Row } from './frame.ts';
-import { CORE_COMMANDS, coreCommandFor, unknownCommandReply } from '../commands.ts';
+import { CORE_COMMANDS, availableCoreCommand, coreCommandFor, unknownCommandReply } from '../commands.ts';
 import { LIFECYCLE_WORD, type Overlay, type TuiView } from './view.ts';
 
 export interface TuiCommand {
@@ -13,11 +13,14 @@ export interface TuiCommand {
   argumentHint?: string;
 }
 
-/** The palette half of the table; a conditional entry (`/model`) only joins once its condition holds. */
+/**
+ * The palette half of the table; a conditional entry (`/model`) only joins once its condition holds.
+ * It is `availableCoreCommand` that decides — the same rule the proposal path uses — so the panel
+ * and "what the agent may propose" cannot drift apart.
+ */
 function corePaletteCommands(multipleRoutes: boolean): TuiCommand[] {
   return CORE_COMMANDS
-    .filter((command) => command.surfaces.includes('palette'))
-    .filter((command) => command.needsMultipleRoutes !== true || multipleRoutes)
+    .filter((command) => availableCoreCommand(command.name, 'palette', { multipleRoutes }) !== undefined)
     .map(({ name, description, argumentHint }) => ({ name, description, argumentHint }));
 }
 
@@ -192,6 +195,7 @@ function helpLines(view: TuiView): string[] {
     'PageUp/PageDown 滚动对话；回到底部恢复跟随',
     'Ctrl+U 清行 · Ctrl+W 删词 · Esc 撤回排队消息',
     '/ 命令面板 · @ 文件补全',
+    '提议出现时：Enter 执行 · Esc 放弃（提议不会自己执行）',
     '',
     `关窗只是断开附着；让它睡是 /sleep。当前状态 ${LIFECYCLE_WORD[view.lifecycle]}。`,
   ];

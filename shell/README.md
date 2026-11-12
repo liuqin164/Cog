@@ -118,6 +118,16 @@ shows a sleep screen and any input wakes it through the legal `DREAMING→WAKING
 "你不在时发生了什么" — the dreams, the held emergence candidates and the fulfilled commitments read back
 from the ledger, not replayed into the conversation.
 
+**The agent can hand you a command.** Its reply may carry a `propose_command` offer — the command, any
+argument, and a one-line reason — which renders in the transcript as an executable element in the
+receipt's visual family (`⌁ 提议 /pause · 你刚说今天很累`, then `Enter 执行 · Esc 放弃（尚未执行）`). It
+never runs on its own: `Enter` sends the confirmation over the socket and the resident executes it
+through the same dispatch a typed `/pause` takes; `Esc` retires it. Either answer is final — a proposal
+is one-shot and cannot be replayed — and both land in the trace (`command_proposed`, `_confirmed`,
+`_executed`, `_discarded`, `_rejected`, `_execution_refused`). Only commands the palette offers may be
+proposed: `/forget`, `/pin` and `/unpin` are refused on the spot and traced, and an offer nobody
+confirms changes nothing.
+
 The renderer is self-owned (ANSI + differential repaint, no TUI framework): the transcript is
 virtualized, so a scroll frame over ten thousand entries costs ~0.07 ms regardless of length.
 `NO_COLOR` drops the palette to plain text and `TERM=dumb` degrades the borders and markers to ASCII.
@@ -137,7 +147,11 @@ numbers.
 - `src/plugins/host.ts` — one registry, one bus; native Cordis-style plugins.
 - `src/pi/adapter.ts` — the removable Pi compatibility layer.
 - `src/plugins/*` — clock, recall, dream, emergence (conservative), cage, capture, the four tools,
-  mg provider. Dream, emergence and recall are plugins like the rest: swap one by not loading it.
+  command-proposals (the `propose_command` tool), mg provider. Dream, emergence and recall are plugins
+  like the rest: swap one by not loading it.
+- `src/proposals.ts` — command proposals (spec §7): the registry the agent's tool records into, and the
+  one execution entry `executeProposal`, gated on a user-confirmation event. The shell's `confirmProposal`
+  is its only caller, and it dispatches through `runCommand`, never a second dispatcher.
 - `src/model/routes.ts` / `router.ts` — the named-route store (`0600`), the redaction helpers, and the
   switchable provider the resident's `model` service is.
 - `src/channels/terminal.ts` — the self-owned terminal channel (line mode, for `--no-terminal`-off residents).

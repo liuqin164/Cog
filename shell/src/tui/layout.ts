@@ -166,6 +166,8 @@ export class TranscriptCache {
 /** A cheap content fingerprint; only the streaming entry ever changes it during a run. */
 function signatureOf(entry: TranscriptEntry): number {
   if (entry.kind === 'tool') return 1_000_000_000 + entry.block.output.length * 4 + (entry.block.expanded ? 2 : 0) + (entry.block.status === 'error' ? 1 : 0);
+  // A proposal's rows change in place when its state settles; the status and the result are what move.
+  if (entry.kind === 'proposal') return 2_000_000_000 + (entry.proposal.resultText?.length ?? 0) * 4 + entry.proposal.status.length;
   return entry.text.length;
 }
 

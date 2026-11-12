@@ -192,7 +192,7 @@ export const CORE_COMMANDS: readonly CoreCommand[] = [
     name: 'help',
     description: '快捷键与命令',
     surfaces: ['palette', 'resident', 'tui'],
-    run: () => ({ text: 'Enter 发送 · Shift+Enter 换行 · / 命令面板 · Esc 撤回排队消息 · /exit 断开附着 · /sleep 进 DORMANT' }),
+    run: () => ({ text: 'Enter 发送 · Shift+Enter 换行 · / 命令面板 · Esc 撤回排队消息 · /exit 断开附着 · /sleep 进 DORMANT · 提议出现时 Enter 执行 / Esc 放弃' }),
   },
   {
     name: 'exit',
@@ -206,6 +206,25 @@ export const CORE_COMMANDS: readonly CoreCommand[] = [
 /** The table entry a face is allowed to dispatch, or `undefined` for "not my command". */
 export function coreCommandFor(name: string, surface: CommandSurface): CoreCommand | undefined {
   return CORE_COMMANDS.find((command) => command.name === name && command.surfaces.includes(surface));
+}
+
+/**
+ * The one availability rule (spec §7): whether a face may present a core command as available right
+ * now. The palette lists exactly these (`tui/commands.ts`), and the proposal path asks the same
+ * question with the resident's face — the face a confirmed proposal executes on. Because the shared
+ * table is the source, a name the panel hides is refused as a proposal too: `/forget`, `/pin` and
+ * `/unpin` are not in `CORE_COMMANDS`, so they cannot even enter the pending state. `/model` is
+ * available only once a second route exists, on both paths alike.
+ */
+export function availableCoreCommand(
+  name: string,
+  surface: CommandSurface,
+  options: { multipleRoutes?: boolean } = {},
+): CoreCommand | undefined {
+  const command = coreCommandFor(name, surface);
+  if (!command) return undefined;
+  if (command.needsMultipleRoutes === true && options.multipleRoutes !== true) return undefined;
+  return command;
 }
 
 /**
