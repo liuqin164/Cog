@@ -155,10 +155,22 @@ export async function executeToolCall(
     const nested = await executeToolCall(context, { toolCallId: `${call.toolCallId}:${depth + 1}:${name}`, toolName: name, input }, { emitEvents: false, depth: depth + 1 });
     return nested.result;
   };
-  let result = await context.tools.invoke(call.toolName, call, { runId: context.runId, signal: context.signal, runToolCall: nest });
-  const after = await context.bus.emit('afterToolCall', { type: 'afterToolCall', toolCall: call, result }, { runId: context.runId });
-  if (after && typeof after === 'object' && 'result' in after) result = after.result as ToolResult;
-  const terminate = Boolean(after && typeof after === 'object' && 'terminate' in after && after.terminate);
+  let result: ToolResult;
+  let terminate = false;
+  try {
+    result = await context.tools.invoke(call.toolName, call, { runId: context.runId, signal: context.signal, runToolCall: nest });
+    const after = await context.bus.emit('afterToolCall', { type: 'afterToolCall', tool: call, result }, { runId: context.runId });
+    if (after && typeof after === 'object' && 'result' in after) result = after.result as ToolResult;
+    terminate = Boolean(after && typeof after === 'object' && 'terminate' in after && after.terminate);
+  } catch (caught) {
+    // Pi's `executePreparedToolCall`/`finalizeExecutedToolCall`: a thrown failure is an error result,
+    // never an escaped rejection. Without this a rejecting invoker skipped `tool_execution_end`, so the
+    // ledger's call had no observation and the checkpoint's in-flight entry stuck until the next
+    // recovery — the dangling pair the interrupt audit went looking for.
+    const message = caught instanceof Error ? caught.message : String(caught);
+    result = { toolCallId: call.toolCallId, toolName: call.toolName, output: `tool_call_failed: ${message}`, isError: true };
+    context.trace?.append('tool_call_failed', { runId: context.runId, toolName: call.toolName, message, nested: !options.emitEvents }, context.clock());
+  }
   if (options.emitEvents) await emitToolEnd(context, call, result);
   return { result, terminate };
 }

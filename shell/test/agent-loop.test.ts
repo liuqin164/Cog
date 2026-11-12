@@ -370,6 +370,31 @@ describe('Pi-aligned loop', () => {
     expect(provider.calls[1].messages.some((message) => message.role === 'user' && message.content === 'typed during prepare')).toBe(true);
   });
 
+  test('a tool that rejects still gets its tool_execution_end and an error result', async () => {
+    // Pi's guarantee: a thrown tool failure comes back as `isError: true` and the start/end pair is
+    // never left dangling. Without it the capture buffer holds a call with no observation and the
+    // checkpoint's in-flight list keeps the call until the next recovery.
+    const bus = new EventBus();
+    const seen = recordEvents(bus, ['tool_execution_start', 'tool_execution_end', 'turn_end']);
+    const invoker = tools({
+      invoke: async () => {
+        throw new Error('bash aborted');
+      },
+    });
+    const provider = new ScriptedProvider([
+      { text: 'tool', toolCalls: [{ toolCallId: 'c1', toolName: 'echo', input: {} }] },
+      { text: 'recovered', toolCalls: [] },
+    ]);
+    const summary = await runtime(bus, provider, invoker).run({ runId: 'r', sessionId: 's', userText: 'go' });
+    const ends = seen.filter((event) => event.name === 'tool_execution_end');
+    expect(ends).toHaveLength(1);
+    expect(ends[0].payload.isError).toBe(true);
+    expect(String(ends[0].payload.result.output)).toContain('bash aborted');
+    // The turn still closes, and the model can read the failure and re-plan.
+    expect(seen.filter((event) => event.name === 'turn_end')).toHaveLength(2);
+    expect(summary.stopReason).toBe('run_complete');
+  });
+
   test('a provider failure becomes run_error, not an unhandled rejection', async () => {
     const bus = new EventBus();
     const provider = new ScriptedProvider([() => {
