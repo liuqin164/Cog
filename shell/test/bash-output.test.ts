@@ -48,6 +48,25 @@ describe('bash output capping', () => {
     expect(result.output).not.toContain('\uFFFD');
   }, 30_000);
 
+  test('a character split across two pipe chunks is decoded whole, never as U+FFFD (#211)', async () => {
+    // Each '日' (E6 97 A5) is written one byte at a time with a pause, so the bytes of a single
+    // character land in separate `data` events. The flaky case above is the same defect with a
+    // boundary the pipe picked by chance; this forces it. Per-chunk `chunk.toString()` decodes each
+    // half on its own and leaves replacement characters behind.
+    const script = "for i in $(seq 1 40); do printf '\\xe6'; sleep 0.001; printf '\\x97\\xa5'; sleep 0.001; done";
+    const { result } = await runBash(script);
+    expect(result.isError).toBe(false);
+    expect(result.output).toBe('日'.repeat(40));
+    expect(result.output).not.toContain('\uFFFD');
+  }, 30_000);
+
+  test('a genuinely truncated tail byte is flushed as one replacement character, not dropped silently', async () => {
+    // The decoder holds back an incomplete sequence; `end()` is what turns a stream that really ended
+    // mid-character into the visible U+FFFD instead of losing the bytes without a trace.
+    const { result } = await runBash("printf 'ok\\xe6'");
+    expect(result.output).toBe('ok\uFFFD');
+  }, 30_000);
+
   test('a short output is returned whole, with no pointer', async () => {
     const { result } = await runBash('echo short-and-complete');
     expect(result.output).toBe('short-and-complete\n');

@@ -7,6 +7,7 @@
 import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 import type { NativePlugin, ToolDefinition, ToolOutcome } from './host.ts';
 
 const MAX_READ_BYTES = 256 * 1024;
@@ -188,11 +189,23 @@ function definitions(workspaceRoot: string): ToolDefinition[] {
             child.kill('SIGKILL');
             settle(`Command timed out after ${timeoutMs / 1000} seconds`, true);
           }, timeoutMs);
+          // A pipe hands over arbitrary byte boundaries, so a multi-byte character can be cut in two
+          // between `data` events; decoding each chunk alone leaves U+FFFD on both halves. One decoder
+          // per stream carries the unfinished bytes over to the next chunk, and `end()` flushes a
+          // genuinely truncated tail as the replacement character rather than dropping it silently.
+          const stdoutDecoder = new StringDecoder('utf8');
+          const stderrDecoder = new StringDecoder('utf8');
           child.stdout.on('data', (chunk: Buffer) => {
-            output += chunk.toString();
+            output += stdoutDecoder.write(chunk);
           });
           child.stderr.on('data', (chunk: Buffer) => {
-            output += chunk.toString();
+            output += stderrDecoder.write(chunk);
+          });
+          child.stdout.on('end', () => {
+            output += stdoutDecoder.end();
+          });
+          child.stderr.on('end', () => {
+            output += stderrDecoder.end();
           });
           child.on('error', (error) => {
             // An abort (`signal`) arrives here: the run is unwinding, so reject and let the pipeline
