@@ -318,6 +318,13 @@ export class CompanionShell implements ShellControl, AttachShell {
         pendingSteering: steering.length > 0 ? [...steering] : undefined,
         pendingFollowUps: followUps.length > 0 ? [...followUps] : undefined,
       }),
+      // The context gauge is the measured request, not a running total of message events: the system
+      // prompt, the tool schemas and a `transformContext`-injected recall block are all part of what
+      // the model was charged for, and none of them is a message this process emits.
+      onContextAssembled: (account) => {
+        this.contextTokenEstimate = account.totalTokens;
+        this.emitStatus();
+      },
     });
     this.modelLabel = `${this.host.getService<ModelProvider>('model').name}/${model.model}`;
     this.attachWorkListeners();
@@ -542,7 +549,6 @@ export class CompanionShell implements ShellControl, AttachShell {
    */
   private attachWorkListeners(): void {
     this.host.bus.on('agent_start', () => {
-      this.contextTokenEstimate = 500; // the system prompt's own weight, the one part no message carries
       this.emitStatus();
     });
     this.host.bus.on('turn_start', (event: { turnIndex?: number }) => {
@@ -561,12 +567,6 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.host.bus.on('tool_execution_end', () => {
       this.workLabel = '思考中';
       this.emitWork();
-    });
-    this.host.bus.on('message_end', (event: { message?: { role?: string; content?: string } }) => {
-      if (event.message?.content) {
-        this.contextTokenEstimate += Math.ceil(event.message.content.length / 4);
-        this.emitStatus();
-      }
     });
     this.host.bus.on('turn_end', () => this.emitSteering());
     this.host.bus.on('agent_end', (event: { summary?: RunSummary }) => {

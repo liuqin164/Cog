@@ -11,6 +11,7 @@
 import type { EventBus } from '../bus.ts';
 import type { TraceLog } from '../trace.ts';
 import { ContextProjection } from './projection.ts';
+import { accountRequest, type ContextAccount } from './context-budget.ts';
 import { DEFAULT_RETRY_POLICY, planFailure, sleepAbortable, type RetryPolicy } from './retry.ts';
 
 export interface AgentMessage {
@@ -262,6 +263,13 @@ export interface AgentRuntimeOptions {
   initialQueues?: { steering?: readonly string[]; followUps?: readonly string[] };
   /** Called on every queue change so the checkpoint can hold it; a failed write stays loud. */
   onQueueChange?: (queues: { steering: readonly string[]; followUps: readonly string[] }) => void;
+  /**
+   * The request as it will be sent, measured (`context-budget.ts`). Measured here, after the last
+   * projection, is the only place the number is true: `transformContext` may have injected a block
+   * no message event carries, and the system prompt and tool schemas are part of the request too.
+   * The trace keeps the breakdown, so a later compaction can be read against what it replaced.
+   */
+  onContextAssembled?: (account: ContextAccount) => void;
 }
 
 export class AgentRuntime {
@@ -439,6 +447,11 @@ export class AgentRuntime {
         for (let attempt = 0; ; ) {
           const draft: AgentMessage = { role: 'assistant', content: '' };
           const attemptMessages = await this.projectMessages(handlerMessages ?? context.project(), input.runId);
+          // The request is measured once it is final: after `transformContext`, so a block it injected
+          // (the recall context) is part of the number instead of invisible to it.
+          const account = accountRequest({ messages: attemptMessages, systemPrompt: request.systemPrompt, tools: request.tools ?? this.options.tools.list() });
+          this.options.onContextAssembled?.(account);
+          this.options.trace?.append('context_assembled', { runId: input.runId, turnIndex, attempt, ...account }, this.clock());
           await this.options.bus.emit('message_start', { type: 'message_start', message: draft }, { runId: input.runId });
           try {
             turn = await this.options.provider.complete({
