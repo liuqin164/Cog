@@ -22,6 +22,7 @@ import { ModelRouter, modelRouterPlugin, routeLine } from './model/router.ts';
 import { RouteStore, redactUrl } from './model/routes.ts';
 import { cagePlugin, RunCage } from './plugins/cage.ts';
 import { builtinToolsPlugin } from './plugins/builtin-tools.ts';
+import { coreCommandFor, type CommandHost, type CommandReply } from './commands.ts';
 import { capturePlugin } from './plugins/capture.ts';
 import { recallPlugin } from './plugins/recall.ts';
 import { dreamPlugin } from './plugins/dream.ts';
@@ -289,7 +290,6 @@ export class CompanionShell implements ShellControl, AttachShell {
     if (this.config.terminalEnabled) {
       this.host.register(terminalPlugin({
         shell: this,
-        commands: this.host.commands,
         input: this.options.terminalInput,
         output: this.options.terminalOutput,
         trace: this.trace,
@@ -822,80 +822,52 @@ export class CompanionShell implements ShellControl, AttachShell {
     return `checkpoint seq ${this.machine.seq}`;
   }
 
-  /** A `/` command answered by the resident; the TUI renders the text in its own overlay. */
-  commandText(name: string, args?: string): { text: string; data?: Record<string, unknown> } {
-    switch (name) {
-      case 'dream': {
-        const product = this.lastDreamProduct();
-        return {
-          text: product ? `${product.localDate}：${product.summary}` : '本会话尚无做梦产物。',
-          data: product ? { companion_dream: { product } } : undefined,
-        };
-      }
-      case 'commitments': {
-        const items = this.commitments();
-        const fulfilled = items.filter((item) => item.status === 'completed').length;
-        return { text: `承诺册 ${items.length} 条（已兑现 ${fulfilled} 条）`, data: { companion_commitments: { items } } };
-      }
-      case 'soul': {
-        // Read back what the installer wrote. F17's editor is the star sea's job; until then the
-        // v0 row is what the resident can show, and showing it beats claiming it is not there.
-        const row = readSoul(this.config.dbPath, this.config.agentId);
-        if (!row) return { text: `soul 尚未写入。当前身份 ${this.config.agentId}。` };
-        const bytes = Buffer.byteLength(row.content);
-        return {
-          text: `soul v${row.version}（${bytes} 字节）：${row.content.split('\n')[0]}`,
-          data: { companion_soul: { version: row.version, bytes, agentId: row.agentId } },
-        };
-      }
-      case 'memory':
-        return { text: `星海（记忆图）前端不在本壳内；记忆库文件：${this.config.dbPath}` };
-      case 'status':
-        return { text: `生命周期 ${this.machine.state}，checkpoint seq ${this.machine.seq}，本日 ${this.machine.runtime.costDayTokens ?? 0} token。` };
-      case 'context':
-        return { text: `当前组装上下文约 ${this.contextTokenEstimate} token（甜点带宽 ${this.config.contextSweetSpot}）。本壳未接入 F14 车道控制器。` };
-      case 'model': {
-        if (!this.modelRouter) return { text: `会话模型：${this.modelLabel}（本进程未接入路线表，切换需重装或重启）。` };
-        const requested = args?.trim() ?? '';
-        if (requested !== '') {
-          const switched = this.switchModelRoute(requested);
-          if (!switched.ok) return { text: `切换失败：${switched.message}` };
-          return {
-            text: `已切到路线「${switched.name}」（${switched.model}）。下一回合生效：进程没重启，会话没断。`,
-            data: { companion_model_routes: { routes: this.modelRoutes(), active: switched.name } },
-          };
-        }
-        const routes = this.modelRouter.routes();
-        const lines = routes.map((route) => routeLine(route, route.name === this.modelRouter!.active));
-        const warning = this.modelRouter.storeError ? [`⚠ 路线表有问题：${this.modelRouter.storeError}（内置 mg 仍可用；修好或删掉这个文件再重试）`] : [];
-        return {
-          text: [`当前路线：${this.modelRouter.active}`, ...lines, ...warning, '用 /model <名称> 切换（不重启、不断会话）'].join('\n'),
-          data: { companion_model_routes: { routes: this.modelRoutes(), active: this.modelRouter.active } },
-        };
-      }
-      case 'help':
-        return { text: 'Enter 发送 · Shift+Enter 换行 · / 命令面板 · Esc 撤回排队消息 · /exit 断开附着 · /sleep 进 DORMANT' };
-      case 'pause': {
-        if (this.capturePaused) return { text: '已在暂停捕获中：此刻壳不把会话内容写进内核。/resume 恢复。' };
-        // The write is the receipt's precondition: if the checkpoint write fails the machine halts
-        // and this never claims a pause that the next process would not know about.
-        this.machine.updateRuntime({ capturePaused: true });
-        this.trace.append('capture_paused_command', { at: this.now() });
-        this.emitStatus();
-        return { text: '已暂停捕获：壳不再把新的会话内容写进内核。这个状态随 checkpoint 持久化，重启后仍是暂停；/resume 恢复。' };
-      }
-      case 'resume': {
-        if (!this.capturePaused) return { text: '捕获本来就在进行中，没有需要恢复的暂停。' };
-        this.machine.updateRuntime({ capturePaused: false });
-        this.trace.append('capture_resumed_command', { at: this.now() });
-        this.emitStatus();
-        return { text: '已恢复捕获：接下来的回合会照常写进内核。' };
-      }
-      case 'why':
-        return { text: this.whyReport() };
-      default:
-        return { text: `unknown command: /${name}` };
-    }
+  /**
+   * The resident's one command entry point, shared by the attach socket and the terminal channel.
+   * Core names come from the table (`commands.ts`); plugin commands from the host registry.
+   */
+  async runCommand(name: string, args = ''): Promise<CommandReply> {
+    const core = coreCommandFor(name, 'resident');
+    if (core) return core.run(this.commandHost, args);
+    if (this.host.commands.has(name)) return { text: (await this.host.commands.run(name, args, this)) ?? '' };
+    return { text: `unknown command: /${name}` };
+  }
+
+  /**
+   * What the palette's command table may ask of the shell. It exists so the handlers can live in
+   * `commands.ts` (one table for every face) without moving the shell's private state out of the
+   * class: each arrow reads `this` at call time.
+   */
+  private readonly commandHost: CommandHost = {
+    config: () => this.config,
+    lifecycle: () => ({ state: this.machine.state, seq: this.machine.seq, costDayTokens: this.machine.runtime.costDayTokens ?? 0 }),
+    contextTokens: () => this.contextTokenEstimate,
+    lastDream: () => this.lastDreamProduct(),
+    commitments: () => this.commitments(),
+    whyReport: () => this.whyReport(),
+    capturePaused: () => this.capturePaused,
+    setCapturePaused: (paused: boolean) => {
+      this.machine.updateRuntime({ capturePaused: paused });
+      this.trace.append(paused ? 'capture_paused_command' : 'capture_resumed_command', { at: this.now() });
+      this.emitStatus();
+    },
+    sessionModel: () => this.modelLabel,
+    modelRoutes: () => this.modelRoutes(),
+    modelRouter: () =>
+      this.modelRouter
+        ? {
+            active: this.modelRouter.active,
+            lines: this.modelRouter.routes().map((route) => routeLine(route, route.name === this.modelRouter!.active)),
+            storeError: this.modelRouter.storeError,
+          }
+        : undefined,
+    switchRoute: (name: string) => this.switchModelRoute(name),
+    sleep: () => this.sleep(),
+  };
+
+  /** The palette's plugin half: the resident is the only process that holds the registry. */
+  pluginCommands(): Array<{ name: string; description?: string }> {
+    return this.host.commands.list().map(({ name, description }) => ({ name, description }));
   }
 
   /**

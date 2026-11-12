@@ -13,7 +13,7 @@ import { DiffRenderer, defaultRenderEnv, type RenderEnv } from './frame.ts';
 import { LineEditor, loadHistory, saveHistory } from './editor.ts';
 import { KeyDecoder, type Key } from './keys.ts';
 import { inputCursorPosition, renderTui, TranscriptCache, type TuiSize } from './layout.ts';
-import { filterCommands, paletteCommands } from './commands.ts';
+import { dispatchTuiCommand, filterCommands, paletteCommands } from './commands.ts';
 import { TuiView, type ShellEvent } from './view.ts';
 
 export interface TuiAppOptions {
@@ -198,22 +198,15 @@ export class TuiApp {
     const [name = '', ...rest] = text.slice(1).trim().split(/\s+/u);
     const args = rest.join(' ');
     this.editor.setText('');
-    if (name === 'exit') {
+    // One decision function for every `/name`: which overlay it opens and whether the resident answers.
+    const dispatch = dispatchTuiCommand(name, args, this.view);
+    if (dispatch.exit) {
       this.stop('exit');
       return;
     }
-    if (name === 'help' || name === 'status' || name === 'context') {
-      this.view.overlay = { kind: name };
-      this.scheduleRender();
-      return;
-    }
-    if (name === 'sleep') {
-      this.view.push({ kind: 'notice', id: `sleep-${Date.now()}`, text: '正在让它进 DORMANT……关窗只是你走了，/sleep 才是让它睡。', tone: 'info' });
-    }
-    if (name === 'dream') this.view.overlay = { kind: 'dream' };
-    if (name === 'commitments') this.view.overlay = { kind: 'commitments' };
-    if (name === 'soul' || name === 'memory' || name === 'model') this.view.overlay = { kind: 'info', title: name };
-    this.client.send({ t: 'command', name, args });
+    if (dispatch.overlay) this.view.overlay = dispatch.overlay;
+    if (dispatch.notice) this.view.push({ kind: 'notice', id: `notice-${name}-${Date.now()}`, text: dispatch.notice, tone: 'info' });
+    if (dispatch.forward) this.client.send({ t: 'command', name, args });
     this.scheduleRender();
   }
 

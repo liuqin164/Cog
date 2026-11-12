@@ -1,22 +1,25 @@
 /**
  * The terminal channel: the simplest self-owned way to talk to the shell. No external platform, no
- * OpenMaus, no bot token — a line in, a turn out, and `/name args` reaching the plugin command table.
+ * OpenMaus, no bot token — a line in, a turn out, and `/name args` reaching the same dispatch the
+ * TUI and the attach socket use (`CompanionShell.runCommand`: core table, then plugin registry,
+ * then the shared unknown-command receipt).
  *
  * It is a channel plugin like any future platform channel: it injects the shell control surface and
- * the command registry, and it knows nothing about the state machine's internals.
+ * knows nothing about the state machine's internals.
  */
 import { createInterface, type Interface } from 'node:readline';
 import type { NativePlugin } from '../plugins/host.ts';
 import type { TraceLog } from '../trace.ts';
+import type { CommandReply } from '../commands.ts';
 
 export interface ShellControl {
   submit(text: string): Promise<unknown>;
   readonly state: string;
+  runCommand(name: string, args?: string): Promise<CommandReply>;
 }
 
 export interface TerminalChannelOptions {
   shell: ShellControl;
-  commands: { has(name: string): boolean; run(name: string, args: string, ctx: unknown): Promise<string | undefined>; list(): Array<{ name: string; description?: string }> };
   input?: NodeJS.ReadableStream;
   output?: NodeJS.WritableStream;
   trace?: TraceLog;
@@ -48,12 +51,10 @@ export class TerminalChannel {
     if (line.startsWith('/')) {
       const [rawName, ...rest] = line.slice(1).split(/\s+/u);
       const args = rest.join(' ');
-      if (!this.options.commands.has(rawName)) {
-        this.print(`unknown command: /${rawName}\n`);
-        return;
-      }
-      const result = await this.options.commands.run(rawName, args, this.options.shell);
-      this.print(`${result ?? ''}\n`);
+      // One dispatch for every face: core table first, plugin registry second, and an unknown name
+      // comes back as the shared receipt instead of a silent fall-through to the model.
+      const result = await this.options.shell.runCommand(rawName, args);
+      this.print(`${result.text}\n`);
       await this.options.captureTerminalRecord?.(`/${rawName} ${args}`);
       return;
     }
@@ -74,11 +75,10 @@ export function terminalPlugin(options: TerminalChannelOptions): NativePlugin {
   return {
     name: 'terminal-channel',
     provide: ['terminal'],
-    inject: ['shell', 'commands'],
+    inject: ['shell'],
     apply(ctx) {
       const channel = new TerminalChannel({
         shell: ctx.getService<ShellControl>('shell'),
-        commands: ctx.getService<TerminalChannelOptions['commands']>('commands'),
         input: options.input,
         output: options.output,
         trace: options.trace,

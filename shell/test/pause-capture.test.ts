@@ -34,7 +34,7 @@ describe('/pause and /resume stop and restart ingest (spec §7)', () => {
       const before = ledgerCount(shell, threadId);
       expect(before).toBeGreaterThan(0);
 
-      expect(shell.commandText('pause').text).toContain('已暂停捕获');
+      expect((await shell.runCommand('pause')).text).toContain('已暂停捕获');
       expect(shell.capturePaused).toBe(true);
       expect(shell.currentStatus().capturePaused).toBe(true);
 
@@ -45,7 +45,7 @@ describe('/pause and /resume stop and restart ingest (spec §7)', () => {
       expect(skipped.length).toBeGreaterThan(0);
       expect(JSON.stringify(skipped)).not.toContain('这条不该进账本');
 
-      expect(shell.commandText('resume').text).toContain('已恢复捕获');
+      expect((await shell.runCommand('resume')).text).toContain('已恢复捕获');
       await shell.submit('这条该进账本');
       expect(ledgerCount(shell, threadId)).toBeGreaterThan(before);
     } finally {
@@ -58,7 +58,7 @@ describe('/pause and /resume stop and restart ingest (spec §7)', () => {
     const first = makeShell(dir, new ScriptedProvider([{ text: 'unused', toolCalls: [] }]), { dream: NO_DREAM });
     await first.start();
     try {
-      first.commandText('pause');
+      await first.runCommand('pause');
       expect(first.capturePaused).toBe(true);
     } finally {
       await first.stop();
@@ -84,7 +84,7 @@ describe('/pause and /resume stop and restart ingest (spec §7)', () => {
     await shell.start();
     try {
       expect(shell.capturePaused).toBe(false);
-      expect(shell.commandText('resume').text).toContain('没有需要恢复的暂停');
+      expect((await shell.runCommand('resume')).text).toContain('没有需要恢复的暂停');
       expect(shell.capturePaused).toBe(false);
     } finally {
       await shell.stop();

@@ -137,6 +137,8 @@ export class TuiView {
   lastDream?: { localDate: string; eventCount: number; summary: string };
   commandResult?: { name: string; text: string };
   modelRoutes: string[] = [];
+  /** Plugin commands the resident reported; the palette lists them beside the core table. */
+  pluginCommands: Array<{ name: string; description?: string }> = [];
   snapshotNote?: string;
 
   private nextId = 1;
@@ -155,7 +157,7 @@ export class TuiView {
   }
 
   /** Attach-time state: the resident's history replaces whatever this view had. */
-  load(snapshot: { status?: Partial<StatusState>; entries?: TranscriptEntry[]; queued?: string[]; work?: Partial<WorkState>; presence?: PresenceReport }): void {
+  load(snapshot: { status?: Partial<StatusState>; entries?: TranscriptEntry[]; queued?: string[]; work?: Partial<WorkState>; presence?: PresenceReport; commands?: Array<{ name: string; description?: string }> }): void {
     if (snapshot.status) this.status = { ...this.status, ...snapshot.status };
     if (snapshot.entries) {
       this.entries.length = 0;
@@ -165,6 +167,7 @@ export class TuiView {
     }
     if (snapshot.queued) this.queued = [...snapshot.queued];
     if (snapshot.work) this.work = { ...this.work, ...snapshot.work };
+    if (snapshot.commands) this.pluginCommands = [...snapshot.commands];
     this.presence = snapshot.presence;
     if (snapshot.presence) this.pushPresence(snapshot.presence);
     this.follow = true;

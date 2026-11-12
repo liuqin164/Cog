@@ -27,7 +27,7 @@ describe('/why reads the last recall decision trace (spec §7)', () => {
         suppressed: [{ reason: 'redacted_content', count: 1 }],
       });
 
-      const text = shell.commandText('why').text;
+      const text = (await shell.runCommand('why')).text;
       expect(text).toContain('蓝色遮阳篷的面包店');
       expect(text).toContain('车道：graph');
       expect(text).toContain('理由：topic_match');
@@ -44,7 +44,7 @@ describe('/why reads the last recall decision trace (spec §7)', () => {
     const shell = makeShell(dir, new ScriptedProvider([{ text: 'unused', toolCalls: [] }]), { dream: NO_DREAM });
     await shell.start();
     try {
-      const empty = shell.commandText('why').text;
+      const empty = (await shell.runCommand('why')).text;
       expect(empty).toContain('尚无召回决策痕迹');
       expect(empty).toContain('不编造');
 
@@ -57,7 +57,7 @@ describe('/why reads the last recall decision trace (spec §7)', () => {
         reason: 'topic_match',
         selectedIds: ['other-1'],
       });
-      const stillEmpty = shell.commandText('why').text;
+      const stillEmpty = (await shell.runCommand('why')).text;
       expect(stillEmpty).toContain('尚无召回决策痕迹');
       expect(stillEmpty).not.toContain('别人的查询');
     } finally {

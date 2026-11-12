@@ -1,33 +1,36 @@
 /**
- * The command palette and its overlays. The palette is data (`COMMANDS`) plus a fuzzy filter; the
- * overlays are rendered from what the view already knows, so opening one never blocks the resident.
+ * The command palette and its overlays. The palette is data — the core table in `../commands.ts`
+ * plus the plugin commands the resident reported — and a fuzzy filter; the overlays are rendered
+ * from what the view already knows, so opening one never blocks the resident.
  */
 import { cellWidth, compactNumber, formatWakeAt, seg, truncate, type RenderEnv, type Row } from './frame.ts';
-import { LIFECYCLE_WORD, type TuiView } from './view.ts';
+import { CORE_COMMANDS, coreCommandFor } from '../commands.ts';
+import { LIFECYCLE_WORD, type Overlay, type TuiView } from './view.ts';
 
 export interface TuiCommand {
   name: string;
   description: string;
-  /** Local commands are answered by the TUI; the rest are asked of the resident. */
-  local?: boolean;
+  argumentHint?: string;
 }
 
-export const COMMANDS: TuiCommand[] = [
-  { name: 'soul', description: '查看当前 soul（身份与称呼风格）' },
-  { name: 'memory', description: '打开星海（记忆地址）' },
-  { name: 'commitments', description: '承诺册概览' },
-  { name: 'status', description: '健康状态页' },
-  { name: 'context', description: '上下文车道构成' },
-  { name: 'sleep', description: '让它进 DORMANT（关窗只是你走了）' },
-  { name: 'dream', description: '最近一次做梦产物' },
-  { name: 'pause', description: '暂停捕获（壳不再写内核；重启后仍是暂停）' },
-  { name: 'resume', description: '恢复捕获（/pause 之后）' },
-  { name: 'why', description: '看最近一次召回决策痕迹（只读）' },
-  { name: 'help', description: '快捷键与命令', local: true },
-  { name: 'exit', description: '断开附着（常驻进程继续）', local: true },
-];
+/** The palette half of the table; a conditional entry (`/model`) only joins once its condition holds. */
+function corePaletteCommands(multipleRoutes: boolean): TuiCommand[] {
+  return CORE_COMMANDS
+    .filter((command) => command.surfaces.includes('palette'))
+    .filter((command) => command.needsMultipleRoutes !== true || multipleRoutes)
+    .map(({ name, description, argumentHint }) => ({ name, description, argumentHint }));
+}
 
-/** Fuzzy match: every query character appears in order, which is all a nine-item palette needs. */
+/** The view-less default the fuzzy filter falls back to. */
+const CORE_PALETTE = corePaletteCommands(false);
+
+/** The palette for the current view: the core table, then the plugin commands the resident reported. */
+export function paletteCommands(view: TuiView): TuiCommand[] {
+  const plugins = view.pluginCommands.map((command) => ({ name: command.name, description: command.description ?? '插件命令' }));
+  return [...corePaletteCommands((view.modelRoutes?.length ?? 0) > 1), ...plugins];
+}
+
+/** Fuzzy match: every query character appears in order, which is all a command palette needs. */
 export function fuzzyMatch(query: string, name: string): boolean {
   if (query === '') return true;
   const haystack = name.toLowerCase();
@@ -40,16 +43,50 @@ export function fuzzyMatch(query: string, name: string): boolean {
   return true;
 }
 
-export function filterCommands(query: string, commands: TuiCommand[] = COMMANDS): TuiCommand[] {
+export function filterCommands(query: string, commands: TuiCommand[] = CORE_PALETTE): TuiCommand[] {
   const trimmed = query.replace(/^\//u, '');
   return commands.filter((command) => fuzzyMatch(trimmed, command.name));
 }
 
-/** The palette for the current view, including the model switch only when >1 route is configured. */
-export function paletteCommands(view: TuiView): TuiCommand[] {
-  const commands = [...COMMANDS];
-  if ((view.modelRoutes?.length ?? 0) > 1) commands.push({ name: 'model', description: '查看 / 切换模型路线（不重启、不断会话）' });
-  return commands;
+/**
+ * Where a `/name` typed in the TUI goes. It is a pure decision so the "every declared surface
+ * dispatches the same command" check can run without a terminal: the modulator only applies it.
+ */
+export interface TuiDispatch {
+  /** `/exit`: detach instead of asking the resident. */
+  exit?: boolean;
+  /** A local notice pushed before the resident answers (`/sleep`). */
+  notice?: string;
+  /** The overlay this command's answer renders in, if any. */
+  overlay?: Overlay;
+  /** Ask the resident (core commands with a resident surface, and every plugin command). */
+  forward: boolean;
+}
+
+/** The TUI presentation of a core command; the handler itself is the table's, not this map's. */
+const TUI_OVERLAYS: Record<string, Overlay> = {
+  help: { kind: 'help' },
+  status: { kind: 'status' },
+  context: { kind: 'context' },
+  dream: { kind: 'dream' },
+  commitments: { kind: 'commitments' },
+  soul: { kind: 'info', title: 'soul' },
+  memory: { kind: 'info', title: 'memory' },
+  model: { kind: 'info', title: 'model' },
+};
+
+export function dispatchTuiCommand(name: string, args: string, view: TuiView): TuiDispatch {
+  const core = coreCommandFor(name, 'tui');
+  // A name no face owns still goes to the resident, whose answer decides what the view shows.
+  if (!core) return { forward: true };
+  const overlay = TUI_OVERLAYS[name];
+  const notice = name === 'sleep' ? '正在让它进 DORMANT……关窗只是你走了，/sleep 才是让它睡。' : undefined;
+  return {
+    ...(overlay ? { overlay } : {}),
+    ...(notice ? { notice } : {}),
+    exit: name === 'exit',
+    forward: core.surfaces.includes('resident'),
+  };
 }
 
 export function overlayRows(view: TuiView, width: number, env: RenderEnv): Row[] {
@@ -81,9 +118,12 @@ export function paletteRows(view: TuiView, query: string, width: number, env: Re
   rows.push([seg(` > ${query}`, 'accent')]);
   matches.forEach((command, at) => {
     const selected = at === index;
+    // The argument hint rides in the palette row (`/model <名称>`), which is the whole point of
+    // carrying it: a plugin command that needs an argument says so where the user completes it.
+    const label = truncate(command.argumentHint ? `${command.name} ${command.argumentHint}` : command.name, 16).padEnd(16, ' ');
     rows.push([
-      seg(`  ${selected ? '>' : ' '} /${command.name.padEnd(12, ' ')}`, selected ? 'accent' : 'plain'),
-      seg(truncate(command.description, Math.max(1, width - 18)), selected ? 'accent' : 'dim'),
+      seg(`  ${selected ? '>' : ' '} /${label}`, selected ? 'accent' : 'plain'),
+      seg(truncate(command.description, Math.max(1, width - 21)), selected ? 'accent' : 'dim'),
     ]);
   });
   if (matches.length === 0) rows.push([seg('   （无匹配）', 'dim')]);

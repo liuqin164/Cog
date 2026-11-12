@@ -11,14 +11,14 @@ import { join } from 'node:path';
 import { CommandNameConflictError, PluginHost, RESERVED_CORE_COMMANDS } from '../src/plugins/host.ts';
 import { PiCompatAdapter, resolvePiExtensionEntry } from '../src/pi/adapter.ts';
 import { TraceLog } from '../src/trace.ts';
-import { COMMANDS } from '../src/tui/commands.ts';
+import { CORE_COMMANDS } from '../src/commands.ts';
 import { makeTempDir } from './helpers.ts';
 
 describe('the core command namespace (spec §7)', () => {
-  test('every name the palette offers is reserved, so the two lists cannot drift apart', () => {
-    // `model` is added to the palette only when >1 route exists (paletteCommands), so it is included.
-    for (const name of [...COMMANDS.map((command) => command.name), 'model']) {
-      expect(RESERVED_CORE_COMMANDS).toContain(name);
+  test('every name the table offers is reserved, so the two lists cannot drift apart', () => {
+    // `model` is in the table with a conditional palette surface (paletteCommands), so it is included.
+    for (const command of CORE_COMMANDS) {
+      expect(RESERVED_CORE_COMMANDS).toContain(command.name);
     }
   });
 

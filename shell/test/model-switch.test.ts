@@ -40,7 +40,7 @@ describe('runtime model routes in the resident', () => {
     try {
       expect(shell.modelRoutes()).toEqual(['mg/auto/deepseek-v4.1-flash', 'deepseek/deepseek-chat']);
       expect(shell.currentStatus().model).toBe('deepseek/deepseek-chat');
-      const listed = shell.commandText('model');
+      const listed = await shell.runCommand('model');
       expect(listed.text).toContain('当前路线：deepseek');
       expect(listed.text).toContain('● deepseek · deepseek-chat');
       expect(listed.text).toContain('○ mg · auto/deepseek-v4.1-flash');
@@ -59,7 +59,7 @@ describe('runtime model routes in the resident', () => {
       const seqBefore = shell.machine.seq;
       const checkpointBefore = readFileSync(join(dataDir, 'checkpoint.json'), 'utf8');
 
-      const switched = shell.commandText('model', 'mg');
+      const switched = await shell.runCommand('model', 'mg');
       expect(switched.text).toContain('已切到路线「mg」');
       expect(shell.currentStatus().model).toBe('mg/auto/deepseek-v4.1-flash');
       expect(shell.modelRoutes()).toHaveLength(2);
@@ -88,7 +88,7 @@ describe('runtime model routes in the resident', () => {
     await shell.start();
     try {
       expect(shell.modelRoutes()).toEqual(['mg/auto/deepseek-v4.1-flash']);
-      expect(shell.commandText('model').text).toContain('当前路线：mg');
+      expect((await shell.runCommand('model')).text).toContain('当前路线：mg');
     } finally {
       await shell.stop();
     }
@@ -103,7 +103,7 @@ describe('runtime model routes in the resident', () => {
     await shell.start();
     try {
       expect(shell.modelRoutes()).toEqual(['mg/auto/deepseek-v4.1-flash']);
-      const listed = shell.commandText('model');
+      const listed = await shell.runCommand('model');
       expect(listed.text).toContain('路线表有问题');
       expect(listed.text).toContain('routes_unreadable');
       expect(listed.text).toContain('当前路线：mg');

@@ -11,6 +11,7 @@ import { chmodSync, existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import type { EventBus } from '../bus.ts';
 import type { TraceLog } from '../trace.ts';
+import type { CommandReply } from '../commands.ts';
 import { TuiView, type PresenceReport, type StatusState, type TranscriptEntry, type WorkState } from '../tui/view.ts';
 
 /** Every event the TUI consumes. One list, so a new event is forwarded by adding it here. */
@@ -42,6 +43,8 @@ export interface AttachSnapshot {
   commitments: Array<{ candidateId: string; title: string; status: string; updatedAt: number }>;
   lastDream?: { localDate: string; eventCount: number; summary: string };
   modelRoutes: string[];
+  /** The plugin half of the palette, which only the resident can enumerate (spec §7). */
+  commands: Array<{ name: string; description?: string }>;
   snapshotNote?: string;
 }
 
@@ -67,7 +70,8 @@ export type AttachServerMessage =
 /** What the server needs from the shell; `CompanionShell` implements it. */
 export interface AttachShell {
   submit(text: string): Promise<unknown>;
-  commandText(name: string, args?: string): { text: string; data?: Record<string, unknown> };
+  /** One dispatch for core and plugin commands alike; an unknown name answers with a receipt. */
+  runCommand(name: string, args?: string): Promise<CommandReply>;
   withdrawSteering(): string | undefined;
   sleep(): Promise<void>;
   awayReport(): PresenceReport;
@@ -76,6 +80,7 @@ export interface AttachShell {
   currentQueued(): string[];
   commitments(): Array<{ candidateId: string; title: string; status: string; updatedAt: number }>;
   modelRoutes(): string[];
+  pluginCommands(): Array<{ name: string; description?: string }>;
   snapshotNote(): string | undefined;
   /** Called when the attached-client count changes, so the shell can date its own absence. */
   attachChanged(count: number): void;
@@ -182,11 +187,7 @@ export class AttachServer {
         this.pushSteering();
         break;
       case 'command': {
-        if (message.name === 'sleep') {
-          await this.options.shell.sleep();
-          break;
-        }
-        const result = this.options.shell.commandText(message.name, message.args);
+        const result = await this.options.shell.runCommand(message.name, message.args ?? '');
         this.send(socket, { t: 'event', name: 'companion_command_result', payload: { name: message.name, text: result.text } });
         if (result.data) {
           for (const [name, payload] of Object.entries(result.data)) this.send(socket, { t: 'event', name, payload });
@@ -239,6 +240,7 @@ export class AttachServer {
       commitments: this.options.shell.commitments(),
       lastDream: this.mirror.lastDream,
       modelRoutes: this.options.shell.modelRoutes(),
+      commands: this.options.shell.pluginCommands(),
       snapshotNote: this.options.shell.snapshotNote(),
     };
   }
