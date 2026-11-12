@@ -7,6 +7,19 @@
   parameters, extension loading), not Pi's package as a runtime dependency. The shell does not import
   Pi's loop; it reimplements the contract.
 
+## Deliberate deviations (shell rules, not Pi's)
+
+- **Tool calls in one assistant message run sequentially.** Pi's core defaults `toolExecution` to
+  `"parallel"` (`pi-agent-core/dist/agent.js:147`), prepares calls in assistant order, then runs them
+  concurrently — `tool_execution_end` in completion order, result messages in assistant order
+  (`agent-loop.js:417-470`, the contract stated at `types.d.ts:20-24`). The shell runs each call to
+  completion before the next, because its four tools mutate one workspace and the capture and
+  checkpoint paths are order-sensitive. The ordering guarantees are kept (results land in assistant
+  order); the concurrency is given up, and a per-call `executionMode` is not offered.
+- **`tool_execution_start` names the arguments `input`, Pi names them `args`.** No plugin in the
+  exercised set reads that event; if one appears, the translation belongs in `src/pi/adapter.ts`
+  beside the `tool_call`/`tool_result` bridges, not in the core payload.
+
 ## Real plugins exercised through the adapter
 
 | Plugin | Version | Kind | What the test drives |
