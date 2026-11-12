@@ -609,10 +609,13 @@ export class CompanionShell implements ShellControl, AttachShell {
    * reported once, because "what happened while you were away" is not a recurring banner.
    */
   awayReport(): PresenceReport {
+    // The one production read of the session log. `recover()` is the tolerant read plus the one-time
+    // record of any damage, so a torn or corrupted log shows up in the report's own evidence instead
+    // of silently reading as "nothing happened while you were away".
     const report = buildAwayReport({
       projectId: this.config.projectId,
       runtime: this.machine.runtime,
-      trace: this.trace.read(),
+      trace: this.trace.recover().records,
       kernel: this.kernel,
       now: this.now(),
     });
