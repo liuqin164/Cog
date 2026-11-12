@@ -134,34 +134,41 @@ export async function executeToolCall(
   options: { emitEvents: boolean; depth?: number } = { emitEvents: true },
 ): Promise<ExecutedToolCall> {
   const depth = options.depth ?? 0;
-  const before = await context.bus.emit('beforeToolCall', {
-    type: 'beforeToolCall',
-    toolCall: call,
-    toolCallId: call.toolCallId,
-    toolName: call.toolName,
-    input: call.input,
-  }, { runId: context.runId });
-  if (before?.block) {
-    const blocked: ToolResult = { toolCallId: call.toolCallId, toolName: call.toolName, output: before.reason ?? 'blocked', isError: true, blocked: { reason: before.reason ?? 'blocked' } };
-    context.trace?.append('tool_blocked', { runId: context.runId, toolName: call.toolName, reason: before.reason, nested: !options.emitEvents }, context.clock());
-    if (options.emitEvents) await emitToolEnd(context, call, blocked);
-    return { result: blocked, terminate: false };
-  }
+  // Pi emits `tool_execution_start` before `prepareToolCall` — that is, before argument validation
+  // and `beforeToolCall` — so every call the model issued pairs, blocked and failed ones included
+  // (`agent-loop.js:380-390,419-426`). The end alone left the ledger an observation with no call,
+  // the mirror of the dangling pair round 15 closed. The hooks also live inside this try because Pi
+  // turns a throwing `beforeToolCall` into that call's error result (`:539-545`); outside it, the
+  // throw would escape with a start and no end.
   if (options.emitEvents) await emitToolStart(context, call);
-  const nest = async (name: string, input: unknown): Promise<ToolResult> => {
-    if (depth >= MAX_NESTED_TOOL_DEPTH) {
-      return { toolCallId: `${call.toolCallId}:${name}`, toolName: name, output: `nested_tool_depth_exceeded: "${name}" is nested more than ${MAX_NESTED_TOOL_DEPTH} deep`, isError: true };
-    }
-    const nested = await executeToolCall(context, { toolCallId: `${call.toolCallId}:${depth + 1}:${name}`, toolName: name, input }, { emitEvents: false, depth: depth + 1 });
-    return nested.result;
-  };
   let result: ToolResult;
   let terminate = false;
   try {
-    result = await context.tools.invoke(call.toolName, call, { runId: context.runId, signal: context.signal, runToolCall: nest });
-    const after = await context.bus.emit('afterToolCall', { type: 'afterToolCall', tool: call, result }, { runId: context.runId });
-    if (after && typeof after === 'object' && 'result' in after) result = after.result as ToolResult;
-    terminate = Boolean(after && typeof after === 'object' && 'terminate' in after && after.terminate);
+    const before = await context.bus.emit('beforeToolCall', {
+      type: 'beforeToolCall',
+      toolCall: call,
+      toolCallId: call.toolCallId,
+      toolName: call.toolName,
+      input: call.input,
+    }, { runId: context.runId });
+    if (before?.block) {
+      result = { toolCallId: call.toolCallId, toolName: call.toolName, output: before.reason ?? 'blocked', isError: true, blocked: { reason: before.reason ?? 'blocked' } };
+      // Pi's blocked result honors `terminate` too, so a veto can also end the batch (`:513-522`).
+      terminate = before.terminate === true;
+      context.trace?.append('tool_blocked', { runId: context.runId, toolName: call.toolName, reason: before.reason, nested: !options.emitEvents }, context.clock());
+    } else {
+      const nest = async (name: string, input: unknown): Promise<ToolResult> => {
+        if (depth >= MAX_NESTED_TOOL_DEPTH) {
+          return { toolCallId: `${call.toolCallId}:${name}`, toolName: name, output: `nested_tool_depth_exceeded: "${name}" is nested more than ${MAX_NESTED_TOOL_DEPTH} deep`, isError: true };
+        }
+        const nested = await executeToolCall(context, { toolCallId: `${call.toolCallId}:${depth + 1}:${name}`, toolName: name, input }, { emitEvents: false, depth: depth + 1 });
+        return nested.result;
+      };
+      result = await context.tools.invoke(call.toolName, call, { runId: context.runId, signal: context.signal, runToolCall: nest });
+      const after = await context.bus.emit('afterToolCall', { type: 'afterToolCall', tool: call, result }, { runId: context.runId });
+      if (after && typeof after === 'object' && 'result' in after) result = after.result as ToolResult;
+      terminate = Boolean(after && typeof after === 'object' && 'terminate' in after && after.terminate);
+    }
   } catch (caught) {
     // Pi's `executePreparedToolCall`/`finalizeExecutedToolCall`: a thrown failure is an error result,
     // never an escaped rejection. Without this a rejecting invoker skipped `tool_execution_end`, so the
