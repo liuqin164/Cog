@@ -198,10 +198,16 @@ export class TuiApp {
     const [name = '', ...rest] = text.slice(1).trim().split(/\s+/u);
     const args = rest.join(' ');
     this.editor.setText('');
-    // One decision function for every `/name`: which overlay it opens and whether the resident answers.
+    // One decision function for every `/name`: which overlay it opens, whether the resident answers,
+    // and — for a name no face owns — the same receipt the terminal and the resident give.
     const dispatch = dispatchTuiCommand(name, args, this.view);
     if (dispatch.exit) {
       this.stop('exit');
+      return;
+    }
+    if (dispatch.unknown !== undefined) {
+      this.view.push({ kind: 'receipt', id: `receipt-${name}-${Date.now()}`, text: dispatch.unknown });
+      this.scheduleRender();
       return;
     }
     if (dispatch.overlay) this.view.overlay = dispatch.overlay;

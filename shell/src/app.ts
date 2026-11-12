@@ -22,7 +22,7 @@ import { ModelRouter, modelRouterPlugin, routeLine } from './model/router.ts';
 import { RouteStore, redactUrl } from './model/routes.ts';
 import { cagePlugin, RunCage } from './plugins/cage.ts';
 import { builtinToolsPlugin } from './plugins/builtin-tools.ts';
-import { coreCommandFor, type CommandHost, type CommandReply } from './commands.ts';
+import { coreCommandFor, unknownCommandReply, type CommandHost, type CommandReply } from './commands.ts';
 import { capturePlugin } from './plugins/capture.ts';
 import { recallPlugin } from './plugins/recall.ts';
 import { dreamPlugin } from './plugins/dream.ts';
@@ -824,13 +824,14 @@ export class CompanionShell implements ShellControl, AttachShell {
 
   /**
    * The resident's one command entry point, shared by the attach socket and the terminal channel.
-   * Core names come from the table (`commands.ts`); plugin commands from the host registry.
+   * Core names come from the table (`commands.ts`); plugin commands from the host registry; anything
+   * else gets the same unknown-command receipt the other two faces give.
    */
   async runCommand(name: string, args = ''): Promise<CommandReply> {
     const core = coreCommandFor(name, 'resident');
     if (core) return core.run(this.commandHost, args);
     if (this.host.commands.has(name)) return { text: (await this.host.commands.run(name, args, this)) ?? '' };
-    return { text: `unknown command: /${name}` };
+    return unknownCommandReply(name);
   }
 
   /**

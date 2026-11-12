@@ -188,7 +188,7 @@ export class AttachServer {
         break;
       case 'command': {
         const result = await this.options.shell.runCommand(message.name, message.args ?? '');
-        this.send(socket, { t: 'event', name: 'companion_command_result', payload: { name: message.name, text: result.text } });
+        this.send(socket, { t: 'event', name: 'companion_command_result', payload: { name: message.name, text: result.text, receipt: result.receipt === true } });
         if (result.data) {
           for (const [name, payload] of Object.entries(result.data)) this.send(socket, { t: 'event', name, payload });
         }

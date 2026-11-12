@@ -19,6 +19,8 @@ export type CommandSurface = 'palette' | 'resident' | 'tui';
 export interface CommandReply {
   text: string;
   data?: Record<string, unknown>;
+  /** The third visual style (spec §7): the TUI shows this in the transcript, not in an overlay. */
+  receipt?: boolean;
 }
 
 /** Everything a handler may ask of the shell; `CompanionShell` provides it as `commandHost`. */
@@ -125,11 +127,11 @@ export const CORE_COMMANDS: readonly CoreCommand[] = [
     description: '暂停捕获（壳不再写内核；重启后仍是暂停）',
     surfaces: ['palette', 'resident', 'tui'],
     run(host) {
-      if (host.capturePaused()) return { text: '已在暂停捕获中：此刻壳不把会话内容写进内核。/resume 恢复。' };
+      if (host.capturePaused()) return { text: '已在暂停捕获中：此刻壳不把会话内容写进内核。/resume 恢复。', receipt: true };
       // The write is the receipt's precondition: if the checkpoint write fails the machine halts
       // and this never claims a pause that the next process would not know about.
       host.setCapturePaused(true);
-      return { text: '已暂停捕获：壳不再把新的会话内容写进内核。这个状态随 checkpoint 持久化，重启后仍是暂停；/resume 恢复。' };
+      return { text: '已暂停捕获：壳不再把新的会话内容写进内核。这个状态随 checkpoint 持久化，重启后仍是暂停；/resume 恢复。', receipt: true };
     },
   },
   {
@@ -137,16 +139,16 @@ export const CORE_COMMANDS: readonly CoreCommand[] = [
     description: '恢复捕获（/pause 之后）',
     surfaces: ['palette', 'resident', 'tui'],
     run(host) {
-      if (!host.capturePaused()) return { text: '捕获本来就在进行中，没有需要恢复的暂停。' };
+      if (!host.capturePaused()) return { text: '捕获本来就在进行中，没有需要恢复的暂停。', receipt: true };
       host.setCapturePaused(false);
-      return { text: '已恢复捕获：接下来的回合会照常写进内核。' };
+      return { text: '已恢复捕获：接下来的回合会照常写进内核。', receipt: true };
     },
   },
   {
     name: 'why',
     description: '看最近一次召回决策痕迹（只读）',
     surfaces: ['palette', 'resident', 'tui'],
-    run: (host) => ({ text: host.whyReport() }),
+    run: (host) => ({ text: host.whyReport(), receipt: true }),
   },
   {
     name: 'model',
@@ -184,11 +186,53 @@ export const CORE_COMMANDS: readonly CoreCommand[] = [
     description: '断开附着（常驻进程继续）',
     // The TUI detaches itself; there is nothing for the resident to answer.
     surfaces: ['palette', 'tui'],
-    run: () => ({ text: '断开附着。常驻进程继续运行。' }),
+    run: () => ({ text: '断开附着。常驻进程继续运行。', receipt: true }),
   },
 ];
 
 /** The table entry a face is allowed to dispatch, or `undefined` for "not my command". */
 export function coreCommandFor(name: string, surface: CommandSurface): CoreCommand | undefined {
   return CORE_COMMANDS.find((command) => command.name === name && command.surfaces.includes(surface));
+}
+
+/**
+ * The closest core name by edit distance. This is the hint an unknown `/foo` gets on every face, so
+ * a typo points at a real command instead of silently becoming a model prompt.
+ */
+export function nearestCommand(name: string): string | undefined {
+  let best: string | undefined;
+  let bestDistance = Infinity;
+  for (const command of CORE_COMMANDS) {
+    const distance = editDistance(name.toLowerCase(), command.name);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = command.name;
+    }
+  }
+  return best;
+}
+
+/**
+ * The one unknown-command answer all three faces give (spec §7): a system receipt, a closest-command
+ * hint, and never a fall-through to the model. Three faces used to answer three different ways —
+ * the terminal refused, the resident returned bare text, the TUI forwarded and swallowed it.
+ */
+export function unknownCommandReply(name: string): CommandReply {
+  const nearest = nearestCommand(name);
+  const hint = nearest === undefined ? '没有相近的核心命令。' : `最接近的核心命令：/${nearest}。`;
+  return { text: `unknown command: /${name} 不是命令；${hint}用 / 打开命令面板。`, receipt: true };
+}
+
+/** Two-row Levenshtein; the longest core name is nine characters, so this is not a hot path. */
+function editDistance(a: string, b: string): number {
+  let previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i += 1) {
+    const current = [i];
+    for (let j = 1; j <= b.length; j += 1) {
+      const substitution = previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1);
+      current[j] = Math.min(previous[j] + 1, current[j - 1] + 1, substitution);
+    }
+    previous = current;
+  }
+  return previous[b.length];
 }

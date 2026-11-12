@@ -4,7 +4,7 @@
  * from what the view already knows, so opening one never blocks the resident.
  */
 import { cellWidth, compactNumber, formatWakeAt, seg, truncate, type RenderEnv, type Row } from './frame.ts';
-import { CORE_COMMANDS, coreCommandFor } from '../commands.ts';
+import { CORE_COMMANDS, coreCommandFor, unknownCommandReply } from '../commands.ts';
 import { LIFECYCLE_WORD, type Overlay, type TuiView } from './view.ts';
 
 export interface TuiCommand {
@@ -59,6 +59,8 @@ export interface TuiDispatch {
   notice?: string;
   /** The overlay this command's answer renders in, if any. */
   overlay?: Overlay;
+  /** The unknown-command receipt, when no face owns the name. */
+  unknown?: string;
   /** Ask the resident (core commands with a resident surface, and every plugin command). */
   forward: boolean;
 }
@@ -77,8 +79,11 @@ const TUI_OVERLAYS: Record<string, Overlay> = {
 
 export function dispatchTuiCommand(name: string, args: string, view: TuiView): TuiDispatch {
   const core = coreCommandFor(name, 'tui');
-  // A name no face owns still goes to the resident, whose answer decides what the view shows.
-  if (!core) return { forward: true };
+  if (!core) {
+    if (view.pluginCommands.some((command) => command.name === name)) return { forward: true };
+    // Never a silent drop and never a model prompt: the same receipt the other two faces give.
+    return { unknown: unknownCommandReply(name).text, forward: false };
+  }
   const overlay = TUI_OVERLAYS[name];
   const notice = name === 'sleep' ? '正在让它进 DORMANT……关窗只是你走了，/sleep 才是让它睡。' : undefined;
   return {

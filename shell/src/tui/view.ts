@@ -71,9 +71,6 @@ export type TranscriptEntry =
    */
   | { kind: 'receipt'; id: string; text: string };
 
-/** Commands whose answer is a receipt, not an overlay or a model turn. */
-export const RECEIPT_COMMANDS: readonly string[] = ['pause', 'resume', 'why'];
-
 export interface PresenceReport {
   awaySince?: number;
   awayMs?: number;
@@ -235,7 +232,9 @@ export class TuiView {
         break;
       case 'companion_command_result':
         this.commandResult = { name: String(event.payload?.name ?? ''), text: String(event.payload?.text ?? '') };
-        if (RECEIPT_COMMANDS.includes(this.commandResult.name)) this.push({ kind: 'receipt', id: this.id(), text: this.commandResult.text });
+        // The receipt style is the resident's call (`CommandReply.receipt`), not a second list here,
+        // so an unknown `/foo` shows as a receipt on this face too instead of being swallowed.
+        if (event.payload?.receipt === true) this.push({ kind: 'receipt', id: this.id(), text: this.commandResult.text });
         break;
       case 'companion_model_routes':
         this.modelRoutes = Array.isArray(event.payload?.routes) ? [...event.payload.routes] : [];

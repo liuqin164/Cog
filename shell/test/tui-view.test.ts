@@ -92,7 +92,8 @@ describe('command receipts (spec §7)', () => {
   test('a /pause receipt is its own transcript entry, and other command results are not', () => {
     const view = fixtureView('IDLE');
     const before = view.entries.length;
-    view.applyEvent({ name: 'companion_command_result', payload: { name: 'pause', text: '已暂停捕获：壳不再把新的会话内容写进内核。' } });
+    // The receipt style is the resident's flag (`CommandReply.receipt`), not a name list in the view.
+    view.applyEvent({ name: 'companion_command_result', payload: { name: 'pause', text: '已暂停捕获：壳不再把新的会话内容写进内核。', receipt: true } });
     const receipt = view.entries[view.entries.length - 1];
     expect(receipt.kind).toBe('receipt');
     expect(view.entries.length).toBe(before + 1);
