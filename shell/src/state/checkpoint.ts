@@ -89,8 +89,6 @@ export interface ShellRuntimeState {
   lastDreamDate?: string;
   lastInteractionAt?: number;
   lastInteractionText?: string;
-  /** The turn the last user line became; emergence must not surface that turn back to its author. */
-  lastInteractionTurnId?: string;
   /** The block injected when the shell last woke; the system prompt reuses it until the next wake. */
   lastTimeContext?: string;
   /**

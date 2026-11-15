@@ -104,7 +104,7 @@ describe('attach over the socket (spec §0, §6)', () => {
         metadata: { kind: 'dream-integration' },
       });
       await seedCompletedCommitment(shell, '明天去看医生');
-      await shell.backend.rememberTurnWithResult({
+      const reference = await shell.backend.rememberTurnWithResult({
         agentId: shell.config.agentId,
         projectId: shell.config.projectId,
         sessionId: shell.config.sessionId,
@@ -113,7 +113,16 @@ describe('attach over the socket (spec §0, §6)', () => {
         assistantText: '记下了：蓝色遮阳篷的面包店。',
         ingestMode: 'immediate_compile',
       });
-      shell.machine.updateRuntime({ lastInteractionText: '蓝色遮阳篷 面包店' });
+      // The associative ledger echo is gone (#230): the accumulate path is a first-class due
+      // source, so the seed is a wake intention at this instant, not the last sentence.
+      shell.backend.registerWakeIntention({
+        projectId: shell.config.projectId,
+        agentId: shell.config.agentId,
+        at: base + 1_000,
+        reason: '蓝色遮阳篷面包店',
+        sourceRefs: [{ eventId: reference.rawEventIds[0] }],
+        now: base,
+      });
       await shell.tick(base + 1_000);
       expect(shell.machine.runtime.awayQueue?.length).toBe(1);
 

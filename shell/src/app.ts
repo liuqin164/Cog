@@ -106,6 +106,8 @@ const RESUME_BACKOFF_CAP_MS = 6 * 60 * 60_000;
  */
 const EMERGENCE_COOLDOWN_MS = 2 * 60_000;
 const EMERGENCE_DAILY_LIMIT = 8;
+/** The compiled books are incremental but each pass scans the ledger; one pass a minute is enough. */
+const PROACTIVE_COMPILE_INTERVAL_MS = 60_000;
 const MAX_EMERGENCE_CONSUMED = 500;
 
 export interface CompanionShellOptions {
@@ -140,8 +142,8 @@ export class CompanionShell implements ShellControl, AttachShell {
   private clock?: ClockService;
   private dream?: { integrate(...args: [string, string, number?]): Promise<{ localDate: string; eventCount: number; sourceRefs: unknown[]; summary: string }> };
   private emergence?: {
-    decide(query: string | undefined, now?: number, currentTurnId?: string): {
-      candidates: Array<{ id: string; text: string; reason: string; sourceRefs?: Array<{ eventId?: string }> }>;
+    decide(now?: number): {
+      candidates: Array<{ id: string; text: string; reason: string; source?: string; observedAt?: number; sourceRefs?: Array<{ eventId?: string }> }>;
       suppressed: unknown[];
     };
   };
@@ -155,6 +157,9 @@ export class CompanionShell implements ShellControl, AttachShell {
   private modelRouter?: ModelRouter;
   /** An estimate of the assembled context; the kernel has no F14 budget controller to ask. */
   private contextTokenEstimate = 0;
+  /** The latest project event the compiled books were last brought up to. */
+  private compiledThroughEventId?: string;
+  private lastProactiveCompileAt?: number;
   /** Whether a soul-read failure has been traced; the read itself is retried on the next turn. */
   private soulFailureTraced = false;
   private workLabel = '';
@@ -768,9 +773,6 @@ export class CompanionShell implements ShellControl, AttachShell {
   ): Promise<RunSummary> {
     const runId = `run-${this.now().toString(36)}-${randomUUID().slice(0, 8)}`;
     const origin = trigger === 'emergence_due' ? 'emergence' : 'user';
-    // The next emergence decision must know which turn the last user line became, so recall can
-    // refuse to hand that turn back to its author (#229).
-    if (origin === 'user') this.machine.updateRuntime({ lastInteractionTurnId: `${runId}:0` });
     const tier = this.budgetTier(trigger);
     this.runTier = tier;
     // The owner's grant widens this one run's cage and is spent when it settles (#228).
@@ -1042,13 +1044,15 @@ export class CompanionShell implements ShellControl, AttachShell {
       return;
     }
     if (this.machine.state === 'IDLE') {
-      const decision = this.emergence!.decide(
-        this.machine.runtime.lastInteractionText,
-        at,
-        this.machine.runtime.lastInteractionTurnId,
-      );
-      const candidate = decision.candidates.find((item) => !this.emergenceConsumed(item));
-      if (candidate && this.emergenceAllowed(at)) {
+      this.compileProactiveBooks(at);
+      // The candidate query must run before F2's tick: a due wake intention is still pending at
+      // the query, while the tick that follows marks it fired. A prospective memory stays listed
+      // after its notification, so both first-class lanes are seen once.
+      const allowed = this.emergenceAllowed(at);
+      const decision = allowed ? this.emergence!.decide(at) : undefined;
+      this.runKernelWakeTick(at);
+      const candidate = decision?.candidates.find((item) => !this.emergenceConsumed(item));
+      if (candidate) {
         // Consume before acting: a crash during the run must not free the same candidate to run again.
         this.consumeEmergence(candidate, at);
         if (this.shouldHoldForAbsence()) {
@@ -1062,16 +1066,75 @@ export class CompanionShell implements ShellControl, AttachShell {
         }
         void this.host.bus.emit('companion_emergence', { id: candidate.id, reason: candidate.reason, text: candidate.text });
         await this.executeRun(candidate.text, 'emergence_due', `emergence:${candidate.id}`);
+      } else if (!allowed) {
+        this.trace.append('emergence_skipped', { at, reason: 'cooldown_or_daily_cap' });
       }
     }
   }
 
-  /** The event, when the candidate names one, is a stabler key than a lane's own id. */
-  private emergenceKey(candidate: { id: string; sourceRefs?: Array<{ eventId?: string }> }): string {
-    return candidate.sourceRefs?.[0]?.eventId ?? candidate.id;
+  /**
+   * The compiled books an emergence decision reads: promised commitments (F16) and the agent's
+   * plans (F22). Both compile incrementally and are safe at a turn boundary. F22 has no F6 source,
+   * so a plan with a target instant is consumed the way its own contract says: `schedule` turns it
+   * into an F2 wake intention, which is a first-class candidate source.
+   */
+  private compileProactiveBooks(at: number): void {
+    const projectId = this.config.projectId;
+    try {
+      const latest = this.kernel.eventStore.queryEvents(1, 1, {
+        projectId: [projectId],
+        order: 'desc',
+      }).records[0]?.eventId ?? '';
+      // Idle ticks are the common case; recompiling two books for no new turn is the kind of cost
+      // a long-lived resident pays forever.
+      if (latest === (this.compiledThroughEventId ?? '')) return;
+      if (this.lastProactiveCompileAt !== undefined && at - this.lastProactiveCompileAt < PROACTIVE_COMPILE_INTERVAL_MS) return;
+      this.kernel.commitments.compile({ projectId, now: at });
+      this.kernel.intentions.compile({ projectId, now: at });
+      for (const intention of this.kernel.intentions.list({ projectId, statuses: ['active'], now: at })) {
+        if (intention.dueAt === undefined || intention.wakeIntentionId !== undefined) continue;
+        this.kernel.intentions.schedule({ projectId, intentionId: intention.intentionId, now: at });
+        this.trace.append('intention_scheduled_for_wake', { intentionId: intention.intentionId, dueAt: intention.dueAt, at });
+      }
+      this.compiledThroughEventId = latest;
+      this.lastProactiveCompileAt = at;
+    } catch (error) {
+      this.trace.append('proactive_compile_failed', { at, message: error instanceof Error ? error.message : String(error) });
+    }
   }
 
-  private emergenceConsumed(candidate: { id: string; sourceRefs?: Array<{ eventId?: string }> }): boolean {
+  /** F2's clock: fire due intentions and announce due prospective memories. It never speaks. */
+  private runKernelWakeTick(at: number): void {
+    try {
+      const result = this.backend.runWakeTick({ projectId: this.config.projectId, agentId: this.config.agentId, now: at });
+      if (result.emitted > 0) {
+        this.trace.append('wake_tick', {
+          at,
+          firedWakeIntentions: result.firedWakeIntentions.map((intention) => intention.intentionId),
+          prospectiveDue: result.prospectiveDue.map((entry) => entry.candidateId),
+        });
+      }
+    } catch (error) {
+      this.trace.append('wake_tick_failed', { at, message: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  /**
+   * The event, when the candidate names one, is a stabler key than a lane's own id. The observed
+   * instant rides along because a snoozed commitment resumes as the same id at a new occurrence.
+   */
+  private emergenceKey(candidate: { id: string; source?: string; observedAt?: number; sourceRefs?: Array<{ eventId?: string }> }): string {
+    if (candidate.source === 'commitment') {
+      const commitmentId = candidate.id.slice('surfacing:commitment:'.length);
+      const entry = this.kernel.commitments
+        .list({ projectId: this.config.projectId, now: this.now() })
+        .find((item) => item.commitmentId === commitmentId);
+      if (entry) return `${candidate.id}@${entry.resumeAt ?? entry.dueAt ?? ''}`;
+    }
+    return `${candidate.sourceRefs?.[0]?.eventId ?? candidate.id}@${candidate.observedAt ?? ''}`;
+  }
+
+  private emergenceConsumed(candidate: { id: string; source?: string; observedAt?: number; sourceRefs?: Array<{ eventId?: string }> }): boolean {
     return (this.machine.runtime.emergence?.consumed ?? []).includes(this.emergenceKey(candidate));
   }
 
@@ -1083,7 +1146,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     return state.day !== tokyoDate(at) || state.count < EMERGENCE_DAILY_LIMIT;
   }
 
-  private consumeEmergence(candidate: { id: string; sourceRefs?: Array<{ eventId?: string }> }, at: number): void {
+  private consumeEmergence(candidate: { id: string; source?: string; observedAt?: number; sourceRefs?: Array<{ eventId?: string }> }, at: number): void {
     const key = this.emergenceKey(candidate);
     const day = tokyoDate(at);
     const prior = this.machine.runtime.emergence;
@@ -1995,10 +2058,13 @@ export class CompanionShell implements ShellControl, AttachShell {
    * an answer the receipt gives plainly instead of guessing at one.
    */
   whyReport(): string {
+    const emergence = this.trace.read().filter((record) => record.kind === 'emergence_decision').pop();
     try {
       const db = this.kernel.factStore.getDatabase();
       const hasTraceTable = (db.query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'trace_events'`).all() as unknown[]).length > 0;
-      if (!hasTraceTable) return '本会话尚无召回决策痕迹（内核还没有 trace_events 表）。不编造。';
+      if (!hasTraceTable) {
+        return emergence ? this.emergenceWhyReport(emergence) : '本会话尚无召回决策痕迹（内核还没有 trace_events 表）。不编造。';
+      }
       const store = new TraceStore(db);
       const rows = store.queryByEventType('recall.result').filter((event) => {
         if (event.projectId !== undefined && event.projectId !== this.config.projectId) return false;
@@ -2009,7 +2075,12 @@ export class CompanionShell implements ShellControl, AttachShell {
         return named.length === 0 || named.includes(this.config.agentId);
       });
       const last = rows[rows.length - 1];
-      if (!last) return '本会话尚无召回决策痕迹。不编造。';
+      if (!last) return emergence ? this.emergenceWhyReport(emergence) : '本会话尚无召回决策痕迹。不编造。';
+      // Whichever decision is newer is the one the receipt answers with: an asked recall after a
+      // surfaced candidate is the recall; the emergence step is shown until something newer lands.
+      if (emergence && Number(emergence.now ?? emergence.at ?? 0) >= last.timestamp) {
+        return this.emergenceWhyReport(emergence);
+      }
       const payload = last.payload as Record<string, unknown>;
       const selected = Array.isArray(payload.selectedIds) ? payload.selectedIds.map(String) : [];
       const suppressed = Array.isArray(payload.suppressed) ? (payload.suppressed as Array<Record<string, unknown>>) : [];
@@ -2029,8 +2100,47 @@ export class CompanionShell implements ShellControl, AttachShell {
       // A read that failed is not "no trace": the receipt says which it was, or a broken database
       // would read as an empty history.
       this.trace.append('why_read_failed', { message: error instanceof Error ? error.message : String(error) });
+      if (emergence) return this.emergenceWhyReport(emergence);
       return '读决策痕迹失败（内核读取报错）；没有可展示的内容。';
     }
+  }
+
+  /**
+   * The emergence decision's own trace: the F10 grade, the F8 occasion gate and the F7 modulation
+   * step, in the order F6 evaluated them. The shell only reports what the kernel decided; a
+   * missing step is named rather than guessed.
+   */
+  private emergenceWhyReport(record: Record<string, unknown>): string {
+    const at = typeof record.now === 'number' ? record.now : Number(record.at ?? 0);
+    const candidates = Array.isArray(record.candidates) ? record.candidates as Array<Record<string, unknown>> : [];
+    const withheld = Array.isArray(record.withheld) ? record.withheld as Array<Record<string, unknown>> : [];
+    const shown = candidates[0] ?? withheld[0];
+    const lines = [
+      `最近一次浮现决策 · ${new Date(at).toISOString()}`,
+      `通道：${String(record.channel ?? 'unknown')} · 场合：${String(record.occasion ?? 'unknown')} · 候选 ${candidates.length} 条`,
+    ];
+    if (!shown) {
+      lines.push('没有候选（无到期承诺/意图或唤醒意图）。');
+      return lines.join('\n');
+    }
+    const steps = Array.isArray(shown.steps) ? shown.steps as Array<Record<string, unknown>> : [];
+    const stepOf = (rule: string) => steps.find((step) => step.rule === rule);
+    const detailOf = (rule: string) => {
+      const detail = stepOf(rule)?.detail;
+      return detail && typeof detail === 'object' ? detail as Record<string, unknown> : {};
+    };
+    const sensitivity = stepOf('sensitivity');
+    const occasion = stepOf('occasion');
+    const modulation = stepOf('modulation');
+    const matched = Array.isArray(detailOf('sensitivity').matched) ? detailOf('sensitivity').matched as unknown[] : [];
+    lines.push(`来源：${String(shown.source ?? 'unknown')} · 分级：${String(sensitivity?.outcome ?? shown.sensitivity ?? 'unknown')}（命中 ${matched.length} 条标记）`);
+    lines.push(`场合闸：${String(occasion?.outcome ?? 'unknown')} · 决定：${String(detailOf('occasion').decision ?? 'unknown')} · 理由：${String(detailOf('occasion').reason ?? 'unknown')}`);
+    lines.push(`反馈：${String(modulation?.outcome ?? 'unknown')} · level=${String(detailOf('modulation').level ?? 'n/a')} · cooldownUntil=${String(detailOf('modulation').cooldownUntil ?? 'null')}`);
+    lines.push(candidates.length > 0
+      ? `候选：${String(shown.text ?? '')}`
+      : `抑制 ${withheld.length} 条：${String(shown.reason ?? 'unknown')}`);
+    lines.push(`步骤：${steps.map((step) => `${String(step.rule)}=${String(step.outcome)}`).join('; ')}`);
+    return lines.join('\n');
   }
 
   private lastDreamProduct(): { localDate: string; eventCount: number; summary: string } | undefined {

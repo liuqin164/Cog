@@ -1,35 +1,59 @@
 /**
- * The emergence decision point, in conservative mode until F6 (#160) and F8 (#162) land.
+ * The emergence decision point: a consumer of F6's surfacing query, not a second policy.
  *
- * The kernel offers recall, not a candidate surface: no reason, no confidence, no sensitivity grade,
- * no "is this suppressed" flag on an item. So this service takes recall items, applies a deterministic
- * low-sensitivity filter of its own, and either hands back one candidate or records why it stayed
- * quiet. It never asks the model a question to manufacture a candidate — the query is always the last
- * thing the user actually said.
+ * The kernel answers with candidates, their sensitivity grade, occasion binding and the F7
+ * modulation step; the shell only decides whether to speak. There is no word list here — a
+ * sensitive turn is graded by F10's mark and withheld by F6's channel policy, so a benign
+ * "孩子" or "药店" is not caught by a substring and a life-marked turn cannot slip through.
+ *
+ * Only due sources are first-class: an arrived commitment, a due intention (through its F2 wake
+ * intention) and a wake intention. The associative ledger echo this service used in 5.0 is gone:
+ * it surfaced whatever the owner had just said, had no due instant, and was the path #229 burned.
  */
-import type { KernelAgentMemoryBackend } from 'cogmem';
+import type { KernelAgentMemoryBackend, SensitivityTier, SurfacingDecisionTrace, SurfacingSource } from 'cogmem';
 import type { TraceLog } from '../trace.ts';
 import type { NativePlugin } from './host.ts';
 
 export interface EmergenceConfig {
   limit: number;
-  /** F10's list is not landed; these are the conservative stand-ins for high-sensitivity life topics. */
-  highSensitivityTerms: string[];
 }
+
+/** Sources with a due instant. Everything else is a helper lane, not a reason to speak first. */
+export const FIRST_CLASS_PROACTIVE_SOURCES: readonly SurfacingSource[] = [
+  'commitment',
+  'prospective-memory',
+  'wake-intention',
+];
 
 export interface EmergenceCandidate {
   id: string;
   text: string;
   reason: string;
-  sensitivity: 'low';
+  source: SurfacingSource;
+  sensitivity: SensitivityTier;
+  /** The source's own due/observed instant: a snoozed commitment resumes as a new occurrence. */
+  observedAt: number;
   sourceRefs: Array<{ eventId?: string; sourceId?: string; contentHash?: string }>;
+  decisionTrace: SurfacingDecisionTrace;
+}
+
+export interface EmergenceWithheld {
+  id: string;
+  source: SurfacingSource;
+  sensitivity: SensitivityTier;
+  reason: string;
+  decisionTrace: SurfacingDecisionTrace;
 }
 
 export interface EmergenceDecision {
-  mode: 'conservative';
-  query: string;
+  mode: 'surfacing';
+  channel: 'proactive';
+  occasion: string;
   candidates: EmergenceCandidate[];
   suppressed: Array<{ id: string; reason: string }>;
+  withheld: EmergenceWithheld[];
+  /** First-class sources that were not due, or a non-first-class lane the shell deliberately ignores. */
+  excluded: Array<{ id: string; source: SurfacingSource; reason: string }>;
   decidedAt: number;
 }
 
@@ -39,94 +63,87 @@ export class EmergenceService {
     private readonly options: { agentId: string; projectId: string; trace?: TraceLog; config?: Partial<EmergenceConfig> },
   ) {}
 
-  private get config(): EmergenceConfig {
-    return {
-      limit: this.options.config?.limit ?? 5,
-      highSensitivityTerms: this.options.config?.highSensitivityTerms ?? DEFAULT_HIGH_SENSITIVITY_TERMS,
-    };
+  private get limit(): number {
+    return this.options.config?.limit ?? 10;
   }
 
   /**
-   * `query` is the last observed user text; an empty query produces no candidate at all. That is the
-   * line against "定时自问自答": without something the user said, there is nothing to surface.
-   *
-   * `currentTurnId` is the turn that text was written as. Recall must not hand that turn back: doing
-   * so would make the companion answer its own last sentence as if the user had said it again (#229).
+   * One deterministic query. `now` is the caller's clock; there is no user text to match, because
+   * a due promise or intention is a reason to speak whether or not the owner just said anything.
    */
-  decide(query: string | undefined, now = Date.now(), currentTurnId?: string): EmergenceDecision {
-    const text = (query ?? '').trim();
-    if (!text) {
-      const decision: EmergenceDecision = { mode: 'conservative', query: '', candidates: [], suppressed: [], decidedAt: now };
-      this.options.trace?.append('emergence_decision', { ...decision, reason: 'no_user_query' });
-      return decision;
-    }
-    const result = this.backend.recall({ agentId: this.options.agentId, projectId: this.options.projectId, query: text, limit: this.config.limit });
-    const suppressed: Array<{ id: string; reason: string }> = [];
+  decide(now = Date.now()): EmergenceDecision {
+    const result = this.backend.surfacingCandidates({
+      projectId: this.options.projectId,
+      channel: 'proactive',
+      now,
+      limit: this.limit,
+    });
+
     const candidates: EmergenceCandidate[] = [];
-    // F10 withholds a life-marked turn before it can become a recall item. Report that upstream
-    // gate too, so "nothing surfaced" still names the reason it stayed quiet.
-    for (const entry of result.decisionTrace?.suppressed ?? []) {
-      suppressed.push({ id: `recall:${entry.reason}`, reason: entry.reason });
-    }
-    for (const item of result.items) {
-      const reason = suppressReason(item, this.config);
-      if (reason) {
-        suppressed.push({ id: item.id, reason });
-        continue;
-      }
-      if (isCurrentTurn(item, text, currentTurnId)) {
-        suppressed.push({ id: item.id, reason: 'current_turn' });
+    const withheld: EmergenceWithheld[] = [];
+    const excluded: EmergenceDecision['excluded'] = [];
+    for (const item of result.candidates) {
+      if (!FIRST_CLASS_PROACTIVE_SOURCES.includes(item.source)) {
+        excluded.push({ id: item.candidateId, source: item.source, reason: 'no_due_instant' });
         continue;
       }
       candidates.push({
-        id: item.id,
-        text: item.text,
-        reason: item.whyMatched ?? 'recall item matched the last user topic',
-        sensitivity: 'low',
-        sourceRefs: item.sourceAnchor?.eventId ? [{ eventId: item.sourceAnchor.eventId, sourceId: item.source }] : [],
+        id: item.candidateId,
+        text: item.content,
+        reason: item.reason,
+        source: item.source,
+        sensitivity: item.sensitivity,
+        observedAt: item.freshness.observedAt,
+        sourceRefs: item.sourceRefs,
+        decisionTrace: item.decisionTrace,
       });
     }
-    const decision: EmergenceDecision = { mode: 'conservative', query: text, candidates, suppressed, decidedAt: now };
+    for (const item of result.withheld) {
+      if (!FIRST_CLASS_PROACTIVE_SOURCES.includes(item.source)) {
+        excluded.push({ id: item.candidateId, source: item.source, reason: 'no_due_instant' });
+        continue;
+      }
+      withheld.push({
+        id: item.candidateId,
+        source: item.source,
+        sensitivity: item.sensitivity,
+        reason: item.reason,
+        decisionTrace: item.decisionTrace,
+      });
+    }
+
+    const decision: EmergenceDecision = {
+      mode: 'surfacing',
+      channel: 'proactive',
+      occasion: result.occasion,
+      candidates,
+      suppressed: withheld.map((item) => ({ id: item.id, reason: item.reason })),
+      withheld,
+      excluded,
+      decidedAt: now,
+    };
     this.options.trace?.append('emergence_decision', {
-      query: text,
-      candidates: candidates.map((candidate) => candidate.id),
-      suppressed,
-      recallMode: result.recallMode,
-    });
+      now,
+      channel: decision.channel,
+      occasion: decision.occasion,
+      candidates: candidates.map((candidate) => ({
+        id: candidate.id,
+        source: candidate.source,
+        text: candidate.text,
+        sensitivity: candidate.sensitivity,
+        steps: candidate.decisionTrace.steps,
+      })),
+      withheld: withheld.map((item) => ({
+        id: item.id,
+        source: item.source,
+        sensitivity: item.sensitivity,
+        reason: item.reason,
+        steps: item.decisionTrace.steps,
+      })),
+      excluded,
+    }, now);
     return decision;
   }
-}
-
-/** The current query hit itself, by turn when known and by exact text when an older checkpoint is read. */
-function isCurrentTurn(
-  item: { text: string; sourceAnchor?: { role?: string; turnId?: string } },
-  query: string,
-  currentTurnId?: string,
-): boolean {
-  if (currentTurnId !== undefined && item.sourceAnchor?.turnId === currentTurnId) return true;
-  if (item.sourceAnchor?.role !== 'user') return false;
-  return normalize(item.text) === normalize(query);
-}
-
-function normalize(text: string): string {
-  return text.replace(/\s+/gu, ' ').trim();
-}
-
-export const DEFAULT_HIGH_SENSITIVITY_TERMS: string[] = [
-  // Health
-  '病历', '诊断', '处方', '药', '手术', '体检', '抑郁', '焦虑', '住院', 'diagnosis', 'medication', 'therapy',
-  // Money
-  '工资', '薪水', '银行卡', '信用卡', '转账', '借款', '负债', 'salary', 'bank', 'debt', 'invoice',
-  // Family / private life
-  '离婚', '吵架', '家庭', '孩子', '怀孕', 'divorce', 'pregnan',
-];
-
-function suppressReason(item: { id: string; text: string; tags?: string[]; redaction?: unknown }, config: EmergenceConfig): string | undefined {
-  if (item.redaction) return 'redacted_content';
-  const haystack = `${item.text} ${(item.tags ?? []).join(' ')}`.toLowerCase();
-  const term = config.highSensitivityTerms.find((candidate) => haystack.includes(candidate.toLowerCase()));
-  if (term) return `high_sensitivity_term:${term}`;
-  return undefined;
 }
 
 /** The decision point as a plugin: it can be swapped for a stricter policy without touching the shell. */

@@ -81,20 +81,22 @@ describe('dream and run do not collide', () => {
   });
 });
 
-describe('emergence decision point (conservative mode)', () => {
-  test('only a low-sensitivity item can surface; high-sensitivity items are suppressed; no model is asked', async () => {
+describe('emergence decision point (kernel surfacing)', () => {
+  test('a due promise is a candidate with grade/occasion/modulation steps; a life-marked one is withheld', async () => {
     const dir = makeTempDir();
     const provider = new ScriptedProvider([{ text: 'unused', toolCalls: [] }]);
     const shell = makeDreamShell(dir, provider);
     await shell.start();
     try {
+      const at = Date.now();
       await shell.backend.rememberTurnWithResult({
         agentId: shell.config.agentId,
         projectId: shell.config.projectId,
         sessionId: shell.config.sessionId,
         turnId: 'low-1',
-        userText: '我常去街角那家蓝色遮阳篷的面包店买可颂',
-        assistantText: '记下了：蓝色遮阳篷的面包店。',
+        userText: '我明天把蓝色遮阳篷面包店的地址发你',
+        assistantText: '记下了：明天发面包店地址。',
+        timestamp: at,
         ingestMode: 'immediate_compile',
       });
       await shell.backend.rememberTurnWithResult({
@@ -102,26 +104,32 @@ describe('emergence decision point (conservative mode)', () => {
         projectId: shell.config.projectId,
         sessionId: shell.config.sessionId,
         turnId: 'high-1',
-        userText: '我的病历显示需要长期服用某种药物',
-        assistantText: '记下了治疗安排。',
+        userText: '我明天把病历发你',
+        assistantText: '记下了：明天发病历。',
+        timestamp: at + 1,
         ingestMode: 'immediate_compile',
       });
+      shell.kernel.commitments.compile({ projectId: shell.config.projectId, now: at + 2_000 });
+      const due = shell.kernel.commitments.list({ projectId: shell.config.projectId, now: at + 2_000 })[0]!.dueAt;
       const emergence = new EmergenceService(shell.backend, { agentId: shell.config.agentId, projectId: shell.config.projectId, trace: shell.trace });
-      const low = emergence.decide('蓝色遮阳篷 面包店');
-      expect(low.candidates.length).toBeGreaterThan(0);
-      expect(low.candidates[0].text).toContain('面包店');
-      expect(low.candidates[0].reason.length).toBeGreaterThan(0);
+      const decision = emergence.decide(due);
+      const low = decision.candidates.find((candidate) => candidate.text.includes('面包店'));
+      expect(low).toBeDefined();
+      expect(low!.source).toBe('commitment');
+      expect(low!.sensitivity).toBe('daily');
+      expect(low!.decisionTrace.steps.find((step) => step.rule === 'sensitivity')).toBeDefined();
+      expect(low!.decisionTrace.steps.find((step) => step.rule === 'occasion')).toBeDefined();
+      expect(low!.decisionTrace.steps.find((step) => step.rule === 'modulation')).toBeDefined();
 
-      const high = emergence.decide('病历 药物');
-      // The sensitive item never becomes a candidate; a low-sensitivity item that the same recall
-      // happened to return may still surface, which is the conservative rule working as specified.
-      expect(high.candidates.some((candidate) => candidate.text.includes('病历') || candidate.text.includes('药物'))).toBe(false);
-      // F10 now withholds this turn in the kernel, before the shell's own term filter can see it.
-      expect(high.suppressed.some((item) => item.reason === 'life_sensitivity_withheld')).toBe(true);
+      expect(decision.candidates.some((candidate) => candidate.text.includes('病历'))).toBe(false);
+      const high = decision.withheld.find((item) => item.reason.includes('sensitivity=high'));
+      expect(high).toBeDefined();
+      expect(high!.sensitivity).toBe('high');
+      expect(high!.reason).toContain('channel=withheld:policy');
 
-      const none = emergence.decide(undefined);
+      // No user text is needed: with nothing due the same query is empty, not a guess.
+      const none = emergence.decide(at);
       expect(none.candidates).toHaveLength(0);
-      expect(shell.trace.read().some((record) => record.kind === 'emergence_decision' && record.reason === 'no_user_query')).toBe(true);
 
       // The decision is deterministic; the model was never called to manufacture a candidate.
       expect(provider.calls).toHaveLength(0);
