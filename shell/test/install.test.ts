@@ -3,7 +3,7 @@
  * probe session, so the test owns the boundaries and the real kernel/DB work still happens on disk.
  */
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_SOUL, readSoul, writeDefaultSoul } from '../src/install/soul.ts';
@@ -281,6 +281,21 @@ describe('the six-step install', () => {
     expect(output).toContain('/health');
     expect(output).toContain('召回对上');
     expect(output).toContain('安装完成');
+  });
+
+  test('the plugin registry is an empty table on first install and a re-run never overwrites it', async () => {
+    const harness = makeHarness({ probeOk: true });
+    expect(await harness.installer.run()).toBe(0);
+    const pluginsPath = join(harness.dataDir, 'plugins.json');
+    expect(JSON.parse(readFileSync(pluginsPath, 'utf8'))).toEqual([]);
+    expect(statSync(pluginsPath).mode & 0o777).toBe(0o600);
+
+    // What `/plugins add` would have written. A re-run that goes through the place step again (a lost
+    // install.json is the realistic case) must keep it, the same way budgets.json is kept.
+    writeFileSync(pluginsPath, `${JSON.stringify(['@llblab/pi-telegram'])}\n`, 'utf8');
+    rmSync(join(harness.dataDir, 'install.json'), { force: true });
+    expect(await harness.installer.run()).toBe(0);
+    expect(JSON.parse(readFileSync(pluginsPath, 'utf8'))).toEqual(['@llblab/pi-telegram']);
   });
 
   test('a failed model probe stops cleanly at step 2 and names the reason', async () => {

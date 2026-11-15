@@ -6,6 +6,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { mergePluginSpecs, readPluginRegistry } from './plugins/registry.ts';
 
 export interface RunBudget {
   maxTurnsPerRun: number;
@@ -107,6 +108,10 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
   const operating = readBudgetConfig(dataDir);
   const autonomous: RunBudget = { ...DEFAULT_AUTONOMOUS_BUDGET, ...operating.autonomous };
   const work: RunBudget = { ...DEFAULT_WORK_BUDGET, ...operating.work };
+  // The registry is read here, once, so a plugin registered by `/plugins add` reaches the next
+  // process and nothing re-reads the file mid-run. A corrupt file is a startup error (see registry).
+  const envPlugins = (env('COGMEM_SHELL_PI_PLUGINS') ?? '').split(',').map((item) => item.trim()).filter(Boolean);
+  const registryPlugins = readPluginRegistry(dataDir);
   return {
     workspaceRoot,
     projectId: overrides.projectId ?? env('COGMEM_SHELL_PROJECT') ?? 'companion',
@@ -144,7 +149,7 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
     },
     pi: overrides.pi ?? {
       adapterEnabled: env('COGMEM_SHELL_PI_ADAPTER') !== 'off',
-      plugins: (env('COGMEM_SHELL_PI_PLUGINS') ?? '').split(',').map((item) => item.trim()).filter(Boolean),
+      plugins: mergePluginSpecs(envPlugins, registryPlugins),
     },
     terminalEnabled: overrides.terminalEnabled ?? env('COGMEM_SHELL_TERMINAL') !== 'off',
     attach: overrides.attach ?? {

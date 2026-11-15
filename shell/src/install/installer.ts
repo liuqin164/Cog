@@ -34,6 +34,7 @@ import {
 import { runDoctor, type DoctorReport, type HealthPayload } from './doctor.ts';
 import { openProbeSession, type ProbeSession } from './attach.ts';
 import { createTerminalIO, type InstallIO, type TerminalStreams } from './io.ts';
+import { pluginsConfigPath, writePluginRegistry } from '../plugins/registry.ts';
 
 export const INSTALL_STEPS = ['preflight', 'place', 'model', 'rhythm', 'resident', 'awake'] as const;
 export type InstallStepId = (typeof INSTALL_STEPS)[number];
@@ -430,6 +431,13 @@ export class Installer {
     if (!existsSync(budgetsPath)) {
       writeFileSync(budgetsPath, `${JSON.stringify({ autonomous: DEFAULT_AUTONOMOUS_BUDGET, work: DEFAULT_WORK_BUDGET }, null, 2)}\n`, { mode: 0o600 });
       this.io.say(`预算：紧笼 ${DEFAULT_AUTONOMOUS_BUDGET.maxTurnsPerRun} 回合 / ${DEFAULT_AUTONOMOUS_BUDGET.maxTokensPerRun} token；工作档 ${DEFAULT_WORK_BUDGET.maxTurnsPerRun} 回合 / ${DEFAULT_WORK_BUDGET.maxTokensPerRun} token（${budgetsPath}）`);
+    }
+    // The Pi plugin registry: empty on first install, never overwritten on a re-run. A re-run must
+    // not unregister what `/plugins add` wrote; the file is the resident's operating copy.
+    const pluginsPath = pluginsConfigPath(this.choices.dataDir);
+    if (!existsSync(pluginsPath)) {
+      writePluginRegistry(this.choices.dataDir, []);
+      this.io.say(`Pi 插件注册表：空表（${pluginsPath}，0600；之后用 /plugins add 登记）`);
     }
 
     // 空库初始化 through the kernel's own API — migrations and schema come from the kernel, not here.
