@@ -4,10 +4,11 @@
  * Every tool validates its input at the trust boundary (path inside the workspace, output capped,
  * command timeout) and every output is returned as text for the capture path to redact and mark.
  */
-import { spawn } from 'node:child_process';
-import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
+import type { TraceLog } from '../trace.ts';
 import type { NativePlugin, ToolDefinition, ToolOutcome } from './host.ts';
 
 const MAX_READ_BYTES = 256 * 1024;
@@ -21,6 +22,13 @@ const BASH_OUTPUT_DIR = '.cogmem-shell/bash-output';
 
 export interface BuiltinToolsConfig {
   workspaceRoot: string;
+  /**
+   * The shell's own state directory (#233). `bash` runs with it read-only; `write`/`edit` refuse it
+   * too, because the default data dir lives under the workspace and a path check alone would let the
+   * model rewrite the budgets it is caged by.
+   */
+  dataDir?: string;
+  trace?: TraceLog;
 }
 
 function inside(root: string, candidate: string): string {
@@ -31,6 +39,53 @@ function inside(root: string, candidate: string): string {
   }
   return resolved;
 }
+
+function writableInside(root: string, candidate: string, dataDir?: string): string {
+  const resolved = inside(root, candidate);
+  if (dataDir) {
+    const data = resolve(dataDir);
+    if (resolved === data || resolved.startsWith(data + sep)) throw new Error(`path_in_data_dir: ${candidate}`);
+  }
+  return resolved;
+}
+
+/**
+ * bwrap is probed once per process with a real mount, not `--version`: a binary can exist while
+ * unprivileged user namespaces are refused, and that is the case the probe has to catch.
+ */
+let bwrapProbe: boolean | undefined;
+
+export function bwrapUsable(): boolean {
+  if (bwrapProbe !== undefined) return bwrapProbe;
+  const probe = spawnSync('bwrap', ['--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--', '/bin/true'], {
+    timeout: 2_000,
+    stdio: 'ignore',
+  });
+  bwrapProbe = probe.status === 0;
+  return bwrapProbe;
+}
+
+/**
+ * A read-only root with the existing writable surfaces bound back in. The data dir is bound after
+ * the workspace, so a default `<workspace>/.cogmem-shell` cannot be written through its parent.
+ * Network is shared (no `--unshare-net`), which keeps the tool's reach exactly what it was.
+ */
+function sandboxArgs(workspaceRoot: string, dataDir: string, command: string): string[] {
+  const workspace = realpathSync(workspaceRoot);
+  const data = realpathSync(dataDir);
+  const args = ['--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--die-with-parent'];
+  for (const dir of ['/tmp', '/var/tmp']) {
+    if (existsSync(dir)) args.push('--bind', dir, dir);
+  }
+  args.push('--bind', workspace, workspace, '--ro-bind', data, data);
+  const webCache = join(data, 'web-cache');
+  if (existsSync(webCache)) args.push('--bind', webCache, webCache);
+  args.push('--chdir', workspace, '--', '/bin/bash', '-lc', command);
+  return args;
+}
+
+/** A denied write is evidence, not just a non-zero exit the model might retry. */
+const SANDBOX_DENIAL = /read-only file system|attempt to write a readonly database|sqlite_readonly|unable to open database file/i;
 
 function asString(args: unknown, key: string, required = true): string {
   const value = (args as Record<string, unknown> | undefined)?.[key];
@@ -111,7 +166,7 @@ function capBashOutput(fullText: string, workspaceRoot: string): string {
   return `${shown}\n\n[showing lines ${startLine}-${totalLines} of ${totalLines}${limit}; full output: ${pointer}]`;
 }
 
-function definitions(workspaceRoot: string): ToolDefinition[] {
+function definitions(workspaceRoot: string, sandbox?: { dataDir: string; trace?: TraceLog }): ToolDefinition[] {
   return [
     {
       name: 'read',
@@ -139,12 +194,12 @@ function definitions(workspaceRoot: string): ToolDefinition[] {
         required: ['path', 'content'],
       },
       rehearse({ args }) {
-        const path = inside(workspaceRoot, asString(args, 'path'));
+        const path = writableInside(workspaceRoot, asString(args, 'path'), sandbox?.dataDir);
         const content = asString(args, 'content', false);
         return `would write ${Buffer.byteLength(content)} bytes to ${path}`;
       },
       execute({ args }) {
-        const path = inside(workspaceRoot, asString(args, 'path'));
+        const path = writableInside(workspaceRoot, asString(args, 'path'), sandbox?.dataDir);
         const content = asString(args, 'content', false);
         mkdirSync(dirname(path), { recursive: true });
         writeFileSync(path, content, 'utf8');
@@ -161,13 +216,13 @@ function definitions(workspaceRoot: string): ToolDefinition[] {
         required: ['path', 'old_string', 'new_string'],
       },
       rehearse({ args }) {
-        const path = inside(workspaceRoot, asString(args, 'path'));
+        const path = writableInside(workspaceRoot, asString(args, 'path'), sandbox?.dataDir);
         asString(args, 'old_string');
         asString(args, 'new_string', false);
         return `would edit ${path}`;
       },
       execute({ args }) {
-        const path = inside(workspaceRoot, asString(args, 'path'));
+        const path = writableInside(workspaceRoot, asString(args, 'path'), sandbox?.dataDir);
         const oldString = asString(args, 'old_string');
         const newString = asString(args, 'new_string', false);
         const original = readFileSync(path, 'utf8');
@@ -191,7 +246,9 @@ function definitions(workspaceRoot: string): ToolDefinition[] {
         const command = asString(args, 'command');
         const timeoutMs = resolveBashTimeoutMs(args);
         return new Promise<ToolOutcome>((resolvePromise, rejectPromise) => {
-          const child = spawn('/bin/bash', ['-lc', command], { cwd: workspaceRoot, signal, stdio: ['ignore', 'pipe', 'pipe'] });
+          const child = sandbox
+            ? spawn('bwrap', sandboxArgs(workspaceRoot, sandbox.dataDir, command), { cwd: workspaceRoot, signal, stdio: ['ignore', 'pipe', 'pipe'] })
+            : spawn('/bin/bash', ['-lc', command], { cwd: workspaceRoot, signal, stdio: ['ignore', 'pipe', 'pipe'] });
           let output = '';
           let settled = false;
           let timer: ReturnType<typeof setTimeout>;
@@ -202,6 +259,12 @@ function definitions(workspaceRoot: string): ToolDefinition[] {
             if (settled) return;
             settled = true;
             clearTimeout(timer);
+            if (sandbox && SANDBOX_DENIAL.test(output)) {
+              sandbox.trace?.append('bash_sandbox_denied', {
+                command: command.length > 240 ? `${command.slice(0, 240)}…` : command,
+                dataDir: sandbox.dataDir,
+              });
+            }
             const capped = capBashOutput(output, workspaceRoot);
             resolvePromise({ output: note ? `${capped}\n\n${note}` : capped, isError });
           };
@@ -233,6 +296,7 @@ function definitions(workspaceRoot: string): ToolDefinition[] {
             if (settled) return;
             settled = true;
             clearTimeout(timer);
+            sandbox?.trace?.append('bash_sandbox_failed', { message: error.message });
             rejectPromise(error);
           });
           child.on('close', (code) => {
@@ -252,8 +316,10 @@ export function builtinToolsPlugin(): NativePlugin {
     name: 'builtin-tools',
     provide: ['builtinTools'],
     apply(ctx, config) {
-      const { workspaceRoot } = config as BuiltinToolsConfig;
-      for (const definition of definitions(workspaceRoot)) {
+      const { workspaceRoot, dataDir, trace } = config as BuiltinToolsConfig;
+      const sandbox = dataDir && bwrapUsable() ? { dataDir, trace } : undefined;
+      if (dataDir && !sandbox) trace?.append('bash_sandbox_unavailable', { dataDir, reason: 'bwrap_not_usable' });
+      for (const definition of definitions(workspaceRoot, sandbox)) {
         ctx.registerTool(definition, { builtin: true });
       }
       ctx.provide('builtinTools', { names: ['read', 'write', 'edit', 'bash'] });

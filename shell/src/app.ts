@@ -464,7 +464,11 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.host.register(clockPlugin({ timeZone: this.config.timeZone, idleWakeIntervalMs: this.config.idleWakeIntervalMs, dreamWindow: { startHour: this.config.dream.windowStartHour, endHour: this.config.dream.windowEndHour } }));
     this.host.register(provider, this.config.model);
     this.host.register(cagePlugin(this.config.budgets, this.trace, { ...this.config.workBudget, toolWhitelist: this.config.budgets.toolWhitelist }));
-    this.host.register(builtinToolsPlugin(), { workspaceRoot: this.config.workspaceRoot });
+    this.host.register(builtinToolsPlugin(), {
+      workspaceRoot: this.config.workspaceRoot,
+      dataDir: this.config.dataDir,
+      trace: this.trace,
+    });
     this.host.register(workflowsPlugin({
       agentId: this.config.agentId,
       projectId: this.config.projectId,
