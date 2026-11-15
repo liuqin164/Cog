@@ -14,9 +14,16 @@ function parse(argv: string[]): Options {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]!;
     if (arg === '--json') options.json = true;
-    else if (arg === '--module') options.modulePath = argv[++index];
-    else if (arg === '--filter') options.filter = argv[++index];
-    else if (arg === '--repeat') options.repeat = Number(argv[++index] ?? '1');
+    else if (arg === '--module' || arg === '--filter') {
+      const value = argv[++index];
+      if (!value || value.startsWith('--')) throw new Error(`${arg} requires a value`);
+      if (arg === '--module') options.modulePath = value;
+      else options.filter = value;
+    } else if (arg === '--repeat') {
+      const value = argv[++index];
+      if (!value || value.startsWith('--')) throw new Error('--repeat requires a value');
+      options.repeat = Number(value);
+    }
     else if (arg === '--help' || arg === '-h') {
       console.log('usage: bun eval/behavior/run.ts [--module PATH] [--filter ID_OR_CATEGORY] [--repeat N] [--json]');
       process.exit(0);
@@ -36,6 +43,10 @@ function printResult(result: ScenarioResult): void {
 
 const options = parse(process.argv.slice(2));
 const results = await runScenarios(SCENARIOS, options);
+if (results.length === 0) {
+  console.error(`no scenarios matched ${options.filter ? `"${options.filter}"` : 'the selection'}`);
+  process.exit(1);
+}
 const failed = results.filter((result) => !result.passed);
 const categories = Object.fromEntries(
   [...new Set(results.map((result) => result.category))].map((category) => [
