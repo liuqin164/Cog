@@ -39,6 +39,11 @@ describe('night integration (DREAMING)', () => {
       expect(Array.isArray(metadata.sourceRefs)).toBe(true);
       expect((metadata.sourceRefs as unknown[]).length).toBeGreaterThanOrEqual(2);
       expect(metadata.sourceEventIds).toContain(seed.rawEventIds[0]);
+      // The product is a deterministic rule over the day's ledger, so its provenance must say
+      // rule extraction. `llm_inference` here was the audit lie #231 exists to stop.
+      const integrated = shell.trace.read().find((record) => record.kind === 'dream_integrated');
+      const compiled = shell.kernel.memoryGraph.getNeuron(String(integrated?.compiledNeuronId));
+      expect(compiled?.metadata.sourceType).toBe('rule_extraction');
       expect(shell.state).toBe('IDLE');
       expect(shell.machine.runtime.lastDreamDate).toBe(date);
       expect(shell.machine.wakeIntents.some((intent) => intent.reason === 'morning_after_dream' && !intent.consumedAt)).toBe(true);

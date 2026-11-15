@@ -24,6 +24,9 @@ export class BeliefStore {
     verified_fact: 1.0,
     external_tool: 0.9,
     user_input: 0.85,
+    // A deterministic rule over the owner's ledger is not a model claim, but it is not the
+    // owner's own words either; it sits between the two.
+    rule_extraction: 0.7,
     llm_inference: 0.55
   };
 

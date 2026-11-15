@@ -6,6 +6,7 @@
  * laundering itself into the user's recall as anonymous evidence.
  *
  * Deterministic by design: the summary is a function of the day's redacted ledger, not a model call.
+ * Its provenance says so — `rule_extraction`, never `llm_inference`.
  */
 import type { KernelAgentMemoryBackend, MemoryEvent, MemoryKernel, MemorySourceRef } from 'cogmem';
 import type { TraceLog } from '../trace.ts';
@@ -81,7 +82,7 @@ export class DreamService {
       content: summary,
       projectId,
       source: agentId,
-      sourceType: 'llm_inference',
+      sourceType: 'rule_extraction',
       type: 'semantic_consolidation',
       sourceRefs: refs,
       tags: ['companion', 'dream', `local_date:${localDate}`],

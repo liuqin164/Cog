@@ -6,7 +6,7 @@
 
 export type NeuronType = 'code' | 'chat' | 'doc' | 'command' | 'file' | 'agent_finding' | 'agent_observation' | 'skill' | 'semantic_consolidation' | 'cross_domain_principle';
 export type NeuronStatus = 'active' | 'cold' | 'suspect' | 'archived';
-export type SourceType = 'user_input' | 'llm_inference' | 'verified_fact' | 'external_tool';
+export type SourceType = 'user_input' | 'llm_inference' | 'rule_extraction' | 'verified_fact' | 'external_tool';
 export type MemoryImportanceLevel = 'low' | 'normal' | 'important' | 'permanent';
 /**
  * `other` is a third party in the conversation — a human who is neither the owner nor the agent
