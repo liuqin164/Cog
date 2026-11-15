@@ -89,6 +89,8 @@ export interface ShellRuntimeState {
   lastDreamDate?: string;
   lastInteractionAt?: number;
   lastInteractionText?: string;
+  /** The turn the last user line became; emergence must not surface that turn back to its author. */
+  lastInteractionTurnId?: string;
   /** The block injected when the shell last woke; the system prompt reuses it until the next wake. */
   lastTimeContext?: string;
   /**
@@ -158,6 +160,18 @@ export interface ShellRuntimeState {
   };
   /** The one paused run, present exactly while the lifecycle state is SUSPENDED. */
   suspension?: Suspension;
+  /**
+   * Emergence's own ledger (#229). Counts and one-shot candidate keys live here so a restart cannot
+   * repeat yesterday's surfacing; the day is Asia/Tokyo's, independent of the display time zone.
+   */
+  emergence?: {
+    /** Asia/Tokyo local date the count belongs to. */
+    day: string;
+    count: number;
+    lastAt?: number;
+    /** Consumed candidate keys, oldest first. The shell keeps the newest 500. */
+    consumed: string[];
+  };
   /**
    * A restart was requested by the plugin surface, and the open assignment should continue once the
    * new process is up. Only a requested restart sets this: a kill does not, so the kill matrix's

@@ -15,8 +15,9 @@ const TIGHT: CageConfig = { maxTurnsPerRun: 5, maxTokensPerRun: 1_000, toolWhite
 
 /** The emergence decision point replaced with one candidate, so a tick starts an autonomous run. */
 function emerge(shell: CompanionShell, text = 'continue the open task'): void {
+  let n = 0;
   (shell as unknown as { emergence: unknown }).emergence = {
-    decide: () => ({ candidates: [{ id: 'candidate-1', text, reason: 'test' }], suppressed: [] }),
+    decide: () => ({ candidates: [{ id: `candidate-${++n}`, text, reason: 'test' }], suppressed: [] }),
   };
 }
 
@@ -206,6 +207,7 @@ describe('autonomous continuation backoff (#228)', () => {
       expect(assignment.nextResumeAt! - now).toBe(5 * 60_000);
 
       // While it waits, the autonomous wake is a plain surfacing run: no assignment block, no retry.
+      now += 2 * 60_000;
       await shell.tick(now);
       assignment = shell.machine.runtime.openAssignment!;
       expect(assignment.attempts).toBe(1);

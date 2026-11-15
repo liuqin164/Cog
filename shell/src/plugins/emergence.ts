@@ -49,8 +49,11 @@ export class EmergenceService {
   /**
    * `query` is the last observed user text; an empty query produces no candidate at all. That is the
    * line against "定时自问自答": without something the user said, there is nothing to surface.
+   *
+   * `currentTurnId` is the turn that text was written as. Recall must not hand that turn back: doing
+   * so would make the companion answer its own last sentence as if the user had said it again (#229).
    */
-  decide(query: string | undefined, now = Date.now()): EmergenceDecision {
+  decide(query: string | undefined, now = Date.now(), currentTurnId?: string): EmergenceDecision {
     const text = (query ?? '').trim();
     if (!text) {
       const decision: EmergenceDecision = { mode: 'conservative', query: '', candidates: [], suppressed: [], decidedAt: now };
@@ -71,6 +74,10 @@ export class EmergenceService {
         suppressed.push({ id: item.id, reason });
         continue;
       }
+      if (isCurrentTurn(item, text, currentTurnId)) {
+        suppressed.push({ id: item.id, reason: 'current_turn' });
+        continue;
+      }
       candidates.push({
         id: item.id,
         text: item.text,
@@ -88,6 +95,21 @@ export class EmergenceService {
     });
     return decision;
   }
+}
+
+/** The current query hit itself, by turn when known and by exact text when an older checkpoint is read. */
+function isCurrentTurn(
+  item: { text: string; sourceAnchor?: { role?: string; turnId?: string } },
+  query: string,
+  currentTurnId?: string,
+): boolean {
+  if (currentTurnId !== undefined && item.sourceAnchor?.turnId === currentTurnId) return true;
+  if (item.sourceAnchor?.role !== 'user') return false;
+  return normalize(item.text) === normalize(query);
+}
+
+function normalize(text: string): string {
+  return text.replace(/\s+/gu, ' ').trim();
 }
 
 export const DEFAULT_HIGH_SENSITIVITY_TERMS: string[] = [

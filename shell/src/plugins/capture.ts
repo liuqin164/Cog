@@ -69,6 +69,9 @@ export class CaptureService {
       });
       return { turnId: summary.turnId, toolCallEventIds: [], toolResultEventIds: [], redactionCount: 0 };
     }
+    // An autonomous run has no user turn to write. Booking it through `rememberTurnWithResult`
+    // would invent one — the exact write #229 forbids — so it is a task event instead.
+    if (summary.origin === 'emergence') return this.captureAutonomousRun(summary, threadId);
     const { backend, agentId, projectId, sessionId } = this.options;
     const user = this.redactor.mark(summary.userText);
     const assistant = this.redactor.mark(summary.assistantText);
@@ -145,6 +148,85 @@ export class CaptureService {
       toolResultEventIds,
       redactionCount,
     };
+  }
+
+  /**
+   * The autonomous half: one task event for what the companion said, tool rows under it, all marked
+   * `origin: emergence` and role `system` (the kernel's task-event default). No user row is written.
+   */
+  private async captureAutonomousRun(summary: RunSummary, threadId: string): Promise<CaptureResult> {
+    const { backend, agentId, projectId, sessionId } = this.options;
+    const assistant = this.redactor.mark(summary.assistantText || '(no assistant text)');
+    let redactionCount = markTotal(assistant.metadata);
+    const event = await backend.ingestTaskEvent({
+      agentId,
+      projectId,
+      workspaceId: projectId,
+      sessionId,
+      threadId,
+      turnId: summary.turnId,
+      title: 'autonomous run',
+      content: assistant.value,
+      metadata: {
+        sourceAgent: agentId,
+        source: 'companion-shell',
+        kind: 'autonomous-run',
+        origin: 'emergence',
+        ...assistant.metadata,
+      },
+    });
+    const assistantEventId = event.eventId;
+    const toolCallEventIds: string[] = [];
+    const toolResultEventIds: string[] = [];
+    const byCallId = new Map<string, string>();
+    for (const call of summary.toolCalls) {
+      const input = this.redactor.mark(call.input);
+      redactionCount += markTotal(input.metadata);
+      const toolEvent = await backend.ingestToolCall({
+        agentId,
+        projectId,
+        workspaceId: projectId,
+        sessionId,
+        threadId,
+        turnId: summary.turnId,
+        assistantEventId,
+        toolCallId: call.toolCallId,
+        toolName: call.toolName,
+        input: input.value,
+        metadata: { sourceAgent: agentId, origin: 'emergence', ...input.metadata },
+      });
+      toolCallEventIds.push(toolEvent.eventId);
+      byCallId.set(call.toolCallId, toolEvent.eventId);
+    }
+    for (const resultEntry of summary.toolResults) {
+      const toolCallEventId = byCallId.get(resultEntry.toolCallId);
+      if (!toolCallEventId) continue;
+      const output = this.redactor.mark(resultEntry.output);
+      redactionCount += markTotal(output.metadata);
+      const toolEvent = await backend.ingestToolObservation({
+        agentId,
+        projectId,
+        workspaceId: projectId,
+        sessionId,
+        threadId,
+        turnId: summary.turnId,
+        toolCallEventId,
+        toolCallId: resultEntry.toolCallId,
+        toolName: resultEntry.toolName,
+        output: output.value,
+        metadata: { sourceAgent: agentId, origin: 'emergence', isError: resultEntry.isError, ...output.metadata },
+      });
+      toolResultEventIds.push(toolEvent.eventId);
+    }
+    this.options.trace?.append('capture_run', {
+      runId: summary.runId,
+      turnId: summary.turnId,
+      origin: 'emergence',
+      redactionCount,
+      toolCalls: summary.toolCalls.length,
+      toolResults: summary.toolResults.length,
+    });
+    return { turnId: summary.turnId, assistantEventId, toolCallEventIds, toolResultEventIds, redactionCount };
   }
 
   /** A terminal session record: same redaction and marking, written as a task event. */
@@ -272,17 +354,21 @@ export function capturePlugin(config: CapturePluginConfig): NativePlugin {
       ctx.on('agent_end', async (event: { summary?: RunSummary }, busCtx?: { runId?: string }) => {
         const runId = busCtx?.runId ?? event.summary?.runId;
         if (!runId) return;
+        const origin = event.summary?.origin ?? 'user';
         const buffer = buffers.get(runId);
-        if (!buffer) return;
+        // A user run's account starts with its user message; an autonomous run that failed before
+        // its first reply still has an origin and a stop reason worth booking.
+        if (!buffer && origin === 'user') return;
         buffers.delete(runId);
         const summary: RunSummary = {
           runId,
           sessionId: event.summary?.sessionId ?? config.sessionId,
           turnId: event.summary?.turnId ?? `${runId}:0`,
-          userText: buffer.userText,
-          assistantText: buffer.assistantText.join('\n'),
-          toolCalls: buffer.toolCalls,
-          toolResults: buffer.toolResults,
+          origin,
+          userText: buffer?.userText ?? '',
+          assistantText: buffer?.assistantText.join('\n') ?? '',
+          toolCalls: buffer?.toolCalls ?? [],
+          toolResults: buffer?.toolResults ?? [],
           turns: event.summary?.turns ?? 0,
           tokens: event.summary?.tokens ?? 0,
           stopReason: event.summary?.stopReason ?? 'run_complete',

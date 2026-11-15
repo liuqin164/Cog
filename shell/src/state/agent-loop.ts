@@ -13,6 +13,7 @@ import type { TraceLog } from '../trace.ts';
 import { ContextProjection } from './projection.ts';
 import { accountRequest, type ContextAccount } from './context-budget.ts';
 import { DEFAULT_RETRY_POLICY, planFailure, sleepAbortable, type RetryPolicy } from './retry.ts';
+import { renderRecallBlock } from './recall-block.ts';
 
 /**
  * The message a boundary hook's failure leaves on the bus result, or `undefined` when no handler
@@ -255,6 +256,8 @@ export interface RunSummary {
   runId: string;
   sessionId: string;
   turnId: string;
+  /** Who started it. An emergence run is not a user turn and must not be booked as one. */
+  origin: RunOrigin;
   userText: string;
   assistantText: string;
   /** The closing assistant message alone; the handoff field reads this, not the whole run. */
@@ -266,6 +269,8 @@ export interface RunSummary {
   stopReason: 'run_complete' | 'run_aborted' | 'run_error' | 'budget_exceeded';
   error?: string;
 }
+
+export type RunOrigin = 'user' | 'emergence';
 
 export interface AgentRuntimeOptions {
   bus: EventBus;
@@ -374,9 +379,10 @@ export class AgentRuntime {
     this.abortController?.abort();
   }
 
-  async run(input: { runId: string; sessionId: string; userText: string; signal?: AbortSignal }): Promise<RunSummary> {
+  async run(input: { runId: string; sessionId: string; userText: string; origin?: RunOrigin; signal?: AbortSignal }): Promise<RunSummary> {
     if (this.running) throw new Error('agent_already_running: at most one RUNNING state exists');
     this.running = true;
+    const origin: RunOrigin = input.origin ?? 'user';
     // Pi #10000: the prompt is durable before the model call. The callback redacts and writes the
     // session log, so an interrupted run keeps its whole prompt and not only the display copy.
     this.options.onPrompt?.({ runId: input.runId, sessionId: input.sessionId, text: input.userText });
@@ -394,21 +400,25 @@ export class AgentRuntime {
     let stopReason: RunSummary['stopReason'] = 'run_complete';
     let error: string | undefined;
     const turnId = `${input.runId}:0`;
-    const userMessage: AgentMessage = { role: 'user', content: input.userText };
+    // An autonomous candidate is recalled text, so it enters under the same contract the recall
+    // plugin uses: a system block that says it is data. It is never a user-role message (#229).
+    const userMessage: AgentMessage = origin === 'emergence'
+      ? { role: 'system', content: renderRecallBlock([{ text: input.userText }]) }
+      : { role: 'user', content: input.userText };
     context.append(userMessage);
     // Pi fires before_agent_start before agent_start; an extension may hand back one injected message
     // (the shape the Cogmem pi extension uses for recall context).
     const beforeStart = await this.options.bus.emit('before_agent_start', {
       type: 'before_agent_start',
       prompt: input.userText,
-      messageType: 'user',
+      messageType: origin === 'emergence' ? 'system' : 'user',
     }, { runId: input.runId });
     const injected = (beforeStart as { message?: { content?: unknown } } | undefined)?.message;
     if (injected && injected.content !== undefined) {
       context.append({ role: 'system', content: typeof injected.content === 'string' ? injected.content : JSON.stringify(injected.content) });
     }
     await this.options.bus.emit('agent_start', { type: 'agent_start', runId: input.runId, messages: context.project() }, { runId: input.runId });
-    await this.emitUserMessage(userMessage, input.runId);
+    if (origin === 'user') await this.emitUserMessage(userMessage, input.runId);
 
     try {
       for (;;) {
@@ -717,6 +727,7 @@ export class AgentRuntime {
       runId: input.runId,
       sessionId: input.sessionId,
       turnId,
+      origin,
       userText: input.userText,
       assistantText,
       lastAssistantText: assistantMessages.at(-1)?.content ?? '',

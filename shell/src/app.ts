@@ -94,6 +94,19 @@ const MAX_ASSIGNMENT_FINDINGS = 600;
 const RESUME_BACKOFF_BASE_MS = 5 * 60_000;
 const RESUME_BACKOFF_CAP_MS = 6 * 60 * 60_000;
 
+/**
+ * Emergence's stop-bleed (#229). A candidate is spoken or queued at most once, never twice within
+ * two minutes, and at most eight times in a Tokyo day. The count is checkpointed, so a restart
+ * cannot reset today's silence. The cooldown stays below #228's 5-minute resume backoff, or a
+ * deferred surfacing run could never happen while an assignment is waiting.
+ *
+ * shortcut: the consumed-key list keeps the newest 500; an event older than that may surface once
+ * more. Raise the cap if a resident ever accumulates candidates faster than 500 per lifetime.
+ */
+const EMERGENCE_COOLDOWN_MS = 2 * 60_000;
+const EMERGENCE_DAILY_LIMIT = 8;
+const MAX_EMERGENCE_CONSUMED = 500;
+
 export interface CompanionShellOptions {
   config?: Partial<ShellConfig>;
   /** Tests inject a deterministic provider; production uses the mg plugin. */
@@ -124,7 +137,12 @@ export class CompanionShell implements ShellControl, AttachShell {
   private cage?: RunCage;
   private clock?: ClockService;
   private dream?: { integrate(...args: [string, string, number?]): Promise<{ localDate: string; eventCount: number; sourceRefs: unknown[]; summary: string }> };
-  private emergence?: { decide(query: string | undefined, now?: number): { candidates: Array<{ id: string; text: string; reason: string }>; suppressed: unknown[] } };
+  private emergence?: {
+    decide(query: string | undefined, now?: number, currentTurnId?: string): {
+      candidates: Array<{ id: string; text: string; reason: string; sourceRefs?: Array<{ eventId?: string }> }>;
+      suppressed: unknown[];
+    };
+  };
   private http?: HttpFaceHandle;
   private terminal?: TerminalChannel;
   private readonly channelContract: ChannelContract;
@@ -720,6 +738,10 @@ export class CompanionShell implements ShellControl, AttachShell {
     dispatchTrigger: Trigger = trigger,
   ): Promise<RunSummary> {
     const runId = `run-${this.now().toString(36)}-${randomUUID().slice(0, 8)}`;
+    const origin = trigger === 'emergence_due' ? 'emergence' : 'user';
+    // The next emergence decision must know which turn the last user line became, so recall can
+    // refuse to hand that turn back to its author (#229).
+    if (origin === 'user') this.machine.updateRuntime({ lastInteractionTurnId: `${runId}:0` });
     const tier = this.budgetTier(trigger);
     this.runTier = tier;
     // The owner's grant widens this one run's cage and is spent when it settles (#228).
@@ -739,7 +761,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     await this.machine.dispatch(dispatchTrigger, { runId, reason });
     let summary: RunSummary;
     try {
-      summary = await this.runtime!.run({ runId, sessionId: this.config.sessionId, userText: text });
+      summary = await this.runtime!.run({ runId, sessionId: this.config.sessionId, userText: text, origin });
     } finally {
       this.hideAssignmentContext = false;
     }
@@ -924,9 +946,15 @@ export class CompanionShell implements ShellControl, AttachShell {
       return;
     }
     if (this.machine.state === 'IDLE') {
-      const decision = this.emergence!.decide(this.machine.runtime.lastInteractionText, at);
-      if (decision.candidates.length > 0) {
-        const candidate = decision.candidates[0];
+      const decision = this.emergence!.decide(
+        this.machine.runtime.lastInteractionText,
+        at,
+        this.machine.runtime.lastInteractionTurnId,
+      );
+      const candidate = decision.candidates.find((item) => !this.emergenceConsumed(item));
+      if (candidate && this.emergenceAllowed(at)) {
+        // Consume before acting: a crash during the run must not free the same candidate to run again.
+        this.consumeEmergence(candidate, at);
         if (this.shouldHoldForAbsence()) {
           // Nobody is attached, so speaking now would be talking to an empty room. Hold it in the
           // durable away queue and let the next attach's "你不在时" broadcast carry it.
@@ -940,6 +968,33 @@ export class CompanionShell implements ShellControl, AttachShell {
         await this.executeRun(candidate.text, 'emergence_due', `emergence:${candidate.id}`);
       }
     }
+  }
+
+  /** The event, when the candidate names one, is a stabler key than a lane's own id. */
+  private emergenceKey(candidate: { id: string; sourceRefs?: Array<{ eventId?: string }> }): string {
+    return candidate.sourceRefs?.[0]?.eventId ?? candidate.id;
+  }
+
+  private emergenceConsumed(candidate: { id: string; sourceRefs?: Array<{ eventId?: string }> }): boolean {
+    return (this.machine.runtime.emergence?.consumed ?? []).includes(this.emergenceKey(candidate));
+  }
+
+  /** Cooldown and the Tokyo day's count; both survive a restart because they live in the checkpoint. */
+  private emergenceAllowed(at: number): boolean {
+    const state = this.machine.runtime.emergence;
+    if (!state) return true;
+    if (state.lastAt !== undefined && at - state.lastAt < EMERGENCE_COOLDOWN_MS) return false;
+    return state.day !== tokyoDate(at) || state.count < EMERGENCE_DAILY_LIMIT;
+  }
+
+  private consumeEmergence(candidate: { id: string; sourceRefs?: Array<{ eventId?: string }> }, at: number): void {
+    const key = this.emergenceKey(candidate);
+    const day = tokyoDate(at);
+    const prior = this.machine.runtime.emergence;
+    const count = prior?.day === day ? prior.count + 1 : 1;
+    const consumed = [...(prior?.consumed ?? []).filter((entry) => entry !== key), key].slice(-MAX_EMERGENCE_CONSUMED);
+    this.machine.updateRuntime({ emergence: { day, count, lastAt: at, consumed } });
+    this.trace.append('emergence_consumed', { id: candidate.id, key, day, count });
   }
 
   /**
@@ -2032,5 +2087,15 @@ function promptCacheAccount(usage: TurnUsage | undefined): { hit: number; miss: 
 
 function truncate(text: string, limit: number): string {
   return text.length <= limit ? text : `${text.slice(0, limit)}…`;
+}
+
+/** The issue's day boundary is Tokyo's, not the display time zone's. */
+function tokyoDate(at: number): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Tokyo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date(at));
 }
 
