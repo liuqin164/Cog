@@ -38,6 +38,7 @@ describe('the agent drafts a soul edit through the tool surface (#218)', () => {
       expect(draft.current?.content).toBe(original);
       expect(draft.versions.map((version) => version.version)).toEqual([0]);
       expect(draft.proposal?.content).toBe(proposed);
+      expect(draft.proposal?.reason).toBe('缩短');
       const auditRow = shell.kernel.soul.audit(shell.config.agentId).find((row) => row.action === 'soul_edit_proposed');
       expect(auditRow?.reason).toBe('缩短');
       expect(shell.systemPromptSections().pinned.startsWith(original)).toBe(true);
