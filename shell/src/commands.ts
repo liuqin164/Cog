@@ -44,6 +44,17 @@ export interface CommandHost {
    * (#228). A receipt when there is nothing paused or the pause is a question rather than a budget.
    */
   continueSuspended(): CommandReply;
+  /**
+   * `/forget` (#232): show the half-open window and its ledger row count, then delete exactly that
+   * window through F9's `deleteRange`. The preview is the confirmation step; nothing is deleted
+   * until `forgetConfirm`.
+   */
+  forgetPreview(start: number, end: number): CommandReply;
+  forgetConfirm(): CommandReply;
+  /** `/export`: F9's archive to `path`, or a timestamped file under the data dir. */
+  exportMemory(path: string | undefined): CommandReply;
+  /** `/correct`: one owner correction of a current profile entry, through the profile face. */
+  correctProfile(key: string, value: string): Promise<CommandReply>;
   sessionModel(): string;
   modelRoutes(): string[];
   modelRouter(): { active: string; lines: string[]; storeError?: string } | undefined;
@@ -100,6 +111,49 @@ export const CORE_COMMANDS: readonly CoreCommand[] = [
     description: '打开星海（记忆地址）',
     surfaces: ['palette', 'resident', 'tui'],
     run: (host) => ({ text: `星海（记忆图）前端不在本壳内；记忆库文件：${host.config().dbPath}` }),
+  },
+  {
+    name: 'forget',
+    description: '按时间段删除记忆（先看范围与条数，确认后执行并记审计）',
+    argumentHint: '<起> <止> | confirm',
+    surfaces: ['palette', 'resident', 'tui'],
+    run(host, args) {
+      const parts = args.trim().split(/\s+/u).filter(Boolean);
+      if (parts.length === 1 && parts[0]!.toLowerCase() === 'confirm') return host.forgetConfirm();
+      if (parts.length !== 2) {
+        return {
+          text: '用法：/forget <起> <止> 预览（如 2026-11-01 2026-11-02），确认后 /forget confirm。窗口含起不含止。',
+          receipt: true,
+        };
+      }
+      const start = parseInstant(parts[0]!);
+      const end = parseInstant(parts[1]!);
+      if (start === undefined || end === undefined) {
+        return { text: '时间看不懂：用 ISO 日期/时间（2026-11-01 或 2026-11-01T12:00:00Z）或毫秒时间戳。', receipt: true };
+      }
+      return host.forgetPreview(start, end);
+    },
+  },
+  {
+    name: 'export',
+    description: '导出人类可读的记忆归档（Markdown）',
+    argumentHint: '[文件路径]',
+    surfaces: ['palette', 'resident', 'tui'],
+    run: (host, args) => host.exportMemory(args.trim() || undefined),
+  },
+  {
+    name: 'correct',
+    description: '纠正一条画像/偏好（下一次召回起全局按新值）',
+    argumentHint: '<键> <新值>',
+    surfaces: ['palette', 'resident', 'tui'],
+    run(host, args) {
+      const trimmed = args.trim();
+      const split = trimmed.search(/\s/u);
+      if (split <= 0 || trimmed.slice(split).trim() === '') {
+        return { text: '用法：/correct <键> <新值>。键和当前值可用 /export 的 Profile 段或画像册查看。', receipt: true };
+      }
+      return host.correctProfile(trimmed.slice(0, split), trimmed.slice(split).trim());
+    },
   },
   {
     name: 'commitments',
@@ -260,7 +314,7 @@ export function coreCommandFor(name: string, surface: CommandSurface): CoreComma
  * The one availability rule (spec §7): whether a face may present a core command as available right
  * now. The palette lists exactly these (`tui/commands.ts`), and the proposal path asks the same
  * question with the resident's face — the face a confirmed proposal executes on. Because the shared
- * table is the source, a name the panel hides is refused as a proposal too: `/forget`, `/pin` and
+ * table is the source, a name the panel hides is refused as a proposal too: `/pin` and
  * `/unpin` are not in `CORE_COMMANDS`, so they cannot even enter the pending state. `/model` is
  * available only once a second route exists, on both paths alike.
  */
@@ -301,6 +355,13 @@ export function unknownCommandReply(name: string): CommandReply {
   const nearest = nearestCommand(name);
   const hint = nearest === undefined ? '没有相近的核心命令。' : `最接近的核心命令：/${nearest}。`;
   return { text: `unknown command: /${name} 不是命令；${hint}用 / 打开命令面板。`, receipt: true };
+}
+
+/** ISO 8601 (`2026-11-01`, `2026-11-01T12:00:00Z`) or a 13-digit epoch-millisecond integer. */
+function parseInstant(text: string): number | undefined {
+  if (/^\d{13}$/u.test(text)) return Number(text);
+  const parsed = Date.parse(text.includes('T') ? text : text.replace(' ', 'T'));
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 /** Two-row Levenshtein; the longest core name is nine characters, so this is not a hot path. */

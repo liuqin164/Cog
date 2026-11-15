@@ -216,7 +216,7 @@ Four sections: a status bar (name · lifecycle in human words · kernel · next 
 the input box (1–8 lines, inner-scrolling), and a footer (context bandwidth gauge · model route ·
 today's token cost · workspace). `RUNNING` shows a work indicator with the cage's turn and token bars;
 a line sent while working is queued visibly and `Esc` withdraws it. `/` opens the command palette
-(`/soul /memory /commitments /status /context /sleep /dream /plugins /help /exit`, plus `/model` when
+(`/soul /memory /forget /export /correct /commitments /status /context /sleep /dream /plugins /help /exit`, plus `/model` when
 more than one route is configured); attaching while `DREAMING`
 shows a sleep screen and any input wakes it through the legal `DREAMING→WAKING` edge. Attaching plays
 "你不在时发生了什么" — the dreams, the held emergence candidates and the fulfilled commitments read back
@@ -229,8 +229,8 @@ never runs on its own: `Enter` sends the confirmation over the socket and the re
 through the same dispatch a typed `/pause` takes; `Esc` retires it. Either answer is final — a proposal
 is one-shot and cannot be replayed — and both land in the trace (`command_proposed`, `_confirmed`,
 `_executed`, `_discarded`, `_rejected`, `_execution_refused`). Only commands the palette offers may be
-proposed: `/forget`, `/pin` and `/unpin` are refused on the spot and traced, and an offer nobody
-confirms changes nothing.
+proposed: `/pin` and `/unpin` are refused on the spot and traced, and an offer nobody confirms
+changes nothing.
 
 The renderer is self-owned (ANSI + differential repaint, no TUI framework): the transcript is
 virtualized, so a scroll frame over ten thousand entries costs ~0.07 ms regardless of length.

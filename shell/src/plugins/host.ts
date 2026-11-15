@@ -18,9 +18,10 @@ const BUILTIN_SOURCE = 'plugin:builtin-tools';
  * dispatcher answer to, and a plugin command shadowing `/pause` would make the same word mean two
  * things depending on which layer saw it first.
  *
- * The last three are the spec's §7 addendum (Ryu 2026-11-12): they belong to F9 (#163) and F14
- * (#191) and are **not implemented this round**, so they are reserved but deliberately absent from
- * the palette (`tui/commands.ts`), which must never present an unimplemented command as available.
+ * `forget` is the spec's §7 addendum (Ryu 2026-11-12) for F9 (#163) and now has a core entry
+ * (`commands.ts`, #232). `export` and `correct` joined with the same round. `pin` and `unpin` belong
+ * to F14 (#191), remain unimplemented, and stay reserved but absent from the palette
+ * (`tui/commands.ts`), which must never present an unimplemented command as available.
  */
 export const RESERVED_CORE_COMMANDS: readonly string[] = [
   'soul',
@@ -40,6 +41,8 @@ export const RESERVED_CORE_COMMANDS: readonly string[] = [
   'upgrade',
   'plugins',
   'forget',
+  'export',
+  'correct',
   'pin',
   'unpin',
 ];

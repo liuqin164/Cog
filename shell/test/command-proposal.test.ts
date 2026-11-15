@@ -1,7 +1,7 @@
 /**
  * Command proposals (spec §7, #165 round 22): the agent hands the user a command to run and the user
  * decides. The discriminators are the three the round names — a `/pause` offer becomes an executable
- * element and only a confirmation runs it; a `/forget` offer is refused on the spot and traced; and
+ * element and only a confirmation runs it; a `/pin` offer is refused on the spot and traced; and
  * the execution entry refuses an unconfirmed proposal object outright.
  *
  * Red-first: this file was run against the tree before `src/proposals.ts`'s confirmation gate
@@ -126,9 +126,9 @@ describe('an agent-offered command is an executable element, not a message', () 
 });
 
 describe('the availability table is shared with the panel (spec §7)', () => {
-  test('a /forget offer is refused on the spot and traced, and nothing enters the pending state', async () => {
+  test('a /pin offer is refused on the spot and traced, and nothing enters the pending state', async () => {
     const dir = makeTempDir();
-    const shell = makeShell(dir, offering('forget', '清掉这段'), { dream: NO_DREAM });
+    const shell = makeShell(dir, offering('pin', '记住这段'), { dream: NO_DREAM });
     const events = recordEvents(shell.host.bus, ['companion_command_proposal']);
     await shell.start();
     try {
@@ -136,7 +136,7 @@ describe('the availability table is shared with the panel (spec §7)', () => {
       expect(shell.currentProposals()).toHaveLength(0);
       const rejected = traceKinds(shell, 'command_proposal_rejected');
       expect(rejected).toHaveLength(1);
-      expect(rejected[0].command).toBe('forget');
+      expect(rejected[0].command).toBe('pin');
       expect(traceKinds(shell, 'command_proposed')).toHaveLength(0);
       // The refusal is visible too, so the user sees the agent tried and was told no.
       const view = new TuiView();
@@ -148,10 +148,16 @@ describe('the availability table is shared with the panel (spec §7)', () => {
   });
 
   test('reserved-unimplemented names are unavailable on both faces, and /model waits for two routes', () => {
-    for (const name of ['forget', 'pin', 'unpin']) {
+    for (const name of ['pin', 'unpin']) {
       expect(availableCoreCommand(name, 'palette')).toBeUndefined();
       expect(availableCoreCommand(name, 'resident')).toBeUndefined();
       expect(paletteCommands(new TuiView()).some((command) => command.name === name)).toBe(false);
+    }
+    // #232's three entry points are implemented, so both faces offer them.
+    for (const name of ['forget', 'export', 'correct']) {
+      expect(availableCoreCommand(name, 'palette')).toBeDefined();
+      expect(availableCoreCommand(name, 'resident')).toBeDefined();
+      expect(paletteCommands(new TuiView()).some((command) => command.name === name)).toBe(true);
     }
     // Proposable iff the palette offers it, asked on the face a confirmation executes on.
     for (const name of ['pause', 'resume', 'sleep', 'status', 'why', 'help']) {

@@ -181,6 +181,11 @@ export class CompanionShell implements ShellControl, AttachShell {
   /** One memory notice per crossing, reset after we drop below 90% of the ceiling. */
   private memoryWarned = false;
   /**
+   * The window `/forget` previewed and `/forget confirm` may execute. Process-local: a restart
+   * asks for a fresh preview rather than resuming a confirmation the owner can no longer see.
+   */
+  private pendingForget?: { start: number; end: number };
+  /**
    * A question the run registered through `ask_user` (#228). It is process-local because the run is
    * still in this process; `settleAssignment` turns it into the checkpointed suspension.
    */
@@ -1422,6 +1427,115 @@ export class CompanionShell implements ShellControl, AttachShell {
     }
   }
 
+  // ---- Memory sovereignty entry points (#232): three commands over F9's face. ----
+
+  forgetPreview(start: number, end: number): CommandReply {
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end) {
+      return { text: '删除窗口无效：起点必须早于终点（半开窗口 [起, 止)）。', receipt: true };
+    }
+    const projectId = this.config.projectId;
+    // The same half-open occurredAt filter deleteRange applies; this is a read, not a second rule.
+    const count = this.kernel.eventStore.queryEvents(1, 1, { projectId: [projectId], startTime: start, endTime: end }).total;
+    this.pendingForget = { start, end };
+    return {
+      text: [
+        `将删除 ${new Date(start).toISOString()} 至 ${new Date(end).toISOString()}（含起不含止）的 ${count} 条账本记录。`,
+        '引用这些记录的画像、程序、承诺、情节与图谱条目会随证据一并删除，然后重建。',
+        '确认执行：/forget confirm。回执与审计只记范围、条数和审计 id，不记被删内容。',
+      ].join('\n'),
+      receipt: true,
+    };
+  }
+
+  forgetConfirm(): CommandReply {
+    const pending = this.pendingForget;
+    if (!pending) return { text: '还没有预览：先 /forget <起> <止> 看范围和条数。', receipt: true };
+    const projectId = this.config.projectId;
+    const result = this.kernel.sovereignty.deleteRange({
+      projectId,
+      start: pending.start,
+      end: pending.end,
+      reason: 'owner_command',
+    });
+    this.pendingForget = undefined;
+    this.trace.append('forget_range_deleted', {
+      projectId,
+      start: pending.start,
+      end: pending.end,
+      auditId: result.auditId,
+      deleted: result.deleted,
+    });
+    const deleted = Object.entries(result.deleted)
+      .filter(([, value]) => value > 0)
+      .map(([field, value]) => `${field} ${value}`)
+      .join(' · ');
+    return {
+      text: `已删除 ${new Date(pending.start).toISOString()} 至 ${new Date(pending.end).toISOString()}：${deleted || '没有记录'}。审计 ${result.auditId}。`,
+      receipt: true,
+      data: { sovereignty_delete: result },
+    };
+  }
+
+  exportMemory(path: string | undefined): CommandReply {
+    const outputPath = path
+      ?? join(this.config.dataDir, 'exports', `memory-${new Date(this.now()).toISOString().replace(/[:.]/gu, '-')}.md`);
+    const result = this.kernel.sovereignty.exportArchive({ projectId: this.config.projectId, outputPath });
+    this.trace.append('memory_exported', { path: result.path, bytes: result.bytes, auditId: result.auditId });
+    const { events, profile, procedures, commitments, graph } = result.counts;
+    return {
+      text: `已导出 ${events} 条对话、${profile} 条画像、${procedures} 条程序、${commitments} 条承诺、${graph} 个图谱节点（${formatBytes(result.bytes)}）到 ${result.path}。审计 ${result.auditId}。`,
+      receipt: true,
+      data: { sovereignty_export: result },
+    };
+  }
+
+  async correctProfile(key: string, value: string): Promise<CommandReply> {
+    const projectId = this.config.projectId;
+    const entries = this.kernel.profile.entries({ projectId });
+    const exact = entries.filter((entry) => entry.key === key);
+    const matches = exact.length > 0 ? exact : entries.filter((entry) => entry.key.endsWith(`.${key}`));
+    if (matches.length === 0) {
+      const known = entries.slice(0, 12).map((entry) => `${entry.ledger}:${entry.key}`).join('、');
+      return { text: `没有叫 ${key} 的当前画像条目。${known ? `现有：${known}` : '画像册目前是空的。'}`, receipt: true };
+    }
+    if (matches.length > 1) {
+      return {
+        text: `${key} 命中多条（${matches.map((entry) => `${entry.ledger}:${entry.key}`).join('、')}），请用完整键再试。`,
+        receipt: true,
+      };
+    }
+    const entry = matches[0]!;
+    // The correction names the owner's turn. The command line is that turn, recorded through the
+    // same backend every typed message uses, so pause/exclusion rules apply unchanged.
+    const turn = await this.backend.rememberTurnWithResult({
+      agentId: this.config.agentId,
+      projectId,
+      sessionId: this.config.sessionId,
+      userText: `/correct ${entry.key} ${value}`,
+    });
+    const correctionEventId = turn.rawEventIds[0];
+    if (!correctionEventId) return { text: '纠正未执行：纠正面需要一个用户回合，这次没有写进去。', receipt: true };
+    const corrected = this.kernel.profile.correct({
+      projectId,
+      ledger: entry.ledger,
+      key: entry.key,
+      value,
+      correctionEventId,
+    });
+    this.trace.append('profile_corrected', {
+      projectId,
+      ledger: entry.ledger,
+      key: entry.key,
+      version: corrected.version,
+      eventId: correctionEventId,
+    });
+    return {
+      text: `已纠正 ${entry.ledger} · ${entry.key}：${entry.value} → ${corrected.value}（v${corrected.version}）。下一次召回起全局按新值。`,
+      receipt: true,
+      data: { profile_correction: { ledger: entry.ledger, key: entry.key, value: corrected.value, version: corrected.version } },
+    };
+  }
+
   /** The TUI route list; with no router (an injected provider) it is just the one label, as before. */
   modelRoutes(): string[] {
     return this.modelRouter ? this.modelRouter.labels() : [this.modelLabel];
@@ -1651,6 +1765,10 @@ export class CompanionShell implements ShellControl, AttachShell {
       this.emitStatus();
     },
     continueSuspended: () => this.continueSuspended(),
+    forgetPreview: (start: number, end: number) => this.forgetPreview(start, end),
+    forgetConfirm: () => this.forgetConfirm(),
+    exportMemory: (path: string | undefined) => this.exportMemory(path),
+    correctProfile: (key: string, value: string) => this.correctProfile(key, value),
     sessionModel: () => this.modelLabel,
     modelRoutes: () => this.modelRoutes(),
     modelRouter: () =>

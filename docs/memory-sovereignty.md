@@ -25,6 +25,22 @@ tables back and compares them with the exported constants.
   here. "A person who does not read code can follow it" is a merge-acceptance judgement for
   Susan/Ryu, not something this round claims to have passed.
 
+## Shell entry points (#232)
+
+The resident's three commands are the owner's way in. Each is a thin call into this face, not a
+second implementation:
+
+| Command | Calls | Does |
+|---|---|---|
+| `/forget <from> <to>`, then `/forget confirm` | `deleteRange` | Shows the half-open window and its ledger row count first; the confirm deletes exactly that window and answers with the audit id and counts. |
+| `/export [path]` | `exportArchive` | Writes the archive (default `<dataDir>/exports/memory-<time>.md`) and answers with the path and counts. |
+| `/correct <key> <value>` | `ProfileCompiler.correct` | Records the owner's turn, corrects one current profile entry, and recompiles that ledger; the next recall reads the new value. |
+
+The commands add no deletion or export semantics of their own: the preview counts ledger rows with
+the same half-open `occurredAt` filter `deleteRange` uses, and `/export` names no section the archive
+does not already carry. A preview lives in the resident process, so a restart asks for a fresh
+preview instead of resuming a confirmation the owner can no longer see.
+
 ## The face (frozen)
 
 | Method | Does |
