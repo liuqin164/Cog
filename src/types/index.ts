@@ -203,14 +203,6 @@ export enum BrainMode {
 
 // -------------------- 健康度指标 --------------------
 
-// -------------------- 降级状态 --------------------
-
-export interface DegradationState {
-  mode: BrainMode;
-  trigger: string;
-  timestamp: number;
-}
-
 // -------------------- 能量传导 --------------------
 
 export interface EnergyPropagationResult {
