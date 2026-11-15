@@ -66,6 +66,19 @@ export class Reflection {
     this.recordCoOccurrence(neuronId);
   }
 
+  /** Drop activation and co-occurrence rows for neurons whose graph rows are gone (#227). */
+  forgetNeurons(neuronIds: Iterable<string>): void {
+    const ids = [...neuronIds];
+    if (ids.length === 0) return;
+    for (const id of ids) {
+      this.activationLog.delete(id);
+      this.coOccurrenceMap.delete(id);
+    }
+    for (const related of this.coOccurrenceMap.values()) {
+      for (const id of ids) related.delete(id);
+    }
+  }
+
   /** SM-2 遗忘曲线: CurrentWeight = BaseWeight * exp(-elapsedTime_in_days / stability) */
   private async applySM2Forgetting(): Promise<void> {
     const allNeurons = this.memoryGraph.getAllNeurons();

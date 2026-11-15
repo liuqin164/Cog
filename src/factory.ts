@@ -1133,6 +1133,11 @@ export class MemoryKernel {
       procedures: this.procedures,
       commitments: this.commitments,
       rebuildAtlas: (projectId) => this.memoryAtlasIndexer.rebuild({ projectId }),
+      afterNeuronsDeleted: (neuronIds, projectId) => {
+        this.memoryGraph.removeNeuronIdsFromIndexes(neuronIds);
+        this.reflection.forgetNeurons(neuronIds);
+        this.topicRegistry.invalidate(projectId);
+      },
     });
     this.surfacing = new SurfacingCandidates({
       events: this.eventStore,
@@ -3965,6 +3970,7 @@ export class MemoryKernel {
       this.vectorStore.removePoint(neuronId);
     }
     this.memoryGraph.rebuildIndexes();
+    this.reflection.forgetNeurons(neuronIds);
     this.topicRegistry.invalidate(scope);
     return { projectId: scope, auditId, deleted };
   }

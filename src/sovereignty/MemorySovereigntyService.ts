@@ -146,6 +146,7 @@ export interface MemorySovereigntyPorts {
   procedures: ProcedureCompiler;
   commitments: CommitmentBook;
   rebuildAtlas?: (projectId: string) => unknown;
+  afterNeuronsDeleted?: (neuronIds: readonly string[], projectId: string) => void;
   now?: () => number;
 }
 
@@ -333,6 +334,8 @@ export class MemorySovereigntyService {
         [scope, ...ids, ...ids]);
       this.runDelete(`DELETE FROM memory_events WHERE event_id IN (${placeholders})`, ids);
     })();
+
+    if (neuronIds.length > 0) this.ports.afterNeuronsDeleted?.(neuronIds, scope);
 
     // The ledger and derived rows are gone before the audit row is written, so a failed recompile
     // still leaves the owner a record of what was removed.

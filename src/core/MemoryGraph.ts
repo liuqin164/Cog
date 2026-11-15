@@ -44,7 +44,6 @@ export class MemoryGraph {
   private readonly ownsDb: boolean;
   private timeIndex = new Map<string, Set<string>>();
   private projectIndex = new Map<string, Set<string>>();
-  private anchorIndex = new Map<string, MemoryAnchor>();
   private topicReclassifiedListeners = new Set<(observation: TopicReclassifiedObservation) => void>();
 
   constructor(dbOrPath: Database | string = ':memory:') {
@@ -357,6 +356,18 @@ export class MemoryGraph {
     this.projectIndex.get(scope)!.add(neuron.id);
   }
 
+  /** Drop ids whose rows are gone from the resident indexes (#227). */
+  removeNeuronIdsFromIndexes(neuronIds: Iterable<string>): void {
+    const ids = new Set(neuronIds);
+    if (ids.size === 0) return;
+    for (const index of [this.timeIndex, this.projectIndex]) {
+      for (const [key, bucket] of index) {
+        for (const id of ids) bucket.delete(id);
+        if (bucket.size === 0) index.delete(key);
+      }
+    }
+  }
+
   addSynapse(sourceId: string, synapse: Synapse): void {
     const endpoints = this.db.prepare(`SELECT id,COALESCE(project_id,'') AS scope FROM neurons
       WHERE id IN (?,?) AND is_deleted=0`).all(sourceId, synapse.targetId) as Array<{ id: string; scope: string }>;
@@ -586,7 +597,6 @@ export class MemoryGraph {
       anchor.metadata.version
     );
 
-    this.anchorIndex.set(anchor.id, anchor);
     return anchor;
   }
 
