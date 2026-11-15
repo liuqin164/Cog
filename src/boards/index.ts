@@ -9,4 +9,3 @@ export * from './ContextBoard.js';
 export * from './ApprovalBoard.js';
 export * from './ProposalBoard.js';
 export * from './ReasoningTraceBoard.js';
-export * from './BoardRegistry.js';

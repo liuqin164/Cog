@@ -27,7 +27,6 @@ export * from './benchmark/LongMemEvalAdapter.js';
 export * from './boards/ApprovalBoard.js';
 export * from './boards/Board.js';
 export * from './boards/BoardEventBus.js';
-export * from './boards/BoardRegistry.js';
 export * from './boards/ContextBoard.js';
 export * from './boards/MemoryBoard.js';
 export * from './boards/ProcessBoard.js';
