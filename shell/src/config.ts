@@ -63,9 +63,10 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
       model: env('MG_MODEL') ?? 'auto/deepseek-v4.1-flash',
       timeoutMs: 120_000,
     },
-    // `propose_command` is on the default whitelist because it is how the agent offers the user a
-    // shell command (spec §7); leaving it off would make every offer a cage violation.
-    budgets: overrides.budgets ?? { maxTurnsPerRun: 6, maxTokensPerRun: 20_000, toolWhitelist: ['read', 'write', 'edit', 'bash', 'propose_command'] },
+    // `propose_command` and `propose_soul_edit` are on the default whitelist because they are how
+    // the agent offers the user a command or a soul draft; leaving them off would make every offer a
+    // cage violation.
+    budgets: overrides.budgets ?? { maxTurnsPerRun: 6, maxTokensPerRun: 20_000, toolWhitelist: ['read', 'write', 'edit', 'bash', 'propose_command', 'propose_soul_edit'] },
     contextSweetSpot: overrides.contextSweetSpot ?? 6_000,
     // The install's rhythm step is what fills these; the literals stay the fallback for a hand-run
     // shell that was never installed.

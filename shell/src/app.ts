@@ -28,6 +28,7 @@ import { proposalPlugin } from './plugins/proposal.ts';
 import { CommandProposals, executeProposal, type CommandProposal, type ProposalConfirmation } from './proposals.ts';
 import { capturePlugin } from './plugins/capture.ts';
 import { recallPlugin } from './plugins/recall.ts';
+import { soulEditPlugin } from './plugins/soul-edit.ts';
 import { dreamPlugin } from './plugins/dream.ts';
 import { emergencePlugin } from './plugins/emergence.ts';
 import { terminalPlugin, TerminalChannel, type ShellControl } from './channels/terminal.ts';
@@ -372,6 +373,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.host.register(proposalPlugin());
     this.host.register(capturePlugin({ agentId: this.config.agentId, projectId: this.config.projectId, sessionId: this.config.sessionId, paused: () => this.capturePaused }));
     this.host.register(recallPlugin({ agentId: this.config.agentId, projectId: this.config.projectId, limit: 3 }));
+    this.host.register(soulEditPlugin());
     this.host.register(dreamPlugin({ agentId: this.config.agentId, projectId: this.config.projectId, sessionId: this.config.sessionId, runKernelNight: this.config.dream.runKernelNight, maxEpisodes: this.config.dream.maxEpisodes }));
     this.host.register(emergencePlugin({ agentId: this.config.agentId, projectId: this.config.projectId }));
     if (this.config.terminalEnabled) {

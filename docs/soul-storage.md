@@ -58,6 +58,11 @@ A proposal is a draft for the owner. It is stored in the existing `governance_au
 in the soul editor; no new queue or table is created. It is not applied until the owner saves a new
 version.
 
+The shell registers this face as the model-callable `propose_soul_edit` tool (#218). Its arguments
+are `{ content, reason }` — the full proposed text and why — and the result names the draft while
+saying the current version is unchanged. The tool has no approve or save path: the owner approves by
+saving in the star-sea editor, which is the same `actor: 'user'` write as any other edit.
+
 ## Endpoints (frozen)
 
 All are loopback-only, like every observatory endpoint. The two `POST` routes are the observatory's
