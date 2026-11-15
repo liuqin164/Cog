@@ -15,7 +15,9 @@ import { fixtureEditor } from './tui-fixture.ts';
 const ENV = defaultRenderEnv({ TERM: 'xterm-256color' } as NodeJS.ProcessEnv);
 
 function bigView(entries: number): TuiView {
-  const view = new TuiView();
+  // Retention is not what this file measures: the renderer must stay bounded even for a transcript
+  // larger than the live view's cap (#226).
+  const view = new TuiView({ maxEntries: Number.POSITIVE_INFINITY });
   for (let index = 0; index < entries; index += 1) {
     view.push({ kind: 'user', id: `u${index}`, text: `第 ${index} 个问题：蓝色遮阳篷的面包店还开着吗？` });
     view.push({ kind: 'assistant', id: `a${index}`, text: `第 ${index} 个回答：\n- 要点一\n- 要点二\n**记得**蓝色。` });

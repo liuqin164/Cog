@@ -118,8 +118,14 @@ export type Overlay =
   | { kind: 'info'; title: string };
 
 export const MAX_TOOL_OUTPUT_ROWS = 12;
+/**
+ * The transcript mirrored for attached views (and the TUI's own view) is bounded (#226). The ledger
+ * is the unbounded record; a view only has to show the recent conversation.
+ */
+export const MAX_TRANSCRIPT_ENTRIES = 500;
 
 export class TuiView {
+  private readonly maxEntries: number;
   readonly entries: TranscriptEntry[] = [];
   status: StatusState = {
     name: 'companion',
@@ -165,6 +171,14 @@ export class TuiView {
   private readonly createdAt = Date.now();
   private dreamingSince?: number;
 
+  /**
+   * `maxEntries` is the retention policy; `Infinity` is for a renderer stress fixture that needs a
+   * transcript larger than the live view ever holds.
+   */
+  constructor(options: { maxEntries?: number } = {}) {
+    this.maxEntries = options.maxEntries ?? MAX_TRANSCRIPT_ENTRIES;
+  }
+
   get lifecycle(): Lifecycle {
     return this.status.lifecycle;
   }
@@ -180,6 +194,7 @@ export class TuiView {
     if (snapshot.entries) {
       this.entries.length = 0;
       this.entries.push(...snapshot.entries);
+      this.trim();
       this.dirty.clear();
       for (const entry of this.entries) this.dirty.add(entry.id);
     }
@@ -411,7 +426,16 @@ export class TuiView {
   push(entry: TranscriptEntry): void {
     this.entries.push(entry);
     this.dirty.add(entry.id);
+    this.trim();
     if (!this.follow) this.newMessages = true;
+  }
+
+  /** Drop the oldest entries past the cap, their dirty marks, and any selection pointing at them. */
+  private trim(): void {
+    if (!Number.isFinite(this.maxEntries) || this.entries.length <= this.maxEntries) return;
+    const removed = this.entries.splice(0, this.entries.length - this.maxEntries);
+    for (const entry of removed) this.dirty.delete(entry.id);
+    if (this.selected >= 0) this.selected = Math.max(0, this.selected - removed.length);
   }
 
   private id(): string {

@@ -10,7 +10,7 @@
  * deliberate difference. Pi skips in silence; here the damage is written down (`trace_corrupt`) once
  * per damaged byte range, because this log is the evidence the kill matrix reads back.
  */
-import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 export interface TraceRecord {
@@ -33,14 +33,24 @@ export interface TraceScan {
   bytes: number;
 }
 
+/**
+ * The trace is evidence, and evidence is allowed to age out (#226). One rotated generation keeps
+ * the previous ~8 MiB; `read()`/`recover()` see the live file, and the `.1` file is what a forensics
+ * pass opens when the live log starts mid-story. Rotation is by rename, which is safe because this
+ * file is shell-owned (unlike `service.log`, written through a daemon's inherited fd).
+ */
+export const TRACE_MAX_BYTES = 8 * 1024 * 1024;
+
 export class TraceLog {
   readonly path: string;
+  private readonly maxBytes: number;
   private warned = false;
   /** Byte ranges already reported; keyed by offset so a repeated read cannot grow the log. */
   private readonly reportedDamage = new Set<number>();
 
-  constructor(readonly dir: string, fileName = 'shell-events.jsonl') {
+  constructor(readonly dir: string, fileName = 'shell-events.jsonl', options: { maxBytes?: number } = {}) {
     this.path = join(dir, fileName);
+    this.maxBytes = options.maxBytes ?? TRACE_MAX_BYTES;
   }
 
   append(kind: string, record: Record<string, unknown> = {}, now = Date.now()): void {
@@ -49,6 +59,7 @@ export class TraceLog {
     const entry: TraceRecord = { ...record, at: now, kind };
     try {
       mkdirSync(this.dir, { recursive: true });
+      this.rotateIfNeeded();
       appendFileSync(this.path, `${JSON.stringify(entry)}\n`, 'utf8');
     } catch (error) {
       if (!this.warned) {
@@ -56,6 +67,26 @@ export class TraceLog {
         console.error(`[companion-shell] trace write failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
+  }
+
+  private rotateIfNeeded(): void {
+    try {
+      if (statSync(this.path).size < this.maxBytes) return;
+    } catch {
+      return;
+    }
+    const rotated = `${this.path}.1`;
+    try {
+      rmSync(rotated, { force: true });
+      renameSync(this.path, rotated);
+    } catch {
+      // A rotation that cannot rename is not a reason to stop recording; the size check retries.
+      return;
+    }
+    // Offsets in `reportedDamage` address the old file; clearing them keeps the new file's report
+    // honest instead of suppressing a fresh corruption at a coincidentally equal offset.
+    this.reportedDamage.clear();
+    this.append('trace_rotated', { maxBytes: this.maxBytes, rotated });
   }
 
   /**

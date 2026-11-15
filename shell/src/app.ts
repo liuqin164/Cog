@@ -36,6 +36,8 @@ import { emergencePlugin } from './plugins/emergence.ts';
 import { terminalPlugin, TerminalChannel, type ShellControl } from './channels/terminal.ts';
 import { AgentRuntime, type ModelProvider, type RunSummary, type TurnUsage } from './state/agent-loop.ts';
 import { SecretRedactor, startKernelHttpFace, type HttpFaceHandle } from './kernel-host.ts';
+import { formatBytes, memoryPressureAction, readMemoryUsage } from './memory.ts';
+import { rotateLogFile, SERVICE_LOG_MAX_BYTES } from './log-rotation.ts';
 import { defaultRunner } from './install/installer.ts';
 import { AttachServer, defaultSocketPath, type AttachShell } from './attach/server.ts';
 import { buildAwayReport, enqueueAway } from './presence.ts';
@@ -144,6 +146,8 @@ export class CompanionShell implements ShellControl, AttachShell {
   private interrupted?: { runId: string; text: string; chars: number };
   /** An upgrade outcome already spoken by this process; attaches read it once, then it is gone. */
   private lastUpgrade?: UpgradeOutcome;
+  /** One memory notice per crossing, reset after we drop below 90% of the ceiling. */
+  private memoryWarned = false;
   private readonly redactor = new SecretRedactor();
   private tickTimer?: ReturnType<typeof setInterval>;
   private started = false;
@@ -358,6 +362,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       });
     }
     this.started = true;
+    this.rotateServiceLog();
     this.trace.append('shell_started', { state: this.machine.state, mi: this.machine.wakeIntents.length });
     // A restart the plugin surface asked for is the one restart that continues the open assignment
     // on its own. Deferred so the HTTP/attach faces are serving before the run begins; a kill (no
@@ -710,6 +715,7 @@ export class CompanionShell implements ShellControl, AttachShell {
 
   /** One deterministic tick: due intent, then dream window, then the emergence decision point. */
   async tick(at = this.now()): Promise<void> {
+    this.rotateServiceLog();
     // An owed upgrade report is not gated on the lifecycle: a promise that came due has to be
     // honoured whatever else is happening.
     this.settleUpgradeReport(at);
@@ -753,6 +759,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   private reportHealth(at: number): void {
     try {
       this.kernel.health.check({ now: at });
+      this.reportMemoryPressure(at);
       const away = this.shouldHoldForAbsence();
       const notice = this.backend.healthNotice({
         projectId: this.config.projectId,
@@ -774,6 +781,43 @@ export class CompanionShell implements ShellControl, AttachShell {
       void this.host.bus.emit('companion_emergence', { id: 'health:dream-streak', reason: 'health_notice', text });
     } catch (error) {
       this.trace.append('health_check_failed', { message: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  /**
+   * The process half of the health face (#226). The kernel's frozen four checks stay four; this
+   * reads the resident's own RSS against the unit ceiling and routes one notice through the same
+   * emergence path the Dream-streak notice uses. The reading itself is also on `GET /health`.
+   */
+  private reportMemoryPressure(at: number): void {
+    const memory = readMemoryUsage();
+    const action = memoryPressureAction(memory, this.memoryWarned);
+    if (action === 'reset') {
+      this.memoryWarned = false;
+      return;
+    }
+    if (action === 'hold') return;
+    const ceiling = (memory.highBytes ?? memory.limitBytes)!;
+    this.memoryWarned = true;
+    const kind = memory.highBytes === undefined ? '硬顶' : '高水位';
+    const text = `常驻进程占用 ${formatBytes(memory.rssBytes)}，已到安装时设的 ${formatBytes(ceiling)} ${kind}；再涨会被限流或重启。我先说一声。`;
+    this.trace.append('memory_pressure', {
+      rssBytes: memory.rssBytes,
+      limitBytes: memory.limitBytes,
+      highBytes: memory.highBytes,
+      source: memory.source,
+    }, at);
+    void this.host.bus.emit('companion_emergence', { id: 'health:memory-pressure', reason: 'memory_notice', text });
+  }
+
+  /** Keep the inherited stdout/stderr file bounded between restarts. */
+  private rotateServiceLog(): void {
+    const path = join(this.config.dataDir, 'service.log');
+    try {
+      if (!rotateLogFile(path, SERVICE_LOG_MAX_BYTES)) return;
+      this.trace.append('service_log_rotated', { path, maxBytes: SERVICE_LOG_MAX_BYTES, rotated: `${path}.1` });
+    } catch (error) {
+      this.trace.append('service_log_rotate_failed', { path, message: error instanceof Error ? error.message : String(error) });
     }
   }
 
