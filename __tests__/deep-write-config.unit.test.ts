@@ -10,7 +10,6 @@ describe('deep write config', () => {
       COGMEM_DEEP_WRITE_CONTEXT_TURNS: '12',
       COGMEM_DEEP_WRITE_RECALL_LIMIT: '8',
       COGMEM_DEEP_WRITE_MIN_PROMOTE_CONFIDENCE: '0.7',
-      COGMEM_DEEP_WRITE_ALLOW_CLOUD: 'yes',
       COGMEM_DEEP_WRITE_REDACTION_ENABLED: 'false',
       COGMEM_DEEP_WRITE_PROMOTE_CAUSAL: '1',
     });
@@ -21,7 +20,6 @@ describe('deep write config', () => {
       contextTurns: 12,
       recallLimit: 8,
       minPromoteConfidence: 0.7,
-      allowCloud: true,
       redactionEnabled: false,
       promoteCausalLinks: true,
     });
