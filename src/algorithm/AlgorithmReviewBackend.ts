@@ -14,7 +14,6 @@ export type AlgorithmReviewBackendMode = 'noop' | 'phase1_rule' | 'model_backed_
 export type AlgorithmReviewVersion = 'phase1_rule_v1' | 'model_backed_phase2_v1';
 
 export const PHASE1_RULE_REVIEW_VERSION: AlgorithmReviewVersion = 'phase1_rule_v1';
-export const MODEL_BACKED_PHASE2_REVIEW_VERSION: AlgorithmReviewVersion = 'model_backed_phase2_v1';
 
 export interface AlgorithmReviewProvenance {
   reviewBackendMode: Exclude<AlgorithmReviewBackendMode, 'noop'>;
