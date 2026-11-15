@@ -36,6 +36,11 @@ Useful flags: `--workspace <dir>`, `--data <dir>`, `--db <file>`, `--project <id
 `--tools read,write,edit,bash`, `--turns <n>`, `--tokens <n>`, `--http-port <n>`, `--no-http`,
 `--no-terminal`, `--attach`, `--no-pi`, `--pi-plugin <pkg-or-path>` (repeatable).
 
+Pi plugins can also be registered from the conversation: `/plugins add <pkg-or-path>` writes
+`<dataDir>/plugins.json` (0600) and restarts the resident through its service manager; `/plugins` and
+`GET /health`'s `plugins` field report what actually loaded. The registry is unioned with
+`COGMEM_SHELL_PI_PLUGINS`, so an existing install keeps working.
+
 ## Budget tiers (#222)
 
 The cage still has one enforcement mechanism — the same hook points, whitelist and forced
@@ -185,8 +190,8 @@ Four sections: a status bar (name · lifecycle in human words · kernel · next 
 the input box (1–8 lines, inner-scrolling), and a footer (context bandwidth gauge · model route ·
 today's token cost · workspace). `RUNNING` shows a work indicator with the cage's turn and token bars;
 a line sent while working is queued visibly and `Esc` withdraws it. `/` opens the command palette
-(`/soul /memory /commitments /status /context /sleep /dream /help /exit`, plus `/model` when more than
-one route is configured); attaching while `DREAMING`
+(`/soul /memory /commitments /status /context /sleep /dream /plugins /help /exit`, plus `/model` when
+more than one route is configured); attaching while `DREAMING`
 shows a sleep screen and any input wakes it through the legal `DREAMING→WAKING` edge. Attaching plays
 "你不在时发生了什么" — the dreams, the held emergence candidates and the fulfilled commitments read back
 from the ledger, not replayed into the conversation.
