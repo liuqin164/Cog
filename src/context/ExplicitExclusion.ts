@@ -23,9 +23,6 @@ export const EXPLICIT_EXCLUSION_INLINE_OPEN = '<COGMEM_PRIVATE>';
 export const EXPLICIT_EXCLUSION_INLINE_CLOSE = '</COGMEM_PRIVATE>';
 export const EXPLICIT_EXCLUSION_WHOLE_TURN = '<COGMEM_PRIVATE_ALL>';
 
-/** The one sentence the host teaching surfaces carry, so a user learns the convention exists. */
-export const EXPLICIT_EXCLUSION_TEACHING = `To keep a passage out of memory entirely, the user can wrap it in ${EXPLICIT_EXCLUSION_INLINE_OPEN} … ${EXPLICIT_EXCLUSION_INLINE_CLOSE} or write ${EXPLICIT_EXCLUSION_WHOLE_TURN} to exclude the whole turn. Marked text is never stored — it does not reach the ledger, the search index or recall, so nothing has to be deleted later. Only the user's own text can be marked this way; the assistant's reply and tool results are unaffected.`;
-
 export interface ExplicitExclusionResult {
   /** The user text with every excluded span removed. */
   text: string;
