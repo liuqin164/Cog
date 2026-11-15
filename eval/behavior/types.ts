@@ -28,7 +28,6 @@ export interface ScenarioContext {
   readonly kernel: any;
   /** The loaded kernel module, so a scenario can construct the public backend face. */
   readonly api: KernelApi;
-  readonly dbPath: string;
   /** Close and recreate the kernel on the same database, as a restart would. */
   reopen(): any;
 }

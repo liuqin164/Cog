@@ -1,9 +1,9 @@
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { rmSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import type { KernelApi, ScenarioContext } from './types.js';
+import { makeTempDir } from '../../__tests__/helpers/tmp.js';
 
 /** The source public surface. A box run passes `--module` to the installed `dist/public.js`. */
 export const DEFAULT_MODULE = new URL('../../src/public.ts', import.meta.url).href;
@@ -27,16 +27,15 @@ export async function withKernel<T>(
   api: KernelApi,
   run: (context: ScenarioContext) => Promise<T>,
 ): Promise<T> {
-  const directory = mkdtempSync(join(tmpdir(), `cogmem-behavior-${slug}-`));
-  const dbPath = join(directory, 'memory.db');
+  const directory = makeTempDir(`cogmem-behavior-${slug}-`);
+  const dbPath = `${directory}/memory.db`;
   const make = () => api.createMemoryKernel({ dbPath, projectTimeZone: 'UTC' });
-  let current = make();
+  let current: any;
   const context: ScenarioContext = {
     get kernel() {
       return current;
     },
     api,
-    dbPath,
     reopen() {
       current.close();
       current = make();
@@ -44,15 +43,56 @@ export async function withKernel<T>(
     },
   };
   try {
+    current = make();
     return await run(context);
   } finally {
     try {
-      current.close();
+      current?.close();
     } catch {
       // A scenario may already have closed it on a failed restart; the temp tree still goes.
     }
     rmSync(directory, { recursive: true, force: true });
   }
+}
+
+/** The shared scenario clock. Every instant a scenario names is derived from this constant. */
+export const EVAL_T0 = Date.UTC(2026, 10, 15, 9, 0, 0);
+
+/** Pin one offline extraction output onto a real captured turn. */
+export function rememberBelief(
+  kernel: any,
+  input: {
+    projectId: string;
+    eventId: string;
+    predicate: string;
+    value: string;
+    validFrom: number;
+    extractionReason?: string;
+  },
+): void {
+  kernel.beliefStore.upsert({
+    projectId: input.projectId,
+    scope: 'project',
+    subject: 'owner',
+    predicate: input.predicate,
+    objectValue: { raw: input.value, type: 'string' },
+    confidence: 0.9,
+    sourceType: 'user_input',
+    extractionReason: input.extractionReason ?? 'explicit_user_statement',
+    sourceEventId: input.eventId,
+    validFrom: input.validFrom,
+  });
+}
+
+/** The public agent-facing backend bound to one occasion. */
+export function backendFor(
+  api: KernelApi,
+  kernel: any,
+  channelId: string,
+  occasion: 'private' | 'group' | 'public' = 'private',
+): any {
+  const binding = kernel.occasionScope.register({ channelId, occasion });
+  return new api.KernelAgentMemoryBackend(kernel, { binding });
 }
 
 export class ScenarioFailure extends Error {}
