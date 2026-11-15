@@ -28,6 +28,7 @@ import {
   SNAPSHOT_FORMAT,
   SNAPSHOT_MANIFEST_VERSION,
   SNAPSHOT_RETENTION,
+  SNAPSHOT_WEEKLY_RETENTION,
   SNAPSHOT_VERIFICATION_CHECKS,
   BrainBackup,
   BrainBundleError,
@@ -96,6 +97,7 @@ describe('frozen tables and the code that implements them', () => {
     const table = rows(sectionAfter('## Version (frozen)'));
     expect(table.get('contractVersion')).toBe(String(HEALTH_CONTRACT_VERSION));
     expect(table.get('snapshotRetention')).toBe(String(SNAPSHOT_RETENTION));
+    expect(table.get('snapshotWeeklyRetention')).toBe(String(SNAPSHOT_WEEKLY_RETENTION));
     expect(table.get('dreamFailureNights')).toBe(String(DREAM_FAILURE_NIGHTS));
     expect(table.get('snapshotFormat')).toBe(SNAPSHOT_FORMAT);
     expect(table.get('bundleFormat')).toBe(BUNDLE_FORMAT);
@@ -124,7 +126,12 @@ describe('frozen tables and the code that implements them', () => {
   test('snapshot, counts, config and verification', () => {
     const snapshot = rows(sectionAfter('## Nightly snapshot (frozen)'));
     expect(snapshot.get('retention')).toContain(String(SNAPSHOT_RETENTION));
+    expect(snapshot.get('retention')).toContain('Weekly archives');
     expect(snapshot.get('trigger')).toContain('runNight');
+    const archive = rows(sectionAfter('## Weekly archive (frozen)'));
+    expect(archive.get('retention')).toContain(String(SNAPSHOT_WEEKLY_RETENTION));
+    expect(archive.get('verification')).toContain('checksum');
+    expect(archive.get('restore')).toContain('F19');
     const manifest = rows(sectionAfter('## Snapshot manifest (frozen)'));
     expect(manifest.get('format')).toBe(SNAPSHOT_FORMAT);
     expect(manifest.get('version')).toBe(String(SNAPSHOT_MANIFEST_VERSION));
@@ -334,7 +341,7 @@ describe('nightly snapshot and the machine bundle', () => {
     expect(verified.verification.checks.checksum).toBe(false);
   });
 
-  test('rotation keeps the newest seven snapshots and their manifests', async () => {
+  test('rotation keeps the newest seven nightly snapshots and their manifests', async () => {
     const snapshotsDir = join(dir, 'rotation');
     let now = NIGHT_ONE;
     const backup = new BrainBackup({
@@ -350,11 +357,51 @@ describe('nightly snapshot and the machine bundle', () => {
       expect(await backup.snapshot()).toBeDefined();
     }
     const listed = backup.list();
-    expect(listed).toHaveLength(SNAPSHOT_RETENTION);
+    // Nine days span two ISO weeks, so two weekly archives sit beside the seven nightly copies.
+    expect(listed).toHaveLength(SNAPSHOT_RETENTION + 2);
     expect(listed[0]!.createdAt > listed[listed.length - 1]!.createdAt).toBe(true);
     const files = readdirSync(snapshotsDir);
-    expect(files.filter((file) => file.endsWith('.snap'))).toHaveLength(SNAPSHOT_RETENTION);
-    expect(files.filter((file) => file.endsWith('.json'))).toHaveLength(SNAPSHOT_RETENTION);
+    expect(files.filter((file) => /^brain-.*\.snap$/u.test(file))).toHaveLength(SNAPSHOT_RETENTION);
+    expect(files.filter((file) => /^brain-.*\.json$/u.test(file))).toHaveLength(SNAPSHOT_RETENTION);
+    const archives = listed.filter((manifest) => manifest.snapshot.file.startsWith('archive-'));
+    expect(archives).toHaveLength(2);
+    for (const archive of archives) {
+      expect(archive.verification.ok).toBe(true);
+      expect(archive.verification.checks).toEqual({ checksum: true, opens: true, counts: true });
+    }
+  });
+
+  test('weekly archives keep four ISO weeks, verify, and prune the oldest pair', async () => {
+    const snapshotsDir = join(dir, 'weekly');
+    const backup = new BrainBackup({
+      dbPath,
+      snapshotsDir,
+      embeddingDimension: 8,
+      coreVersion: 'test',
+      config,
+      now: () => NIGHT_ONE,
+    });
+    // One snapshot per week for six weeks: the nightly window never fills, the archive window does.
+    for (let week = 0; week < 6; week += 1) {
+      const now = NIGHT_ONE + week * 7 * DAY_MS;
+      const snapshot = new BrainBackup({
+        dbPath,
+        snapshotsDir,
+        embeddingDimension: 8,
+        coreVersion: 'test',
+        config,
+        now: () => now,
+      });
+      expect(await snapshot.snapshot()).toBeDefined();
+    }
+    const archives = backup.list().filter((manifest) => manifest.snapshot.file.startsWith('archive-'));
+    expect(archives).toHaveLength(SNAPSHOT_WEEKLY_RETENTION);
+    for (const archive of archives) {
+      expect(archive.verification.ok).toBe(true);
+    }
+    const files = readdirSync(snapshotsDir);
+    expect(files.filter((file) => /^archive-.*\.snap$/u.test(file))).toHaveLength(SNAPSHOT_WEEKLY_RETENTION);
+    expect(files.filter((file) => /^archive-.*\.json$/u.test(file))).toHaveLength(SNAPSHOT_WEEKLY_RETENTION);
   });
 
   test('a bundle restores into a clean directory with matching counts, and refuses damage', async () => {

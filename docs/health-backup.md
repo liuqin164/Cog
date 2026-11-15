@@ -9,7 +9,8 @@ The code is `src/health/` (`HealthService`) and `src/snapshot/` (`BrainBackup`, 
 reached as `MemoryKernel.health` and `MemoryKernel.backup`. The observatory's health page is
 `GET /observatory/health`. The document is held by `__tests__/health-backup.contract.test.ts`, which
 reads the frozen tables below and fails when code and contract disagree. Version:
-`HEALTH_CONTRACT_VERSION = 1`.
+`HEALTH_CONTRACT_VERSION = 2`. Version 2 adds the weekly archive beside the nightly window; the
+nightly snapshot, its manifest, the bundle and the recovery drill are otherwise unchanged.
 
 ## What this face does not do
 
@@ -31,8 +32,9 @@ reads the frozen tables below and fails when code and contract disagree. Version
 
 | Field | Value |
 |---|---|
-| `contractVersion` | `1` |
+| `contractVersion` | `2` |
 | `snapshotRetention` | `7` |
+| `snapshotWeeklyRetention` | `4` |
 | `dreamFailureNights` | `3` |
 | `snapshotFormat` | `cogmem.brain-snapshot` |
 | `bundleFormat` | `cogmem.brain-bundle` |
@@ -126,13 +128,28 @@ with `night-dnd` and a normally interruptible channel it is `deliver` / `proacti
 | `trigger` | `MemoryKernel.runNight`, after the Dream pass and the atlas reconcile. |
 | `contents` | The whole database, every table including `soul_versions`, plus the JSON manifest. |
 | `location` | `<paths.snapshots_dir>/brain-<ISO>.snap` and `brain-<ISO>.json`. |
-| `retention` | The newest `7` snapshots are kept; older `.snap` and `.json` pairs are deleted. |
+| `retention` | The newest `7` nightly snapshots are kept; older `.snap` and `.json` pairs are deleted. Weekly archives are separate (below). |
 | `verification` | Every snapshot is checked for `checksum`, `opens` and `counts` before it is reported. |
 | `query` | `cogmem backup list --json`, `cogmem doctor --json`, `GET /observatory/health`. |
 | `failure` | A snapshot that cannot be written fails the Night. The Dream rows are already committed and a re-run is idempotent. |
 
 The snapshot reuses `SnapshotExporter`: `VACUUM INTO`, forgotten rows removed, sha256 over the DB
 bytes. The manifest is written after the export and rewritten with the verification result.
+
+## Weekly archive (frozen)
+
+The nightly window is seven days. A contamination that is noticed on day eight would leave seven
+dirty snapshots and no clean point, so the first verified snapshot of each ISO week is kept as a
+weekly archive as well.
+
+| Field | Value |
+|---|---|
+| `trigger` | The first nightly snapshot of an ISO week whose verification is `ok`. |
+| `contents` | A byte copy of that nightly `.snap` and a manifest whose `snapshot.file` names the archive. |
+| `location` | `<paths.snapshots_dir>/archive-<ISO-week>.snap` and `archive-<ISO-week>.json`. |
+| `retention` | The newest `4` weekly archives are kept; older `.snap` and `.json` pairs are deleted. |
+| `verification` | The archive passes the same `checksum`, `opens` and `counts` checks; a failed result is kept in its manifest as evidence, like a nightly snapshot. |
+| `restore` | The same F19 restore semantics as a nightly snapshot; an archive is a snapshot. |
 
 ## Snapshot manifest (frozen)
 
@@ -265,7 +282,8 @@ checked answers `checked: false` rather than inventing a status.
 - `MemoryKernel.health` runs the self-checks; `doctor` prints them and the snapshot state; the shell
   tick runs `check` so a transition is recorded without a person asking.
 - `MemoryKernel.backup.snapshot` runs at the end of `runNight` when a snapshots directory is
-  configured. `cogmem backup snapshot|list|bundle|restore` is the operator face.
+  configured; the week's first verified copy is kept as a weekly archive beside the nightly window.
+  `cogmem backup snapshot|list|bundle|restore` is the operator face.
 - The observatory gains a read-only health tab. Its only write remains the soul editor.
 - The update boundary is stated rather than invented: 5.0 has **no pre-migration snapshot** — 4.0
   refuses an old database and writes no backup (ADR-0007), and `cogmem snapshot export|import` is

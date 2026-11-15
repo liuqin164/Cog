@@ -3,12 +3,14 @@
  *
  * It reuses `SnapshotExporter` — the one `.snap` DB copy format — and writes a JSON manifest beside
  * it with the soul versions, the key configuration and the five counts. Every snapshot is verified
- * (checksum, opens, counts) and the newest `SNAPSHOT_RETENTION` are kept. The contract is
- * `docs/health-backup.md`.
+ * (checksum, opens, counts) and the newest `SNAPSHOT_RETENTION` are kept. The first verified
+ * snapshot of an ISO week is also copied to a weekly archive, so a slow contamination that takes
+ * more than seven nights to notice still leaves a clean point; the newest
+ * `SNAPSHOT_WEEKLY_RETENTION` archives are kept. The contract is `docs/health-backup.md`.
  */
 import { createHash } from 'node:crypto';
 import Database from 'bun:sqlite';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 
 import { SnapshotExporter } from './SnapshotExporter.js';
@@ -18,6 +20,7 @@ import {
   SNAPSHOT_FORMAT,
   SNAPSHOT_MANIFEST_VERSION,
   SNAPSHOT_RETENTION,
+  SNAPSHOT_WEEKLY_RETENTION,
   SNAPSHOT_VERIFICATION_CHECKS,
   readBrainCounts,
   readSoulVersions,
@@ -81,6 +84,8 @@ export class BrainBackup {
     };
     manifest.verification = this.verifyFiles(snapshotPath, manifest, createdAt);
     writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
+    // Only a snapshot that passed its own checks is a clean point worth archiving.
+    if (manifest.verification.ok) this.archive(dir, snapshotPath, manifest, createdAt);
     this.recordLast(manifest, manifestFile);
     this.rotate(dir);
     return manifest;
@@ -92,7 +97,7 @@ export class BrainBackup {
     if (!dir || !existsSync(dir)) return [];
     const manifests: BrainManifest[] = [];
     for (const file of readdirSync(dir)) {
-      if (!/^brain-.*\.json$/u.test(file)) continue;
+      if (!/^(?:brain|archive)-.*\.json$/u.test(file)) continue;
       try {
         manifests.push(JSON.parse(readFileSync(join(dir, file), 'utf8')) as BrainManifest);
       } catch {
@@ -100,7 +105,8 @@ export class BrainBackup {
         // the operator to see, not silently deleted.
       }
     }
-    return manifests.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+    return manifests.sort((left, right) => right.createdAt.localeCompare(left.createdAt)
+      || right.snapshot.file.localeCompare(left.snapshot.file));
   }
 
   /** Re-verify one manifest's snapshot and return the manifest with the fresh result. */
@@ -194,4 +200,50 @@ export class BrainBackup {
       rmSync(join(dir, old.replace(/\.snap$/u, '.json')), { force: true });
     }
   }
+
+  /** Copy the week's first verified snapshot, then keep only the newest weekly archives. */
+  private archive(dir: string, snapshotPath: string, manifest: BrainManifest, createdAt: string): void {
+    const week = isoWeekKey(createdAt);
+    const archiveFile = `archive-${week}.snap`;
+    const manifestFile = `archive-${week}.json`;
+    const archivePath = join(dir, archiveFile);
+    if (existsSync(archivePath) && existsSync(join(dir, manifestFile))) return;
+    copyFileSync(snapshotPath, archivePath);
+    const archiveManifest: BrainManifest = {
+      ...manifest,
+      snapshot: { ...manifest.snapshot, file: archiveFile },
+      verification: {
+        ok: false,
+        checkedAt: createdAt,
+        checks: { checksum: false, opens: false, counts: false },
+      },
+    };
+    archiveManifest.verification = this.verifyFiles(archivePath, archiveManifest, createdAt);
+    writeFileSync(join(dir, manifestFile), JSON.stringify(archiveManifest, null, 2), 'utf8');
+    this.rotateWeekly(dir);
+  }
+
+  private rotateWeekly(dir: string): void {
+    const archives = readdirSync(dir)
+      .filter((file) => /^archive-.*\.snap$/u.test(file))
+      .sort()
+      .reverse();
+    for (const old of archives.slice(SNAPSHOT_WEEKLY_RETENTION)) {
+      rmSync(join(dir, old), { force: true });
+      rmSync(join(dir, old.replace(/\.snap$/u, '.json')), { force: true });
+    }
+  }
+}
+
+/** ISO-8601 week key, e.g. `2026-W01`. Weeks start on Monday; the year is the week's own. */
+function isoWeekKey(iso: string): string {
+  const date = new Date(iso);
+  const day = (date.getUTCDay() + 6) % 7;
+  date.setUTCDate(date.getUTCDate() - day + 3);
+  const year = date.getUTCFullYear();
+  const firstThursday = new Date(Date.UTC(year, 0, 4));
+  const firstDay = (firstThursday.getUTCDay() + 6) % 7;
+  firstThursday.setUTCDate(firstThursday.getUTCDate() - firstDay + 3);
+  const week = 1 + Math.round((date.getTime() - firstThursday.getTime()) / (7 * 86_400_000));
+  return `${year}-W${String(week).padStart(2, '0')}`;
 }
