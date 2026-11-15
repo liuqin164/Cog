@@ -617,6 +617,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       `user-assigned task: ${assignment.text}`,
       assignment.stoppedStep ? `stopped at: ${assignment.stoppedStep}` : '',
       assignment.nextStep ? `next: ${assignment.nextStep}` : '',
+      assignment.findings ? `confirmed findings: ${assignment.findings}` : '',
       '</open-assignment>',
     ].filter(Boolean).join('\n');
   }
@@ -720,8 +721,12 @@ export class CompanionShell implements ShellControl, AttachShell {
       this.machine.updateRuntime({ openAssignment: undefined });
       return;
     }
+    // The run's own closing words are the handoff: bounded, collapsed to one line, and carried into
+    // the next run's prompt so a continuation does not re-read the same sources. A run that ends
+    // without text (an abort mid-tool) keeps the earlier findings rather than erasing them.
+    const findings = this.captureFindings(summary, assignment);
     if (summary.stopReason !== 'budget_exceeded') {
-      this.machine.updateRuntime({ openAssignment: { ...assignment, lastRunId: summary.runId } });
+      this.machine.updateRuntime({ openAssignment: { ...assignment, lastRunId: summary.runId, ...(findings ? { findings } : {}) } });
       return;
     }
     const lastCall = summary.toolCalls.at(-1);
@@ -732,9 +737,24 @@ export class CompanionShell implements ShellControl, AttachShell {
       ? `resume from ${lastCall.toolName}: check its last result, then continue the user-assigned task`
       : 'continue the user-assigned task from its next step; the budget stopped this run before it finished';
     this.machine.updateRuntime({
-      openAssignment: { ...assignment, lastRunId: summary.runId, stoppedAt: this.now(), stoppedStep, nextStep },
+      openAssignment: { ...assignment, lastRunId: summary.runId, stoppedAt: this.now(), stoppedStep, nextStep, ...(findings ? { findings } : {}) },
     });
-    this.trace.append('assignment_stopped', { runId: summary.runId, assignmentId: assignment.id, stoppedStep, nextStep });
+    this.trace.append('assignment_stopped', { runId: summary.runId, assignmentId: assignment.id, stoppedStep, nextStep, findingsChars: findings?.length ?? 0 });
+  }
+
+  private captureFindings(summary: RunSummary, assignment: { id: string }): string | undefined {
+    // The closing message, not the whole run: the handoff is what the run concluded, and the earlier
+    // turns are already in the transcript it can recall.
+    const text = (summary.lastAssistantText ?? summary.assistantText).replace(/\s+/gu, ' ').trim();
+    if (text === '') return undefined;
+    if (text.length <= MAX_ASSIGNMENT_FINDINGS) return text;
+    this.trace.append('assignment_findings_truncated', {
+      assignmentId: assignment.id,
+      runId: summary.runId,
+      chars: text.length,
+      kept: MAX_ASSIGNMENT_FINDINGS,
+    });
+    return `${text.slice(0, MAX_ASSIGNMENT_FINDINGS - 1)}…`;
   }
 
   /** One deterministic tick: due intent, then dream window, then the emergence decision point. */

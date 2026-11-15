@@ -101,6 +101,12 @@ export interface ShellRuntimeState {
     stoppedAt?: number;
     stoppedStep?: string;
     nextStep?: string;
+    /**
+     * The conclusions the run itself wrote down when it ended unfinished (bounded; the closing text
+     * of the last run, collapsed to one line). The next run gets it in the prompt tail, so a
+     * continuation does not re-read the same sources to rediscover the same line numbers.
+     */
+    findings?: string;
   };
   /**
    * A restart was requested by the plugin surface, and the open assignment should continue once the

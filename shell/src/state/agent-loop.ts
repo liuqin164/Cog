@@ -257,6 +257,8 @@ export interface RunSummary {
   turnId: string;
   userText: string;
   assistantText: string;
+  /** The closing assistant message alone; the handoff field reads this, not the whole run. */
+  lastAssistantText?: string;
   toolCalls: ToolCall[];
   toolResults: ToolResult[];
   turns: number;
@@ -709,13 +711,15 @@ export class AgentRuntime {
       this.abortController = undefined;
     }
 
-    const assistantText = context.project().filter((message) => message.role === 'assistant').map((message) => message.content).filter(Boolean).join('\n');
+    const assistantMessages = context.project().filter((message) => message.role === 'assistant' && message.content);
+    const assistantText = assistantMessages.map((message) => message.content).join('\n');
     const summary: RunSummary = {
       runId: input.runId,
       sessionId: input.sessionId,
       turnId,
       userText: input.userText,
       assistantText,
+      lastAssistantText: assistantMessages.at(-1)?.content ?? '',
       toolCalls: allToolCalls,
       toolResults: allToolResults,
       turns,
