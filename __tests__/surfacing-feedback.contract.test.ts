@@ -197,6 +197,7 @@ describe('three consecutive ignores reduce that type’s proactive frequency', (
     // The withhold is visible with its reason, not silently dropped.
     const withheld = proactive(projectId, instants[0]!).withheld.find((entry) => entry.source === 'ledger');
     expect(withheld?.reason).toContain('modulation=throttled');
+    expect(withheld?.reason).toContain('channel=withheld:modulation');
     const step = withheld?.decisionTrace.steps.find((entry) => entry.rule === 'modulation');
     expect(step?.outcome).toBe('throttled');
     expect(step?.detail.type).toBe('ledger');

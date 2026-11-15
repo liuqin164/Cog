@@ -117,6 +117,32 @@ function surfacingWith(sources: SensitivityTagSource[] = []) {
   });
 }
 
+/** The documented reason: a withheld gate names its code, not only its step outcome. */
+function reasonFrom(steps: Array<{ rule: string; outcome: string; detail: Record<string, unknown> }>): string {
+  return steps.map((step) => {
+    if (step.rule === 'channel' && step.outcome === 'withheld') {
+      const detail = step.detail as {
+        hardWithhold?: boolean;
+        expired?: boolean;
+        policy?: Record<string, boolean>;
+        channel?: string;
+      };
+      const code = detail.hardWithhold
+        ? 'keychain'
+        : detail.policy?.[detail.channel ?? ''] === false
+          ? 'policy'
+          : detail.expired
+            ? 'expired'
+            : 'modulation';
+      return `channel=withheld:${code}`;
+    }
+    if (step.rule === 'occasion' && step.detail.decision === 'withheld') {
+      return `occasion=withheld:${String(step.detail.reason)}`;
+    }
+    return `${step.rule}=${step.outcome}`;
+  }).join('; ');
+}
+
 describe('the contract document and the frozen lists agree', () => {
   test('the channel table is exactly SURFACING_CHANNELS, in order', () => {
     expect(firstColumn(sectionAfter('## Channels (frozen)'))).toEqual([...SURFACING_CHANNELS]);
@@ -340,7 +366,7 @@ describe('the trace reconciles with every candidate field', () => {
 
     for (const candidate of result.candidates) {
       expect(candidate.reason).toBe(candidate.decisionTrace.reason);
-      expect(candidate.reason).toBe(candidate.decisionTrace.steps.map((step) => `${step.rule}=${step.outcome}`).join('; '));
+      expect(candidate.reason).toBe(reasonFrom(candidate.decisionTrace.steps));
 
       const source = candidate.decisionTrace.steps.find((step) => step.rule === 'source')!;
       expect(source.outcome.startsWith(`${candidate.source}:`)).toBe(true);
@@ -365,7 +391,7 @@ describe('the trace reconciles with every candidate field', () => {
     expect(result.withheld.length).toBeGreaterThan(0);
     for (const entry of result.withheld) {
       expect(entry.reason).toBe(entry.decisionTrace.reason);
-      expect(entry.reason).toBe(entry.decisionTrace.steps.map((step) => `${step.rule}=${step.outcome}`).join('; '));
+      expect(entry.reason).toBe(reasonFrom(entry.decisionTrace.steps));
       const sensitivity = entry.decisionTrace.steps.find((step) => step.rule === 'sensitivity')!;
       expect(sensitivity.outcome).toBe(entry.sensitivity);
       const channel = entry.decisionTrace.steps.find((step) => step.rule === 'channel')!;
@@ -374,6 +400,21 @@ describe('the trace reconciles with every candidate field', () => {
       expect(['upcoming', 'fresh', 'expired']).toContain(freshness.outcome);
       expect(freshness.detail).toHaveProperty('expired');
     }
+  });
+
+  test('a withheld reason names the channel rule that said no (#219)', () => {
+    const policyProject = 'contract-trace-policy';
+    const salary = writeTurn(policyProject, '我的工资这个月晚发了。');
+    const policy = backend.surfacingCandidates({ projectId: policyProject, channel: 'proactive', now });
+    const policyEntry = policy.withheld.find((entry) => entry.candidateId.endsWith(salary.eventId))!;
+    expect(policyEntry.reason).toContain('sensitivity=private');
+    expect(policyEntry.reason).toContain('channel=withheld:policy');
+
+    const keychainProject = 'contract-trace-keychain';
+    const secret = writeTurn(keychainProject, '我的钥匙在这里 sk-abcdefghijklmnopqrstuvwxyz0123456789');
+    const keychain = backend.surfacingCandidates({ projectId: keychainProject, channel: 'asked', now, query: '钥匙' });
+    const keychainEntry = keychain.withheld.find((entry) => entry.candidateId.endsWith(secret.eventId))!;
+    expect(keychainEntry.reason).toContain('channel=withheld:keychain');
   });
 
   test('a declared occasion is recorded beside the bound one, and a mismatch is visible', () => {
@@ -459,6 +500,8 @@ describe('freshness is reported and enforced', () => {
 
     const proactive = backend.surfacingCandidates({ projectId, channel: 'proactive', now });
     expect(proactive.candidates.some((candidate) => candidate.source === 'wake-intention')).toBe(false);
+    const expiredEntry = proactive.withheld.find((entry) => entry.source === 'wake-intention');
+    expect(expiredEntry?.reason).toContain('channel=withheld:expired');
     const asked = backend.surfacingCandidates({ projectId, channel: 'asked', now, query: '交报告' });
     const found = asked.candidates.find((candidate) => candidate.source === 'wake-intention');
     expect(found?.freshness.expired).toBe(true);

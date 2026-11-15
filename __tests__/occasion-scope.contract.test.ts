@@ -249,6 +249,7 @@ describe('the same question decreases strictly across private, group and public'
       decision: 'withheld',
       reason: 'occasion_private_tier',
     });
+    expect(withheld.reason).toContain('occasion=withheld:occasion_private_tier');
 
     const recalled = recallEventIds(group, '咖啡');
     expect(recalled).not.toContain(privatePersonal.eventId);
