@@ -4,9 +4,9 @@ import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
 const original = 'soul v0：先做自己。\n';
 const proposed = 'soul v1：把话说短些。\n';
 
-function drafting(content: string, reason: string): ScriptedProvider {
+function drafting(input: Record<string, unknown>): ScriptedProvider {
   return new ScriptedProvider([
-    { text: '', toolCalls: [{ toolCallId: 'c1', toolName: 'propose_soul_edit', input: { content, reason } }] },
+    { text: '', toolCalls: [{ toolCallId: 'c1', toolName: 'propose_soul_edit', input }] },
     { text: '我把草稿放在星海里了。', toolCalls: [] },
   ]);
 }
@@ -19,7 +19,12 @@ function toolOutput(provider: ScriptedProvider): string {
 
 describe('the agent drafts a soul edit through the tool surface (#218)', () => {
   test('the tool stores a draft, the current version stays put, and only the owner save appends', async () => {
-    const provider = drafting(proposed, '缩短');
+    const provider = drafting({
+      content: proposed,
+      reason: '缩短',
+      sourceRefs: ['evt-user-1'],
+      counterexample: '用户也说过喜欢现在的长版本。',
+    });
     const shell = makeShell(makeTempDir(), provider);
     await shell.start();
     try {
@@ -39,6 +44,9 @@ describe('the agent drafts a soul edit through the tool surface (#218)', () => {
       expect(draft.versions.map((version) => version.version)).toEqual([0]);
       expect(draft.proposal?.content).toBe(proposed);
       expect(draft.proposal?.reason).toBe('缩短');
+      expect(draft.proposal?.sourceRefs).toEqual(['evt-user-1']);
+      expect(draft.proposal?.diff).toBe('-soul v0：先做自己。\n+soul v1：把话说短些。');
+      expect(draft.proposal?.counterexample).toBe('用户也说过喜欢现在的长版本。');
       const auditRow = shell.kernel.soul.audit(shell.config.agentId).find((row) => row.action === 'soul_edit_proposed');
       expect(auditRow?.reason).toBe('缩短');
       expect(shell.systemPromptSections().pinned.startsWith(original)).toBe(true);
@@ -62,8 +70,51 @@ describe('the agent drafts a soul edit through the tool surface (#218)', () => {
     }
   }, 30_000);
 
+  test('a proposal with no ledger evidence is refused at registration and never becomes pending (#237)', async () => {
+    const provider = drafting({ content: proposed, reason: '我觉得这样更好' });
+    const shell = makeShell(makeTempDir(), provider);
+    await shell.start();
+    try {
+      shell.kernel.soul.ensureDefault(shell.config.agentId, original);
+      await shell.submit('soul 能短一点吗');
+
+      expect(toolOutput(provider)).toContain('soul_source_refs_required');
+      expect(shell.backend.soul().proposal).toBeUndefined();
+      expect(shell.kernel.soul.audit(shell.config.agentId).some((row) => row.action === 'soul_edit_proposed')).toBe(false);
+      expect(shell.backend.soul().current?.content).toBe(original);
+    } finally {
+      await shell.stop();
+    }
+  }, 30_000);
+
+  test('a declared no-counterexample search scope satisfies the evidence rule', async () => {
+    const provider = drafting({
+      content: proposed,
+      reason: '缩短',
+      sourceRefs: ['evt-user-1'],
+      noCounterexampleScope: '本会话内搜索「长、详细、展开」，未发现相反偏好。',
+    });
+    const shell = makeShell(makeTempDir(), provider);
+    await shell.start();
+    try {
+      shell.kernel.soul.ensureDefault(shell.config.agentId, original);
+      await shell.submit('soul 能短一点吗');
+
+      expect(toolOutput(provider)).toContain('proposal_drafted');
+      expect(shell.backend.soul().proposal?.noCounterexampleScope).toContain('未发现');
+      expect(shell.backend.soul().proposal?.counterexample).toBeUndefined();
+    } finally {
+      await shell.stop();
+    }
+  }, 30_000);
+
   test('a draft with no text is refused and writes no proposal', async () => {
-    const provider = drafting('   ', 'empty');
+    const provider = drafting({
+      content: '   ',
+      reason: 'empty',
+      sourceRefs: ['evt-user-1'],
+      counterexample: 'none',
+    });
     const shell = makeShell(makeTempDir(), provider);
     await shell.start();
     try {

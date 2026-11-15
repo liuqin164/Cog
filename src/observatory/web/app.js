@@ -932,6 +932,18 @@ function renderSoul() {
     const proposal = el('div', { class: 'soul-proposal' });
     proposal.append(el('strong', { text: '智能体的修改建议' }));
     proposal.append(el('p', { class: 'hint', text: data.proposal.reason ? `理由：${data.proposal.reason}` : '它只能起草，不能保存。' }));
+    if (data.proposal.diff) {
+      proposal.append(el('p', { class: 'hint', text: '相对当前版本的逐行差异：' }));
+      proposal.append(el('pre', { class: 'json', text: data.proposal.diff }));
+    }
+    if (Array.isArray(data.proposal.sourceRefs) && data.proposal.sourceRefs.length > 0) {
+      proposal.append(el('p', { class: 'hint', text: `依据：${data.proposal.sourceRefs.join('；')}` }));
+    }
+    if (data.proposal.counterexample) {
+      proposal.append(el('p', { class: 'hint', text: `反例：${data.proposal.counterexample}` }));
+    } else if (data.proposal.noCounterexampleScope) {
+      proposal.append(el('p', { class: 'hint', text: `无反例（检索范围：${data.proposal.noCounterexampleScope}）` }));
+    }
     proposal.append(el('pre', { class: 'json', text: data.proposal.content }));
     const use = el('button', { type: 'button', class: 'primary', text: '载入建议' });
     use.addEventListener('click', () => {

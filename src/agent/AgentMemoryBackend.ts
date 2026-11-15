@@ -1006,12 +1006,25 @@ export class KernelAgentMemoryBackend {
     return this.kernel.soul.snapshot(this.requireSoulAgent());
   }
 
-  /** Draft an edit for the owner. The current soul is unchanged until the owner saves a version. */
-  proposeSoulEdit(input: { content: string; reason?: string }): SoulProposal {
+  /**
+   * Draft an edit for the owner. The current soul is unchanged until the owner saves a version.
+   * A proposal must carry its ledger evidence and a counterexample (or the no-counterexample search
+   * scope); the registry computes the diff against the current soul (#237).
+   */
+  proposeSoulEdit(input: {
+    content: string;
+    reason?: string;
+    sourceRefs: string[];
+    counterexample?: string;
+    noCounterexampleScope?: string;
+  }): SoulProposal {
     return this.kernel.soul.propose({
       agentId: this.requireSoulAgent(),
       content: input.content,
       reason: input.reason,
+      sourceRefs: input.sourceRefs,
+      counterexample: input.counterexample,
+      noCounterexampleScope: input.noCounterexampleScope,
     });
   }
 

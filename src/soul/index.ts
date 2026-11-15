@@ -12,6 +12,7 @@ export {
   SoulService,
   ensureSoulSchema,
   readSoulVersion,
+  soulDiff,
   soulTokens,
 } from './SoulService.js';
 export type {

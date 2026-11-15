@@ -52,16 +52,27 @@ agent parameter, so a connection cannot ask for another identity's soul:
 | Method | Answer |
 |---|---|
 | `soul()` | `{ current, versions, proposal }` for the bound agent. |
-| `proposeSoulEdit({ content, reason? })` | Append a `soul_edit_proposed` audit row; the current soul is unchanged. |
+| `proposeSoulEdit({ content, reason?, sourceRefs, counterexample? \| noCounterexampleScope? })` | Append a `soul_edit_proposed` audit row; the current soul is unchanged. |
 
 A proposal is a draft for the owner. It is stored in the existing `governance_audit_log` and shown
 in the soul editor; no new queue or table is created. It is not applied until the owner saves a new
 version.
 
+A proposal must carry evidence (#237). `sourceRefs` names the ledger entries the edit is based on —
+an event id when known, otherwise the exact user or assistant turn being cited — and at least one is
+required. Exactly one of `counterexample` (at least one ledger fact that argues against the edit) or
+`noCounterexampleScope` (what was searched, and that none was found) is required. The registry
+computes the line diff against the current soul at registration and stores it with the proposal; an
+edit identical to the current soul has no diff and is refused. A proposal missing any piece is
+refused with the matching `soul_*` error and never becomes the pending proposal, so it does not enter
+the owner's review. The refs are stored verbatim rather than resolved, because the model-facing recall
+does not expose event ids; a quoted turn is the citation the owner can search for.
+
 The shell registers this face as the model-callable `propose_soul_edit` tool (#218). Its arguments
-are `{ content, reason }` — the full proposed text and why — and the result names the draft while
-saying the current version is unchanged. The tool has no approve or save path: the owner approves by
-saving in the star-sea editor, which is the same `actor: 'user'` write as any other edit.
+are `{ content, reason, sourceRefs, counterexample? | noCounterexampleScope? }` — the full proposed
+text, why, the ledger basis, and the counter-evidence or its search scope — and the result names the
+draft while saying the current version is unchanged. The tool has no approve or save path: the owner
+approves by saving in the star-sea editor, which is the same `actor: 'user'` write as any other edit.
 
 ## Endpoints (frozen)
 
@@ -88,7 +99,7 @@ proposed text so the owner can read it back.
 |---|---|---|
 | `soul_save` | An owner save appended a version. | `agentId`, `version`, `supersedes`, `contentHash`, `bytes`, `tokens` |
 | `soul_rollback` | An owner rollback appended a version. | `agentId`, `version`, `supersedes`, `fromVersion`, `contentHash`, `bytes`, `tokens` |
-| `soul_edit_proposed` | The agent drafted an edit. | `agentId`, `content`, `contentHash`, `bytes`, `tokens`, `reason?` |
+| `soul_edit_proposed` | The agent drafted an edit. | `agentId`, `content`, `contentHash`, `bytes`, `tokens`, `sourceRefs`, `diff`, `counterexample?`, `noCounterexampleScope?`, `reason?` |
 
 `audit(agentId)` returns only that agent's rows, newest first. A save is auditable by version, and a
 rollback is reversible because the version it copied still exists.
@@ -124,6 +135,10 @@ estimate and the limit beside the text area, and disables the save button while 
 | `soul_writer_required` | The write did not name the owner actor. |
 | `soul_version_unknown` | A rollback named a version that agent does not have. |
 | `soul_version_is_current` | A rollback named the version already current. |
+| `soul_source_refs_required` | A proposal named no ledger entry as its basis. |
+| `soul_diff_required` | A proposal would not change the current soul, so it has no diff. |
+| `soul_counterexample_required` | A proposal named neither a counterexample nor a no-counterexample search scope. |
+| `soul_evidence_ambiguous` | A proposal named both a counterexample and a no-counterexample scope. |
 
 ## Zero-write proof under the revised rule (frozen)
 
