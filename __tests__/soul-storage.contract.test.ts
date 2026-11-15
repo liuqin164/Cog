@@ -144,8 +144,10 @@ describe('the agent may read and propose, never save (#194 discriminator 2)', ()
     const backend = new KernelAgentMemoryBackend(kernel, { agentId: 'agent-p' });
     const proposal = backend.proposeSoulEdit({ content: 'proposal v1\n', reason: 'shorter' });
     expect(proposal.content).toBe('proposal v1\n');
+    expect(proposal.reason).toBe('shorter');
     expect(kernel.soul.read('agent-p')?.content).toBe('proposal v0\n');
     expect(backend.soul().proposal?.content).toBe('proposal v1\n');
+    expect(backend.soul().proposal?.reason).toBe('shorter');
     expect(kernel.soul.audit('agent-p').some((entry) => entry.action === 'soul_edit_proposed')).toBe(true);
   });
 

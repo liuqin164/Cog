@@ -353,20 +353,20 @@ export class SoulService {
     const scope = requireAgent(agentId);
     try {
       const row = this.db.prepare(`
-        SELECT details_json, created_at FROM governance_audit_log
+        SELECT details_json, reason, created_at FROM governance_audit_log
         WHERE action = 'soul_edit_proposed'
           AND json_extract(details_json, '$.agentId') = ?
         ORDER BY created_at DESC, audit_id DESC LIMIT 1
-      `).get(scope) as { details_json: string | null; created_at: number } | undefined;
+      `).get(scope) as { details_json: string | null; reason: string | null; created_at: number } | undefined;
       if (!row?.details_json) return undefined;
       const details = JSON.parse(row.details_json) as {
-        agentId?: string; content?: string; reason?: string; contentHash?: string; tokens?: number; bytes?: number;
+        agentId?: string; content?: string; contentHash?: string; tokens?: number; bytes?: number;
       };
       if (typeof details.content !== 'string') return undefined;
       return {
         agentId: scope,
         content: details.content,
-        ...(details.reason ? { reason: details.reason } : {}),
+        ...(row.reason ? { reason: row.reason } : {}),
         contentHash: details.contentHash ?? hashContent(details.content),
         tokens: details.tokens ?? soulTokens(details.content),
         bytes: details.bytes ?? Buffer.byteLength(details.content, 'utf8'),
