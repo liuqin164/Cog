@@ -68,6 +68,24 @@ export class EmergenceService {
   }
 
   /**
+   * A cheap "is anything due" probe before the full candidate query. The query scans the recent
+   * ledger and classifies every candidate; an idle tick with nothing due should not pay for it.
+   */
+  hasDue(now = Date.now()): boolean {
+    try {
+      if (this.backend.nextWakeAt({ projectId: this.options.projectId, agentId: this.options.agentId, now }) === now) return true;
+      return this.backend.listCommitments({
+        projectId: this.options.projectId,
+        now,
+        statuses: ['due_soon', 'overdue'],
+      }).length > 0;
+    } catch {
+      // A failed probe must not drop a due promise; let the full query decide.
+      return true;
+    }
+  }
+
+  /**
    * One deterministic query. `now` is the caller's clock; there is no user text to match, because
    * a due promise or intention is a reason to speak whether or not the owner just said anything.
    */

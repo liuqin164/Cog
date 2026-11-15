@@ -106,8 +106,6 @@ const RESUME_BACKOFF_CAP_MS = 6 * 60 * 60_000;
  */
 const EMERGENCE_COOLDOWN_MS = 2 * 60_000;
 const EMERGENCE_DAILY_LIMIT = 8;
-/** The compiled books are incremental but each pass scans the ledger; one pass a minute is enough. */
-const PROACTIVE_COMPILE_INTERVAL_MS = 60_000;
 const MAX_EMERGENCE_CONSUMED = 500;
 
 export interface CompanionShellOptions {
@@ -142,6 +140,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   private clock?: ClockService;
   private dream?: { integrate(...args: [string, string, number?]): Promise<{ localDate: string; eventCount: number; sourceRefs: unknown[]; summary: string }> };
   private emergence?: {
+    hasDue?(now?: number): boolean;
     decide(now?: number): {
       candidates: Array<{ id: string; text: string; reason: string; source?: string; observedAt?: number; sourceRefs?: Array<{ eventId?: string }> }>;
       suppressed: unknown[];
@@ -159,7 +158,6 @@ export class CompanionShell implements ShellControl, AttachShell {
   private contextTokenEstimate = 0;
   /** The latest project event the compiled books were last brought up to. */
   private compiledThroughEventId?: string;
-  private lastProactiveCompileAt?: number;
   /** Whether a soul-read failure has been traced; the read itself is retried on the next turn. */
   private soulFailureTraced = false;
   private workLabel = '';
@@ -230,6 +228,9 @@ export class CompanionShell implements ShellControl, AttachShell {
       projectTimeZone: this.config.timeZone,
       snapshotsDir: join(this.config.dataDir, 'snapshots'),
     });
+    // The WAL is mmap'd and counts against RSS. The 4 MB default lets it grow to the threshold on a
+    // busy turn stream; 256 pages (~1 MB) keeps the native footprint bounded without a shell timer.
+    this.kernel.factStore.getDatabase().exec('PRAGMA wal_autocheckpoint=256');
     // The resident's own terminal is a private conversation (#162), registered through F12's
     // contract (#166). A future channel registers its own session here; a connection that never
     // registers answers as `public`.
@@ -1048,9 +1049,11 @@ export class CompanionShell implements ShellControl, AttachShell {
       // The candidate query must run before F2's tick: a due wake intention is still pending at
       // the query, while the tick that follows marks it fired. A prospective memory stays listed
       // after its notification, so both first-class lanes are seen once.
-      const allowed = this.emergenceAllowed(at);
+      // A test double without `hasDue` is asked every tick, which is the old injected behaviour.
+      const due = this.emergence!.hasDue?.(at) ?? true;
+      const allowed = due && this.emergenceAllowed(at);
       const decision = allowed ? this.emergence!.decide(at) : undefined;
-      this.runKernelWakeTick(at);
+      if (due) this.runKernelWakeTick(at);
       const candidate = decision?.candidates.find((item) => !this.emergenceConsumed(item));
       if (candidate) {
         // Consume before acting: a crash during the run must not free the same candidate to run again.
@@ -1066,7 +1069,7 @@ export class CompanionShell implements ShellControl, AttachShell {
         }
         void this.host.bus.emit('companion_emergence', { id: candidate.id, reason: candidate.reason, text: candidate.text });
         await this.executeRun(candidate.text, 'emergence_due', `emergence:${candidate.id}`);
-      } else if (!allowed) {
+      } else if (due && !allowed) {
         this.trace.append('emergence_skipped', { at, reason: 'cooldown_or_daily_cap' });
       }
     }
@@ -1088,7 +1091,6 @@ export class CompanionShell implements ShellControl, AttachShell {
       // Idle ticks are the common case; recompiling two books for no new turn is the kind of cost
       // a long-lived resident pays forever.
       if (latest === (this.compiledThroughEventId ?? '')) return;
-      if (this.lastProactiveCompileAt !== undefined && at - this.lastProactiveCompileAt < PROACTIVE_COMPILE_INTERVAL_MS) return;
       this.kernel.commitments.compile({ projectId, now: at });
       this.kernel.intentions.compile({ projectId, now: at });
       for (const intention of this.kernel.intentions.list({ projectId, statuses: ['active'], now: at })) {
@@ -1097,7 +1099,6 @@ export class CompanionShell implements ShellControl, AttachShell {
         this.trace.append('intention_scheduled_for_wake', { intentionId: intention.intentionId, dueAt: intention.dueAt, at });
       }
       this.compiledThroughEventId = latest;
-      this.lastProactiveCompileAt = at;
     } catch (error) {
       this.trace.append('proactive_compile_failed', { at, message: error instanceof Error ? error.message : String(error) });
     }
