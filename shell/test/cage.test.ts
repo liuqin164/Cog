@@ -7,7 +7,8 @@ import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
 
 /** The cage axis is the whole point of these tests, so it stays a named argument. */
 function cageShell(dir: string, provider: ScriptedProvider, budgets: CageConfig) {
-  return makeShell(dir, provider, { budgets });
+  // These cases pin both tiers: they are about the enforcement points, not about tier selection.
+  return makeShell(dir, provider, { budgets, workBudget: budgets });
 }
 
 function cageViolations(shell: CompanionShell): Array<Record<string, unknown>> {

@@ -43,7 +43,8 @@ Ryu 2026-11-12 定的五条要求各自落在哪一行代码、哪个判别测�
 
 - **快照的边界**：快照是内核数据库文件（`VACUUM INTO` 出来的整份，含壳自有的 `companion_soul` 表
   与一切同库表），带 `schemaVersion` / `embeddingDimension` / 校验和。壳侧那几份 JSON 状态
-  （`checkpoint.json`、`routes.json`、`install.json`）不参与版本迁移，切换也不动它们。F19（#196）的
+  （`checkpoint.json`、`routes.json`、`install.json`、运营配置 `budgets.json`）不参与版本迁移，
+  切换也不动它们。F19（#196）的
   整脑备份/搬家包/恢复演练仍是它自己的票；本轮的快照面是那里已有的「单文件、可校验、可恢复」形状，
   与 F19 的夜间自动轮换快照是**同一张脸的两个消费者**，不是两套。
 - **健康门的分工**：`runDoctor` 的六项有四项需要进程在跑（health 面、仅回环、附着 socket、服务单元），

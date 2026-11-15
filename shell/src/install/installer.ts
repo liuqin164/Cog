@@ -17,6 +17,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { createMemoryKernel } from 'cogmem';
+import { DEFAULT_AUTONOMOUS_BUDGET, DEFAULT_WORK_BUDGET } from '../config.ts';
 import { DEFAULT_SOUL, readSoul, writeDefaultSoul } from './soul.ts';
 import { MG_DEFAULT_BASE_URL, MG_DEFAULT_MODEL, MODEL_PRESETS, modelEnv, probeModel, type ModelChoice, type ModelProviderKind } from './model.ts';
 import { RouteStore, safeRouteName, type ModelRoute } from '../model/routes.ts';
@@ -423,6 +424,13 @@ export class Installer {
     mkdirSync(snapshots, { recursive: true, mode: 0o700 });
     chmodSync(snapshots, 0o700);
     this.io.say(`数据目录：${this.choices.dataDir}（0700，快照目录 ${snapshots}）`);
+    // The operating copy of the two cages. Never overwritten: a re-run must not undo an edited
+    // number. The resident falls back to the source defaults when the file is absent.
+    const budgetsPath = join(this.choices.dataDir, 'budgets.json');
+    if (!existsSync(budgetsPath)) {
+      writeFileSync(budgetsPath, `${JSON.stringify({ autonomous: DEFAULT_AUTONOMOUS_BUDGET, work: DEFAULT_WORK_BUDGET }, null, 2)}\n`, { mode: 0o600 });
+      this.io.say(`预算：紧笼 ${DEFAULT_AUTONOMOUS_BUDGET.maxTurnsPerRun} 回合 / ${DEFAULT_AUTONOMOUS_BUDGET.maxTokensPerRun} token；工作档 ${DEFAULT_WORK_BUDGET.maxTurnsPerRun} 回合 / ${DEFAULT_WORK_BUDGET.maxTokensPerRun} token（${budgetsPath}）`);
+    }
 
     // 空库初始化 through the kernel's own API — migrations and schema come from the kernel, not here.
     const kernel = createMemoryKernel({ dbPath: this.dbPath, projectTimeZone: this.choices.timeZone });

@@ -88,6 +88,21 @@ export interface ShellRuntimeState {
   costDayDate?: string;
   costDayTokens?: number;
   /**
+   * The user-assigned task open across runs. Its `origin` is the ledger provenance the budget tier
+   * reads: only `user_message` earns the work cage and only while the task is unfinished. A budget
+   * stop fills `stoppedStep` / `nextStep`, which the next run gets in its prompt tail.
+   */
+  openAssignment?: {
+    id: string;
+    origin: 'user_message';
+    text: string;
+    startedAt: number;
+    lastRunId?: string;
+    stoppedAt?: number;
+    stoppedStep?: string;
+    nextStep?: string;
+  };
+  /**
    * `/pause`: while true the shell's ingest call points write nothing to the kernel. It is state, not
    * a UI toggle — a pause that a restart forgot would resume capturing behind the user's back, so it
    * lives in the checkpoint with everything else the next process must honour.

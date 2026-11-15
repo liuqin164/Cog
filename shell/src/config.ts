@@ -4,6 +4,14 @@
  * The model endpoint is the mg gateway (magpie) that the box already runs: one OpenAI-compatible
  * base URL, model id `auto/deepseek-v4.1-flash`.
  */
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+export interface RunBudget {
+  maxTurnsPerRun: number;
+  maxTokensPerRun: number;
+}
+
 export interface ShellConfig {
   /** Working directory the read/write/edit/bash tools are caged to. */
   workspaceRoot: string;
@@ -22,7 +30,13 @@ export interface ShellConfig {
   model: { baseUrl: string; apiKey: string; model: string; timeoutMs: number };
   /** The context bandwidth gauge's denominator (spec §6's "甜点带宽"); F14 has no controller yet. */
   contextSweetSpot: number;
-  budgets: { maxTurnsPerRun: number; maxTokensPerRun: number; toolWhitelist: string[] | null };
+  /** The tight cage: pure autonomous runs (emergence, idle checks, dreams) and the fallback. */
+  budgets: RunBudget & { toolWhitelist: string[] | null };
+  /**
+   * The work cage: a user-assigned run, or an autonomous wake continuing one. Kept beside `budgets`
+   * because the tool whitelist is shared and only the two numeric limits differ.
+   */
+  workBudget: RunBudget;
   dream: { windowStartHour: number; windowEndHour: number; runKernelNight: boolean; maxEpisodes: number };
   idleWakeIntervalMs: number;
   /** Tick interval for due intents/dream/emergence. Deterministic; tests drive ticks directly. */
@@ -46,9 +60,53 @@ function env(name: string): string | undefined {
   return value === undefined || value === '' ? undefined : value;
 }
 
+/**
+ * `<dataDir>/budgets.json`, the operating copy beside the rhythm env file. Both tiers are optional:
+ * a missing file or missing tier falls back to the source defaults. A file that exists but cannot
+ * be understood is a startup error, not a silent fallback — a user who edited a number must not be
+ * left believing it applied.
+ */
+function readBudgetConfig(dataDir: string): { work?: Partial<RunBudget>; autonomous?: Partial<RunBudget> } {
+  const path = join(dataDir, 'budgets.json');
+  if (!existsSync(path)) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (error) {
+    throw new Error(`invalid_budgets_config: ${path}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error(`invalid_budgets_config: ${path}: expected an object`);
+  const record = parsed as Record<string, unknown>;
+  return {
+    ...(record.work === undefined ? {} : { work: budgetTier(record.work, path, 'work') }),
+    ...(record.autonomous === undefined ? {} : { autonomous: budgetTier(record.autonomous, path, 'autonomous') }),
+  };
+}
+
+function budgetTier(value: unknown, path: string, name: string): Partial<RunBudget> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error(`invalid_budgets_config: ${path}: ${name} must be an object`);
+  const record = value as Record<string, unknown>;
+  const out: Partial<RunBudget> = {};
+  for (const key of ['maxTurnsPerRun', 'maxTokensPerRun'] as const) {
+    const raw = record[key];
+    if (raw === undefined) continue;
+    if (typeof raw !== 'number' || !Number.isInteger(raw) || raw <= 0) {
+      throw new Error(`invalid_budgets_config: ${path}: ${name}.${key} must be a positive integer`);
+    }
+    out[key] = raw;
+  }
+  return out;
+}
+
+export const DEFAULT_AUTONOMOUS_BUDGET: RunBudget = { maxTurnsPerRun: 6, maxTokensPerRun: 20_000 };
+export const DEFAULT_WORK_BUDGET: RunBudget = { maxTurnsPerRun: 32, maxTokensPerRun: 400_000 };
+
 export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellConfig {
   const workspaceRoot = overrides.workspaceRoot ?? env('COGMEM_SHELL_WORKSPACE') ?? process.cwd();
   const dataDir = overrides.dataDir ?? env('COGMEM_SHELL_DATA') ?? `${workspaceRoot}/.cogmem-shell`;
+  const operating = readBudgetConfig(dataDir);
+  const autonomous: RunBudget = { ...DEFAULT_AUTONOMOUS_BUDGET, ...operating.autonomous };
+  const work: RunBudget = { ...DEFAULT_WORK_BUDGET, ...operating.work };
   return {
     workspaceRoot,
     projectId: overrides.projectId ?? env('COGMEM_SHELL_PROJECT') ?? 'companion',
@@ -66,7 +124,8 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
     // `propose_command` and `propose_soul_edit` are on the default whitelist because they are how
     // the agent offers the user a command or a soul draft; leaving them off would make every offer a
     // cage violation.
-    budgets: overrides.budgets ?? { maxTurnsPerRun: 6, maxTokensPerRun: 20_000, toolWhitelist: ['read', 'write', 'edit', 'bash', 'propose_command', 'propose_soul_edit'] },
+    budgets: overrides.budgets ?? { ...autonomous, toolWhitelist: ['read', 'write', 'edit', 'bash', 'propose_command', 'propose_soul_edit'] },
+    workBudget: overrides.workBudget ?? work,
     contextSweetSpot: overrides.contextSweetSpot ?? 6_000,
     // The install's rhythm step is what fills these; the literals stay the fallback for a hand-run
     // shell that was never installed.

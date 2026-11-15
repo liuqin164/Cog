@@ -21,7 +21,7 @@ import { clockPlugin, ClockService } from './plugins/clock.ts';
 import { providedModelPlugin } from './plugins/mg-provider.ts';
 import { ModelRouter, modelRouterPlugin, routeLine } from './model/router.ts';
 import { RouteStore, redactUrl } from './model/routes.ts';
-import { cagePlugin, RunCage } from './plugins/cage.ts';
+import { cagePlugin, RunCage, type CageTier } from './plugins/cage.ts';
 import { builtinToolsPlugin } from './plugins/builtin-tools.ts';
 import { coreCommandFor, availableCoreCommand, unknownCommandReply, type CommandHost, type CommandReply } from './commands.ts';
 import { proposalPlugin } from './plugins/proposal.ts';
@@ -118,6 +118,8 @@ export class CompanionShell implements ShellControl, AttachShell {
   private workLabel = '';
   private runTurns = 0;
   private runTokens = 0;
+  /** The tier this process last started a run with; the work bar shows that tier's limits. */
+  private runTier: CageTier = 'autonomous';
   /**
    * The provider's own prompt-cache account for the run in flight (#165 round 21): `hit` is what the
    * endpoint reported served from cache, `miss` the remainder of the prompt, `percent` their ratio.
@@ -368,7 +370,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     }
     this.host.register(clockPlugin({ timeZone: this.config.timeZone, idleWakeIntervalMs: this.config.idleWakeIntervalMs, dreamWindow: { startHour: this.config.dream.windowStartHour, endHour: this.config.dream.windowEndHour } }));
     this.host.register(provider, this.config.model);
-    this.host.register(cagePlugin(this.config.budgets, this.trace));
+    this.host.register(cagePlugin(this.config.budgets, this.trace, { ...this.config.workBudget, toolWhitelist: this.config.budgets.toolWhitelist }));
     this.host.register(builtinToolsPlugin(), { workspaceRoot: this.config.workspaceRoot });
     this.host.register(proposalPlugin());
     this.host.register(capturePlugin({ agentId: this.config.agentId, projectId: this.config.projectId, sessionId: this.config.sessionId, paused: () => this.capturePaused }));
@@ -568,8 +570,25 @@ export class CompanionShell implements ShellControl, AttachShell {
       'To hand the user a shell command, call `propose_command` with the command and a one-line reason. It is only an offer: the command runs when the user confirms it, never before, so never say it already ran.',
       'Never invent a memory. If recall is empty, say so plainly.',
     ].filter(Boolean);
-    const tail = [this.clock ? this.clock.timeContextBlock(this.now()) : ''].filter(Boolean);
+    const tail = [this.clock ? this.clock.timeContextBlock(this.now()) : '', this.openAssignmentBlock()].filter(Boolean);
     return { pinned: pinned.join('\n\n'), tail: tail.join('\n\n') };
+  }
+
+  /**
+   * F14's open-item lane, on the prompt's existing variable-tail seam. A budget stop writes where it
+   * stopped and what is next; the next run (user or autonomous wake) reads it verbatim, so the work
+   * does not restart from the same file read.
+   */
+  private openAssignmentBlock(): string {
+    const assignment = this.machine.runtime.openAssignment;
+    if (!assignment) return '';
+    return [
+      '<open-assignment>',
+      `user-assigned task: ${assignment.text}`,
+      assignment.stoppedStep ? `stopped at: ${assignment.stoppedStep}` : '',
+      assignment.nextStep ? `next: ${assignment.nextStep}` : '',
+      '</open-assignment>',
+    ].filter(Boolean).join('\n');
   }
 
   systemPrompt(): string {
@@ -604,6 +623,10 @@ export class CompanionShell implements ShellControl, AttachShell {
       this.emitSteering();
       return undefined;
     }
+    // The user's message is the assignment's provenance. It is written before the run so an
+    // autonomous wake after a budget stop can inherit the work tier from the ledger, not from a
+    // guess about what the wake's text means.
+    this.beginUserAssignment(text);
     this.clock!.markInteraction(text, this.now());
     await this.wakeIfNeeded('message_received');
     if (this.machine.state !== 'IDLE') throw new Error(`submit_requires_idle: state is ${this.machine.state}`);
@@ -621,12 +644,67 @@ export class CompanionShell implements ShellControl, AttachShell {
 
   private async executeRun(text: string, trigger: 'message_received' | 'emergence_due', reason: string): Promise<RunSummary> {
     const runId = `run-${this.now().toString(36)}-${randomUUID().slice(0, 8)}`;
-    this.cage!.beginRun(runId);
+    const tier = this.budgetTier(trigger);
+    this.runTier = tier;
+    this.cage!.beginRun(runId, tier);
     await this.machine.dispatch(trigger, { runId, reason });
     const summary = await this.runtime!.run({ runId, sessionId: this.config.sessionId, userText: text });
+    this.settleAssignment(summary, tier);
     await this.machine.dispatch(summary.stopReason, { reason: summary.error ?? reason, runId });
     if (!this.clock!.nextPendingIntent()) this.clock!.scheduleIdleWake();
     return summary;
+  }
+
+  /**
+   * Which cage this run gets. A user message is an assignment by definition. An autonomous wake
+   * inherits the work tier only when the ledger still holds an unfinished user-assigned task; the
+   * check reads that task's `origin`, never the wake's words.
+   */
+  private budgetTier(trigger: 'message_received' | 'emergence_due'): CageTier {
+    if (trigger === 'message_received') return 'work';
+    return this.machine.runtime.openAssignment?.origin === 'user_message' ? 'work' : 'autonomous';
+  }
+
+  private beginUserAssignment(text: string): void {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    this.machine.updateRuntime({
+      openAssignment: {
+        id: `assignment-${this.now().toString(36)}-${randomUUID().slice(0, 8)}`,
+        origin: 'user_message',
+        text: trimmed.slice(0, 500),
+        startedAt: this.now(),
+      },
+    });
+  }
+
+  /**
+   * A completed run closes the assignment; a budget stop keeps it open and writes the place and the
+   * next move. A run error or abort keeps it open too: the work is unfinished, and the next wake
+   * must not mistake it for a fresh autonomous idea.
+   */
+  private settleAssignment(summary: RunSummary, tier: CageTier): void {
+    const assignment = this.machine.runtime.openAssignment;
+    if (!assignment || tier !== 'work') return;
+    if (summary.stopReason === 'run_complete') {
+      this.machine.updateRuntime({ openAssignment: undefined });
+      return;
+    }
+    if (summary.stopReason !== 'budget_exceeded') {
+      this.machine.updateRuntime({ openAssignment: { ...assignment, lastRunId: summary.runId } });
+      return;
+    }
+    const lastCall = summary.toolCalls.at(-1);
+    const stoppedStep = lastCall
+      ? `${lastCall.toolName} ${truncate(JSON.stringify(lastCall.input ?? {}), 240)}`
+      : `after turn ${summary.turns}`;
+    const nextStep = lastCall
+      ? `resume from ${lastCall.toolName}: check its last result, then continue the user-assigned task`
+      : 'continue the user-assigned task from its next step; the budget stopped this run before it finished';
+    this.machine.updateRuntime({
+      openAssignment: { ...assignment, lastRunId: summary.runId, stoppedAt: this.now(), stoppedStep, nextStep },
+    });
+    this.trace.append('assignment_stopped', { runId: summary.runId, assignmentId: assignment.id, stoppedStep, nextStep });
   }
 
   /** One deterministic tick: due intent, then dream window, then the emergence decision point. */
@@ -831,14 +909,15 @@ export class CompanionShell implements ShellControl, AttachShell {
   }
 
   currentWork(): WorkState {
+    const budget = this.runTier === 'work' ? this.config.workBudget : this.config.budgets;
     return {
       active: this.machine.state === 'RUNNING',
       label: this.workLabel,
       startedAt: this.runStartedAt,
       turns: this.runTurns,
-      maxTurns: this.config.budgets.maxTurnsPerRun,
+      maxTurns: budget.maxTurnsPerRun,
       tokens: this.runTokens,
-      maxTokens: this.config.budgets.maxTokensPerRun,
+      maxTokens: budget.maxTokensPerRun,
     };
   }
 
@@ -1380,5 +1459,9 @@ function promptCacheAccount(usage: TurnUsage | undefined): { hit: number; miss: 
   const miss = usage?.cacheMiss ?? (usage?.input === undefined ? undefined : Math.max(0, usage.input - hit));
   if (miss === undefined || hit + miss <= 0) return undefined;
   return { hit, miss, percent: Math.round((hit / (hit + miss)) * 100) };
+}
+
+function truncate(text: string, limit: number): string {
+  return text.length <= limit ? text : `${text.slice(0, limit)}…`;
 }
 

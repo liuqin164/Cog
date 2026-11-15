@@ -21,6 +21,9 @@ export interface CageConfig {
   toolWhitelist: string[] | null;
 }
 
+/** Which numeric limits this run uses. The whitelist and every enforcement point stay shared. */
+export type CageTier = 'work' | 'autonomous';
+
 /** The one shape: `runId`, `reason`, `violation`, and exactly one detail field. */
 export type CageViolation =
   | { violation: 'tool_whitelist'; toolName: string }
@@ -30,23 +33,37 @@ export type CageViolation =
 export class RunCage implements RunBudget {
   private tokens = 0;
   private runId?: string;
+  private limits: CageConfig;
+  private tier: CageTier = 'autonomous';
 
-  constructor(private readonly config: CageConfig, private readonly trace?: TraceLog) {}
+  constructor(private readonly config: CageConfig, private readonly trace?: TraceLog, private readonly work: CageConfig = config) {
+    this.limits = config;
+  }
 
-  beginRun(runId: string): void {
+  beginRun(runId: string, tier: CageTier = 'autonomous'): void {
     this.runId = runId;
+    this.tier = tier;
+    this.limits = tier === 'work' ? this.work : this.config;
     this.tokens = 0;
+    // The tier is recorded once per run, before any turn, so a reader can tell which limits a
+    // `cage_violation` was measured against without inferring it from the trigger.
+    this.trace?.append('run_budget', {
+      runId,
+      tier,
+      maxTurnsPerRun: this.limits.maxTurnsPerRun,
+      maxTokensPerRun: this.limits.maxTokensPerRun,
+    });
   }
 
   checkTurn(turnIndex: number): { exceeded: boolean; reason?: string } {
-    if (turnIndex <= this.config.maxTurnsPerRun) return { exceeded: false };
-    return this.overrun({ violation: 'turn_budget', turnIndex }, `turn_budget_exceeded: ${turnIndex} > ${this.config.maxTurnsPerRun}`);
+    if (turnIndex <= this.limits.maxTurnsPerRun) return { exceeded: false };
+    return this.overrun({ violation: 'turn_budget', turnIndex }, `turn_budget_exceeded: ${turnIndex} > ${this.limits.maxTurnsPerRun}`);
   }
 
   addTokens(tokens: number): { exceeded: boolean; reason?: string } {
     this.tokens += tokens;
-    if (this.tokens <= this.config.maxTokensPerRun) return { exceeded: false };
-    return this.overrun({ violation: 'token_budget', tokens: this.tokens }, `token_budget_exceeded: ${this.tokens} > ${this.config.maxTokensPerRun}`);
+    if (this.tokens <= this.limits.maxTokensPerRun) return { exceeded: false };
+    return this.overrun({ violation: 'token_budget', tokens: this.tokens }, `token_budget_exceeded: ${this.tokens} > ${this.limits.maxTokensPerRun}`);
   }
 
   toolAllowed(name: string): boolean {
@@ -76,12 +93,12 @@ export class RunCage implements RunBudget {
   }
 }
 
-export function cagePlugin(config: CageConfig, trace?: TraceLog): NativePlugin {
+export function cagePlugin(config: CageConfig, trace?: TraceLog, work?: CageConfig): NativePlugin {
   return {
     name: 'cage',
     provide: ['cage'],
     apply(ctx) {
-      const cage = new RunCage(config, trace);
+      const cage = new RunCage(config, trace, work);
       cage.register(ctx.getService<EventBus>('eventBus'));
       ctx.provide('cage', cage);
     },

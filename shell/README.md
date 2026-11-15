@@ -36,6 +36,37 @@ Useful flags: `--workspace <dir>`, `--data <dir>`, `--db <file>`, `--project <id
 `--tools read,write,edit,bash`, `--turns <n>`, `--tokens <n>`, `--http-port <n>`, `--no-http`,
 `--no-terminal`, `--attach`, `--no-pi`, `--pi-plugin <pkg-or-path>` (repeatable).
 
+## Budget tiers (#222)
+
+The cage still has one enforcement mechanism — the same hook points, whitelist and forced
+`budget_exceeded` → `IDLE` transition — but its numeric limits now come in two tiers:
+
+- **work** — a run the user assigned. A user message opens that assignment; 32 turns / 400k tokens
+  is the shipped default, because one real install task burned 20k on reading a few large source
+  files and never reached the download/register/load steps.
+- **tight** — pure autonomous runs (emergence, idle checks, scheduled wakes, dreams): 6 turns /
+  20k tokens, unchanged.
+
+An autonomous wake inherits the work tier only when the ledger still holds an unfinished
+user-assigned task (the assignment's `origin` is `user_message`); a fresh autonomous idea stays
+tight. This is a provenance read, not a keyword guess about the wake's text. `--turns` /
+`--tokens` still override the tight tier for a hand-run shell.
+
+Both tiers live in `<dataDir>/budgets.json`, beside the rhythm env file; the installer writes it
+once and never overwrites it. Edit a number and restart the service — no source edit, no rebuild:
+
+```json
+{
+  "autonomous": { "maxTurnsPerRun": 6, "maxTokensPerRun": 20000 },
+  "work":       { "maxTurnsPerRun": 32, "maxTokensPerRun": 400000 }
+}
+```
+
+A file that exists but does not parse (or names a non-positive limit) stops startup with
+`invalid_budgets_config` rather than silently falling back. When the work tier cuts a user
+assignment, the checkpoint keeps the task open with the tool call it stopped on and the next move;
+the next run reads that block from the prompt tail, so it does not restart from the same file read.
+
 ## `install`: the F21 bootstrap (#203)
 
 `bin/install` is the install guide for a self-owned companion — six steps, text in / text out, no TUI
