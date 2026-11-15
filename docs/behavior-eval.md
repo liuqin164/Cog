@@ -85,7 +85,7 @@ the tree; the main checkout never carries the broken line.
 
 | Injection | Target | Expected red scenarios |
 |---|---|---|
-| `life-default-lane-open` | the default-recall life gate in `src/agent/AgentMemoryBackend.ts` | `withhold-life-default`, `correct-life-tier` |
+| `life-default-lane-open` | `eventHoldsLifeSensitivityMark()` in `src/security/LifeSensitivity.ts` | `withhold-life-default`, `correct-life-tier` |
 
 Protocol:
 
