@@ -14,6 +14,7 @@ import {
   SOUL_MAX_TOKENS,
   SOUL_VERSION_FIELDS,
   SoulError,
+  soulDiff,
   soulTokens,
 } from '../src/soul/index.js';
 import { makeTempDir } from './helpers/tmp.js';
@@ -142,19 +143,76 @@ describe('the agent may read and propose, never save (#194 discriminator 2)', ()
   test('a proposal is stored in the audit ledger, surfaced on the read, and never changes the current soul', () => {
     kernel.soul.ensureDefault('agent-p', 'proposal v0\n', 1_000);
     const backend = new KernelAgentMemoryBackend(kernel, { agentId: 'agent-p' });
-    const proposal = backend.proposeSoulEdit({ content: 'proposal v1\n', reason: 'shorter' });
+    const proposal = backend.proposeSoulEdit({
+      content: 'proposal v1\n',
+      reason: 'shorter',
+      sourceRefs: ['evt-1'],
+      counterexample: 'the owner once asked for more detail',
+    });
     expect(proposal.content).toBe('proposal v1\n');
     expect(proposal.reason).toBe('shorter');
+    expect(proposal.sourceRefs).toEqual(['evt-1']);
+    expect(proposal.diff).toBe('-proposal v0\n+proposal v1');
+    expect(proposal.counterexample).toBe('the owner once asked for more detail');
     expect(kernel.soul.read('agent-p')?.content).toBe('proposal v0\n');
     expect(backend.soul().proposal?.content).toBe('proposal v1\n');
     expect(backend.soul().proposal?.reason).toBe('shorter');
+    expect(backend.soul().proposal?.diff).toBe('-proposal v0\n+proposal v1');
+    expect(backend.soul().proposal?.sourceRefs).toEqual(['evt-1']);
     expect(kernel.soul.audit('agent-p').some((entry) => entry.action === 'soul_edit_proposed')).toBe(true);
   });
 
   test('a backend without a bound agent cannot read or propose', () => {
     const backend = new KernelAgentMemoryBackend(kernel);
     expect(() => backend.soul()).toThrow('agent_id_required');
-    expect(() => backend.proposeSoulEdit({ content: 'x' })).toThrow('agent_id_required');
+    expect(() => backend.proposeSoulEdit({ content: 'x', sourceRefs: ['evt-1'], counterexample: 'none' })).toThrow('agent_id_required');
+  });
+});
+
+describe('a proposal must carry its evidence (#237)', () => {
+  test('the line diff is relative to the current soul and omits unchanged lines', () => {
+    expect(soulDiff('soul v0\n', 'soul v1\n')).toBe('-soul v0\n+soul v1');
+    expect(soulDiff('same\n', 'same\n')).toBe('');
+    expect(soulDiff('a\nb\nc\n', 'a\nB\nc\n')).toBe('-b\n+B');
+  });
+
+  test('no sourceRefs, no counterexample, and a no-op edit are each refused before the draft is written', () => {
+    kernel.soul.ensureDefault('agent-e', 'evidence v0\n', 1_000);
+    const backend = new KernelAgentMemoryBackend(kernel, { agentId: 'agent-e' });
+    const base = { content: 'evidence v1\n', reason: 'better' };
+
+    expect(() => backend.proposeSoulEdit({ ...base, sourceRefs: undefined as never, counterexample: 'one' })).toThrow('soul_source_refs_required');
+    expect(() => backend.proposeSoulEdit({ ...base, sourceRefs: [] })).toThrow('soul_source_refs_required');
+    expect(() => backend.proposeSoulEdit({ ...base, sourceRefs: ['evt-1'] })).toThrow('soul_counterexample_required');
+    expect(() => backend.proposeSoulEdit({
+      ...base,
+      sourceRefs: ['evt-1'],
+      counterexample: 'one',
+      noCounterexampleScope: 'searched',
+    })).toThrow('soul_evidence_ambiguous');
+    expect(() => backend.proposeSoulEdit({
+      content: 'evidence v0\n',
+      sourceRefs: ['evt-1'],
+      counterexample: 'one',
+    })).toThrow('soul_diff_required');
+
+    expect(backend.soul().proposal).toBeUndefined();
+    expect(kernel.soul.audit('agent-e').some((entry) => entry.action === 'soul_edit_proposed')).toBe(false);
+    expect(kernel.soul.read('agent-e')?.content).toBe('evidence v0\n');
+  });
+
+  test('a declared no-counterexample search scope is accepted and surfaced', () => {
+    kernel.soul.ensureDefault('agent-n', 'scope v0\n', 1_000);
+    const backend = new KernelAgentMemoryBackend(kernel, { agentId: 'agent-n' });
+    const proposal = backend.proposeSoulEdit({
+      content: 'scope v1\n',
+      sourceRefs: ['evt-a', 'evt-b', 'evt-a'],
+      noCounterexampleScope: 'the last 30 days of turns, keyword "detail"',
+    });
+    expect(proposal.sourceRefs).toEqual(['evt-a', 'evt-b']);
+    expect(proposal.noCounterexampleScope).toContain('30 days');
+    expect(proposal.counterexample).toBeUndefined();
+    expect(backend.soul().proposal?.noCounterexampleScope).toContain('30 days');
   });
 });
 
@@ -166,8 +224,8 @@ describe('two agents are isolated (#194 discriminator 3)', () => {
     kernel.soul.save({ agentId: 'iso-b', content: 'B v1\n', actor: 'user', now: 2_000 });
     const a = new KernelAgentMemoryBackend(kernel, { agentId: 'iso-a' });
     const b = new KernelAgentMemoryBackend(kernel, { agentId: 'iso-b' });
-    a.proposeSoulEdit({ content: 'A proposal\n' });
-    b.proposeSoulEdit({ content: 'B proposal\n' });
+    a.proposeSoulEdit({ content: 'A proposal\n', sourceRefs: ['evt-a'], counterexample: 'one' });
+    b.proposeSoulEdit({ content: 'B proposal\n', sourceRefs: ['evt-b'], counterexample: 'one' });
 
     expect(a.soul().current?.content).toBe('A v1\n');
     expect(b.soul().current?.content).toBe('B v1\n');

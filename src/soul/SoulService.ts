@@ -77,6 +77,10 @@ export const SOUL_ERROR_CODES = [
   'soul_writer_required',
   'soul_version_unknown',
   'soul_version_is_current',
+  'soul_source_refs_required',
+  'soul_diff_required',
+  'soul_counterexample_required',
+  'soul_evidence_ambiguous',
 ] as const;
 export type SoulErrorCode = (typeof SOUL_ERROR_CODES)[number];
 
@@ -99,6 +103,10 @@ export interface SoulProposal {
   agentId: string;
   content: string;
   reason?: string;
+  sourceRefs: string[];
+  diff: string;
+  counterexample?: string;
+  noCounterexampleScope?: string;
   contentHash: string;
   tokens: number;
   bytes: number;
@@ -149,6 +157,9 @@ export interface SoulProposeInput {
   agentId: string;
   content: string;
   reason?: string;
+  sourceRefs: string[];
+  counterexample?: string;
+  noCounterexampleScope?: string;
   now?: number;
 }
 
@@ -170,6 +181,28 @@ export function soulTokens(text: string): number {
   let units = 0;
   for (const char of text) units += CJK_RE.test(char) ? 1 : 0.25;
   return Math.ceil(units);
+}
+
+/**
+ * The line difference between the current soul and a proposal (#237). Common leading and trailing
+ * lines are omitted; every line inside the changed span is shown as removed then added. Linear in
+ * the number of lines — an LCS table over a 2,000-token soul is not worth its memory.
+ */
+export function soulDiff(before: string, after: string): string {
+  const a = before === '' ? [] : before.split('\n');
+  const b = after === '' ? [] : after.split('\n');
+  let start = 0;
+  while (start < a.length && start < b.length && a[start] === b[start]) start += 1;
+  let endA = a.length;
+  let endB = b.length;
+  while (endA > start && endB > start && a[endA - 1] === b[endB - 1]) {
+    endA -= 1;
+    endB -= 1;
+  }
+  return [
+    ...a.slice(start, endA).map((line) => `-${line}`),
+    ...b.slice(start, endB).map((line) => `+${line}`),
+  ].join('\n');
 }
 
 export function ensureSoulSchema(db: Database): void {
@@ -329,22 +362,40 @@ export class SoulService {
     const scope = requireAgent(input.agentId);
     const content = requireContent(input.content);
     this.assertLength(content);
+    const sourceRefs = requireSourceRefs(input.sourceRefs);
+    const counterexample = input.counterexample?.trim() || undefined;
+    const noCounterexampleScope = input.noCounterexampleScope?.trim() || undefined;
+    if (!counterexample && !noCounterexampleScope) throw new SoulError('soul_counterexample_required');
+    if (counterexample && noCounterexampleScope) throw new SoulError('soul_evidence_ambiguous');
+    const diff = soulDiff(readSoulVersion(this.db, scope)?.content ?? '', content);
+    if (diff === '') throw new SoulError('soul_diff_required');
     const now = input.now ?? this.now();
     const reason = input.reason?.trim() || undefined;
+    const contentHash = hashContent(content);
+    const bytes = Buffer.byteLength(content, 'utf8');
+    const tokens = soulTokens(content);
     this.writeAudit('soul_edit_proposed', scope, {
       agentId: scope,
       content,
-      contentHash: hashContent(content),
-      bytes: Buffer.byteLength(content, 'utf8'),
-      tokens: soulTokens(content),
+      contentHash,
+      bytes,
+      tokens,
+      sourceRefs,
+      diff,
+      ...(counterexample ? { counterexample } : {}),
+      ...(noCounterexampleScope ? { noCounterexampleScope } : {}),
     }, reason, now);
     return {
       agentId: scope,
       content,
       ...(reason ? { reason } : {}),
-      contentHash: hashContent(content),
-      tokens: soulTokens(content),
-      bytes: Buffer.byteLength(content, 'utf8'),
+      sourceRefs,
+      diff,
+      ...(counterexample ? { counterexample } : {}),
+      ...(noCounterexampleScope ? { noCounterexampleScope } : {}),
+      contentHash,
+      tokens,
+      bytes,
       proposedAt: now,
     };
   }
@@ -361,12 +412,29 @@ export class SoulService {
       if (!row?.details_json) return undefined;
       const details = JSON.parse(row.details_json) as {
         agentId?: string; content?: string; contentHash?: string; tokens?: number; bytes?: number;
+        sourceRefs?: unknown; diff?: unknown; counterexample?: unknown; noCounterexampleScope?: unknown;
       };
       if (typeof details.content !== 'string') return undefined;
+      const sourceRefs = Array.isArray(details.sourceRefs)
+        ? details.sourceRefs.filter((ref): ref is string => typeof ref === 'string' && ref.trim() !== '')
+        : [];
+      const diff = typeof details.diff === 'string' ? details.diff : '';
+      const counterexample = typeof details.counterexample === 'string' && details.counterexample.trim() !== ''
+        ? details.counterexample
+        : undefined;
+      const noCounterexampleScope = typeof details.noCounterexampleScope === 'string' && details.noCounterexampleScope.trim() !== ''
+        ? details.noCounterexampleScope
+        : undefined;
+      // A pre-#237 row has no evidence. It is not a reviewable proposal, so it is not surfaced.
+      if (sourceRefs.length === 0 || diff === '' || (!counterexample && !noCounterexampleScope)) return undefined;
       return {
         agentId: scope,
         content: details.content,
         ...(row.reason ? { reason: row.reason } : {}),
+        sourceRefs,
+        diff,
+        ...(counterexample ? { counterexample } : {}),
+        ...(noCounterexampleScope ? { noCounterexampleScope } : {}),
         contentHash: details.contentHash ?? hashContent(details.content),
         tokens: details.tokens ?? soulTokens(details.content),
         bytes: details.bytes ?? Buffer.byteLength(details.content, 'utf8'),
@@ -506,6 +574,21 @@ function requireUserActor(actor: unknown): 'user' {
 function requireContent(content: unknown): string {
   if (typeof content !== 'string' || content.trim() === '') throw new SoulError('soul_content_required');
   return content;
+}
+
+/**
+ * The proposal's basis must name at least one ledger entry. Refs are stored verbatim, not resolved:
+ * the model-facing recall does not expose event ids, so a citation may be a turn's text.
+ * shortcut: unresolved refs, upgrade when recall surfaces event ids to the model.
+ */
+function requireSourceRefs(refs: unknown): string[] {
+  if (!Array.isArray(refs) || refs.length === 0) throw new SoulError('soul_source_refs_required');
+  const clean: string[] = [];
+  for (const ref of refs) {
+    if (typeof ref !== 'string' || ref.trim() === '') throw new SoulError('soul_source_refs_required');
+    clean.push(ref.trim());
+  }
+  return [...new Set(clean)];
 }
 
 function hashContent(content: string): string {

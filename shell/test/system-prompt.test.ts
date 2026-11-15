@@ -101,7 +101,12 @@ describe('system prompt sections: a stable pinned zone and a variable tail', () 
     try {
       const original = 'soul v0：先做自己。\n';
       shell.kernel.soul.ensureDefault(shell.config.agentId, original);
-      const proposal = shell.backend.proposeSoulEdit({ content: 'soul v1：更短。\n', reason: 'tighten' });
+      const proposal = shell.backend.proposeSoulEdit({
+        content: 'soul v1：更短。\n',
+        reason: 'tighten',
+        sourceRefs: ['evt-1'],
+        counterexample: 'the owner also asked for more detail once',
+      });
       expect(proposal.content).toBe('soul v1：更短。\n');
       expect(shell.systemPromptSections().pinned.startsWith(original)).toBe(true);
       expect(() => shell.kernel.soul.save({
