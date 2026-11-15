@@ -11,15 +11,6 @@ export type NormalizationFamily =
 
 export type NormalizedSourceFamily = 'normalized_conversation_markdown';
 
-export interface NormalizationMetadata {
-  isNormalized: boolean;
-  contractVersion?: 'v1';
-  normalizedSourceFamily?: NormalizedSourceFamily;
-  originalInputFamily?: NormalizationFamily;
-  title?: string;
-  onboardingPath?: string;
-}
-
 export interface NormalizedMessage {
   role: 'user' | 'agent' | 'system' | 'narrator';
   text: string;
