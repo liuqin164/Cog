@@ -118,6 +118,10 @@ function definitions(workspaceRoot: string): ToolDefinition[] {
       description: 'Read a UTF-8 text file inside the workspace. Output is capped at 256 KiB.',
       replay: 'safe',
       parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+      rehearse({ args }) {
+        const path = inside(workspaceRoot, asString(args, 'path'));
+        return `would read ${path}`;
+      },
       execute({ args }) {
         const path = inside(workspaceRoot, asString(args, 'path'));
         const size = statSync(path).size;
@@ -133,6 +137,11 @@ function definitions(workspaceRoot: string): ToolDefinition[] {
         type: 'object',
         properties: { path: { type: 'string' }, content: { type: 'string' } },
         required: ['path', 'content'],
+      },
+      rehearse({ args }) {
+        const path = inside(workspaceRoot, asString(args, 'path'));
+        const content = asString(args, 'content', false);
+        return `would write ${Buffer.byteLength(content)} bytes to ${path}`;
       },
       execute({ args }) {
         const path = inside(workspaceRoot, asString(args, 'path'));
@@ -151,6 +160,12 @@ function definitions(workspaceRoot: string): ToolDefinition[] {
         properties: { path: { type: 'string' }, old_string: { type: 'string' }, new_string: { type: 'string' } },
         required: ['path', 'old_string', 'new_string'],
       },
+      rehearse({ args }) {
+        const path = inside(workspaceRoot, asString(args, 'path'));
+        asString(args, 'old_string');
+        asString(args, 'new_string', false);
+        return `would edit ${path}`;
+      },
       execute({ args }) {
         const path = inside(workspaceRoot, asString(args, 'path'));
         const oldString = asString(args, 'old_string');
@@ -167,6 +182,11 @@ function definitions(workspaceRoot: string): ToolDefinition[] {
       replay: 'never',
       description: 'Run a bash command in the workspace, 30s timeout by default. stdout/stderr are combined; the last 2000 lines or 50 KiB (whichever is hit first) are returned, and the full text is written under .cogmem-shell/bash-output/ and named in the result. A non-zero exit is an error. The optional `timeout` is in seconds.',
       parameters: { type: 'object', properties: { command: { type: 'string' }, timeout: { type: 'number' } }, required: ['command'] },
+      rehearse({ args }) {
+        const command = asString(args, 'command');
+        resolveBashTimeoutMs(args);
+        return `would run: ${command}`;
+      },
       execute({ args, signal }) {
         const command = asString(args, 'command');
         const timeoutMs = resolveBashTimeoutMs(args);
