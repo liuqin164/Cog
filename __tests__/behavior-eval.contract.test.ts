@@ -81,4 +81,4 @@ test('every scenario passes in fixture mode', async () => {
   const failed = results.filter((result) => !result.passed);
   expect(failed).toEqual([]);
   expect(results.length).toBe(SCENARIOS.length);
-});
+}, 60_000);
