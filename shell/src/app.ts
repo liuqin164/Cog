@@ -482,16 +482,21 @@ export class CompanionShell implements ShellControl, AttachShell {
 
   /**
    * Pi restores the loadout a transcript declared (`_restoreToolsFromTranscript`). Here the rule is
-   * stricter: if the checkpoint promised a set the process can no longer execute exactly — a plugin
-   * removed, added or failed to load — the shell refuses to start with a transcript that names tools
-   * it does not have, rather than run degraded and quiet.
+   * about executability, not equality: if the checkpoint declared a tool this process cannot run — a
+   * plugin removed, or failed to load — the shell refuses to start with a transcript that names it,
+   * rather than run degraded and quiet.
+   *
+   * An *addition* is accepted and re-declared below. The registry (#223) makes "the plugin set
+   * changed between two starts" a normal, owner-confirmed operation, and an exact-equality check
+   * turned every such restart into a refused boot. A superset can execute everything the transcript
+   * named, so it is not the case this guard exists for.
    */
   private declaredToolMismatch(restored: string[] | undefined): { declared: string[]; executable: string[] } | undefined {
     if (!restored) return undefined;
     const executable = this.executableToolNames();
-    const declared = [...restored].sort();
-    if (declared.length === executable.length && declared.every((name, index) => name === executable[index])) return undefined;
-    return { declared, executable };
+    const missing = restored.filter((name) => !executable.includes(name));
+    if (missing.length === 0) return undefined;
+    return { declared: [...restored].sort(), executable };
   }
 
   private async loadPiPlugins(): Promise<void> {
