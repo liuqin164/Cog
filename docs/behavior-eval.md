@@ -89,6 +89,7 @@ the tree; the main checkout never carries the broken line.
 | Injection | Target | Expected red scenarios |
 |---|---|---|
 | `life-default-lane-open` | `eventHoldsLifeSensitivityMark()` in `src/security/LifeSensitivity.ts` | `withhold-life-default`, `correct-life-tier` |
+| `commitment-reannounce` | the once-per-occurrence guard in `CommitmentBook.surfaceDue()` | `surface-commitment-once` |
 
 Protocol:
 
