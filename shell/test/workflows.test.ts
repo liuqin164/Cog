@@ -229,7 +229,7 @@ describe('an active workflow executes without the model deciding each step', () 
         { tool: 'read_file', args: { path: 'in.txt' }, success: { type: 'not_error' } },
         { tool: 'write_file', args: { path: 'out.txt', content: '{{task}}' }, success: { type: 'not_error' } },
       ]);
-      const result = await h.service.execute(workflow, { runId: 'run-1', userText: 'deploy the site' });
+      const result = await h.service.execute(workflow, { runId: 'run-1', userText: 'deploy the site', origin: 'user' });
       expect(result.ok).toBe(true);
       expect(result.summary.stopReason).toBe('run_complete');
       expect(result.summary.toolResults.map((tool) => tool.toolName)).toEqual(['read_file', 'write_file']);
@@ -255,7 +255,7 @@ describe('an active workflow executes without the model deciding each step', () 
         { tool: 'fail', args: {}, success: { type: 'not_error' } },
         { tool: 'write_file', args: { path: 'b.txt', content: 'b' }, success: { type: 'not_error' } },
       ]);
-      const result = await h.service.execute(workflow, { runId: 'run-2', userText: 'deploy the site' });
+      const result = await h.service.execute(workflow, { runId: 'run-2', userText: 'deploy the site', origin: 'user' });
       expect(result.ok).toBe(false);
       expect(result.failedStep).toBe(2);
       expect(result.summary.stopReason).toBe('run_error');
@@ -276,7 +276,7 @@ describe('an active workflow executes without the model deciding each step', () 
       const workflow = await activeWorkflow(h, [
         { tool: 'echo', args: { text: 'hello' }, success: { type: 'output_contains', text: 'world' } },
       ]);
-      const missed = await h.service.execute(workflow, { runId: 'run-3', userText: 'deploy the site' });
+      const missed = await h.service.execute(workflow, { runId: 'run-3', userText: 'deploy the site', origin: 'user' });
       expect(missed.ok).toBe(false);
       expect(missed.reason).toContain('output_contains');
     } finally {
@@ -287,7 +287,7 @@ describe('an active workflow executes without the model deciding each step', () 
       const workflow = await activeWorkflow(h2, [
         { tool: 'echo', args: { text: 'hello' }, success: { type: 'output_contains', text: 'hello' } },
       ]);
-      const met = await h2.service.execute(workflow, { runId: 'run-4', userText: 'deploy the site' });
+      const met = await h2.service.execute(workflow, { runId: 'run-4', userText: 'deploy the site', origin: 'user' });
       expect(met.ok).toBe(true);
     } finally {
       h2.kernel.close();
@@ -300,7 +300,7 @@ describe('an active workflow executes without the model deciding each step', () 
       const workflow = await activeWorkflow(h, [
         { tool: 'echo', args: { text: '{{task}}', workspace: '{{workspace}}' }, success: { type: 'not_error' } },
       ]);
-      const result = await h.service.execute(workflow, { runId: 'run-5', userText: 'deploy the site' });
+      const result = await h.service.execute(workflow, { runId: 'run-5', userText: 'deploy the site', origin: 'user' });
       expect(result.ok).toBe(true);
       expect(h.recorded.calls).toContain('echo:deploy the site');
       expect(result.summary.toolCalls[0]!.input).toEqual({ text: 'deploy the site', workspace: h.workspaceRoot });
@@ -316,7 +316,7 @@ describe('an active workflow executes without the model deciding each step', () 
         { tool: 'echo', args: { text: 'one' }, success: { type: 'not_error' } },
         { tool: 'echo', args: { text: 'two' }, success: { type: 'not_error' } },
       ]);
-      const result = await h.service.execute(workflow, { runId: 'run-6', userText: 'deploy the site' });
+      const result = await h.service.execute(workflow, { runId: 'run-6', userText: 'deploy the site', origin: 'user' });
       expect(result.ok).toBe(false);
       expect(result.summary.stopReason).toBe('budget_exceeded');
       expect(result.failedStep).toBe(2);

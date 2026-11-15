@@ -17,6 +17,7 @@ import type { EventBus } from '../bus.ts';
 import {
   executeToolCall,
   type RunBudget,
+  type RunOrigin,
   type RunSummary,
   type ToolCall,
   type ToolCallPipelineContext,
@@ -253,7 +254,7 @@ export class WorkflowService {
    * the cage's whitelist and every hook apply. A failure stops at the failed step, records the
    * failure against the workflow, and returns; the caller hands the task back to the model loop.
    */
-  async execute(workflow: ProcedureWorkflow, input: { runId: string; userText: string }): Promise<WorkflowExecutionResult> {
+  async execute(workflow: ProcedureWorkflow, input: { runId: string; userText: string; origin: RunOrigin }): Promise<WorkflowExecutionResult> {
     const runId = input.runId;
     const turnId = `${runId}:0`;
     const userMessage = { role: 'user' as const, content: input.userText };
@@ -329,6 +330,7 @@ export class WorkflowService {
 
     const summary: RunSummary = {
       runId,
+      origin: input.origin,
       sessionId: this.sessionId,
       turnId,
       userText: input.userText,

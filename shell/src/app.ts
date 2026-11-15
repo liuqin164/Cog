@@ -791,7 +791,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     if (workflow) {
       let result;
       try {
-        result = await this.workflows!.execute(workflow, { runId, userText: text });
+        result = await this.workflows!.execute(workflow, { runId, userText: text, origin });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         this.trace.append('workflow_execution_failed', { runId, entryId: workflow.entryId, message });
