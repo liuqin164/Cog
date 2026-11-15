@@ -43,6 +43,7 @@ export const COMMITMENT_EVENT_TYPES = [
   'COMMITMENT_SURFACED',
   'COMMITMENT_ASKED',
   'COMMITMENT_DISMISSED',
+  'COMMITMENT_SNOOZED',
 ] as const;
 export type CommitmentEventType = (typeof COMMITMENT_EVENT_TYPES)[number];
 
@@ -54,6 +55,7 @@ export const COMMITMENT_API_METHODS = [
   'dueForAgent',
   'askOnce',
   'dismiss',
+  'snooze',
   'complete',
   'cancel',
   'audit',
@@ -72,6 +74,8 @@ export const COMMITMENT_ENTRY_FIELDS = [
   'sourceRefs',
   'openedAt',
   'surfacedAt',
+  'resumeAt',
+  'snoozeCount',
   'askedAt',
   'closedAt',
   'version',
@@ -82,7 +86,10 @@ export const COMMITMENT_ERROR_CODES = [
   'project_id_required',
   'commitment_id_required',
   'commitment_unknown',
+  'commitment_not_surfaced',
+  'commitment_snooze_limit',
   'invalid_commitment_evidence',
+  'invalid_commitment_resume',
   'invalid_limit',
 ] as const;
 export type CommitmentErrorCode = (typeof COMMITMENT_ERROR_CODES)[number];
@@ -91,6 +98,8 @@ export type CommitmentErrorCode = (typeof COMMITMENT_ERROR_CODES)[number];
 export const COMMITMENT_DUE_SOON_MS = 24 * 60 * 60 * 1000;
 export const COMMITMENT_DEFAULT_LIMIT = 20;
 export const COMMITMENT_MAX_LIMIT = 100;
+/** Snoozes allowed per promise per original due instant. Frozen by the document. */
+export const COMMITMENT_MAX_SNOOZES = 3;
 
 export interface CommitmentEntry {
   commitmentId: string;
@@ -105,6 +114,10 @@ export interface CommitmentEntry {
   sourceRefs: MemorySourceRef[];
   openedAt: number;
   surfacedAt?: number;
+  /** The instant a snoozed promise may be announced again; absent when it is not snoozed. */
+  resumeAt?: number;
+  /** Snoozes recorded against this promise's original due instant. */
+  snoozeCount: number;
   askedAt?: number;
   closedAt?: number;
   version: number;
@@ -176,6 +189,8 @@ interface StoredCommitment {
   closed?: { status: 'completed' | 'cancelled'; at: number; sourceRefs: MemorySourceRef[] };
   surfacedDueKey?: number;
   surfacedAt?: number;
+  resumeAt?: number;
+  snoozeCount: number;
   askedAt?: number;
   dismissedDueKey?: number;
   version: number;
@@ -262,6 +277,11 @@ function isOpenStatus(status: CommitmentStatus): status is 'pending' | 'due_soon
   return status === 'pending' || status === 'due_soon' || status === 'overdue';
 }
 
+/** The occurrence a mark applies to: the original due instant, or the latest snooze resume. */
+function occurrenceKeyOf(state: StoredCommitment, dueAt: number | undefined): number {
+  return state.resumeAt ?? dueAt ?? 0;
+}
+
 function statusOf(state: StoredCommitment, now: number): CommitmentStatus | null {
   const base = state.base;
   if (!base) return null;
@@ -289,6 +309,8 @@ function toEntry(state: StoredCommitment, now: number): CommitmentEntry | null {
     sourceRefs: [...(state.closed?.sourceRefs ?? base.sourceRefs)],
     openedAt: base.openedAt,
     surfacedAt: state.surfacedAt,
+    resumeAt: state.resumeAt,
+    snoozeCount: state.snoozeCount,
     askedAt: state.askedAt,
     closedAt: state.closed?.at,
     version: state.version,
@@ -352,7 +374,8 @@ export class CommitmentBook {
    * The commitments whose instant has arrived, announced once per due occurrence. This is a pull
    * query with one write: the `SURFACED` row is what makes a second query silent, so the once-only
    * rule survives a restart. Dismissing a reminder silences that occurrence too (F7's feedback
-   * loop, read here as a book mark until F7 lands).
+   * loop, read here as a book mark until F7 lands); a snooze moves the occurrence to its resume
+   * instant, so nothing is handed out before it.
    */
   surfaceDue(input: { projectId: string; owner?: CommitmentOwner; now?: number; limit?: number }): CommitmentSurfacing[] {
     const projectId = requiredText(input.projectId, 'project_id_required');
@@ -364,7 +387,9 @@ export class CommitmentBook {
       if (!entry || !isOpenStatus(entry.status)) continue;
       if (entry.status !== 'due_soon' && entry.status !== 'overdue') continue;
       if (input.owner !== undefined && entry.owner !== input.owner) continue;
-      const dueKey = entry.dueAt ?? 0;
+      // A snooze moves the occurrence to its resume instant; nothing is handed out before it.
+      if (state.resumeAt !== undefined && now < state.resumeAt) continue;
+      const dueKey = occurrenceKeyOf(state, entry.dueAt);
       if (state.surfacedDueKey === dueKey || state.dismissedDueKey === dueKey) continue;
       this.appendMark(projectId, commitmentId, 'COMMITMENT_SURFACED', { dueKey, at: now }, now);
       state.surfacedDueKey = dueKey;
@@ -386,7 +411,7 @@ export class CommitmentBook {
   /**
    * The agent's own due promises, for its wake assembly. A pure read: the session face consumes it
    * through F14's open-loop port, and reading the wake context must not consume the announce-once
-   * mark.
+   * mark. A snoozed promise stays out of the assembly until its resume instant.
    */
   dueForAgent(input: { projectId: string; agentId?: string; owner?: CommitmentOwner; now?: number; limit?: number }): CommitmentEntry[] {
     const projectId = requiredText(input.projectId, 'project_id_required');
@@ -401,7 +426,9 @@ export class CommitmentBook {
       .filter((entry) => !input.agentId || !entry.agentId || entry.agentId === input.agentId)
       .filter((entry) => {
         const state = states.get(entry.commitmentId);
-        return !state || state.dismissedDueKey !== (entry.dueAt ?? 0);
+        if (!state) return true;
+        if (state.resumeAt !== undefined && now < state.resumeAt) return false;
+        return state.dismissedDueKey !== occurrenceKeyOf(state, entry.dueAt);
       })
       .slice(0, limit);
   }
@@ -436,9 +463,51 @@ export class CommitmentBook {
     const now = input.now ?? Date.now();
     const state = this.states(projectId).get(commitmentId);
     const entry = state ? toEntry(state, now) : null;
-    if (!entry) throw commitmentError('commitment_unknown', commitmentId);
-    this.appendMark(projectId, commitmentId, 'COMMITMENT_DISMISSED', { dueKey: entry.dueAt ?? 0, at: now }, now);
+    if (!state || !entry) throw commitmentError('commitment_unknown', commitmentId);
+    this.appendMark(projectId, commitmentId, 'COMMITMENT_DISMISSED', {
+      dueKey: occurrenceKeyOf(state, entry.dueAt),
+      at: now,
+    }, now);
     return entry;
+  }
+
+  /**
+   * Defer an announced promise to the caller's `resumeAt`. The caller (the companion model, after
+   * reading the conversation) chooses the instant; the book does not parse deferral language and
+   * does not choose a default. The promise stays open; the snooze mark only moves the occurrence.
+   * A fourth snooze against the same original due instant is refused.
+   */
+  snooze(input: {
+    projectId: string;
+    commitmentId: string;
+    resumeAt: number;
+    reason?: string;
+    now?: number;
+  }): CommitmentEntry {
+    const projectId = requiredText(input.projectId, 'project_id_required');
+    const commitmentId = requiredText(input.commitmentId, 'commitment_id_required');
+    const now = input.now ?? Date.now();
+    const state = this.states(projectId).get(commitmentId);
+    const entry = state ? toEntry(state, now) : null;
+    if (!state || !entry) throw commitmentError('commitment_unknown', commitmentId);
+    if (state.closed) return entry;
+    if (state.surfacedAt === undefined) throw commitmentError('commitment_not_surfaced', commitmentId);
+    if (state.snoozeCount >= COMMITMENT_MAX_SNOOZES) {
+      throw commitmentError('commitment_snooze_limit', commitmentId);
+    }
+    if (!Number.isFinite(input.resumeAt) || input.resumeAt <= now) {
+      throw commitmentError('invalid_commitment_resume', String(input.resumeAt));
+    }
+    const resumeAt = input.resumeAt;
+    this.appendMark(projectId, commitmentId, 'COMMITMENT_SNOOZED', {
+      dueKey: entry.dueAt ?? 0,
+      resumeAt,
+      ...(input.reason?.trim() ? { reason: input.reason.trim() } : {}),
+      at: now,
+    }, now);
+    state.resumeAt = resumeAt;
+    state.snoozeCount += 1;
+    return toEntry(state, now)!;
   }
 
   /** Completion by the owner's word or by a recorded artifact. The evidence must be a real event. */
@@ -580,7 +649,7 @@ export class CommitmentBook {
     for (const row of this.loadProjectRows(projectId)) {
       const commitmentId = typeof row.payload.commitmentId === 'string' ? row.payload.commitmentId : '';
       if (!commitmentId) continue;
-      const state = states.get(commitmentId) ?? { version: 0 };
+      const state = states.get(commitmentId) ?? { version: 0, snoozeCount: 0 };
       const eventType = row.event.eventType as CommitmentEventType;
       if (eventType === 'COMMITMENT_OPENED') {
         state.base = baseFromPayload(row.payload);
@@ -599,6 +668,9 @@ export class CommitmentBook {
         state.askedAt = Number(row.payload.at ?? row.event.occurredAt);
       } else if (eventType === 'COMMITMENT_DISMISSED') {
         state.dismissedDueKey = Number(row.payload.dueKey ?? 0);
+      } else if (eventType === 'COMMITMENT_SNOOZED') {
+        state.resumeAt = Number(row.payload.resumeAt ?? row.event.occurredAt);
+        state.snoozeCount += 1;
       }
       states.set(commitmentId, state);
     }
@@ -645,7 +717,7 @@ export class CommitmentBook {
   private appendMark(
     projectId: string,
     commitmentId: string,
-    eventType: 'COMMITMENT_SURFACED' | 'COMMITMENT_ASKED' | 'COMMITMENT_DISMISSED',
+    eventType: 'COMMITMENT_SURFACED' | 'COMMITMENT_ASKED' | 'COMMITMENT_DISMISSED' | 'COMMITMENT_SNOOZED',
     payload: Record<string, unknown>,
     now: number,
   ): void {

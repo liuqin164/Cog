@@ -79,6 +79,53 @@ export const surfaceScenarios: CompanionScenario[] = [
     },
   },
   {
+    id: 'surface-commitment-snooze',
+    category: 'surface',
+    title: 'A deferred promise stays silent until the chosen resume instant and is offered once then',
+    criteria: [
+      'C1: the proactive query offers the commitment at its due instant',
+      'C2: after the agent records a snooze, the next query is silent and the promise stays in the book',
+      'C3: at the chosen resume instant it is offered exactly once, and not again',
+    ],
+    pinned: [
+      'the promise, due and resume instants are fixed constants',
+      'the scripted agent chooses the resume instant and calls the snooze face; the book does not parse language or choose a time',
+      'the resume is a new F6 candidate, not a direct speak path',
+    ],
+    async run({ kernel }) {
+      const projectId = 'surface-commitment-snooze';
+      turn(kernel, {
+        projectId,
+        threadId: 'promise-turn',
+        content: '我明天把文件发你。',
+        occurredAt: T0,
+      });
+      kernel.commitments.compile({ projectId, now: T0 + 1_000 });
+      const entry = kernel.commitments.list({ projectId, now: T0 + 1_000 })[0];
+      const due = entry.dueAt;
+
+      const first = kernel.surfacing.candidates({ projectId, channel: 'proactive', now: due });
+      hasLength(first.candidates.filter((candidate: any) => candidate.source === 'commitment'), 1, 'C1 one commitment candidate');
+
+      const resume = Date.UTC(2026, 10, 17, 8);
+      kernel.commitments.snooze({
+        projectId,
+        commitmentId: entry.commitmentId,
+        resumeAt: resume,
+        reason: '用户说等会',
+        now: due + MINUTE,
+      });
+      const before = kernel.surfacing.candidates({ projectId, channel: 'proactive', now: resume - MINUTE });
+      hasLength(before.candidates.filter((candidate: any) => candidate.source === 'commitment'), 0, 'C2 silent before resume');
+      equal(kernel.commitments.list({ projectId, now: resume - MINUTE })[0].status, 'overdue', 'C2 still in the book');
+
+      const resumed = kernel.surfacing.candidates({ projectId, channel: 'proactive', now: resume });
+      hasLength(resumed.candidates.filter((candidate: any) => candidate.source === 'commitment'), 1, 'C3 one offer');
+      const again = kernel.surfacing.candidates({ projectId, channel: 'proactive', now: resume + 1 });
+      hasLength(again.candidates.filter((candidate: any) => candidate.source === 'commitment'), 0, 'C3 no replay');
+    },
+  },
+  {
     id: 'surface-task-preference',
     category: 'surface',
     title: 'The second same-domain task assembly carries the learned procedure and the owner preference',

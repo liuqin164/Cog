@@ -287,6 +287,7 @@ export type MemoryEventType =
   | 'COMMITMENT_SURFACED'
   | 'COMMITMENT_ASKED'
   | 'COMMITMENT_DISMISSED'
+  | 'COMMITMENT_SNOOZED'
   // The intention ledger (F22 of #216): an OPENED row is the agent's plan, an UPDATED row is a
   // self-correction, a CLOSED row is its ending. Separate from the commitment book.
   | 'INTENTION_OPENED'

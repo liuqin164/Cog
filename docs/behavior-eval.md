@@ -55,6 +55,7 @@ Each category has at least four scenarios. The register below is the frozen list
 | `record-intention-book` | `record` | An agent plan stated in conversation enters the intention ledger as active |
 | `surface-commitment-once` | `surface` | An arrived promise is offered at its due instant and not offered a second time |
 | `surface-wake-on-time` | `surface` | A registered wake intention fires at its instant, once, and not before or after |
+| `surface-commitment-snooze` | `surface` | A deferred promise stays silent until the chosen resume instant and is offered once then |
 | `surface-task-preference` | `surface` | The second same-domain task assembly carries the learned procedure and the owner preference |
 | `surface-prospective-once` | `surface` | A confirmed due reminder announces once and does not replay after a restart |
 | `withhold-life-default` | `withhold` | A life-marked turn stays out of default recall and is reached by the forensic intent |

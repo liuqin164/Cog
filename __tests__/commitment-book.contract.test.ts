@@ -10,6 +10,7 @@ import {
   COMMITMENT_ENTRY_FIELDS,
   COMMITMENT_ERROR_CODES,
   COMMITMENT_EVENT_TYPES,
+  COMMITMENT_MAX_SNOOZES,
   COMMITMENT_OWNERS,
   COMMITMENT_STATUSES,
   recognizeCommitments,
@@ -84,6 +85,11 @@ describe('the contract document and the frozen lists agree', () => {
 
   test('the error table is exactly COMMITMENT_ERROR_CODES, in order', () => {
     expect(backtickedFirstColumn(sectionAfter('## Errors (frozen)'))).toEqual([...COMMITMENT_ERROR_CODES]);
+  });
+
+  test('the snooze cap table is COMMITMENT_MAX_SNOOZES', () => {
+    const row = [...sectionAfter('## Snooze rules (frozen)').matchAll(/^\|\s*`maxSnoozes`\s*\|\s*`(\d+)`/gmu)][0];
+    expect(Number(row?.[1])).toBe(COMMITMENT_MAX_SNOOZES);
   });
 
   test('every frozen method exists and the version is 1', () => {
@@ -215,6 +221,184 @@ describe('an arrived promise is announced once', () => {
     kernel.commitments.dismiss({ projectId, commitmentId: entry.commitmentId, now: due - 1_000 });
     expect(kernel.commitments.surfaceDue({ projectId, now: due })).toEqual([]);
     expect(kernel.commitments.list({ projectId, now: due })).toHaveLength(1);
+  });
+});
+
+describe('snooze defers an announced promise to the caller-chosen instant', () => {
+  function announced(projectId: string, now: number) {
+    say({ projectId, text: '我明天把文件发你。', occurredAt: now });
+    kernel.commitments.compile({ projectId, now: now + 1_000 });
+    const entry = kernel.commitments.list({ projectId, now: now + 1_000 })[0]!;
+    expect(kernel.commitments.surfaceDue({ projectId, now: entry.dueAt! })).toHaveLength(1);
+    return entry;
+  }
+
+  test('调用方给定的 resume 时刻被原样记下，到点前静默、到点只浮一次', () => {
+    const projectId = 'commitment-snooze-time';
+    const now = Date.UTC(2026, 10, 15, 9);
+    const entry = announced(projectId, now);
+    const due = entry.dueAt!;
+    const resumeAt = due + 2 * 60 * 60 * 1000;
+
+    const snoozed = kernel.commitments.snooze({
+      projectId, commitmentId: entry.commitmentId, resumeAt, reason: '用户说一小时后', now: due + 1_000,
+    });
+    expect(snoozed.resumeAt).toBe(resumeAt);
+    expect(snoozed.snoozeCount).toBe(1);
+    // The promise is not closed and its own status is unchanged by the deferral.
+    expect(snoozed.status).toBe('overdue');
+
+    const row = kernel.commitments.audit({ projectId, commitmentId: entry.commitmentId })
+      .find((candidate) => candidate.eventType === 'COMMITMENT_SNOOZED')!;
+    expect(row.payload.resumeAt).toBe(resumeAt);
+    expect(row.payload.reason).toBe('用户说一小时后');
+
+    expect(kernel.commitments.surfaceDue({ projectId, now: resumeAt - 1 })).toEqual([]);
+    expect(kernel.commitments.surfaceDue({ projectId, now: resumeAt })).toHaveLength(1);
+    expect(kernel.commitments.surfaceDue({ projectId, now: resumeAt + 1 })).toEqual([]);
+  });
+
+  test('resume 必须是未来时刻；未浮现的承诺不能顺延', () => {
+    const projectId = 'commitment-snooze-guards';
+    const now = Date.UTC(2026, 10, 15, 9);
+    say({ projectId, text: '我明天把文件发你。', occurredAt: now });
+    kernel.commitments.compile({ projectId, now: now + 1_000 });
+    const entry = kernel.commitments.list({ projectId, now: now + 1_000 })[0]!;
+    const due = entry.dueAt!;
+
+    expect(() => kernel.commitments.snooze({
+      projectId, commitmentId: entry.commitmentId, resumeAt: due, now: due,
+    })).toThrow('commitment_not_surfaced');
+
+    kernel.commitments.surfaceDue({ projectId, now: due });
+    expect(() => kernel.commitments.snooze({
+      projectId, commitmentId: entry.commitmentId, resumeAt: due, now: due,
+    })).toThrow('invalid_commitment_resume');
+    expect(() => kernel.commitments.snooze({
+      projectId, commitmentId: entry.commitmentId, resumeAt: Number.NaN, now: due,
+    })).toThrow('invalid_commitment_resume');
+  });
+
+  test('同一原始到期最多 3 次，第 4 次拒绝且不再有主动浮现', () => {
+    const projectId = 'commitment-snooze-cap';
+    const now = Date.UTC(2026, 10, 15, 9);
+    const entry = announced(projectId, now);
+    const hour = 60 * 60 * 1000;
+    let occurrence = entry.dueAt!;
+    for (let index = 0; index < COMMITMENT_MAX_SNOOZES; index += 1) {
+      if (index > 0) expect(kernel.commitments.surfaceDue({ projectId, now: occurrence })).toHaveLength(1);
+      kernel.commitments.snooze({
+        projectId, commitmentId: entry.commitmentId, resumeAt: occurrence + hour, now: occurrence + 1,
+      });
+      occurrence += hour;
+    }
+    // The third resume is the last occurrence the book announces.
+    expect(kernel.commitments.surfaceDue({ projectId, now: occurrence })).toHaveLength(1);
+    expect(() => kernel.commitments.snooze({
+      projectId, commitmentId: entry.commitmentId, resumeAt: occurrence + hour, now: occurrence + 2,
+    })).toThrow('commitment_snooze_limit');
+    expect(kernel.commitments.surfaceDue({ projectId, now: occurrence + hour })).toEqual([]);
+    expect(kernel.commitments.list({ projectId, now: occurrence + hour })[0]!.snoozeCount).toBe(3);
+  });
+
+  test('snooze 不写 F7 反馈行，ignore 计数与冷却不变', () => {
+    const projectId = 'commitment-snooze-f7';
+    const now = Date.UTC(2026, 10, 15, 9);
+    const entry = announced(projectId, now);
+    const due = entry.dueAt!;
+    const before = kernel.surfacingFeedback.state({ projectId, now: due })
+      .types.find((type) => type.type === 'commitment')!;
+    kernel.commitments.snooze({
+      projectId, commitmentId: entry.commitmentId, resumeAt: due + 60 * 60 * 1000, now: due + 1_000,
+    });
+    const after = kernel.surfacingFeedback.state({ projectId, now: due + 2_000 })
+      .types.find((type) => type.type === 'commitment')!;
+    expect(after).toEqual(before);
+    expect(after.consecutiveIgnored).toBe(0);
+    expect(after.level).toBe(0);
+    expect(after.cooldownUntil).toBeNull();
+  });
+
+  test('dismiss 与 snooze 标记互不串扰', () => {
+    const now = Date.UTC(2026, 10, 15, 9);
+    const hour = 60 * 60 * 1000;
+
+    // A snooze then a dismiss: the dismiss silences the resume occurrence.
+    const first = 'commitment-snooze-then-dismiss';
+    const firstEntry = announced(first, now);
+    const firstResume = firstEntry.dueAt! + hour;
+    kernel.commitments.snooze({
+      projectId: first, commitmentId: firstEntry.commitmentId, resumeAt: firstResume, now: firstEntry.dueAt! + 1,
+    });
+    kernel.commitments.dismiss({ projectId: first, commitmentId: firstEntry.commitmentId, now: firstEntry.dueAt! + 2 });
+    expect(kernel.commitments.surfaceDue({ projectId: first, now: firstResume })).toEqual([]);
+
+    // A dismiss then a snooze: the snooze creates a new occurrence the dismiss does not cover.
+    const second = 'commitment-dismiss-then-snooze';
+    const secondEntry = announced(second, now);
+    const secondResume = secondEntry.dueAt! + hour;
+    kernel.commitments.dismiss({ projectId: second, commitmentId: secondEntry.commitmentId, now: secondEntry.dueAt! + 1 });
+    kernel.commitments.snooze({
+      projectId: second, commitmentId: secondEntry.commitmentId, resumeAt: secondResume, now: secondEntry.dueAt! + 2,
+    });
+    expect(kernel.commitments.surfaceDue({ projectId: second, now: secondResume })).toHaveLength(1);
+  });
+
+  test('resume 再浮现仍走 F18 路由', () => {
+    const projectId = 'commitment-snooze-f18';
+    const now = Date.UTC(2026, 10, 15, 9);
+    const entry = announced(projectId, now);
+    const resumeAt = entry.dueAt! + 2 * 60 * 60 * 1000;
+    kernel.commitments.snooze({
+      projectId, commitmentId: entry.commitmentId, resumeAt, now: entry.dueAt! + 1_000,
+    });
+    const resumed = kernel.surfacing.candidates({ projectId, channel: 'proactive', now: resumeAt });
+    const candidate = resumed.candidates.find((item) => item.source === 'commitment')!;
+    expect(candidate).toBeTruthy();
+    const decision = kernel.deliveryRouter.route({
+      projectId,
+      candidate,
+      occasion: 'private',
+      userState: 'night-dnd',
+      channel: { reachability: 'online', interruptibility: 'high' },
+      // The router's existing F7 downgrade is what lets a night-dnd arrival queue for the summary.
+      feedback: { level: 3, stopped: false },
+      now: resumeAt,
+    });
+    expect(decision.destination).toBe('morning-summary');
+  });
+
+  test('重启后 SNOOZED 保持，resume 前静默、到点一次', () => {
+    const scratch = makeTempDir('cogmem-commitment-snooze-');
+    const dbPath = join(scratch, 'memory.db');
+    const projectId = 'commitment-snooze-restart';
+    const now = Date.UTC(2026, 10, 15, 9);
+    const resumeAt = Date.UTC(2026, 10, 17, 8);
+
+    const first = createMemoryKernel({ dbPath, projectTimeZone: 'UTC' });
+    try {
+      first.recordRawEvent({ projectId, threadId: 't', role: 'user', content: '我明天把文件发你。', occurredAt: now });
+      first.commitments.compile({ projectId, now: now + 1_000 });
+      const entry = first.commitments.list({ projectId, now: now + 1_000 })[0]!;
+      expect(first.commitments.surfaceDue({ projectId, now: entry.dueAt! })).toHaveLength(1);
+      first.commitments.snooze({
+        projectId, commitmentId: entry.commitmentId, resumeAt, now: entry.dueAt! + 1_000,
+      });
+    } finally {
+      first.close();
+    }
+
+    const second = createMemoryKernel({ dbPath, projectTimeZone: 'UTC' });
+    try {
+      const entry = second.commitments.list({ projectId, now: resumeAt - 1 })[0]!;
+      expect(entry.resumeAt).toBe(resumeAt);
+      expect(entry.snoozeCount).toBe(1);
+      expect(second.commitments.surfaceDue({ projectId, now: resumeAt - 1 })).toEqual([]);
+      expect(second.commitments.surfaceDue({ projectId, now: resumeAt })).toHaveLength(1);
+      expect(second.commitments.surfaceDue({ projectId, now: resumeAt + 1 })).toEqual([]);
+    } finally {
+      second.close();
+    }
   });
 });
 

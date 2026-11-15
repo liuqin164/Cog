@@ -8,7 +8,7 @@ session book the scene, the procedure book the craft, this book the unfinished t
 
 The code is `src/commitment/` (`CommitmentRecognition.ts`, `CommitmentBook.ts`), reached as
 `MemoryKernel.commitments` and through `KernelAgentMemoryBackend.listCommitments` /
-`.surfaceCommitments` / `.askCommitments` / `.dismissCommitment`. It is held to this document by
+`.surfaceCommitments` / `.askCommitments` / `.dismissCommitment` / `.snoozeCommitment`. It is held to this document by
 `__tests__/commitment-book.contract.test.ts`, which reads the frozen tables below and fails when
 code and contract disagree. Version: `COMMITMENT_CONTRACT_VERSION = 1`.
 
@@ -19,8 +19,8 @@ code and contract disagree. Version: `COMMITMENT_CONTRACT_VERSION = 1`.
 - **No task manager.** Only promises spoken in conversation enter. There is no priority, project or
   recurring-task vocabulary; that would be a GTD product, not this book.
 - **No new storage.** An `OPENED` row is the promise, a `CLOSED` row is its completion or
-  cancellation, and `SURFACED` / `ASKED` / `DISMISSED` rows are the discipline marks. No table, no
-  column, no migration.
+  cancellation, and `SURFACED` / `ASKED` / `DISMISSED` / `SNOOZED` rows are the discipline marks. No
+  table, no column, no migration.
 - **No observatory view this round.** The book is readable through the kernel and host API; the
   observatory page belongs with #136's follow-on design.
 - **No occasion logic.** A candidate carries whatever the caller declared, as F6 does; F8 owns
@@ -86,6 +86,41 @@ same mark is what F6's proactive candidate reads, so the shell cannot announce i
 is F7's feedback loop read as a book mark until F7 lands; when F7 owns per-class weights, the mark
 becomes its input rather than the whole rule.
 
+## Snooze (defer, not dismiss)
+
+After a promise has been announced, the owner may ask to hear it later — 「等会再说」,
+「一小时后」, 「明天再说」. Reading that turn and choosing the resume instant is **conversation-layer
+judgement**: the companion model decides, and calls `snooze` with the instant it chose and a short
+reason. The book does not parse deferral language, does not own a cue table and does not choose a
+default instant; a caller that cannot decide yet does not write a snooze row. What the book
+guarantees is deterministic:
+
+- **The instant is the caller's, recorded verbatim.** `resumeAt` must be finite and strictly after
+  `now`; anything else is `invalid_commitment_resume`. The `SNOOZED` row carries `resumeAt` and the
+  caller's `reason` when given, and a restart replays it.
+- **Silence until then, one announcement after.** Before `resumeAt`, `surfaceDue` and
+  `dueForAgent` do not hand the promise out. At `resumeAt` the promise is a new occurrence: one
+  `surfaceDue` returns it and writes a new `SURFACED` mark; a second query is silent again. The
+  promise's own due instant and derived status do not change.
+- **Three snoozes per original due instant.** A fourth call is refused with
+  `commitment_snooze_limit`. The promise stays in the book (`list`, `audit`) and in any morning
+  summary that reads the book; it is only the proactive deferral that stops.
+- **A snooze is not an ignore.** It writes no `SURFACING_FEEDBACK_RECORDED` row, so F7's
+  ignore-streak, level and cooldown are untouched. It is an explicit instruction, not neglect.
+- **The resume still goes through F18.** The book only decides that the promise is due again; the
+  router still applies the occasion, the night window and the urgency. A snooze is not a direct
+  path to speech.
+- **Dismiss and snooze are independent marks.** `dismiss` silences the current occurrence (the
+  original due, or the latest resume instant); `snooze` moves the occurrence to the resume
+  instant. A dismiss after a snooze silences the resume occurrence; a snooze after a dismiss creates
+  a new occurrence that may surface.
+
+## Snooze rules (frozen)
+
+| Rule | Value | Means |
+|---|---|---|
+| `maxSnoozes` | `3` | Snoozes allowed per promise per original due instant; the next call is refused. |
+
 ## The face (frozen)
 
 | Method | Writes | Does |
@@ -96,6 +131,7 @@ becomes its input rather than the whole rule.
 | `dueForAgent` | — | The agent's own arrived promises for its wake assembly. Pure: reading does not consume the announce mark. |
 | `askOnce` | an `ASKED` row per promise | The one question an ambiguous completion earns. |
 | `dismiss` | a `DISMISSED` row | Silence one reminder for its current occurrence. |
+| `snooze` | a `SNOOZED` row | Silence an announced promise until the caller's `resumeAt`; a closed promise is returned unchanged. |
 | `complete` | a `CLOSED` row | Close on completion evidence (a real event in the project). |
 | `cancel` | a `CLOSED` row | Close on the owner's cancellation. |
 | `audit` | — | Every commitment row for the project, oldest first. |
@@ -117,6 +153,8 @@ Adding a method is an additive change and does not bump the constant. Removing o
 | `sourceRefs` | The turn that made the promise and, once closed, the turn that closed it; never empty. |
 | `openedAt` | When the promise was made. |
 | `surfacedAt` | When it was announced, once. |
+| `resumeAt` | The instant a snoozed promise may be announced again; absent when it is not snoozed. |
+| `snoozeCount` | Snoozes recorded against this promise's original due instant. |
 | `askedAt` | When the one ambiguity question was asked. |
 | `closedAt` | When it was completed or cancelled. |
 | `version` | 1 for the opening row, +1 per close. |
@@ -130,6 +168,7 @@ Adding a method is an additive change and does not bump the constant. Removing o
 | `COMMITMENT_SURFACED` | A due promise is announced. | `commitmentId`, `projectId`, `dueKey`, `at` |
 | `COMMITMENT_ASKED` | The one ambiguity question is asked. | `commitmentId`, `projectId`, `question`, `at` |
 | `COMMITMENT_DISMISSED` | A reminder is silenced for its occurrence. | `commitmentId`, `projectId`, `dueKey`, `at` |
+| `COMMITMENT_SNOOZED` | The owner defers an announced promise to a chosen instant. | `commitmentId`, `projectId`, `dueKey`, `resumeAt`, `reason?`, `at` |
 
 ## Errors (frozen)
 
@@ -138,7 +177,10 @@ Adding a method is an additive change and does not bump the constant. Removing o
 | `project_id_required` | A call names no project. |
 | `commitment_id_required` | A call names no commitment. |
 | `commitment_unknown` | The commitment has no row in this project. |
+| `commitment_not_surfaced` | A snooze names a promise the book has not announced. |
+| `commitment_snooze_limit` | The promise already has three snoozes for this original due instant. |
 | `invalid_commitment_evidence` | Completion or cancellation names an event that is not in the project. |
+| `invalid_commitment_resume` | The resume instant is not finite or not after `now`. |
 | `invalid_limit` | A read limit is not a positive integer. |
 
 ## The seed gate

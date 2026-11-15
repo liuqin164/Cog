@@ -1053,6 +1053,16 @@ export class KernelAgentMemoryBackend {
     return this.kernel.commitments.dismiss(input);
   }
 
+  snoozeCommitment(input: {
+    projectId: string;
+    commitmentId: string;
+    resumeAt: number;
+    reason?: string;
+    now?: number;
+  }): CommitmentEntry {
+    return this.kernel.commitments.snooze(input);
+  }
+
   /**
    * The agent's own plans (F22 of #216): the read face, and the self-governance the agent owns —
    * propose, correct, close, convert and schedule. The owner's veto is not here. Contract:
