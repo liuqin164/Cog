@@ -9,6 +9,7 @@
  */
 import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { formatBytes } from '../memory.ts';
 import { DEFAULT_SOUL, readSoul } from './soul.ts';
 import { serviceStatus, type Platform, type Runner, type ServiceSpec } from './service.ts';
 
@@ -19,6 +20,7 @@ export interface HealthPayload {
   dbPath?: string;
   state?: string;
   kernel?: { status?: string; package?: string; dbPath?: string };
+  memory?: { rssBytes?: number; limitBytes?: number; highBytes?: number; source?: string };
 }
 
 export interface DoctorContext {
@@ -91,6 +93,18 @@ export async function runDoctor(ctx: DoctorContext): Promise<DoctorReport> {
       id: 'loopback-only',
       ok: LOOPBACK.has(health.bind),
       detail: `bind=${health.bind}`,
+    });
+    // The unit's ceiling is only observable through the resident's own cgroup reading. A service
+    // install must have one; a no-manager process legitimately has none.
+    const memory = health.memory;
+    const capped = typeof memory?.limitBytes === 'number' && memory.limitBytes > 0;
+    const capRequired = ctx.platform === 'linux' && ctx.mode === 'service';
+    checks.push({
+      id: 'memory-cap',
+      ok: capRequired ? capped : true,
+      detail: memory
+        ? `rss=${formatBytes(memory.rssBytes)} high=${formatBytes(memory.highBytes)} max=${formatBytes(memory.limitBytes)} via ${memory.source ?? '?'}`
+        : 'resident reports no memory reading (older build?)',
     });
   } catch (error) {
     checks.push({ id: 'resident-health', ok: false, detail: error instanceof Error ? error.message : String(error) });

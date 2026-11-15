@@ -25,6 +25,14 @@ export interface RunOptions {
 
 export type Runner = (command: string, args: string[], options?: RunOptions) => Promise<CommandResult>;
 
+/**
+ * The resident's cgroup ceiling (#226). `MemoryHigh` is the throttle, `MemoryMax` the hard limit;
+ * both are sized for an idle RSS around 200 MB with room for a Dream night, and this box has already
+ * been taken down once by an uncapped process. Values are unit syntax, not bytes.
+ */
+export const COMPANION_MEMORY_HIGH = '1536M';
+export const COMPANION_MEMORY_MAX = '2048M';
+
 export interface ServiceSpec {
   /** Unit basename on Linux, label on macOS. One name, two conventions. */
   serviceName: string;
@@ -101,6 +109,8 @@ export function renderSystemdUnit(spec: ServiceSpec): string {
     `WorkingDirectory=${quote(spec.workspaceRoot)}`,
     'Restart=always',
     'RestartSec=3',
+    `MemoryHigh=${COMPANION_MEMORY_HIGH}`,
+    `MemoryMax=${COMPANION_MEMORY_MAX}`,
     'NoNewPrivileges=true',
     'PrivateTmp=true',
     'StandardOutput=append:' + spec.logFile,
@@ -117,6 +127,8 @@ function xmlEscape(value: string): string {
 }
 
 export function renderLaunchdPlist(spec: ServiceSpec): string {
+  // launchd has no per-service RSS ceiling (no MemoryHigh/MemoryMax equivalent). The plist cannot
+  // carry the cap; on macOS the health face still reports RSS and the absence of a limit.
   const args = residentArgs(spec).map((arg) => `    <string>${xmlEscape(arg)}</string>`).join('\n');
   const env = Object.entries(spec.env)
     .flatMap(([key, value]) => [`    <key>${xmlEscape(key)}</key>`, `    <string>${xmlEscape(value)}</string>`])

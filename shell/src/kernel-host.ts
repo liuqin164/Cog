@@ -17,6 +17,7 @@
  */
 import { Database } from 'bun:sqlite';
 import { redactSecretText } from 'cogmem';
+import { readMemoryUsage } from './memory.ts';
 
 const OBSERVATORY_MODULE = '../../src/observatory/MemoryObservatory.ts';
 const OBSERVATORY_ROUTES = '../../src/observatory/routes.ts';
@@ -102,6 +103,9 @@ export async function startKernelHttpFace(kernel: unknown, options: HttpFaceOpti
           bind: options.hostname,
           port: httpServer.port ?? options.port,
           kernel: kernelHealth(),
+          // The process's own RSS and the unit's ceiling (#226): the doctor reads them here rather
+          // than asking systemd, so the same number is visible with no service manager.
+          memory: readMemoryUsage(),
           ...options.health?.(),
         });
       }

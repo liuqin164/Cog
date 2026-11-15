@@ -46,11 +46,20 @@ describe('in-process kernel host and its loopback HTTP face', () => {
     const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.sqlite'), projectTimeZone: 'UTC' });
     const face = await startKernelHttpFace(kernel, { port: 0, hostname: '127.0.0.1', health: () => ({ state: 'IDLE' }) });
     try {
-      const health = (await (await fetch(face.healthUrl)).json()) as { status: string; bind: string; state?: string; kernel?: { package?: string } };
+      const health = (await (await fetch(face.healthUrl)).json()) as {
+        status: string;
+        bind: string;
+        state?: string;
+        kernel?: { package?: string };
+        memory?: { rssBytes?: number; source?: string };
+      };
       expect(health.status).toBe('ok');
       expect(health.bind).toBe('127.0.0.1');
       expect(health.kernel?.package).toBe('cogmem');
       expect(health.state).toBe('IDLE');
+      // #226: the process's own memory reading rides the health face the doctor already reads.
+      expect(health.memory?.rssBytes).toBeGreaterThan(0);
+      expect(health.memory?.source).toBeDefined();
     } finally {
       face.stop();
       kernel.close();

@@ -142,6 +142,8 @@ describe('service units', () => {
     const unit = renderSystemdUnit(spec);
     expect(unit).toContain('WantedBy=default.target');
     expect(unit).toContain('Restart=always');
+    expect(unit).toContain('MemoryHigh=1536M');
+    expect(unit).toContain('MemoryMax=2048M');
     expect(unit).toContain('EnvironmentFile=/home/u/.cogmem/companion/env');
     expect(unit).toContain('--attach --no-terminal');
     expect(unit).toContain('--http-port 7338');
