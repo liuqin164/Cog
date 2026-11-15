@@ -1,12 +1,7 @@
-import { check, contains, equal, excludes, hasLength, turn } from '../harness.js';
+import { EVAL_T0, backendFor, check, contains, equal, excludes, hasLength, rememberBelief, turn } from '../harness.js';
 import type { CompanionScenario } from '../types.js';
 
-const T0 = Date.UTC(2026, 10, 15, 9, 0, 0);
-
-function backendFor(api: any, kernel: any, channelId = 'correct') {
-  const binding = kernel.occasionScope.register({ channelId, occasion: 'private' });
-  return new api.KernelAgentMemoryBackend(kernel, { binding });
-}
+const T0 = EVAL_T0;
 
 export const correctScenarios: CompanionScenario[] = [
   {
@@ -30,17 +25,13 @@ export const correctScenarios: CompanionScenario[] = [
         content: '我喜欢喝乌龙茶。',
         occurredAt: T0,
       });
-      kernel.beliefStore.upsert({
+      rememberBelief(kernel, {
         projectId,
-        scope: 'project',
-        subject: 'owner',
+        eventId: original.eventId,
         predicate: 'likes',
-        objectValue: { raw: '乌龙茶', type: 'string' },
-        confidence: 0.9,
-        sourceType: 'user_input',
-        extractionReason: 'preference_signal',
-        sourceEventId: original.eventId,
+        value: '乌龙茶',
         validFrom: T0,
+        extractionReason: 'preference_signal',
       });
       kernel.profile.compile({ projectId, now: T0 + 1_000 });
       const before = kernel.profile.entries({ projectId, ledger: 'preferences' })[0];
@@ -108,16 +99,11 @@ export const correctScenarios: CompanionScenario[] = [
         content: '我平时用 vim 写代码。',
         occurredAt: T0,
       });
-      kernel.beliefStore.upsert({
+      rememberBelief(kernel, {
         projectId,
-        scope: 'project',
-        subject: 'owner',
+        eventId: original.eventId,
         predicate: 'uses',
-        objectValue: { raw: 'vim', type: 'string' },
-        confidence: 0.9,
-        sourceType: 'user_input',
-        extractionReason: 'explicit_user_statement',
-        sourceEventId: original.eventId,
+        value: 'vim',
         validFrom: T0,
       });
       kernel.profile.compile({ projectId, now: T0 + 1_000 });
@@ -142,7 +128,7 @@ export const correctScenarios: CompanionScenario[] = [
       const refs = new Set(corrected.sourceRefs.map((ref: any) => ref.eventId));
       check(refs.has(original.eventId) && refs.has(correction.eventId), 'C1 both sources');
 
-      kernel.profile.compile({ projectId, ledger: 'facts', now: T0 + 4_000 });
+      kernel.profile.compile({ projectId, now: T0 + 4_000 });
       const afterCompile = kernel.profile.entries({ projectId, ledger: 'facts' })[0];
       equal(afterCompile.value, 'emacs', 'C2 recompile keeps the correction');
 

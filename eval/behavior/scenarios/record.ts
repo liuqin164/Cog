@@ -1,7 +1,7 @@
-import { check, contains, equal, hasLength, turn } from '../harness.js';
+import { EVAL_T0, check, contains, equal, hasLength, rememberBelief, turn } from '../harness.js';
 import type { CompanionScenario } from '../types.js';
 
-const T0 = Date.UTC(2026, 10, 15, 9, 0, 0);
+const T0 = EVAL_T0;
 
 export const recordScenarios: CompanionScenario[] = [
   {
@@ -25,29 +25,20 @@ export const recordScenarios: CompanionScenario[] = [
         content: '我用 vim，喜欢喝乌龙茶。',
         occurredAt: T0,
       });
-      kernel.beliefStore.upsert({
+      rememberBelief(kernel, {
         projectId,
-        scope: 'project',
-        subject: 'owner',
+        eventId: said.eventId,
         predicate: 'uses',
-        objectValue: { raw: 'vim', type: 'string' },
-        confidence: 0.9,
-        sourceType: 'user_input',
-        extractionReason: 'explicit_user_statement',
-        sourceEventId: said.eventId,
+        value: 'vim',
         validFrom: T0,
       });
-      kernel.beliefStore.upsert({
+      rememberBelief(kernel, {
         projectId,
-        scope: 'project',
-        subject: 'owner',
+        eventId: said.eventId,
         predicate: 'likes',
-        objectValue: { raw: '乌龙茶', type: 'string' },
-        confidence: 0.9,
-        sourceType: 'user_input',
-        extractionReason: 'preference_signal',
-        sourceEventId: said.eventId,
+        value: '乌龙茶',
         validFrom: T0,
+        extractionReason: 'preference_signal',
       });
       kernel.profile.compile({ projectId, now: T0 + 1_000 });
 
@@ -109,8 +100,8 @@ export const recordScenarios: CompanionScenario[] = [
       const entries = kernel.procedures.entries({ projectId });
       hasLength(entries, 1, 'C1 one practice');
       equal(entries[0].grade, 'established', 'C1 grade');
-      contains(entries[0].steps.join(' '), 'bun run build', 'C2 steps');
-      contains(entries[0].tools.join(' '), 'bun', 'C2 tools');
+      equal(JSON.stringify(entries[0].steps), JSON.stringify(descriptor.steps), 'C2 steps unchanged');
+      equal(JSON.stringify(entries[0].tools), JSON.stringify(descriptor.tools), 'C2 tools unchanged');
       const refs = new Set(entries[0].sourceRefs.map((ref: any) => ref.eventId));
       check(refs.has(first.eventId) && refs.has(second.eventId), 'C3 both task events are sourceRefs');
     },
@@ -142,7 +133,7 @@ export const recordScenarios: CompanionScenario[] = [
       hasLength(book, 1, 'C1 one commitment');
       equal(book[0].owner, 'user', 'C1 owner');
       contains(book[0].content, '文件', 'C2 content');
-      check(typeof book[0].dueAt === 'number', 'C2 due instant is present');
+      equal(book[0].dueAt, Date.UTC(2026, 10, 16, 18), 'C2 due instant');
       const refs = new Set(book[0].sourceRefs.map((ref: any) => ref.eventId));
       check(refs.has(promise.eventId), 'C3 sourceRefs name the promise turn');
     },

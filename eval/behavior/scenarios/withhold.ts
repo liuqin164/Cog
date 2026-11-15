@@ -1,12 +1,7 @@
-import { check, equal, excludes, turn } from '../harness.js';
+import { backendFor, check, equal, excludes, turn } from '../harness.js';
 import type { CompanionScenario } from '../types.js';
 
 const T0 = Date.UTC(2026, 10, 15, 9, 0, 0);
-
-function backendFor(api: any, kernel: any, channelId: string, occasion: 'private' | 'group' | 'public') {
-  const binding = kernel.occasionScope.register({ channelId, occasion });
-  return new api.KernelAgentMemoryBackend(kernel, { binding });
-}
 
 export const withholdScenarios: CompanionScenario[] = [
   {
@@ -201,11 +196,12 @@ export const withholdScenarios: CompanionScenario[] = [
       }
       check(ingestRefused, 'C1 ingest refused');
 
-      const resumed = kernel.sovereignty.resume(projectId);
+      kernel.sovereignty.resume(projectId);
+      const afterPause = paused.since + 60_000;
       const during = kernel.eventStore.queryEvents(1, 100, {
         projectId: [projectId],
         startTime: paused.since,
-        endTime: resumed.since ?? paused.since + 1,
+        endTime: afterPause,
         order: 'asc',
       });
       equal(during.total, 0, 'C2 paused window is empty');
@@ -216,7 +212,7 @@ export const withholdScenarios: CompanionScenario[] = [
       const surfaced = backend.surfacingCandidates({
         projectId,
         channel: 'asked',
-        now: resumed.since ?? paused.since + 60_000,
+        now: afterPause,
         query: 'pausemarker',
       });
       excludes(

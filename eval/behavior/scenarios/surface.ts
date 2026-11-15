@@ -1,10 +1,9 @@
-import { check, contains, equal, hasLength, turn } from '../harness.js';
+import { EVAL_T0, check, contains, equal, hasLength, turn } from '../harness.js';
 import type { CompanionScenario } from '../types.js';
 
-const T0 = Date.UTC(2026, 10, 15, 9, 0, 0);
+const T0 = EVAL_T0;
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
-const DAY = 24 * HOUR;
 
 export const surfaceScenarios: CompanionScenario[] = [
   {
@@ -29,16 +28,16 @@ export const surfaceScenarios: CompanionScenario[] = [
         occurredAt: T0,
       });
       kernel.commitments.compile({ projectId, now: T0 + 1_000 });
-      const due = T0 + DAY + HOUR;
+      const due = kernel.commitments.list({ projectId, now: T0 + 1_000 })[0].dueAt;
 
       const first = kernel.surfacing.candidates({ projectId, channel: 'proactive', now: due });
       const firstCommitments = first.candidates.filter((candidate: any) => candidate.source === 'commitment');
       hasLength(firstCommitments, 1, 'C1 one commitment candidate');
       contains(firstCommitments[0].content, '文件', 'C1 candidate content');
 
-      const second = kernel.surfacing.candidates({ projectId, channel: 'proactive', now: due + 1_000 });
+      const second = kernel.surfacing.candidates({ projectId, channel: 'proactive', now: due + 1 });
       hasLength(second.candidates.filter((candidate: any) => candidate.source === 'commitment'), 0, 'C2 no replay');
-      hasLength(kernel.commitments.list({ projectId, now: due + 1_000 }), 1, 'C3 commitment remains');
+      hasLength(kernel.commitments.list({ projectId, now: due + 1 }), 1, 'C3 commitment remains');
     },
   },
   {
@@ -89,29 +88,12 @@ export const surfaceScenarios: CompanionScenario[] = [
       'C3: both items can name their sourceRefs',
     ],
     pinned: [
-      'the task descriptor and preference belief are fixed inputs',
+      'the preference is captured through the deterministic ingest path; the task descriptor is pinned',
       'assembly is F15 deterministic projection; no model',
     ],
     async run({ kernel }) {
       const projectId = 'surface-task-preference';
-      const preferenceTurn = turn(kernel, {
-        projectId,
-        threadId: 'preference-turn',
-        content: '发布前我想先跑一遍测试。',
-        occurredAt: T0,
-      });
-      kernel.beliefStore.upsert({
-        projectId,
-        scope: 'project',
-        subject: 'owner',
-        predicate: 'prefers',
-        objectValue: { raw: '发布前先跑测试', type: 'string' },
-        confidence: 0.9,
-        sourceType: 'user_input',
-        extractionReason: 'preference_signal',
-        sourceEventId: preferenceTurn.eventId,
-        validFrom: T0,
-      });
+      await kernel.ingest({ projectId, content: '我喜欢在发布前先跑一遍测试。' });
       for (const [index, threadId] of ['task-1', 'task-2'].entries()) {
         kernel.recordTaskEvent({
           projectId,
@@ -141,7 +123,7 @@ export const surfaceScenarios: CompanionScenario[] = [
       contains(procedure.text, 'bun run build', 'C1 procedure steps');
       contains(procedure.text, 'tools: bun', 'C1 procedure tools');
       check(preference, 'C2 preference item');
-      contains(preference.text, '发布前先跑测试', 'C2 preference text');
+      contains(preference.text, '发布前先跑一遍测试', 'C2 preference text');
       check(procedure.sourceRefs.length > 0 && preference.sourceRefs.length > 0, 'C3 sourceRefs');
     },
   },
