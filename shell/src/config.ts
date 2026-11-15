@@ -6,7 +6,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { mergePluginSpecs, readPluginRegistry } from './plugins/registry.ts';
+import { readPluginRegistry } from './plugins/registry.ts';
 
 export interface RunBudget {
   maxTurnsPerRun: number;
@@ -47,7 +47,8 @@ export interface ShellConfig {
    * carried an MCP endpoint until #200 R2 removed the shell's outward MCP face.
    */
   http: { enabled: boolean; port: number; hostname: string };
-  pi: { adapterEnabled: boolean; plugins: string[] };
+  /** Native plugin specs read from `<dataDir>/plugins.json` at startup. */
+  plugins: string[];
   terminalEnabled: boolean;
   /**
    * The control socket the `cog` TUI attaches to. Off by default (a plain `start` is still the
@@ -110,7 +111,6 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
   const work: RunBudget = { ...DEFAULT_WORK_BUDGET, ...operating.work };
   // The registry is read here, once, so a plugin registered by `/plugins add` reaches the next
   // process and nothing re-reads the file mid-run. A corrupt file is a startup error (see registry).
-  const envPlugins = (env('COGMEM_SHELL_PI_PLUGINS') ?? '').split(',').map((item) => item.trim()).filter(Boolean);
   const registryPlugins = readPluginRegistry(dataDir);
   return {
     workspaceRoot,
@@ -147,10 +147,7 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
       port: Number(env('COGMEM_SHELL_HTTP_PORT') ?? 7338),
       hostname: '127.0.0.1',
     },
-    pi: overrides.pi ?? {
-      adapterEnabled: env('COGMEM_SHELL_PI_ADAPTER') !== 'off',
-      plugins: mergePluginSpecs(envPlugins, registryPlugins),
-    },
+    plugins: overrides.plugins ?? registryPlugins,
     terminalEnabled: overrides.terminalEnabled ?? env('COGMEM_SHELL_TERMINAL') !== 'off',
     attach: overrides.attach ?? {
       enabled: env('COGMEM_SHELL_ATTACH') === 'on',

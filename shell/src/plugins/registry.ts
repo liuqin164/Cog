@@ -1,11 +1,11 @@
 /**
- * `<dataDir>/plugins.json`: the Pi plugin registry the resident reads at startup.
+ * `<dataDir>/plugins.json`: the native plugin registry the resident reads at startup.
  *
- * The file is a JSON array of package specs — the same strings `COGMEM_SHELL_PI_PLUGINS` takes
- * (`@scope/pkg`, `pkg@1.2.3`, or a path relative to the workspace). It exists because the
- * environment variable is fixed when the service starts: a companion asked to install a plugin had
- * no product surface to write, so registering one meant surgery on its own unit. The two sources are
- * unioned, so an existing install keeps working and the registry adds to it.
+ * The file is a JSON array of specs — a package name (`@scope/pkg`, `pkg@1.2.3`) or a path relative
+ * to the workspace. A spec's module default-exports a `NativePlugin` (see `plugins/load.ts`).
+ * It exists because the service manager's environment is fixed when the process starts: a companion
+ * asked to register a plugin had no product surface to write, so registering one meant surgery on
+ * its own unit.
  *
  * A file that exists but cannot be understood is a startup error, like `budgets.json`: a user who
  * edited it must not be left believing it applied. The installer writes `[]` on first install and
@@ -44,22 +44,4 @@ export function writePluginRegistry(dataDir: string, specs: readonly string[]): 
   writeFileSync(temp, `${JSON.stringify(specs, null, 2)}\n`, { mode: 0o600 });
   chmodSync(temp, 0o600);
   renameSync(temp, path);
-}
-
-/**
- * The startup list: every source in order, first occurrence wins. Env first keeps an existing
- * install's load order; a spec named by both sources loads once.
- */
-export function mergePluginSpecs(...sources: ReadonlyArray<readonly string[]>): string[] {
-  const seen = new Set<string>();
-  const merged: string[] = [];
-  for (const source of sources) {
-    for (const raw of source) {
-      const spec = raw.trim();
-      if (spec === '' || seen.has(spec)) continue;
-      seen.add(spec);
-      merged.push(spec);
-    }
-  }
-  return merged;
 }

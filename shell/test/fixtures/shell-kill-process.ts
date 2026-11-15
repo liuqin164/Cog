@@ -71,7 +71,7 @@ const shell = new CompanionShell({
     sessionId: 'session-kill',
     terminalEnabled: false,
     http: { enabled: false, port: 0, hostname: '127.0.0.1' },
-    pi: { adapterEnabled: false, plugins: [] },
+    plugins: [],
     attach: { enabled: false },
   },
   modelProvider: providerFor(mode),

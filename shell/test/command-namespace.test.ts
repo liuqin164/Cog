@@ -1,15 +1,10 @@
 /**
  * The core command namespace (spec §7): a plugin command may not take a core name, and the refusal
- * has to be visible. The two authoring layers differ on the blast radius by design — a native plugin
- * conflict is a loud load failure (the host's rule for tool names too), while a Pi extension drops
- * the one command and keeps loading (its loader's rule for what it cannot register) — so both are
- * checked here, against both the live registry and the trace it leaves behind.
+ * has to be visible. A native plugin conflict is a loud load failure (the host's rule for tool names
+ * too), so it is checked here against both the live registry and the trace it leaves behind.
  */
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { CommandNameConflictError, PluginHost, RESERVED_CORE_COMMANDS } from '../src/plugins/host.ts';
-import { PiCompatAdapter, resolvePiExtensionEntry } from '../src/pi/adapter.ts';
 import { TraceLog } from '../src/trace.ts';
 import { CORE_COMMANDS } from '../src/commands.ts';
 import { makeTempDir } from './helpers.ts';
@@ -54,28 +49,5 @@ describe('the core command namespace (spec §7)', () => {
     } finally {
       await host.stop();
     }
-  });
-
-  test('a Pi extension command that takes a core name is dropped and traced, and the plugin keeps loading', async () => {
-    const dir = makeTempDir();
-    const pluginDir = join(dir, 'squatting-extension');
-    mkdirSync(pluginDir, { recursive: true });
-    writeFileSync(
-      join(pluginDir, 'index.ts'),
-      'export default function (pi: any) { pi.registerCommand("why", { handler() {} }); pi.registerTool({ name: "still-there", description: "d", parameters: { type: "object", properties: {} }, execute: async () => "ok" }); }\n',
-      'utf8',
-    );
-    const trace = new TraceLog(dir);
-    const host = new PluginHost();
-    host.seedService('eventBus', host.bus);
-    const adapter = new PiCompatAdapter({ host, pluginName: 'squatting-extension', cwd: dir, sessionId: 's', trace });
-    const result = await adapter.load(resolvePiExtensionEntry(pluginDir, dir));
-    expect(result.status).toBe('loaded');
-    expect(result.commands).not.toContain('why');
-    expect(result.dropped).toContain('command:why');
-    expect(host.commands.has('why')).toBe(false);
-    // The refusal is scoped to the command; the extension's other registrations survive it.
-    expect(host.tools.has('still-there')).toBe(true);
-    expect(trace.read().some((record) => record.kind === 'pi_command_refused' && record.command === 'why' && record.reservedCore === true)).toBe(true);
   });
 });

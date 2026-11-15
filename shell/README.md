@@ -34,12 +34,12 @@ opt-in (`SHELL_LIVE_MODEL=1 bun test test/mg-live.test.ts`) so the suite stays f
 
 Useful flags: `--workspace <dir>`, `--data <dir>`, `--db <file>`, `--project <id>`, `--agent <id>`,
 `--tools read,write,edit,bash`, `--turns <n>`, `--tokens <n>`, `--http-port <n>`, `--no-http`,
-`--no-terminal`, `--attach`, `--no-pi`, `--pi-plugin <pkg-or-path>` (repeatable).
+`--no-terminal`, `--attach`.
 
-Pi plugins can also be registered from the conversation: `/plugins add <pkg-or-path>` writes
+Native plugins can also be registered from the conversation: `/plugins add <pkg-or-path>` writes
 `<dataDir>/plugins.json` (0600) and restarts the resident through its service manager; `/plugins` and
-`GET /health`'s `plugins` field report what actually loaded. The registry is unioned with
-`COGMEM_SHELL_PI_PLUGINS`, so an existing install keeps working.
+`GET /health`'s `plugins` field report what actually loaded. A spec's module default-exports a native
+plugin (`{ name, inject?, provide?, apply }`, the host's own API in `src/plugins/host.ts`).
 
 ## Budget tiers (#222)
 
@@ -223,7 +223,7 @@ numbers.
 - `src/state/projection.ts` — the append-only context log and its `context_edit` overlay.
 - `src/state/retry.ts` — the failure ladder's classification and backoff, ported from pinned pi-ai.
 - `src/plugins/host.ts` — one registry, one bus; native Cordis-style plugins.
-- `src/pi/adapter.ts` — the removable Pi compatibility layer.
+- `src/plugins/load.ts` — resolves a registry spec (package or path) and registers its native plugin.
 - `src/plugins/*` — clock, recall, dream, emergence (conservative), cage, capture, the four tools,
   command-proposals (the `propose_command` tool), mg provider. Dream, emergence and recall are plugins
   like the rest: swap one by not loading it.
@@ -334,7 +334,7 @@ process does not have is a lie the model would keep acting on.
 ## Baseline (measured)
 
 Reproduce with `bun run scripts/measure-baseline.ts` (`--no-http` to leave the loopback HTTP face
-out); the script prints one JSON line, with the terminal and the Pi adapter off like the resident
+out); the script prints one JSON line, with the terminal off like the resident
 defaults. The medians below are of eight runs of this round's head; the spread is what the same box
 gave in one measurement session, and a loaded box moves it by tens of milliseconds.
 
@@ -349,5 +349,4 @@ gave in one measurement session, and a loaded box moves it by tens of millisecon
 None of these needed fixing: a resident process pays the start once, and the checkpoint is bounded and
 human-readable on purpose (`SURVIVAL.md` tells the operator to `cat` it).
 
-`COMPATIBILITY.md` records the pinned Pi version and the real-plugin test set.
 `SURVIVAL.md` is the startup script and care notes for the 7-day run (not started in this round).

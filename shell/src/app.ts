@@ -40,7 +40,8 @@ import { AttachServer, defaultSocketPath, type AttachShell } from './attach/serv
 import { buildAwayReport, enqueueAway } from './presence.ts';
 import { readInstallState, readTreeVersion, serviceFileExists, shellDirOfTree, treeOfThisProcess } from './upgrade/paths.ts';
 import { restartService, servicePath, type Platform, type ServiceSpec } from './install/service.ts';
-import { mergePluginSpecs, pluginsConfigPath, readPluginRegistry, writePluginRegistry } from './plugins/registry.ts';
+import { pluginsConfigPath, readPluginRegistry, writePluginRegistry } from './plugins/registry.ts';
+import { loadNativePlugins, type PluginLoadResult } from './plugins/load.ts';
 import { stageUpgradeTree } from './upgrade/stage.ts';
 import { spawnUpgradeSupervisor, type SpawnSupervisorResult } from './upgrade/spawn.ts';
 import {
@@ -77,18 +78,6 @@ const PLUGIN_RESTART_GRACE_MS = 300;
 
 /** The findings handoff is a prompt line, not a transcript: one bounded paragraph. */
 const MAX_ASSIGNMENT_FINDINGS = 600;
-
-export interface PiPluginLoadResult {
-  pluginName: string;
-  status: string;
-  /** The loaded package's own version; absent when the entry could not be resolved. */
-  version?: string;
-  /** Why a plugin that did not load is missing; set only for `status: 'failed'`. */
-  reason?: string;
-  tools: string[];
-  commands: string[];
-  refusedCapabilities: string[];
-}
 
 export interface CompanionShellOptions {
   config?: Partial<ShellConfig>;
@@ -155,11 +144,11 @@ export class CompanionShell implements ShellControl, AttachShell {
   /** An upgrade outcome already spoken by this process; attaches read it once, then it is gone. */
   private lastUpgrade?: UpgradeOutcome;
   private readonly redactor = new SecretRedactor();
-  private readonly adapters: Array<{ emitSessionStart(): Promise<void>; emitSessionShutdown(): Promise<void> }> = [];
   private tickTimer?: ReturnType<typeof setInterval>;
   private started = false;
   private readonly now: () => number;
-  readonly piPluginResults: PiPluginLoadResult[] = [];
+  /** This process's native plugin load outcomes; `/plugins` and `/health` read it. */
+  readonly pluginResults: PluginLoadResult[] = [];
 
   constructor(private readonly options: CompanionShellOptions = {}) {
     this.config = defaultShellConfig(options.config);
@@ -218,7 +207,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     );
     this.host.seedService('proposals', this.proposals);
     // Every transition is also a bus event, so a plugin can observe the lifecycle without reading the
-    // checkpoint file. The Pi-aligned names are untouched; this one carries the companion prefix.
+    // checkpoint file. This one carries the companion prefix.
     this.machine.onTransition((record) => {
       if (record.to === 'RUNNING') {
         this.runStartedAt = record.at;
@@ -305,18 +294,15 @@ export class CompanionShell implements ShellControl, AttachShell {
       this.http = await startKernelHttpFace(this.kernel, {
         ...this.config.http,
         // The plugin half is read from this process's own load results, so "installed" is a fact the
-        // owner can curl instead of a claim the model makes. `results` is filled by loadPiPlugins
+        // owner can curl instead of a claim the model makes. `results` is filled by startPlugins
         // below; the closure reads it lazily.
         health: () => ({ state: this.machine.state, plugins: this.pluginHealth() }),
         connectedAgents: () => [this.config.agentId],
       });
       this.trace.append('http_face_started', { url: this.http.baseUrl, port: this.http.port });
     }
-    if (this.config.pi.adapterEnabled && this.config.pi.plugins.length > 0) {
-      await this.loadPiPlugins();
-    }
-    // The executable set is complete only now (native tools, then Pi plugin tools). A checkpoint that
-    // declared a different loadout is a loud failure, and the current one becomes the declaration.
+    // The executable set is complete only now (built-in tools, then registry plugins). A checkpoint
+    // that declared a different loadout is a loud failure, and the current one becomes the declaration.
     const mismatch = this.declaredToolMismatch(restoredTools);
     if (mismatch) {
       this.trace.append('tool_set_mismatch', mismatch);
@@ -417,7 +403,22 @@ export class CompanionShell implements ShellControl, AttachShell {
         },
       }));
     }
+    this.pluginResults.push(...(await loadNativePlugins(this.host, this.config.plugins, {
+      cwd: this.config.workspaceRoot,
+      trace: this.trace,
+    })));
     await this.host.start();
+    // The host has run every `apply`, so the registrations each plugin actually made are readable.
+    for (const result of this.pluginResults) {
+      if (result.status === 'failed') {
+        // A failure a user cannot see is a failure they will blame on the plugin that did load. The
+        // notice waits until here because the terminal plugin subscribes during `host.start()`.
+        void this.host.bus.emit('terminal_print', { text: `plugin ${result.spec} failed to load: ${result.reason}\n` });
+      }
+      if (result.status !== 'loaded' || !result.name) continue;
+      result.tools = this.host.tools.list().filter((tool) => tool.source === `plugin:${result.name}`).map((tool) => tool.name);
+      result.commands = this.host.commands.list().filter((command) => command.source === `plugin:${result.name}`).map((command) => command.name);
+    }
     this.clock = this.host.getService<ClockService>('clock');
     this.cage = this.host.getService<RunCage>('cage');
     const model = this.host.getService<ModelProvider>('model');
@@ -522,58 +523,6 @@ export class CompanionShell implements ShellControl, AttachShell {
     const missing = restored.filter((name) => !executable.includes(name));
     if (missing.length === 0) return undefined;
     return { declared: [...restored].sort(), executable };
-  }
-
-  private async loadPiPlugins(): Promise<void> {
-    const adapterModule = await import('./pi/adapter.ts');
-    for (const spec of this.config.pi.plugins) {
-      try {
-        const entry = adapterModule.resolvePiExtensionEntry(spec, this.config.workspaceRoot);
-        const adapter = new adapterModule.PiCompatAdapter({
-          host: this.host,
-          pluginName: spec,
-          cwd: this.config.workspaceRoot,
-          sessionId: this.config.sessionId,
-          systemPrompt: () => this.systemPrompt(),
-          isIdle: () => this.machine.state === 'IDLE',
-          hasPendingMessages: () => (this.runtime?.pendingMessages ?? 0) > 0,
-          abort: () => this.runtime?.abort('pi_extension_abort'),
-          onShutdown: () => void this.stop(),
-          onSendMessage: ({ text, deliverAs }) => this.onPiMessage(text, deliverAs),
-          trace: this.trace,
-        });
-        const result = await adapter.load(entry);
-        this.adapters.push(adapter);
-        this.piPluginResults.push(result);
-      } catch (error) {
-        // Pi's loader collects a failed extension into `errors[]` and keeps going
-        // (`pi-coding-agent/dist/core/extensions/loader.js`); the resident is worth more than any one
-        // plugin, so a bad entry is named and skipped, not fatal. The native host stays fail-fast —
-        // this is the removable compatibility layer's rule, not the core's (`plugins/host.ts`).
-        const message = error instanceof Error ? error.message : String(error);
-        this.trace.append('pi_plugin_failed', { plugin: spec, message });
-        this.piPluginResults.push({ pluginName: spec, status: 'failed', reason: message, tools: [], commands: [], refusedCapabilities: [] });
-        // A failure a user cannot see is a failure they will blame on the plugin that did load.
-        void this.host.bus.emit('terminal_print', { text: `pi plugin ${spec} failed to load: ${message}\n` });
-      }
-    }
-    // Pi fires `session_start` once, for the whole runner, once every extension is loaded
-    // (`pi-coding-agent/dist/core/agent-session.js` `_applyExtensionBindings`): a plugin's startup
-    // logic must not run before another plugin's registrations exist. All the adapters share one bus,
-    // so one emit reaches every plugin; `session_shutdown` stays per-plugin (`stop()`).
-    if (this.adapters.length > 0) await this.adapters[0].emitSessionStart();
-  }
-
-  private onPiMessage(text: string, deliverAs: 'steer' | 'followUp' | 'nextTurn'): void {
-    if (deliverAs === 'steer' && this.machine.state === 'RUNNING') {
-      this.runtime!.steer(text);
-      return;
-    }
-    if (deliverAs === 'followUp' && this.machine.state === 'RUNNING') {
-      this.runtime!.followUp(text);
-      return;
-    }
-    void this.submit(text).catch((error) => this.trace.append('pi_message_failed', { message: error instanceof Error ? error.message : String(error) }));
   }
 
   /**
@@ -1209,7 +1158,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     return this.host.commands.list().map(({ name, description, argumentHint }) => ({ name, description, argumentHint }));
   }
 
-  // ---- The Pi plugin install surface (#223) ---------------------------------------------------
+  // ---- The native plugin registry (#223, converted in #224) -----------------------------------
 
   /**
    * `/plugins`: the registered list plus this process's load results. The registry file is re-read
@@ -1219,13 +1168,12 @@ export class CompanionShell implements ShellControl, AttachShell {
   pluginReport(): CommandReply {
     const report = this.pluginReportData();
     const lines = [
-      `Pi 适配层：${report.adapterEnabled ? '开' : '关（--no-pi 或 COGMEM_SHELL_PI_ADAPTER=off）'}`,
       `已登记 ${report.registered.length} 个：${report.registered.length > 0 ? report.registered.join(', ') : '（空）'}`,
     ];
     for (const spec of report.registered) {
       const result = report.results.find((entry) => entry.spec === spec);
       if (!result) {
-        lines.push(`  - ${spec}：本进程未加载（启动后登记，或适配层关闭）；重启后生效`);
+        lines.push(`  - ${spec}：本进程未加载（启动后登记）；重启后生效`);
         continue;
       }
       const parts = [
@@ -1240,15 +1188,13 @@ export class CompanionShell implements ShellControl, AttachShell {
   }
 
   private pluginReportData(): {
-    adapterEnabled: boolean;
     registered: string[];
     results: Array<{ spec: string; status: string; version?: string; reason?: string; tools: string[]; commands: string[] }>;
   } {
     return {
-      adapterEnabled: this.config.pi.adapterEnabled,
-      registered: mergePluginSpecs(this.config.pi.plugins, readPluginRegistry(this.config.dataDir)),
-      results: this.piPluginResults.map((entry) => ({
-        spec: entry.pluginName,
+      registered: readPluginRegistry(this.config.dataDir),
+      results: this.pluginResults.map((entry) => ({
+        spec: entry.spec,
         status: entry.status,
         ...(entry.version ? { version: entry.version } : {}),
         ...(entry.reason ? { reason: entry.reason } : {}),
@@ -1260,15 +1206,13 @@ export class CompanionShell implements ShellControl, AttachShell {
 
   /** What `/health` reports: the registry this process started with, and every load's outcome. */
   pluginHealth(): {
-    enabled: boolean;
     registered: string[];
     results: Array<{ spec: string; status: string; version?: string; reason?: string; tools: string[]; commands: string[] }>;
   } {
     return {
-      enabled: this.config.pi.adapterEnabled,
-      registered: [...this.config.pi.plugins],
-      results: this.piPluginResults.map((entry) => ({
-        spec: entry.pluginName,
+      registered: [...this.config.plugins],
+      results: this.pluginResults.map((entry) => ({
+        spec: entry.spec,
         status: entry.status,
         ...(entry.version ? { version: entry.version } : {}),
         ...(entry.reason ? { reason: entry.reason } : {}),
@@ -1286,8 +1230,8 @@ export class CompanionShell implements ShellControl, AttachShell {
    */
   async installPlugin(rawSpec: string): Promise<CommandReply> {
     const spec = rawSpec.trim();
-    if (spec === '' || /[,\r\n]/u.test(spec)) {
-      return { text: 'invalid_plugin_spec: 包名不能为空，也不能包含逗号或换行（逗号是 COGMEM_SHELL_PI_PLUGINS 的分隔符）。', receipt: true };
+    if (spec === '' || /[\r\n]/u.test(spec)) {
+      return { text: 'invalid_plugin_spec: 插件 spec 不能为空，也不能包含换行。', receipt: true };
     }
     const path = pluginsConfigPath(this.config.dataDir);
     let registry: string[];
@@ -1301,7 +1245,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     }
     const next = [...registry, spec];
     writePluginRegistry(this.config.dataDir, next);
-    this.trace.append('pi_plugin_registered', { spec, source: 'command', registry: path, registered: next });
+    this.trace.append('plugin_registered', { spec, source: 'command', registry: path, registered: next });
     const restart = this.schedulePluginRestart(spec);
     return {
       text: [
@@ -1323,7 +1267,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   private schedulePluginRestart(spec: string): { ok: boolean; detail: string } {
     const target = this.serviceRestartTarget();
     if (!target) {
-      this.trace.append('pi_plugin_restart_skipped', { spec, reason: 'no_service_manager' });
+      this.trace.append('plugin_restart_skipped', { spec, reason: 'no_service_manager' });
       return { ok: false, detail: '找不到接管本进程（且指向这个数据目录）的 systemd unit / launchd plist' };
     }
     const assignment = this.machine.runtime.openAssignment;
@@ -1331,7 +1275,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       this.machine.updateRuntime({ resumeAfterRestart: { assignmentId: assignment.id, at: this.now(), reason: 'plugins' } });
     }
     const restart = this.options.restartResident ?? (() => restartService(defaultRunner(), target.spec, target.platform));
-    this.trace.append('pi_plugin_restart_scheduled', {
+    this.trace.append('plugin_restart_scheduled', {
       spec,
       service: target.spec.serviceName,
       platform: target.platform,
@@ -1341,7 +1285,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     const timer = setTimeout(() => {
       void Promise.resolve()
         .then(restart)
-        .catch((error) => this.trace.append('pi_plugin_restart_failed', { service: target.spec.serviceName, message: error instanceof Error ? error.message : String(error) }));
+        .catch((error) => this.trace.append('plugin_restart_failed', { service: target.spec.serviceName, message: error instanceof Error ? error.message : String(error) }));
     }, PLUGIN_RESTART_GRACE_MS);
     (timer as { unref?: () => void }).unref?.();
     return { ok: true, detail: `${target.platform === 'linux' ? 'systemctl --user restart' : 'launchctl kickstart -k'} ${target.spec.serviceName}` };
@@ -1688,8 +1632,6 @@ export class CompanionShell implements ShellControl, AttachShell {
       if (this.machine.state === 'DREAMING') await this.machine.dispatch('run_error', { reason: 'shutdown' });
       if (this.machine.state !== 'DORMANT') await this.machine.dispatch('shutdown', { reason: 'process_stop' });
     } finally {
-      for (const adapter of this.adapters) await adapter.emitSessionShutdown();
-      this.adapters.length = 0;
       this.http?.stop();
       await this.host.stop();
       this.kernel.close();

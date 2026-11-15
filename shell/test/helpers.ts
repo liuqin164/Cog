@@ -154,8 +154,8 @@ export interface TestShellOptions {
 }
 
 /**
- * The one test shell: temp dirs inside the managed prefix, no terminal, no HTTP face and no Pi
- * adapter unless the test asks for them. Six copies of this config literal had already started to
+ * The one test shell: temp dirs inside the managed prefix, no terminal, no HTTP face and no
+ * registry plugins unless the test asks for them. Six copies of this config literal had already started to
  * drift.
  *
  * `provider` may be omitted: then the shell builds its own model router (mg from config plus the
@@ -175,7 +175,7 @@ export function makeShell(dir: string, provider: ModelProvider | undefined, conf
       sessionId: 'session-test',
       terminalEnabled: false,
       http: { enabled: false, port: 0, hostname: '127.0.0.1' },
-      pi: { adapterEnabled: false, plugins: [] },
+      plugins: [],
       ...config,
     },
     modelProvider: provider,

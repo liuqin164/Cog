@@ -15,15 +15,6 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "1.5.0",
-    "@earendil-works/pi-coding-agent": "1.5.0",
-    "@earendil-works/pi-tui": "1.5.0",
-    "@lalalic/channel": "1.0.6",
-    "@sinclair/typebox": "0.34.52",
-    "@types/ws": "^8.18.2",
-    "bun-types": "^1.4.4",
-    "pi-web-access": "0.47.0",
-    "typebox": "1.4.6",
-    "ws": "8.22.2"
+    "bun-types": "^1.4.4"
   }
 }

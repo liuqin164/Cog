@@ -1,16 +1,16 @@
 /**
- * The Pi plugin registry (#223): a data-dir file the resident reads at startup, unioned with the
- * environment variable that predates it.
+ * The native plugin registry (#223, converted in #224): a data-dir file the resident reads at
+ * startup.
  *
  * The discriminators are the three failure modes the ticket names: a corrupt or wrongly shaped file
- * must stop startup loudly (not fall back), the two sources must load a shared spec once, and the
- * write path must leave a 0600 file the installer never overwrites.
+ * must stop startup loudly (not fall back), the config carries the file's specs once, and the write
+ * path must leave a 0600 file the installer never overwrites.
  */
 import { describe, expect, test } from 'bun:test';
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { defaultShellConfig } from '../src/config.ts';
-import { mergePluginSpecs, pluginsConfigPath, readPluginRegistry, writePluginRegistry } from '../src/plugins/registry.ts';
+import { pluginsConfigPath, readPluginRegistry, writePluginRegistry } from '../src/plugins/registry.ts';
 import { makeTempDir } from './helpers.ts';
 
 describe('reading the plugin registry', () => {
@@ -20,8 +20,8 @@ describe('reading the plugin registry', () => {
 
   test('a valid file is read back trimmed, in order', () => {
     const dir = makeTempDir();
-    writeFileSync(join(dir, 'plugins.json'), JSON.stringify([' @scope/pkg ', 'pi-web-access@0.47.0']), 'utf8');
-    expect(readPluginRegistry(dir)).toEqual(['@scope/pkg', 'pi-web-access@0.47.0']);
+    writeFileSync(join(dir, 'plugins.json'), JSON.stringify([' @scope/pkg ', './plugins/echo.ts']), 'utf8');
+    expect(readPluginRegistry(dir)).toEqual(['@scope/pkg', './plugins/echo.ts']);
   });
 
   test('a corrupt file fails startup loudly, like budgets.json', () => {
@@ -44,35 +44,22 @@ describe('reading the plugin registry', () => {
   });
 });
 
-describe('the registry is the environment variable\'s union, not its replacement', () => {
-  test('env first, then registry, one copy of a spec named by both', () => {
+describe('the config carries the registry read at startup', () => {
+  test('the file\'s specs are the configured list, in order', () => {
     const dir = makeTempDir();
     writePluginRegistry(dir, ['from-registry', 'shared']);
-    const previous = process.env.COGMEM_SHELL_PI_PLUGINS;
-    process.env.COGMEM_SHELL_PI_PLUGINS = 'from-env, shared';
-    try {
-      const config = defaultShellConfig({ dataDir: dir });
-      expect(config.pi.plugins).toEqual(['from-env', 'shared', 'from-registry']);
-    } finally {
-      if (previous === undefined) delete process.env.COGMEM_SHELL_PI_PLUGINS;
-      else process.env.COGMEM_SHELL_PI_PLUGINS = previous;
-    }
-  });
-
-  test('mergePluginSpecs dedupes across sources and keeps the first occurrence', () => {
-    expect(mergePluginSpecs(['a', 'b'], ['b', 'c'], ['a'])).toEqual(['a', 'b', 'c']);
-    expect(mergePluginSpecs([], [])).toEqual([]);
+    expect(defaultShellConfig({ dataDir: dir }).plugins).toEqual(['from-registry', 'shared']);
   });
 });
 
 describe('writing the registry', () => {
   test('the file is 0600 and round-trips exactly', () => {
     const dir = makeTempDir();
-    writePluginRegistry(dir, ['@llblab/pi-telegram']);
+    writePluginRegistry(dir, ['./plugins/hello.ts']);
     const path = pluginsConfigPath(dir);
     expect(existsSync(path)).toBe(true);
     expect(statSync(path).mode & 0o777).toBe(0o600);
-    expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual(['@llblab/pi-telegram']);
-    expect(readPluginRegistry(dir)).toEqual(['@llblab/pi-telegram']);
+    expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual(['./plugins/hello.ts']);
+    expect(readPluginRegistry(dir)).toEqual(['./plugins/hello.ts']);
   });
 });

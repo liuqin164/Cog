@@ -1,9 +1,8 @@
 /**
  * The plugin host: one registry, one event bus, one service table.
  *
- * Two authoring entry points land here — native Cordis-style plugins (`apply(ctx, config)`,
- * `provide`, `inject`, `dispose`) and the Pi compatibility adapter — and the conflict rules are the
- * host's, not either layer's: a tool name registers once, the four builtins are not silently
+ * Native Cordis-style plugins (`apply(ctx, config)`, `provide`, `inject`, `dispose`) land here, and
+ * the conflict rules are the host's: a tool name registers once, the four builtins are not silently
  * overridden, and same-event hooks run in registration order with the first block winning.
  */
 import { EventBus, type BusHandler, type BusResult } from '../bus.ts';
@@ -394,9 +393,7 @@ export class PluginHost {
     if (!record) return;
     for (const unsubscribe of record.unsubscribes.splice(0)) unsubscribe();
     this.tools.unregisterBySource(`plugin:${name}`);
-    this.tools.unregisterBySource(`pi:${name}`);
     this.commands.unregisterBySource(`plugin:${name}`);
-    this.commands.unregisterBySource(`pi:${name}`);
     for (const service of record.provided) {
       if (this.services.get(service)?.source === name) this.services.delete(service);
     }

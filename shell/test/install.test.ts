@@ -292,10 +292,10 @@ describe('the six-step install', () => {
 
     // What `/plugins add` would have written. A re-run that goes through the place step again (a lost
     // install.json is the realistic case) must keep it, the same way budgets.json is kept.
-    writeFileSync(pluginsPath, `${JSON.stringify(['@llblab/pi-telegram'])}\n`, 'utf8');
+    writeFileSync(pluginsPath, `${JSON.stringify(['./plugins/hello.ts'])}\n`, 'utf8');
     rmSync(join(harness.dataDir, 'install.json'), { force: true });
     expect(await harness.installer.run()).toBe(0);
-    expect(JSON.parse(readFileSync(pluginsPath, 'utf8'))).toEqual(['@llblab/pi-telegram']);
+    expect(JSON.parse(readFileSync(pluginsPath, 'utf8'))).toEqual(['./plugins/hello.ts']);
   });
 
   test('a failed model probe stops cleanly at step 2 and names the reason', async () => {

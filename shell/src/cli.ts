@@ -29,11 +29,9 @@ function parseArgs(argv: string[]): ParsedArgs {
     if (token.startsWith('--')) {
       const [name, inline] = token.slice(2).split('=');
       if (inline !== undefined) {
-        if (name === 'pi-plugin') pushFlag(flags, name, inline);
-        else flags.set(name, inline);
+        flags.set(name, inline);
       } else if (rest[index + 1] && !rest[index + 1].startsWith('--')) {
-        if (name === 'pi-plugin') pushFlag(flags, name, rest[index + 1]);
-        else flags.set(name, rest[index + 1]);
+        flags.set(name, rest[index + 1]);
         index += 1;
       } else flags.set(name, true);
     } else positionals.push(token);
@@ -56,24 +54,10 @@ function overridesFrom(parsed: ParsedArgs): Partial<ShellConfig> {
   if (flags.get('attach')) overrides.attach = { ...base.attach, enabled: true };
   if (flags.get('no-http')) overrides.http = { ...base.http, enabled: false };
   if (stringFlag('http-port')) overrides.http = { ...base.http, enabled: true, port: Number(stringFlag('http-port')) };
-  const piPlugins = piPluginSpecs(parsed);
-  if (piPlugins.length > 0) overrides.pi = { adapterEnabled: true, plugins: piPlugins };
-  if (flags.get('no-pi')) overrides.pi = { adapterEnabled: false, plugins: [] };
   if (csv('tools')) overrides.budgets = { ...base.budgets, toolWhitelist: csv('tools')! };
   if (stringFlag('turns')) overrides.budgets = { ...(overrides.budgets ?? base.budgets), maxTurnsPerRun: Number(stringFlag('turns')) };
   if (stringFlag('tokens')) overrides.budgets = { ...(overrides.budgets ?? base.budgets), maxTokensPerRun: Number(stringFlag('tokens')) };
   return overrides;
-}
-
-function pushFlag(flags: ParsedArgs['flags'], name: string, value: string): void {
-  const current = flags.get(name);
-  if (Array.isArray(current)) current.push(value);
-  else flags.set(name, [value]);
-}
-
-function piPluginSpecs(parsed: ParsedArgs): string[] {
-  const value = parsed.flags.get('pi-plugin');
-  return Array.isArray(value) ? value : typeof value === 'string' ? [value] : [];
 }
 
 async function main(): Promise<number> {
@@ -123,8 +107,8 @@ async function main(): Promise<number> {
     return 0;
   }
   process.stdout.write(`companion shell started: state=${shell.state} data=${config.dataDir}${shell.httpUrl ? ` http=${shell.httpUrl}` : ''}\n`);
-  for (const plugin of shell.piPluginResults) {
-    process.stdout.write(`pi plugin ${plugin.pluginName}: ${plugin.status}${plugin.reason ? ` reason=${plugin.reason}` : ''} tools=[${plugin.tools.join(', ')}] commands=[${plugin.commands.join(', ')}]\n`);
+  for (const plugin of shell.pluginResults) {
+    process.stdout.write(`plugin ${plugin.spec}: ${plugin.status}${plugin.reason ? ` reason=${plugin.reason}` : ''} tools=[${plugin.tools.join(', ')}] commands=[${plugin.commands.join(', ')}]\n`);
   }
   const shutdown = async () => {
     await shell.stop();
