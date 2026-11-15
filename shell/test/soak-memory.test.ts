@@ -4,9 +4,18 @@
  *   warmup:        first 20 cycles discarded (JIT, lazy imports, first fills)
  *   sampling:     every 10 cycles after warmup, 10 samples (cycles 20, 30, … 110)
  *   sample:       Bun.gc(true), then process.memoryUsage().rss and .heapUsed
- *   judgement:    least-squares slope over the 10 samples
- *                 rss  < 256 KiB/cycle, and last sample − first sample < 32 MiB
- *                 heap < 64 KiB/cycle
+ *   judgement:    rss end-to-end (last sample − first sample) < 32 MiB
+ *                 heap slope < 64 KiB/cycle
+ *                 The per-cycle RSS slope is logged for diagnosis, not asserted (#230).
+ *   why the RSS slope is no longer a gate: #230 removed the old per-tick recall, whose SQLite
+ *                 writes used to trigger WAL auto-checkpoint. The soak then retained WAL/mmap
+ *                 pages, so the slope was measuring allocator/WAL noise rather than retained
+ *                 memory. Susan's independent rerun on one binary: 8 runs, 4 pass / 4 fail
+ *                 (275k / 358k B/cycle), while heap slope was always negative and rss
+ *                 end-to-end always stayed inside 32 MiB. Bounding the WAL with
+ *                 `wal_autocheckpoint=256` removed the root cause, but the remaining slope still
+ *                 flips sign run to run. The two criteria kept below are the ones that actually
+ *                 measure retention; tuning the slope further would chase the allocator.
  *   why these:    RSS in this harness swings ±30 MiB around a flat mean from forced-GC timing
  *                 (first run: 270 → 242 MiB, slope −349 KiB/cycle), so a 4 KiB/cycle line would be
  *                 below the measurement floor and could only flake. The per-turn structural leaks
@@ -17,7 +26,8 @@
  *                 (`tick` past the scheduled wake intent; health/emergence also run).
  *
  * Run: TMPDIR="$PWD/.cogmem/tmp" bun test shell/test/soak-memory.test.ts
- * A failing slope is a finding, not a threshold to tune.
+ * A failing end-to-end or heap slope is a finding, not a threshold to tune. The RSS slope is
+ * evidence, not a gate (#230).
  */
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { join } from 'node:path';
@@ -29,7 +39,7 @@ const WARMUP_CYCLES = 20;
 const SAMPLE_EVERY = 10;
 const SAMPLE_COUNT = 10;
 const TOTAL_CYCLES = WARMUP_CYCLES + SAMPLE_EVERY * SAMPLE_COUNT;
-const MAX_RSS_SLOPE_BYTES_PER_CYCLE = 256 * 1024;
+const RSS_SLOPE_DIAGNOSTIC_BYTES_PER_CYCLE = 256 * 1024;
 const MAX_RSS_END_TO_END_BYTES = 32 * 1024 * 1024;
 const MAX_HEAP_SLOPE_BYTES_PER_CYCLE = 64 * 1024;
 
@@ -121,7 +131,7 @@ test('retained RSS stays flat across mixed resident cycles', async () => {
   const heapSlope = slope(heapSamples);
   const rssEndToEnd = rssSamples[rssSamples.length - 1]!.y - rssSamples[0]!.y;
   const summary = [
-    `rss slope ${Math.round(rssSlope)} B/cycle (limit ${MAX_RSS_SLOPE_BYTES_PER_CYCLE})`,
+    `rss slope ${Math.round(rssSlope)} B/cycle (diagnostic; old gate ${RSS_SLOPE_DIAGNOSTIC_BYTES_PER_CYCLE})`,
     `rss end-to-end ${Math.round(rssEndToEnd)} B (limit ${MAX_RSS_END_TO_END_BYTES})`,
     `heap slope ${Math.round(heapSlope)} B/cycle (limit ${MAX_HEAP_SLOPE_BYTES_PER_CYCLE})`,
     `rss samples [${rssSamples.map((point) => Math.round(point.y / 1024)).join(', ')}] KiB`,
@@ -129,7 +139,6 @@ test('retained RSS stays flat across mixed resident cycles', async () => {
   ].join('; ');
   console.log(`[soak-memory] ${summary}`);
   expect(rssSamples.length).toBe(SAMPLE_COUNT);
-  expect(rssSlope, summary).toBeLessThan(MAX_RSS_SLOPE_BYTES_PER_CYCLE);
   expect(rssEndToEnd, summary).toBeLessThan(MAX_RSS_END_TO_END_BYTES);
   expect(heapSlope, summary).toBeLessThan(MAX_HEAP_SLOPE_BYTES_PER_CYCLE);
 }, 120_000);
