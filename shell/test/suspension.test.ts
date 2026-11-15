@@ -175,3 +175,93 @@ describe('a question pause (#228)', () => {
   });
 });
 
+describe('autonomous continuation backoff (#228)', () => {
+  test('failed continuations wait 5m, 10m, 20m, and a successful tool result resets the ladder', async () => {
+    const dir = makeTempDir();
+    let now = Date.UTC(2026, 0, 1, 12, 0, 0);
+    const fatal = () => {
+      throw new Error('provider down');
+    };
+    const provider = new ScriptedProvider([
+      fatal, // the user's run
+      fatal, // attempt 1
+      fatal, // the backed-off wake: a surfacing run, not a retry
+      fatal, // attempt 2
+      fatal, // attempt 3
+      { text: 'writing', toolCalls: [{ toolCallId: 'p1', toolName: 'write', input: { path: 'progress.txt', content: 'x' } }] },
+      fatal, // attempt 4: the tool succeeded, then the provider failed
+    ]);
+    const shell = makeShell(dir, provider, {
+      budgets: TIGHT,
+      workBudget: { maxTurnsPerRun: 5, maxTokensPerRun: 3_000 },
+    }, { now: () => now });
+    await shell.start();
+    try {
+      await shell.submit('do the thing');
+      emerge(shell);
+
+      await shell.tick(now);
+      let assignment = shell.machine.runtime.openAssignment!;
+      expect(assignment.attempts).toBe(1);
+      expect(assignment.nextResumeAt! - now).toBe(5 * 60_000);
+
+      // While it waits, the autonomous wake is a plain surfacing run: no assignment block, no retry.
+      await shell.tick(now);
+      assignment = shell.machine.runtime.openAssignment!;
+      expect(assignment.attempts).toBe(1);
+      expect(provider.calls[2].systemPrompt).not.toContain('<open-assignment>');
+      expect(shell.trace.read().some((record) => record.kind === 'assignment_resume_deferred')).toBe(true);
+
+      now += 5 * 60_000;
+      await shell.tick(now);
+      assignment = shell.machine.runtime.openAssignment!;
+      expect(assignment.attempts).toBe(2);
+      expect(assignment.nextResumeAt! - now).toBe(10 * 60_000);
+
+      now += 10 * 60_000;
+      await shell.tick(now);
+      assignment = shell.machine.runtime.openAssignment!;
+      expect(assignment.attempts).toBe(3);
+      expect(assignment.nextResumeAt! - now).toBe(20 * 60_000);
+
+      // A successful tool call is progress even though the run still failed: the ladder resets.
+      now += 20 * 60_000;
+      await shell.tick(now);
+      assignment = shell.machine.runtime.openAssignment!;
+      expect(assignment.attempts).toBe(0);
+      expect(assignment.nextResumeAt).toBeUndefined();
+      expect(provider.calls[6].messages.some((message) => message.role === 'tool' && message.isError === false)).toBe(true);
+    } finally {
+      await shell.stop();
+    }
+  });
+
+  test('a new user instruction resets the count, because the owner is present again', async () => {
+    const dir = makeTempDir();
+    const now = Date.UTC(2026, 0, 1, 12, 0, 0);
+    const fatal = () => {
+      throw new Error('provider down');
+    };
+    const shell = makeShell(dir, new ScriptedProvider([fatal, fatal, fatal]), {
+      budgets: TIGHT,
+      workBudget: { maxTurnsPerRun: 5, maxTokensPerRun: 3_000 },
+    }, { now: () => now });
+    await shell.start();
+    try {
+      await shell.submit('do the thing');
+      const firstId = shell.machine.runtime.openAssignment!.id;
+      emerge(shell);
+      await shell.tick(now);
+      expect(shell.machine.runtime.openAssignment?.attempts).toBe(1);
+
+      await shell.submit('do something else');
+      const assignment = shell.machine.runtime.openAssignment!;
+      expect(assignment.id).not.toBe(firstId);
+      expect(assignment.attempts).toBe(0);
+      expect(assignment.nextResumeAt).toBeUndefined();
+    } finally {
+      await shell.stop();
+    }
+  });
+});
+

@@ -84,6 +84,16 @@ const PLUGIN_RESTART_GRACE_MS = 300;
 /** The findings handoff is a prompt line, not a transcript: one bounded paragraph. */
 const MAX_ASSIGNMENT_FINDINGS = 600;
 
+/**
+ * Autonomous continuation backoff (#228): 5 min × 2^n, capped at 6 h. The base is the shortest wait
+ * that still lets a transient provider failure clear; the cap is what a stuck task costs at most —
+ * after the ladder saturates, an unattended assignment is retried about four times a day instead of
+ * every wake, which is the repeated-recon burn the ticket names. A user line, an approved budget, or
+ * a successful tool result resets the count, so the cap never applies to work that is moving.
+ */
+const RESUME_BACKOFF_BASE_MS = 5 * 60_000;
+const RESUME_BACKOFF_CAP_MS = 6 * 60 * 60_000;
+
 export interface CompanionShellOptions {
   config?: Partial<ShellConfig>;
   /** Tests inject a deterministic provider; production uses the mg plugin. */
@@ -157,6 +167,11 @@ export class CompanionShell implements ShellControl, AttachShell {
   private pendingQuestion?: { text: string; contextRef?: string };
   /** The proposal that offers `/continue` for the current pause; Esc on it is the owner's refusal. */
   private suspensionProposalId?: string;
+  /**
+   * An autonomous wake that is backed off must not continue the open assignment, so its prompt must
+   * not carry the assignment block either — otherwise the model would try anyway.
+   */
+  private hideAssignmentContext = false;
   private readonly redactor = new SecretRedactor();
   private tickTimer?: ReturnType<typeof setInterval>;
   private started = false;
@@ -598,7 +613,7 @@ export class CompanionShell implements ShellControl, AttachShell {
    */
   private openAssignmentBlock(): string {
     const assignment = this.machine.runtime.openAssignment;
-    if (!assignment) return '';
+    if (!assignment || this.hideAssignmentContext) return '';
     return [
       '<open-assignment>',
       `user-assigned task: ${assignment.text}`,
@@ -709,9 +724,26 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.runTier = tier;
     // The owner's grant widens this one run's cage and is spent when it settles (#228).
     this.cage!.beginRun(runId, tier, tier === 'work' ? this.machine.runtime.openAssignment?.grant : undefined);
+    // A backed-off autonomous wake still runs (F7's surfacing decision is untouched) but it does not
+    // inherit the work tier or the assignment, so it cannot keep retrying the same continuation.
+    this.hideAssignmentContext = trigger === 'emergence_due' && tier === 'autonomous' && this.machine.runtime.openAssignment !== undefined;
+    if (this.hideAssignmentContext) {
+      const assignment = this.machine.runtime.openAssignment!;
+      this.trace.append('assignment_resume_deferred', {
+        assignmentId: assignment.id,
+        attempts: assignment.attempts ?? 0,
+        nextResumeAt: assignment.nextResumeAt ?? null,
+        now: this.now(),
+      });
+    }
     await this.machine.dispatch(dispatchTrigger, { runId, reason });
-    const summary = await this.runtime!.run({ runId, sessionId: this.config.sessionId, userText: text });
-    const outcome = this.settleAssignment(summary, tier);
+    let summary: RunSummary;
+    try {
+      summary = await this.runtime!.run({ runId, sessionId: this.config.sessionId, userText: text });
+    } finally {
+      this.hideAssignmentContext = false;
+    }
+    const outcome = this.settleAssignment(summary, tier, trigger);
     await this.machine.dispatch(outcome, { reason: summary.error ?? reason, runId });
     if (this.machine.state === 'SUSPENDED' && this.machine.runtime.suspension?.kind === 'budget') {
       this.offerResume(this.machine.runtime.suspension.id);
@@ -729,6 +761,9 @@ export class CompanionShell implements ShellControl, AttachShell {
     if (trigger === 'message_received') return 'work';
     const assignment = this.machine.runtime.openAssignment;
     if (assignment?.origin !== 'user_message') return 'autonomous';
+    // A continuation that keeps failing waits longer (#228); while it waits, an autonomous wake is a
+    // plain surfacing run, not a retry of the assignment.
+    if (assignment.nextResumeAt !== undefined && assignment.nextResumeAt > this.now()) return 'autonomous';
     return 'work';
   }
 
@@ -750,7 +785,7 @@ export class CompanionShell implements ShellControl, AttachShell {
    * next move. A run error or abort keeps it open too: the work is unfinished, and the next wake
    * must not mistake it for a fresh autonomous idea.
    */
-  private settleAssignment(summary: RunSummary, tier: CageTier): Trigger {
+  private settleAssignment(summary: RunSummary, tier: CageTier, trigger: 'message_received' | 'emergence_due'): Trigger {
     const question = this.pendingQuestion;
     this.pendingQuestion = undefined;
     const assignment = this.machine.runtime.openAssignment;
@@ -787,11 +822,17 @@ export class CompanionShell implements ShellControl, AttachShell {
     // the next run's prompt so a continuation does not re-read the same sources. A run that ends
     // without text (an abort mid-tool) keeps the earlier findings rather than erasing them.
     const findings = this.captureFindings(summary, assignment);
+    // Only an autonomous continuation counts an attempt, and a successful tool result is the
+    // progress that resets it (#228). A user-driven run resets the count: the owner is present.
+    const progressed = summary.toolResults.some((result) => !result.isError);
+    const attempts = trigger === 'emergence_due' && !progressed ? (assignment.attempts ?? 0) + 1 : 0;
+    const nextResumeAt = attempts > 0 ? this.now() + Math.min(RESUME_BACKOFF_BASE_MS * 2 ** (attempts - 1), RESUME_BACKOFF_CAP_MS) : undefined;
     if (summary.stopReason !== 'budget_exceeded') {
       this.machine.updateRuntime({
         suspension: undefined,
-        openAssignment: { ...assignment, lastRunId: summary.runId, grant: undefined, ...(findings ? { findings } : {}) },
+        openAssignment: { ...assignment, lastRunId: summary.runId, grant: undefined, attempts, nextResumeAt, ...(findings ? { findings } : {}) },
       });
+      if (attempts > 0) this.trace.append('assignment_backoff', { assignmentId: assignment.id, attempts, nextResumeAt });
       return summary.stopReason;
     }
     const lastCall = summary.toolCalls.at(-1);
@@ -828,6 +869,8 @@ export class CompanionShell implements ShellControl, AttachShell {
         stoppedStep,
         nextStep,
         grant: undefined,
+        attempts,
+        nextResumeAt,
         ...(findings ? { findings } : {}),
       },
     });
@@ -1367,7 +1410,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     }
     const grant = { tokens: suspension.budget?.additionalTokens ?? 0, turns: suspension.budget?.additionalTurns ?? 0 };
     this.suspensionProposalId = undefined;
-    this.machine.updateRuntime({ openAssignment: { ...assignment, grant }, suspension: undefined });
+    this.machine.updateRuntime({ openAssignment: { ...assignment, grant, attempts: 0, nextResumeAt: undefined }, suspension: undefined });
     this.trace.append('suspension_approved', { id: suspension.id, assignmentId: assignment.id, grant, basis: suspension.budget?.basis });
     setTimeout(() => {
       void this.resumeSuspendedRun(assignment.id).catch((error) =>

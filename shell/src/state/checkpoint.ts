@@ -148,6 +148,13 @@ export interface ShellRuntimeState {
      * and never edits the policy. Consumed when that run settles.
      */
     grant?: { tokens: number; turns: number };
+    /**
+     * Autonomous continuation attempts since the last progress or user input (#228). Only an
+     * `emergence_due` wake increments it; a successful tool result or a user line resets it.
+     */
+    attempts?: number;
+    /** The earliest instant an autonomous wake may continue this assignment again. */
+    nextResumeAt?: number;
   };
   /** The one paused run, present exactly while the lifecycle state is SUSPENDED. */
   suspension?: Suspension;
