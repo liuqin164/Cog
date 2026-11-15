@@ -6,17 +6,10 @@
  * Red/green is the ticket's own discriminator: run A writes a conclusion, run B's prompt contains it.
  */
 import { describe, expect, test } from 'bun:test';
-import type { CompanionShell } from '../src/app.ts';
-import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
+import { ScriptedProvider, makeShell, makeTempDir, waitUntil } from './helpers.ts';
 
 const TIGHT = { maxTurnsPerRun: 6, maxTokensPerRun: 20_000, toolWhitelist: null };
 const NO_DREAM = { windowStartHour: 0, windowEndHour: 0, runKernelNight: false, maxEpisodes: 5 };
-
-function emerge(shell: CompanionShell, text = '继续之前的工作'): void {
-  (shell as unknown as { emergence: unknown }).emergence = {
-    decide: () => ({ candidates: [{ id: 'candidate-1', text, reason: 'test' }], suppressed: [] }),
-  };
-}
 
 describe('confirmed findings travel with the open assignment', () => {
   test('run A\'s conclusion is in run B\'s prompt', async () => {
@@ -34,11 +27,13 @@ describe('confirmed findings travel with the open assignment', () => {
       expect(shell.machine.runtime.openAssignment?.findings).toBe(conclusion);
       expect(shell.machine.runtime.openAssignment?.findings).toContain('config.ts:147');
 
-      // A continuation is a new run while the assignment is still open; an autonomous wake is the
-      // one the shell starts on its own, and it keeps the assignment (a user message starts a new one).
-      emerge(shell);
-      await shell.tick(Date.now());
-      expect(provider.calls).toHaveLength(2);
+      // #228 item 1 supersedes #223's "budget stop, then an autonomous wake continues it" path:
+      // a work-tier budget stop now pauses for approval. The findings handoff still covers the
+      // other closing shapes (run_error/run_abort, autonomous-tier stops) and this approved
+      // continuation, whose prompt carries what the stopped run wrote.
+      expect(shell.state).toBe('SUSPENDED');
+      await shell.runCommand('continue');
+      await waitUntil(() => provider.calls.length === 2 && shell.state === 'IDLE');
       expect(provider.calls[1].systemPrompt).toContain(`confirmed findings: ${conclusion}`);
       expect(provider.calls[1].systemPrompt).toContain('install the plugin');
     } finally {

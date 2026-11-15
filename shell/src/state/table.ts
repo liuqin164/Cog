@@ -1,11 +1,11 @@
 /**
- * The outer lifecycle: five states, one declarative table, no transition decided anywhere else.
+ * The outer lifecycle: six states, one declarative table, no transition decided anywhere else.
  *
  * The inner RUNNING cycle is Pi's turn loop (see agent-loop.ts); this file is the memory-native
  * skeleton around it — waking injects the time context, dreaming consolidates the day, and the
  * emergence decision point is a transition, not a plugin side effect.
  */
-export const STATES = ['DORMANT', 'WAKING', 'IDLE', 'RUNNING', 'DREAMING'] as const;
+export const STATES = ['DORMANT', 'WAKING', 'IDLE', 'RUNNING', 'DREAMING', 'SUSPENDED'] as const;
 export type State = (typeof STATES)[number];
 
 export const TRIGGERS = [
@@ -18,6 +18,9 @@ export const TRIGGERS = [
   'run_aborted',
   'run_error',
   'budget_exceeded',
+  'budget_paused',
+  'budget_approved',
+  'budget_rejected',
   'dream_window_open',
   'dream_complete',
   'recovered_run',
@@ -51,6 +54,11 @@ export const TRANSITION_TABLE: readonly TransitionEdge[] = [
   { from: 'RUNNING', trigger: 'run_error', to: 'IDLE', note: 'provider or tool failure ended the run' },
   { from: 'RUNNING', trigger: 'budget_exceeded', to: 'IDLE', note: 'the cage forced the run out' },
   { from: 'RUNNING', trigger: 'recovered_run', to: 'IDLE', note: 'a run interrupted by a kill is not resumed as running' },
+  { from: 'RUNNING', trigger: 'budget_paused', to: 'SUSPENDED', note: 'the work cage hit its cap; the run waits for the owner to grant more' },
+  { from: 'SUSPENDED', trigger: 'budget_approved', to: 'RUNNING', note: 'the owner granted the estimate; the same assignment continues' },
+  { from: 'SUSPENDED', trigger: 'budget_rejected', to: 'IDLE', note: 'the owner declined; the task closes as budget_exceeded' },
+  { from: 'SUSPENDED', trigger: 'message_received', to: 'RUNNING', note: 'a new instruction supersedes a paused budget request' },
+  { from: 'SUSPENDED', trigger: 'recovered_run', to: 'IDLE', note: 'a suspended checkpoint whose pause object is gone has nothing to wait for' },
   { from: 'DREAMING', trigger: 'dream_complete', to: 'IDLE', note: 'the night integration is written' },
   { from: 'DREAMING', trigger: 'message_received', to: 'WAKING', note: 'a message during the night wakes the shell' },
   { from: 'DREAMING', trigger: 'run_error', to: 'IDLE', note: 'night consolidation failed; standby with the trace' },

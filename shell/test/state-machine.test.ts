@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { StateMachine, StateMachineHaltedError } from '../src/state/machine.ts';
 import { CheckpointStore, CheckpointWriteError, emptyCheckpoint } from '../src/state/checkpoint.ts';
-import { IllegalTransitionError, TRANSITION_TABLE, TRIGGERS, type State, type Trigger } from '../src/state/table.ts';
+import { IllegalTransitionError, STATES, TRANSITION_TABLE, TRIGGERS, type State, type Trigger } from '../src/state/table.ts';
 import { TraceLog } from '../src/trace.ts';
 import { buildMachine, seedMachine, makeTempDir } from './helpers.ts';
 
@@ -30,7 +30,7 @@ describe('transition table', () => {
   // Acceptance: sampled illegal transitions are refused loudly and leave a trace.
   test('every state/trigger pair not in the table throws IllegalTransitionError', async () => {
     let checked = 0;
-    for (const from of ['DORMANT', 'WAKING', 'IDLE', 'RUNNING', 'DREAMING'] as State[]) {
+    for (const from of STATES) {
       for (const trigger of TRIGGERS) {
         if (isLegal(from, trigger)) continue;
         const dir = makeTempDir();

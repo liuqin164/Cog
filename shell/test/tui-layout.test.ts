@@ -83,12 +83,20 @@ describe('small window (spec §1)', () => {
 
 describe('state-specific rendering (spec §2, §4, §8)', () => {
   test('the status bar names the lifecycle in human words and shows the next wake', () => {
-    const words: Record<Lifecycle, string> = { DORMANT: '待机', WAKING: '唤醒中', IDLE: '空闲', RUNNING: '工作中', DREAMING: '做梦中' };
+    const words: Record<Lifecycle, string> = { DORMANT: '待机', WAKING: '唤醒中', IDLE: '空闲', RUNNING: '工作中', DREAMING: '做梦中', SUSPENDED: '挂起' };
     for (const lifecycle of LIFECYCLES) {
       const text = withFixedClock(() => frameText(renderTui(fixtureView(lifecycle), fixtureEditor(''), { width: 120, height: 40 }, defaultRenderEnv({ TERM: 'xterm' } as NodeJS.ProcessEnv))));
       expect(text.split('\n')[0]).toContain(words[lifecycle]);
       expect(text.split('\n')[0]).toContain('下次唤醒 明早 07:00');
     }
+  });
+
+  test('SUSPENDED names the pause in the status bar, so a stopped run is not a silent one', () => {
+    const view = fixtureView('SUSPENDED');
+    view.status.suspended = { kind: 'budget', text: '已暂停：预算到顶，等批准追加 500 token / 1 回合' };
+    const text = withFixedClock(() => frameText(renderTui(view, fixtureEditor(''), { width: 120, height: 40 }, defaultRenderEnv({ TERM: 'xterm' } as NodeJS.ProcessEnv))));
+    expect(text.split('\n')[0]).toContain('挂起');
+    expect(text.split('\n')[0]).toContain('已暂停：预算到顶');
   });
 
   test('RUNNING carries the work indicator with both cage budget bars', () => {

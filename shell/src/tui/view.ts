@@ -11,7 +11,7 @@ import { type RenderEnv, type Row, cellWidth, seg } from './frame.ts';
 import { renderMarkdown } from './markdown.ts';
 import type { CommandProposal } from '../proposals.ts';
 
-export type Lifecycle = 'DORMANT' | 'WAKING' | 'IDLE' | 'RUNNING' | 'DREAMING';
+export type Lifecycle = 'DORMANT' | 'WAKING' | 'IDLE' | 'RUNNING' | 'DREAMING' | 'SUSPENDED';
 
 export const LIFECYCLE_WORD: Record<Lifecycle, string> = {
   DORMANT: '待机',
@@ -19,6 +19,7 @@ export const LIFECYCLE_WORD: Record<Lifecycle, string> = {
   IDLE: '空闲',
   RUNNING: '工作中',
   DREAMING: '做梦中',
+  SUSPENDED: '挂起',
 };
 
 export interface StatusState {
@@ -44,6 +45,11 @@ export interface StatusState {
   timeZone: string;
   /** `/pause`: the status bar shows it while it is true, because a silent pause looks like a bug. */
   capturePaused?: boolean;
+  /**
+   * A paused run (#228): what it waits for and the one line that says so. The status bar draws it,
+   * because "the run stopped and nobody said why" is the failure this pause exists to avoid.
+   */
+  suspended?: { kind: 'budget'; text: string };
 }
 
 export interface WorkState {

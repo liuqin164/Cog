@@ -35,16 +35,25 @@ export class RunCage implements RunBudget {
   private runId?: string;
   private limits: CageConfig;
   private tier: CageTier = 'autonomous';
+  private lastViolation?: CageViolation;
 
   constructor(private readonly config: CageConfig, private readonly trace?: TraceLog, private readonly work: CageConfig = config) {
     this.limits = config;
   }
 
-  beginRun(runId: string, tier: CageTier = 'autonomous'): void {
+  /**
+   * `grant` is the budget the owner approved at a pause (#228): it widens this one run's limits and
+   * nothing else. The base still comes from `budgets.json`, so the policy file is never rewritten.
+   */
+  beginRun(runId: string, tier: CageTier = 'autonomous', grant?: { tokens: number; turns: number }): void {
     this.runId = runId;
     this.tier = tier;
-    this.limits = tier === 'work' ? this.work : this.config;
+    const base = tier === 'work' ? this.work : this.config;
+    this.limits = grant
+      ? { ...base, maxTurnsPerRun: base.maxTurnsPerRun + grant.turns, maxTokensPerRun: base.maxTokensPerRun + grant.tokens }
+      : base;
     this.tokens = 0;
+    this.lastViolation = undefined;
     // The tier is recorded once per run, before any turn, so a reader can tell which limits a
     // `cage_violation` was measured against without inferring it from the trigger.
     this.trace?.append('run_budget', {
@@ -52,7 +61,13 @@ export class RunCage implements RunBudget {
       tier,
       maxTurnsPerRun: this.limits.maxTurnsPerRun,
       maxTokensPerRun: this.limits.maxTokensPerRun,
+      ...(grant ? { grantTokens: grant.tokens, grantTurns: grant.turns } : {}),
     });
+  }
+
+  /** The last overrun the cage recorded, so a pause names the cap it hit without parsing text. */
+  get violation(): CageViolation | undefined {
+    return this.lastViolation;
   }
 
   checkTurn(turnIndex: number): { exceeded: boolean; reason?: string } {
@@ -83,6 +98,7 @@ export class RunCage implements RunBudget {
   }
 
   private record(violation: CageViolation, reason: string): void {
+    this.lastViolation = violation;
     this.trace?.append('cage_violation', { runId: this.runId, reason, ...violation });
   }
 
@@ -91,6 +107,32 @@ export class RunCage implements RunBudget {
     this.record(violation, reason);
     return { exceeded: true, reason };
   }
+}
+
+/**
+ * How much more a paused work run needs (#228), measured from what it actually spent.
+ *
+ * The basis is the run's own numbers: `tokens / turns` is the observed cost of one turn, and the
+ * grant is what the turns it still had left would cost at that rate. A run cut at the turn cap has
+ * no turns left, so the grant is one more allowance of the same size. A run that reported no usage
+ * at all has no rate to extrapolate, so the honest fallback is the base cap itself rather than a
+ * made-up number.
+ */
+export function estimateBudgetGrant(input: { tokens: number; turns: number; limits: { maxTurnsPerRun: number; maxTokensPerRun: number } }): {
+  tokens: number;
+  turns: number;
+  tokensPerTurn: number;
+  basis: string;
+} {
+  const tokensPerTurn = input.turns > 0 ? input.tokens / input.turns : 0;
+  const remainingTurns = Math.max(0, input.limits.maxTurnsPerRun - input.turns);
+  const turns = remainingTurns > 0 ? remainingTurns : input.limits.maxTurnsPerRun;
+  const tokens = tokensPerTurn > 0 ? Math.ceil(tokensPerTurn * turns) : input.limits.maxTokensPerRun;
+  const basis =
+    tokensPerTurn > 0
+      ? `${input.tokens} tokens over ${input.turns} turn(s) ≈ ${Math.round(tokensPerTurn)}/turn; ${turns} turn(s) → ${tokens} tokens`
+      : `no provider usage reported; one allowance of the base cap (${tokens} tokens)`;
+  return { tokens, turns, tokensPerTurn, basis };
 }
 
 export function cagePlugin(config: CageConfig, trace?: TraceLog, work?: CageConfig): NativePlugin {

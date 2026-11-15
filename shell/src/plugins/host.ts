@@ -34,6 +34,7 @@ export const RESERVED_CORE_COMMANDS: readonly string[] = [
   'exit',
   'model',
   'pause',
+  'continue',
   'resume',
   'why',
   'upgrade',

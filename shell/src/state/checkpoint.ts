@@ -50,6 +50,36 @@ export interface InFlightToolCall {
   toolName: string;
 }
 
+/**
+ * The one paused run (#228). A work-tier budget stop ends the run and leaves this object behind; the
+ * lifecycle state is SUSPENDED while it exists.
+ *
+ * There is deliberately no expiry: a resident companion may wait days for its owner, and a pause
+ * that timed out would silently drop work the user asked for. A question is retired when the owner
+ * request when the owner approves or declines it. See `docs/engineering/4.0-issue-loop.md`'s round
+ * record for the rules as reported.
+ */
+export interface Suspension {
+  id: string;
+  kind: 'budget';
+  assignmentId: string;
+  createdAt: number;
+  /** The run that suspended, so the pause is attributable in the trace. */
+  runId?: string;
+  /** Budget kind: the measured estimate the owner is asked to grant. */
+  budget?: {
+    /** Which cap the run hit, when the cage recorded it. */
+    violation?: 'turn_budget' | 'token_budget';
+    tokens: number;
+    turns: number;
+    tokensPerTurn: number;
+    additionalTokens: number;
+    additionalTurns: number;
+    /** The arithmetic in one line, so the number is auditable instead of magic. */
+    basis: string;
+  };
+}
+
 export interface ShellRuntimeState {
   lastDreamDate?: string;
   lastInteractionAt?: number;
@@ -107,7 +137,15 @@ export interface ShellRuntimeState {
      * continuation does not re-read the same sources to rediscover the same line numbers.
      */
     findings?: string;
+    /**
+     * The budget the owner granted at a pause (#228). Added to the work cage's limits for the
+     * resumed run only; `budgets.json` stays the base cap, so an approval extends one continuation
+     * and never edits the policy. Consumed when that run settles.
+     */
+    grant?: { tokens: number; turns: number };
   };
+  /** The one paused run, present exactly while the lifecycle state is SUSPENDED. */
+  suspension?: Suspension;
   /**
    * A restart was requested by the plugin surface, and the open assignment should continue once the
    * new process is up. Only a requested restart sets this: a kill does not, so the kill matrix's

@@ -14,7 +14,8 @@ import { ChannelContract, createMemoryKernel, KernelAgentMemoryBackend, type Cha
 import { TraceStore } from 'cogmem/internal';
 import { defaultShellConfig, type ShellConfig } from './config.ts';
 import { StateMachine } from './state/machine.ts';
-import { CheckpointStore, type InFlightToolCall } from './state/checkpoint.ts';
+import { CheckpointStore, type InFlightToolCall, type Suspension } from './state/checkpoint.ts';
+import type { Trigger } from './state/table.ts';
 import { ProcessLock } from './process-lock.ts';
 import { TraceLog } from './trace.ts';
 import { PluginHost } from './plugins/host.ts';
@@ -22,7 +23,7 @@ import { clockPlugin, ClockService } from './plugins/clock.ts';
 import { providedModelPlugin } from './plugins/mg-provider.ts';
 import { ModelRouter, modelRouterPlugin, routeLine } from './model/router.ts';
 import { RouteStore, redactUrl } from './model/routes.ts';
-import { cagePlugin, RunCage, type CageTier } from './plugins/cage.ts';
+import { cagePlugin, estimateBudgetGrant, RunCage, type CageTier } from './plugins/cage.ts';
 import { builtinToolsPlugin } from './plugins/builtin-tools.ts';
 import { webPlugin } from './plugins/web.ts';
 import { coreCommandFor, availableCoreCommand, unknownCommandReply, type CommandHost, type CommandReply } from './commands.ts';
@@ -148,6 +149,8 @@ export class CompanionShell implements ShellControl, AttachShell {
   private lastUpgrade?: UpgradeOutcome;
   /** One memory notice per crossing, reset after we drop below 90% of the ceiling. */
   private memoryWarned = false;
+  /** The proposal that offers `/continue` for the current pause; Esc on it is the owner's refusal. */
+  private suspensionProposalId?: string;
   private readonly redactor = new SecretRedactor();
   private tickTimer?: ReturnType<typeof setInterval>;
   private started = false;
@@ -289,6 +292,17 @@ export class CompanionShell implements ShellControl, AttachShell {
       }
       await this.machine.dispatch('recovered_run', { reason: `recovered_after_kill:${restored.previous}` });
     }
+    // A pause survives the process (#228). With the object present the shell stays SUSPENDED and
+    // waits; without it there is nothing to wait for, and the recovered_run edge returns to standby.
+    if (restored.previous === 'SUSPENDED') {
+      const suspension = this.machine.runtime.suspension;
+      if (!suspension) {
+        this.trace.append('suspension_missing', { seq: this.machine.seq });
+        await this.machine.dispatch('recovered_run', { reason: 'suspended_without_object' });
+      } else {
+        this.trace.append('suspension_restored', { id: suspension.id, kind: suspension.kind, assignmentId: suspension.assignmentId });
+      }
+    }
     try {
       await this.startPlugins();
     } catch (error) {
@@ -301,7 +315,13 @@ export class CompanionShell implements ShellControl, AttachShell {
         // The plugin half is read from this process's own load results, so "installed" is a fact the
         // owner can curl instead of a claim the model makes. `results` is filled by startPlugins
         // below; the closure reads it lazily.
-        health: () => ({ state: this.machine.state, plugins: this.pluginHealth() }),
+        health: () => ({
+          state: this.machine.state,
+          plugins: this.pluginHealth(),
+          suspension: this.machine.runtime.suspension
+            ? { ...this.suspendedLine(this.machine.runtime.suspension), id: this.machine.runtime.suspension.id, createdAt: this.machine.runtime.suspension.createdAt }
+            : null,
+        }),
         connectedAgents: () => [this.config.agentId],
       });
       this.trace.append('http_face_started', { url: this.http.baseUrl, port: this.http.port });
@@ -364,6 +384,10 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.started = true;
     this.rotateServiceLog();
     this.trace.append('shell_started', { state: this.machine.state, mi: this.machine.wakeIntents.length });
+    // The offer is in-memory, the pause is not: a restart re-offers the approval for a budget pause.
+    if (this.machine.state === 'SUSPENDED' && this.machine.runtime.suspension?.kind === 'budget') {
+      this.offerResume(this.machine.runtime.suspension.id);
+    }
     // A restart the plugin surface asked for is the one restart that continues the open assignment
     // on its own. Deferred so the HTTP/attach faces are serving before the run begins; a kill (no
     // request) never sets the flag, so recovery still lands in IDLE and waits.
@@ -610,6 +634,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       this.emitSteering();
       return undefined;
     }
+    if (this.machine.state === 'SUSPENDED') return this.submitWhileSuspended(text);
     // The user's message is the assignment's provenance. It is written before the run so an
     // autonomous wake after a budget stop can inherit the work tier from the ledger, not from a
     // guess about what the wake's text means.
@@ -617,6 +642,19 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.clock!.markInteraction(text, this.now());
     await this.wakeIfNeeded('message_received');
     if (this.machine.state !== 'IDLE') throw new Error(`submit_requires_idle: state is ${this.machine.state}`);
+    return this.executeRun(text, 'message_received', 'user_message');
+  }
+
+  /**
+   * A line typed while paused (#228). A typed line is a new instruction: the paused task closes as
+   * budget_exceeded (traced) and the line starts fresh work. There is no timeout — see
+   * `Suspension`'s comment.
+   */
+  private async submitWhileSuspended(text: string): Promise<RunSummary | undefined> {
+    const suspension = this.machine.runtime.suspension;
+    this.clock!.markInteraction(text, this.now());
+    if (suspension) this.supersedeSuspension('new_input');
+    this.beginUserAssignment(text);
     return this.executeRun(text, 'message_received', 'user_message');
   }
 
@@ -629,15 +667,24 @@ export class CompanionShell implements ShellControl, AttachShell {
     }
   }
 
-  private async executeRun(text: string, trigger: 'message_received' | 'emergence_due', reason: string): Promise<RunSummary> {
+  private async executeRun(
+    text: string,
+    trigger: 'message_received' | 'emergence_due',
+    reason: string,
+    dispatchTrigger: Trigger = trigger,
+  ): Promise<RunSummary> {
     const runId = `run-${this.now().toString(36)}-${randomUUID().slice(0, 8)}`;
     const tier = this.budgetTier(trigger);
     this.runTier = tier;
-    this.cage!.beginRun(runId, tier);
-    await this.machine.dispatch(trigger, { runId, reason });
+    // The owner's grant widens this one run's cage and is spent when it settles (#228).
+    this.cage!.beginRun(runId, tier, tier === 'work' ? this.machine.runtime.openAssignment?.grant : undefined);
+    await this.machine.dispatch(dispatchTrigger, { runId, reason });
     const summary = await this.runtime!.run({ runId, sessionId: this.config.sessionId, userText: text });
-    this.settleAssignment(summary, tier);
-    await this.machine.dispatch(summary.stopReason, { reason: summary.error ?? reason, runId });
+    const outcome = this.settleAssignment(summary, tier);
+    await this.machine.dispatch(outcome, { reason: summary.error ?? reason, runId });
+    if (this.machine.state === 'SUSPENDED' && this.machine.runtime.suspension?.kind === 'budget') {
+      this.offerResume(this.machine.runtime.suspension.id);
+    }
     if (!this.clock!.nextPendingIntent()) this.clock!.scheduleIdleWake();
     return summary;
   }
@@ -649,7 +696,9 @@ export class CompanionShell implements ShellControl, AttachShell {
    */
   private budgetTier(trigger: 'message_received' | 'emergence_due'): CageTier {
     if (trigger === 'message_received') return 'work';
-    return this.machine.runtime.openAssignment?.origin === 'user_message' ? 'work' : 'autonomous';
+    const assignment = this.machine.runtime.openAssignment;
+    if (assignment?.origin !== 'user_message') return 'autonomous';
+    return 'work';
   }
 
   private beginUserAssignment(text: string): void {
@@ -670,20 +719,23 @@ export class CompanionShell implements ShellControl, AttachShell {
    * next move. A run error or abort keeps it open too: the work is unfinished, and the next wake
    * must not mistake it for a fresh autonomous idea.
    */
-  private settleAssignment(summary: RunSummary, tier: CageTier): void {
+  private settleAssignment(summary: RunSummary, tier: CageTier): Trigger {
     const assignment = this.machine.runtime.openAssignment;
-    if (!assignment || tier !== 'work') return;
+    if (!assignment || tier !== 'work') return summary.stopReason;
     if (summary.stopReason === 'run_complete') {
-      this.machine.updateRuntime({ openAssignment: undefined });
-      return;
+      this.machine.updateRuntime({ openAssignment: undefined, suspension: undefined });
+      return 'run_complete';
     }
     // The run's own closing words are the handoff: bounded, collapsed to one line, and carried into
     // the next run's prompt so a continuation does not re-read the same sources. A run that ends
     // without text (an abort mid-tool) keeps the earlier findings rather than erasing them.
     const findings = this.captureFindings(summary, assignment);
     if (summary.stopReason !== 'budget_exceeded') {
-      this.machine.updateRuntime({ openAssignment: { ...assignment, lastRunId: summary.runId, ...(findings ? { findings } : {}) } });
-      return;
+      this.machine.updateRuntime({
+        suspension: undefined,
+        openAssignment: { ...assignment, lastRunId: summary.runId, grant: undefined, ...(findings ? { findings } : {}) },
+      });
+      return summary.stopReason;
     }
     const lastCall = summary.toolCalls.at(-1);
     const stoppedStep = lastCall
@@ -692,10 +744,48 @@ export class CompanionShell implements ShellControl, AttachShell {
     const nextStep = lastCall
       ? `resume from ${lastCall.toolName}: check its last result, then continue the user-assigned task`
       : 'continue the user-assigned task from its next step; the budget stopped this run before it finished';
+    const estimate = estimateBudgetGrant({ tokens: summary.tokens, turns: summary.turns, limits: this.config.workBudget });
+    const violation = this.cage!.violation;
+    const suspension: Suspension = {
+      id: `suspension-${this.now().toString(36)}-${randomUUID().slice(0, 8)}`,
+      kind: 'budget',
+      assignmentId: assignment.id,
+      createdAt: this.now(),
+      runId: summary.runId,
+      budget: {
+        ...(violation?.violation === 'turn_budget' || violation?.violation === 'token_budget' ? { violation: violation.violation } : {}),
+        tokens: summary.tokens,
+        turns: summary.turns,
+        tokensPerTurn: estimate.tokensPerTurn,
+        additionalTokens: estimate.tokens,
+        additionalTurns: estimate.turns,
+        basis: estimate.basis,
+      },
+    };
     this.machine.updateRuntime({
-      openAssignment: { ...assignment, lastRunId: summary.runId, stoppedAt: this.now(), stoppedStep, nextStep, ...(findings ? { findings } : {}) },
+      suspension,
+      openAssignment: {
+        ...assignment,
+        lastRunId: summary.runId,
+        stoppedAt: this.now(),
+        stoppedStep,
+        nextStep,
+        grant: undefined,
+        ...(findings ? { findings } : {}),
+      },
     });
     this.trace.append('assignment_stopped', { runId: summary.runId, assignmentId: assignment.id, stoppedStep, nextStep, findingsChars: findings?.length ?? 0 });
+    this.trace.append('assignment_paused', {
+      runId: summary.runId,
+      assignmentId: assignment.id,
+      suspensionId: suspension.id,
+      kind: 'budget',
+      additionalTokens: estimate.tokens,
+      additionalTurns: estimate.turns,
+      tokensPerTurn: Math.round(estimate.tokensPerTurn),
+      basis: estimate.basis,
+    });
+    return 'budget_paused';
   }
 
   private captureFindings(summary: RunSummary, assignment: { id: string }): string | undefined {
@@ -719,7 +809,9 @@ export class CompanionShell implements ShellControl, AttachShell {
     // An owed upgrade report is not gated on the lifecycle: a promise that came due has to be
     // honoured whatever else is happening.
     this.settleUpgradeReport(at);
-    if (this.machine.state === 'RUNNING' || this.machine.state === 'WAKING') return;
+    // A paused shell is waiting for its owner, not for the clock: no wake intent, dream window or
+    // emergence decision may fire out of SUSPENDED (#228).
+    if (this.machine.state === 'RUNNING' || this.machine.state === 'WAKING' || this.machine.state === 'SUSPENDED') return;
     this.reportHealth(at);
     if (this.machine.state === 'DORMANT') {
       await this.applyDueWakeIntent(at);
@@ -950,6 +1042,15 @@ export class CompanionShell implements ShellControl, AttachShell {
       costTokens: this.machine.runtime.costDayDate === today ? this.machine.runtime.costDayTokens ?? 0 : 0,
       timeZone: this.config.timeZone,
       capturePaused: this.capturePaused,
+      ...(this.machine.state === 'SUSPENDED' && this.machine.runtime.suspension ? { suspended: this.suspendedLine(this.machine.runtime.suspension) } : {}),
+    };
+  }
+
+  /** The one human line the status bar, the snapshot and `/health` all carry for a pause. */
+  private suspendedLine(suspension: Suspension): { kind: Suspension['kind']; text: string } {
+    return {
+      kind: 'budget',
+      text: `已暂停：预算到顶，等批准追加 ${suspension.budget?.additionalTokens ?? 0} token / ${suspension.budget?.additionalTurns ?? 0} 回合`,
     };
   }
 
@@ -1155,12 +1256,111 @@ export class CompanionShell implements ShellControl, AttachShell {
 
   /** The user's "Esc": retire a pending proposal; it can never be confirmed after this. */
   discardProposal(id: string): CommandProposal | undefined {
-    return this.proposals.discard(id);
+    const proposal = this.proposals.discard(id);
+    // Esc on the budget offer is the owner's refusal (#228): the task closes as budget_exceeded and
+    // the receipt says so, instead of leaving a pause nobody can see the end of.
+    if (proposal && id === this.suspensionProposalId) {
+      this.suspensionProposalId = undefined;
+      this.rejectSuspended();
+    }
+    return proposal;
   }
 
   /** The pending offers, for tests and any face that wants the list rather than the transcript. */
   currentProposals(): CommandProposal[] {
     return [...this.proposals.pending()];
+  }
+
+  // ---- The suspension faces (#228): one pause object, three exits (approve, refuse, supersede). ----
+
+  /**
+   * Offer the owner the one way to continue a budget pause. It reuses the command-proposal shape —
+   * Enter confirms `/continue`, Esc refuses it — because that is the mechanism this shell already
+   * has for "the agent asks, the owner decides". The offer is re-made after a restart: the pause is
+   * durable, the in-memory proposal registry is not.
+   */
+  private offerResume(suspensionId: string): void {
+    const suspension = this.machine.runtime.suspension;
+    if (!suspension || suspension.id !== suspensionId || suspension.kind !== 'budget') return;
+    const { proposal } = this.proposals.propose({
+      command: 'continue',
+      args: suspension.id,
+      reason: `预算到顶：再给 ${suspension.budget?.additionalTokens ?? 0} token / ${suspension.budget?.additionalTurns ?? 0} 回合就能继续（${suspension.budget?.basis ?? ''}）`,
+    });
+    this.suspensionProposalId = proposal.id;
+  }
+
+  /**
+   * `/continue`: the owner approves the estimate. The grant is written onto the assignment (so it
+   * survives a crash between approval and the run) and the pause is cleared in the same checkpoint
+   * write; the run itself is dispatched from the next tick of the event loop, like the plugin
+   * restart's resume, so the command's receipt reaches the socket first.
+   */
+  continueSuspended(): CommandReply {
+    const suspension = this.machine.runtime.suspension;
+    if (this.machine.state !== 'SUSPENDED' || !suspension) return { text: '现在没有挂起的 run，不需要续跑。', receipt: true };
+    if (suspension.kind !== 'budget') return { text: '这次挂起在等一个回答，不是等预算：直接回复即可。', receipt: true };
+    const assignment = this.machine.runtime.openAssignment;
+    if (!assignment || assignment.id !== suspension.assignmentId) {
+      this.trace.append('suspension_resume_refused', { id: suspension.id, reason: 'assignment_mismatch' });
+      return { text: '挂起对象与当前任务对不上，没有续跑（痕迹已记）。', receipt: true };
+    }
+    const grant = { tokens: suspension.budget?.additionalTokens ?? 0, turns: suspension.budget?.additionalTurns ?? 0 };
+    this.suspensionProposalId = undefined;
+    this.machine.updateRuntime({ openAssignment: { ...assignment, grant }, suspension: undefined });
+    this.trace.append('suspension_approved', { id: suspension.id, assignmentId: assignment.id, grant, basis: suspension.budget?.basis });
+    setTimeout(() => {
+      void this.resumeSuspendedRun(assignment.id).catch((error) =>
+        this.trace.append('suspension_resume_failed', { assignmentId: assignment.id, message: error instanceof Error ? error.message : String(error) }),
+      );
+    }, 0);
+    return { text: `已批准：追加 ${grant.tokens} token / ${grant.turns} 回合，原地续跑。`, receipt: true };
+  }
+
+  private async resumeSuspendedRun(assignmentId: string): Promise<void> {
+    const assignment = this.machine.runtime.openAssignment;
+    if (!assignment || assignment.id !== assignmentId) return;
+    if (this.machine.state !== 'SUSPENDED') {
+      this.trace.append('suspension_resume_skipped', { assignmentId, reason: `state:${this.machine.state}` });
+      return;
+    }
+    await this.executeRun(assignment.text, 'message_received', 'budget_approved', 'budget_approved');
+  }
+
+  /**
+   * The owner refused. The task closes exactly as an unattended budget stop used to (#228): the
+   * assignment is gone, the trace keeps the refusal and the numbers it refused, and the lifecycle
+   * returns to standby through the `budget_rejected` edge.
+   */
+  private rejectSuspended(): void {
+    const suspension = this.machine.runtime.suspension;
+    if (this.machine.state !== 'SUSPENDED' || !suspension) return;
+    this.trace.append('suspension_rejected', {
+      id: suspension.id,
+      assignmentId: suspension.assignmentId,
+      kind: suspension.kind,
+      additionalTokens: suspension.budget?.additionalTokens ?? null,
+      closedAs: 'budget_exceeded',
+    });
+    this.machine.updateRuntime({ suspension: undefined, openAssignment: undefined });
+    void this.machine.dispatch('budget_rejected', { reason: 'owner_rejected_budget' }).catch((error) =>
+      this.trace.append('suspension_reject_failed', { id: suspension.id, message: error instanceof Error ? error.message : String(error) }),
+    );
+  }
+
+  /** A new instruction while a budget pause waits: the paused task is closed, and the trace says how. */
+  private supersedeSuspension(reason: string): void {
+    const suspension = this.machine.runtime.suspension;
+    if (!suspension) return;
+    this.suspensionProposalId = undefined;
+    this.trace.append('suspension_superseded', {
+      id: suspension.id,
+      assignmentId: suspension.assignmentId,
+      kind: suspension.kind,
+      reason,
+      closedAs: 'budget_exceeded',
+    });
+    this.machine.updateRuntime({ suspension: undefined, openAssignment: undefined });
   }
 
   /**
@@ -1182,6 +1382,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       this.trace.append(paused ? 'capture_paused_command' : 'capture_resumed_command', { at: this.now() });
       this.emitStatus();
     },
+    continueSuspended: () => this.continueSuspended(),
     sessionModel: () => this.modelLabel,
     modelRoutes: () => this.modelRoutes(),
     modelRouter: () =>
@@ -1676,7 +1877,12 @@ export class CompanionShell implements ShellControl, AttachShell {
         await this.machine.dispatch('run_aborted', { reason: 'shutdown' });
       }
       if (this.machine.state === 'DREAMING') await this.machine.dispatch('run_error', { reason: 'shutdown' });
-      if (this.machine.state !== 'DORMANT') await this.machine.dispatch('shutdown', { reason: 'process_stop' });
+      // A pause outlives the process (#228): writing DORMANT here would drop a question or budget
+      // request the owner never answered. The next start restores SUSPENDED and re-offers it; only
+      // an explicit decision (approve, refuse, answer) or `/sleep` from IDLE ends a pause.
+      if (this.machine.state !== 'DORMANT' && this.machine.state !== 'SUSPENDED') {
+        await this.machine.dispatch('shutdown', { reason: 'process_stop' });
+      }
     } finally {
       this.http?.stop();
       await this.host.stop();

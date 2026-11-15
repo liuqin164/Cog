@@ -35,7 +35,7 @@ describe('the cage (budgets and whitelist at hook points)', () => {
     }
   });
 
-  test('the turn budget forces the run out of RUNNING with budget_exceeded', async () => {
+  test('the turn budget pauses the work run in SUSPENDED with budget_exceeded', async () => {
     const dir = makeTempDir();
     const provider = new ScriptedProvider([{ text: 'looping', toolCalls: [{ toolCallId: 'c', toolName: 'read', input: { path: 'missing.txt' } }] }]);
     const shell = cageShell(dir, provider, { maxTurnsPerRun: 2, maxTokensPerRun: 10_000, toolWhitelist: ['read'] });
@@ -44,14 +44,16 @@ describe('the cage (budgets and whitelist at hook points)', () => {
       const summary = await shell.submit('loop');
       expect(summary!.stopReason).toBe('budget_exceeded');
       expect(summary!.turns).toBe(2);
-      expect(shell.state).toBe('IDLE');
+      expect(shell.state).toBe('SUSPENDED');
+      expect(shell.machine.runtime.suspension?.kind).toBe('budget');
+      expect(shell.machine.runtime.suspension?.assignmentId).toBe(shell.machine.runtime.openAssignment?.id);
       expect(shell.trace.read().some((record) => record.kind === 'cage_violation')).toBe(true);
     } finally {
       await shell.stop();
     }
   });
 
-  test('the token budget forces the run out of RUNNING', async () => {
+  test('the token budget pauses the work run in SUSPENDED', async () => {
     const dir = makeTempDir();
     const provider = new ScriptedProvider([{ text: 'expensive', toolCalls: [], usage: { input: 500_000, output: 1 } }]);
     const shell = cageShell(dir, provider, { maxTurnsPerRun: 5, maxTokensPerRun: 1_000, toolWhitelist: null });
@@ -60,7 +62,7 @@ describe('the cage (budgets and whitelist at hook points)', () => {
       const summary = await shell.submit('spend');
       expect(summary!.stopReason).toBe('budget_exceeded');
       expect(summary!.error).toContain('token_budget_exceeded');
-      expect(shell.state).toBe('IDLE');
+      expect(shell.state).toBe('SUSPENDED');
     } finally {
       await shell.stop();
     }
@@ -97,7 +99,7 @@ describe('the cage (budgets and whitelist at hook points)', () => {
     }
   });
 
-  test('a tool call that pushes the run over budget still runs to completion, then the run leaves RUNNING', async () => {
+  test('a tool call that pushes the run over budget still runs to completion, then the run pauses', async () => {
     const dir = makeTempDir();
     const workspace = join(dir, 'ws');
     const provider = new ScriptedProvider([
@@ -119,7 +121,7 @@ describe('the cage (budgets and whitelist at hook points)', () => {
       expect(summary!.toolResults[0].isError).toBe(false);
       expect(summary!.stopReason).toBe('budget_exceeded');
       expect(provider.calls, 'the cage does not ask the model for another turn').toHaveLength(1);
-      expect(shell.state).toBe('IDLE');
+      expect(shell.state).toBe('SUSPENDED');
       const violation = cageViolations(shell).find((record) => record.violation === 'token_budget')!;
       expect(Number(violation.tokens)).toBeGreaterThan(1_000);
       // The turn that overspent is still accounted for: the run ended normally through agent_end.

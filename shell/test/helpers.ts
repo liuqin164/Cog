@@ -26,6 +26,15 @@ export function makeTempDir(prefix = 'companion-shell-test-'): string {
   return mkdtempSync(join(tmpdir(), prefix));
 }
 
+/** Poll a condition a deferred run settles asynchronously (a command returns before its run ends). */
+export async function waitUntil(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error('waitUntil: condition not met in time');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
 export interface FixtureHarness {
   child: ChildProcess;
   /** Every JSON line the fixture printed, in order. */

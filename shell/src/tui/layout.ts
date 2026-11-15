@@ -249,14 +249,16 @@ function statusRow(view: TuiView, width: number, env: RenderEnv): Row {
   // `/pause` is always visible: a pause the user cannot see is indistinguishable from a broken shell.
   // The glyph follows the same Unicode/ASCII fallback the rest of the frame does.
   const pause = view.status.capturePaused ? `${env.unicode ? '⏸' : '!'} 暂停捕获` : '';
+  const suspended = view.status.suspended?.text ?? '';
   const left: Row = [
     seg(truncate(view.status.name, Math.max(1, width - 24)), 'bold'),
     seg(' · ', 'dim'),
-    seg(LIFECYCLE_WORD[state], state === 'RUNNING' ? 'accent' : state === 'DREAMING' ? 'emergence' : 'plain'),
+    seg(LIFECYCLE_WORD[state], state === 'RUNNING' ? 'accent' : state === 'DREAMING' ? 'emergence' : state === 'SUSPENDED' ? 'warn' : 'plain'),
     seg(' · ', 'dim'),
     seg(kernel, view.status.kernelConnected ? 'dim' : 'warn'),
   ];
   if (pause !== '') left.push(seg(' · ', 'dim'), seg(pause, 'warn'));
+  if (suspended !== '') left.push(seg(' · ', 'dim'), seg(suspended, 'warn'));
   const wake = view.status.nextWakeAt === undefined ? '下次唤醒 无安排' : `下次唤醒 ${formatWakeAt(view.status.nextWakeAt, view.status.timeZone)}`;
   const leftWidth = left.reduce((sum, item) => sum + cellWidth(item.text), 0);
   if (cellWidth(wake) + leftWidth + 1 > width) {

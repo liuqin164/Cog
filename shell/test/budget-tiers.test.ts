@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CompanionShell } from '../src/app.ts';
-import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
+import { ScriptedProvider, makeShell, makeTempDir, waitUntil } from './helpers.ts';
 
 const TIGHT = { maxTurnsPerRun: 6, maxTokensPerRun: 20_000, toolWhitelist: null };
 
@@ -63,7 +63,7 @@ describe('the budget tiers (#222)', () => {
     }
   });
 
-  test('an autonomous wake inherits the work cage while a user assignment is unfinished, then closes it', async () => {
+  test('a paused work run resumes under the work cage after the owner approves the grant', async () => {
     const dir = makeTempDir();
     const provider = new ScriptedProvider([
       { text: 'starting', toolCalls: [{ toolCallId: 'c1', toolName: 'read', input: { path: 'config.ts' } }], usage: { input: 3_500, output: 1 } },
@@ -77,6 +77,7 @@ describe('the budget tiers (#222)', () => {
     try {
       const first = await shell.submit('install the plugin');
       expect(first!.stopReason).toBe('budget_exceeded');
+      expect(shell.state).toBe('SUSPENDED');
       // The stop is written where the next run reads it: place and next move, not just a counter.
       const open = shell.machine.runtime.openAssignment!;
       expect(open.origin).toBe('user_message');
@@ -85,6 +86,43 @@ describe('the budget tiers (#222)', () => {
       expect(shell.systemPrompt()).toContain('<open-assignment>');
       expect(shell.systemPrompt()).toContain(open.nextStep!);
       expect(shell.trace.read().some((record) => record.kind === 'assignment_stopped')).toBe(true);
+      // 3.5k spent on one turn at a 3k cap: the estimate is one more turn at the same rate.
+      expect(shell.machine.runtime.suspension?.budget?.additionalTokens).toBe(3_501);
+      expect(shell.machine.runtime.suspension?.budget?.additionalTurns).toBe(1);
+
+      const receipt = await shell.runCommand('continue');
+      expect(receipt.text).toContain('已批准');
+      await waitUntil(() => shell.state === 'IDLE');
+      const records = budgetRecords(shell);
+      expect(records).toHaveLength(2);
+      expect(records[1].tier).toBe('work');
+      // The approved grant widens this one run; the base cap in the file is untouched.
+      expect(records[1].maxTokensPerRun).toBe(6_501);
+      expect(shell.config.workBudget.maxTokensPerRun).toBe(3_000);
+      expect(cageViolations(shell).filter((entry) => entry.violation === 'token_budget')).toHaveLength(1);
+      expect(shell.machine.runtime.openAssignment).toBeUndefined();
+    } finally {
+      await shell.stop();
+    }
+  });
+
+  test('an autonomous wake inherits the work cage when a failed user run left the assignment open', async () => {
+    const dir = makeTempDir();
+    const provider = new ScriptedProvider([
+      () => {
+        throw new Error('provider down');
+      },
+      { text: 'continuing', toolCalls: [], usage: { input: 2_500, output: 1 } },
+    ]);
+    const shell = makeShell(dir, provider, {
+      budgets: { maxTurnsPerRun: 6, maxTokensPerRun: 1_000, toolWhitelist: null },
+      workBudget: { maxTurnsPerRun: 2, maxTokensPerRun: 3_000 },
+    });
+    await shell.start();
+    try {
+      const first = await shell.submit('install the plugin');
+      expect(first!.stopReason).toBe('run_error');
+      expect(shell.machine.runtime.openAssignment?.origin).toBe('user_message');
 
       emerge(shell, 'continue where you stopped');
       await shell.tick(new Date('2026-01-01T12:00:00Z').getTime());
@@ -93,7 +131,7 @@ describe('the budget tiers (#222)', () => {
       expect(records[1].tier).toBe('work');
       expect(records[1].maxTokensPerRun).toBe(3_000);
       // 2.5k is over the tight 1k and under the work 3k: only the inherited tier could finish.
-      expect(cageViolations(shell).filter((entry) => entry.violation === 'token_budget')).toHaveLength(1);
+      expect(cageViolations(shell).filter((entry) => entry.violation === 'token_budget')).toHaveLength(0);
       expect(shell.machine.runtime.openAssignment).toBeUndefined();
     } finally {
       await shell.stop();

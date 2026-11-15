@@ -39,6 +39,11 @@ export interface CommandHost {
   whyReport(): string;
   capturePaused(): boolean;
   setCapturePaused(paused: boolean): void;
+  /**
+   * `/continue`: approve the additional budget a paused work run asked for and resume it in place
+   * (#228). A receipt when there is nothing paused or the pause is a question rather than a budget.
+   */
+  continueSuspended(): CommandReply;
   sessionModel(): string;
   modelRoutes(): string[];
   modelRouter(): { active: string; lines: string[]; storeError?: string } | undefined;
@@ -193,6 +198,12 @@ export const CORE_COMMANDS: readonly CoreCommand[] = [
       host.setCapturePaused(false);
       return { text: '已恢复捕获：接下来的回合会照常写进内核。', receipt: true };
     },
+  },
+  {
+    name: 'continue',
+    description: '批准暂停任务的追加预算，原地续跑',
+    surfaces: ['palette', 'resident', 'tui'],
+    run: (host) => host.continueSuspended(),
   },
   {
     name: 'why',
