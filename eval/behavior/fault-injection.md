@@ -1,9 +1,9 @@
 # F13 fault-injection record (#167)
 
-Subject: `bf87d7c` (the behaviour-eval contract, scenarios and runner). The injection ran in a
+Subject: `d36e3d3` (the behaviour-eval contract, scenarios, runner and tightened checks). The injections ran in a
 scratch worktree, never in the main checkout.
 
-## Injection
+## Injection 1: life default lane open
 
 File: `src/security/LifeSensitivity.ts`
 Function: `eventHoldsLifeSensitivityMark()`
@@ -16,8 +16,6 @@ Function: `eventHoldsLifeSensitivityMark()`
 This is the shared mark predicate every default recall lane consults. Releasing it lets life-marked
 turns into the ordinary lane while leaving the surfacing tag source and the explicit forensic intent
 alone — the ticket's "放行生活敏感内容进默认车道" fault.
-
-## Red run
 
 Command:
 
@@ -36,10 +34,32 @@ The red set is exactly the register's expected set in `docs/behavior-eval.md`. T
 secret and pause scenarios stayed green, which is the point: F8's occasion gate, #142's keychain
 hard withhold and F9's write-path pause are separate mechanisms and were not broken.
 
+## Injection 2: commitment re-announce
+
+File: `src/commitment/CommitmentBook.ts`
+Function: `surfaceDue()`
+
+```diff
+-      if (state.surfacedDueKey === dueKey || state.dismissedDueKey === dueKey) continue;
++      if (false && (state.surfacedDueKey === dueKey || state.dismissedDueKey === dueKey)) continue;
+```
+
+The guard is what makes one due occurrence speak once. With it bypassed, the first proactive query
+still offers the commitment and the second offers it again.
+
+Exit: `1`. Summary: `15 pass / 1 fail / 16 scenarios`.
+
+| Red scenario | Failure |
+|---|---|
+| `surface-commitment-once` | `C2 no replay: expected 0, got 1` |
+
+This is the surfacing lane the first injection does not touch: the once rule is proven independently
+of the sensitivity gates.
+
 ## Restored run
 
-The file was restored with `git checkout -- src/security/LifeSensitivity.ts`; `git status --short`
-was clean apart from the scratch `node_modules` symlink. The same command then exited `0` with
+Both files were restored with `git checkout -- <file>`; `git status --short` was clean apart from the
+scratch `node_modules` symlink. The same command then exited `0` with
 `16 pass / 0 fail / 16 scenarios`. The worktree was removed after the run.
 
 ## Scope note
