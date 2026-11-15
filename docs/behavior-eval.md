@@ -16,8 +16,10 @@ The code is `eval/behavior/` and this document is held by
 - **No new kernel behaviour.** The suite drives the landed public faces through `src/public.ts`.
   When a scenario exposes a product bug, the round reports or files it; the scenario is not bent to
   the implementation.
-- **No wall clock.** Every instant the assertions depend on is a constant. The runner calls
-  `runWakeTick` and surfacing with `now`, and never sleeps.
+- **No sleeping and no ambient clock in assertions.** Every instant the assertions depend on is a
+  constant or is read back from the kernel's own recorded state. The runner calls `runWakeTick` and
+  surfacing with explicit `now` values and never sleeps. F9's pause instant is the one value the
+  kernel records itself; the pause scenario reads it back from `sovereignty.pause`.
 - **No box-only path.** The same files run in fixture mode on a source checkout and against an
   installed package on the box.
 
@@ -73,7 +75,8 @@ scenario; the criterion is not relaxed to make the suite green.
 
 The assertions are deterministic:
 
-- instants are constants and passed to `runWakeTick`, `compile` and surfacing reads;
+- instants are constants or read back from the kernel's recorded state, and passed to
+  `runWakeTick`, `compile` and surfacing reads;
 - the write path and the compilers run locally; no network or model is called;
 - model-owned extraction is pinned as a fixture in the scenario's `pinned` list;
 - a scenario creates its own SQLite database under `TMPDIR` and removes it afterwards.
