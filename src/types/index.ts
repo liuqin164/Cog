@@ -898,11 +898,6 @@ export interface PolicyExecutionAuditPage {
   };
 }
 
-export interface RuntimeAuditTrail {
-  runtimeHistory: RuntimeDiagnosticsHistoryPage;
-  policyExecutions: PolicyExecutionAuditPage;
-}
-
 export interface ProjectionObservabilityStorageStats {
   rawSampleCount: number;
   rollupCount: number;
