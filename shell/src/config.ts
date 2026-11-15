@@ -13,6 +13,11 @@ export interface RunBudget {
   maxTokensPerRun: number;
 }
 
+/** The day's aggregate ceiling. One counter for every tier, so autonomy cannot add up past it. */
+export interface DailyBudget {
+  maxTokensPerDay: number;
+}
+
 export interface ShellConfig {
   /** Working directory the read/write/edit/bash tools are caged to. */
   workspaceRoot: string;
@@ -38,6 +43,12 @@ export interface ShellConfig {
    * because the tool whitelist is shared and only the two numeric limits differ.
    */
   workBudget: RunBudget;
+  /**
+   * The day's token ceiling (#233), counted across both tiers on the same Tokyo day as #229's
+   * emergence cap. Reaching it stops autonomous runs; a user who is present is told, and their own
+   * instruction still runs under the per-run cage.
+   */
+  dailyBudget: DailyBudget;
   dream: { windowStartHour: number; windowEndHour: number; runKernelNight: boolean; maxEpisodes: number };
   idleWakeIntervalMs: number;
   /** Tick interval for due intents/dream/emergence. Deterministic; tests drive ticks directly. */
@@ -68,7 +79,7 @@ function env(name: string): string | undefined {
  * be understood is a startup error, not a silent fallback — a user who edited a number must not be
  * left believing it applied.
  */
-function readBudgetConfig(dataDir: string): { work?: Partial<RunBudget>; autonomous?: Partial<RunBudget> } {
+function readBudgetConfig(dataDir: string): { work?: Partial<RunBudget>; autonomous?: Partial<RunBudget>; daily?: Partial<DailyBudget> } {
   const path = join(dataDir, 'budgets.json');
   if (!existsSync(path)) return {};
   let parsed: unknown;
@@ -82,7 +93,15 @@ function readBudgetConfig(dataDir: string): { work?: Partial<RunBudget>; autonom
   return {
     ...(record.work === undefined ? {} : { work: budgetTier(record.work, path, 'work') }),
     ...(record.autonomous === undefined ? {} : { autonomous: budgetTier(record.autonomous, path, 'autonomous') }),
+    ...(record.maxTokensPerDay === undefined ? {} : { daily: dailyBudget(record.maxTokensPerDay, path) }),
   };
+}
+
+function dailyBudget(value: unknown, path: string): Partial<DailyBudget> {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+    throw new Error(`invalid_budgets_config: ${path}: maxTokensPerDay must be a positive integer`);
+  }
+  return { maxTokensPerDay: value };
 }
 
 function budgetTier(value: unknown, path: string, name: string): Partial<RunBudget> {
@@ -102,6 +121,12 @@ function budgetTier(value: unknown, path: string, name: string): Partial<RunBudg
 
 export const DEFAULT_AUTONOMOUS_BUDGET: RunBudget = { maxTurnsPerRun: 6, maxTokensPerRun: 20_000 };
 export const DEFAULT_WORK_BUDGET: RunBudget = { maxTurnsPerRun: 32, maxTokensPerRun: 400_000 };
+/**
+ * Five full work runs. The autonomous baseline (eight emergence runs at the tight 20k cap) is
+ * about 160k, so a normal day sits far below this; a runaway loop crosses it after ~100 tight runs
+ * instead of burning the month.
+ */
+export const DEFAULT_DAILY_BUDGET: DailyBudget = { maxTokensPerDay: 2_000_000 };
 
 export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellConfig {
   const workspaceRoot = overrides.workspaceRoot ?? env('COGMEM_SHELL_WORKSPACE') ?? process.cwd();
@@ -109,6 +134,7 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
   const operating = readBudgetConfig(dataDir);
   const autonomous: RunBudget = { ...DEFAULT_AUTONOMOUS_BUDGET, ...operating.autonomous };
   const work: RunBudget = { ...DEFAULT_WORK_BUDGET, ...operating.work };
+  const daily: DailyBudget = { ...DEFAULT_DAILY_BUDGET, ...operating.daily };
   // The registry is read here, once, so a plugin registered by `/plugins add` reaches the next
   // process and nothing re-reads the file mid-run. A corrupt file is a startup error (see registry).
   const registryPlugins = readPluginRegistry(dataDir);
@@ -137,6 +163,7 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
       toolWhitelist: ['read', 'write', 'edit', 'bash', 'propose_command', 'propose_soul_edit', 'ask_user', 'web_search', 'web_fetch', 'web_recall', 'list_workflows', 'propose_workflow', 'veto_workflow'],
     },
     workBudget: overrides.workBudget ?? work,
+    dailyBudget: overrides.dailyBudget ?? daily,
     contextSweetSpot: overrides.contextSweetSpot ?? 6_000,
     // The install's rhythm step is what fills these; the literals stay the fallback for a hand-run
     // shell that was never installed.

@@ -183,6 +183,8 @@ export class CompanionShell implements ShellControl, AttachShell {
   private lastUpgrade?: UpgradeOutcome;
   /** One memory notice per crossing, reset after we drop below 90% of the ceiling. */
   private memoryWarned = false;
+  /** The day whose daily-budget stop was already spoken to the user (#233). */
+  private dailyNotifiedDay?: string;
   /**
    * The window `/forget` previewed and `/forget confirm` may execute. Process-local: a restart
    * asks for a fresh preview rather than resuming a confirmation the owner can no longer see.
@@ -729,6 +731,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       this.emitSteering();
       return undefined;
     }
+    if (this.dailyBudgetExceeded()) this.announceDailyBudget('user_message');
     if (this.machine.state === 'SUSPENDED') return this.submitWhileSuspended(text);
     // The user's message is the assignment's provenance. It is written before the run so an
     // autonomous wake after a budget stop can inherit the work tier from the ledger, not from a
@@ -1074,7 +1077,10 @@ export class CompanionShell implements ShellControl, AttachShell {
         void this.host.bus.emit('companion_emergence', { id: candidate.id, reason: candidate.reason, text: candidate.text });
         await this.executeRun(candidate.text, 'emergence_due', `emergence:${candidate.id}`);
       } else if (due && !allowed) {
-        this.trace.append('emergence_skipped', { at, reason: 'cooldown_or_daily_cap' });
+        this.trace.append('emergence_skipped', {
+          at,
+          reason: this.dailyBudgetExceeded(at) ? 'daily_token_budget' : 'cooldown_or_daily_cap',
+        });
       }
     }
   }
@@ -1145,6 +1151,9 @@ export class CompanionShell implements ShellControl, AttachShell {
 
   /** Cooldown and the Tokyo day's count; both survive a restart because they live in the checkpoint. */
   private emergenceAllowed(at: number): boolean {
+    // #233 and #229 share one day boundary and one hard stop: when the day's tokens are gone,
+    // autonomy does not start another run, exactly as the emergence count cap does.
+    if (this.dailyBudgetExceeded(at)) return false;
     const state = this.machine.runtime.emergence;
     if (!state) return true;
     if (state.lastAt !== undefined && at - state.lastAt < EMERGENCE_COOLDOWN_MS) return false;
@@ -1287,8 +1296,11 @@ export class CompanionShell implements ShellControl, AttachShell {
       this.workLabel = '思考中';
       this.emitWork();
     });
-    this.host.bus.on('turn_usage', (event: { totalTokens?: number; usage?: TurnUsage }) => {
+    this.host.bus.on('turn_usage', (event: { tokens?: number; totalTokens?: number; usage?: TurnUsage }) => {
       this.runTokens = event.totalTokens ?? this.runTokens;
+      // Charged per turn, not at `agent_end`: a kill mid-run must not refund the day's spend, and the
+      // checkpoint is what the next process reads (#233).
+      this.chargeCost(event.tokens ?? 0);
       const cache = promptCacheAccount(event.usage);
       if (cache) {
         this.promptCache = cache;
@@ -1305,26 +1317,63 @@ export class CompanionShell implements ShellControl, AttachShell {
       this.emitWork();
     });
     this.host.bus.on('turn_end', () => this.emitSteering());
-    this.host.bus.on('agent_end', (event: { summary?: RunSummary }) => {
-      const tokens = event.summary?.tokens ?? 0;
-      if (tokens > 0) this.chargeCost(tokens);
-    });
     this.host.bus.on('agent_settled', () => {
       this.workLabel = '思考中';
       this.emitWork();
       this.emitSteering();
       this.emitStatus();
+      this.flushDailyBudgetNotice();
     });
   }
 
   private chargeCost(tokens: number): void {
+    if (tokens <= 0) return;
     try {
-      const today = this.clock?.localDate() ?? new Date().toISOString().slice(0, 10);
+      const today = tokyoDate(this.now());
       const previous = this.machine.runtime.costDayDate === today ? this.machine.runtime.costDayTokens ?? 0 : 0;
-      this.machine.updateRuntime({ costDayDate: today, costDayTokens: previous + tokens });
+      const spent = previous + tokens;
+      this.machine.updateRuntime({ costDayDate: today, costDayTokens: spent });
+      if (previous < this.config.dailyBudget.maxTokensPerDay && spent >= this.config.dailyBudget.maxTokensPerDay) {
+        this.trace.append('daily_budget_crossed', { day: today, spent, limit: this.config.dailyBudget.maxTokensPerDay, tokens });
+      }
     } catch (error) {
       this.trace.append('cost_charge_failed', { tokens, message: error instanceof Error ? error.message : String(error) });
     }
+  }
+
+  /** The day's spend under the same Tokyo boundary #229's emergence count uses. */
+  private dailySpent(at = this.now()): number {
+    return this.machine.runtime.costDayDate === tokyoDate(at) ? this.machine.runtime.costDayTokens ?? 0 : 0;
+  }
+
+  private dailyBudgetExceeded(at = this.now()): boolean {
+    return this.dailySpent(at) >= this.config.dailyBudget.maxTokensPerDay;
+  }
+
+  private dailyBudgetLine(at = this.now()): string {
+    return `已到今日预算上限（${this.dailySpent(at)} / ${this.config.dailyBudget.maxTokensPerDay} token，东京日 ${tokyoDate(at)}）：自主运行今天不再开始；你的指令照常执行，单次运行仍受笼子上限约束。`;
+  }
+
+  /**
+   * A user line is presence: the daily stop is stated once per day rather than left to the status
+   * bar. The line still runs — the ticket stops autonomy, not the owner.
+   */
+  private announceDailyBudget(trigger: string): void {
+    const day = tokyoDate(this.now());
+    if (this.dailyNotifiedDay === day) return;
+    this.dailyNotifiedDay = day;
+    this.trace.append('daily_budget_exceeded', {
+      trigger,
+      day,
+      spent: this.dailySpent(),
+      limit: this.config.dailyBudget.maxTokensPerDay,
+    });
+    void this.host.bus.emit('terminal_print', { text: `${this.dailyBudgetLine()}\n` });
+  }
+
+  private flushDailyBudgetNotice(): void {
+    if (!this.dailyBudgetExceeded()) return;
+    this.announceDailyBudget('run_settled');
   }
 
   private emitWork(): void {
@@ -1345,7 +1394,7 @@ export class CompanionShell implements ShellControl, AttachShell {
 
   currentStatus(): StatusState {
     const next = this.clock?.nextPendingIntent();
-    const today = this.clock?.localDate() ?? new Date().toISOString().slice(0, 10);
+    const today = tokyoDate(this.now());
     return {
       name: this.config.agentId,
       lifecycle: this.machine.state,
@@ -1750,6 +1799,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     const suspension = this.machine.runtime.suspension;
     if (this.machine.state !== 'SUSPENDED' || !suspension) return { text: '现在没有挂起的 run，不需要续跑。', receipt: true };
     if (suspension.kind !== 'budget') return { text: '这次挂起在等一个回答，不是等预算：直接回复即可。', receipt: true };
+    if (this.dailyBudgetExceeded()) this.announceDailyBudget('budget_approved');
     const assignment = this.machine.runtime.openAssignment;
     if (!assignment || assignment.id !== suspension.assignmentId) {
       this.trace.append('suspension_resume_refused', { id: suspension.id, reason: 'assignment_mismatch' });
@@ -2070,6 +2120,16 @@ export class CompanionShell implements ShellControl, AttachShell {
     if (!assignment || assignment.id !== assignmentId) return;
     if (this.machine.state !== 'IDLE') {
       this.trace.append('assignment_resume_skipped', { assignmentId, reason: `state:${this.machine.state}` });
+      return;
+    }
+    if (this.dailyBudgetExceeded()) {
+      this.trace.append('daily_budget_exceeded', {
+        trigger: 'assignment_resume',
+        assignmentId,
+        day: tokyoDate(this.now()),
+        spent: this.dailySpent(),
+        limit: this.config.dailyBudget.maxTokensPerDay,
+      });
       return;
     }
     await this.executeRun(assignment.text, 'message_received', 'assignment_resume');
