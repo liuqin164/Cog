@@ -138,3 +138,40 @@ describe('a budget pause (#228)', () => {
   });
 });
 
+describe('a question pause (#228)', () => {
+  test('asking suspends the run, and the owner answer is the next run of the same task', async () => {
+    const dir = makeTempDir();
+    const provider = new ScriptedProvider([
+      { text: 'I need a decision', toolCalls: [{ toolCallId: 'q1', toolName: 'ask_user', input: { question: '用 A 还是 B？', context: 'src/choice.ts' } }] },
+      { text: 'waiting for the answer', toolCalls: [] },
+      { text: 'went with A', toolCalls: [] },
+    ]);
+    const shell = pausedShell(dir, provider);
+    await shell.start();
+    try {
+      const first = await shell.submit('choose a branch');
+      expect(first!.stopReason).toBe('run_complete');
+      expect(shell.state).toBe('SUSPENDED');
+      const suspension = shell.machine.runtime.suspension!;
+      expect(suspension.kind).toBe('question');
+      expect(suspension.question?.text).toBe('用 A 还是 B？');
+      expect(suspension.question?.contextRef).toBe('src/choice.ts');
+      expect(shell.currentStatus().suspended?.text).toContain('等你回答');
+      // A question is answered by text, not by an approval command.
+      expect(shell.currentProposals()).toHaveLength(0);
+
+      const answered = await shell.submit('用 A');
+      expect(answered!.userText).toBe('用 A');
+      expect(shell.state).toBe('IDLE');
+      expect(shell.machine.runtime.suspension).toBeUndefined();
+      expect(shell.machine.runtime.openAssignment).toBeUndefined();
+      // The question travelled into the resumed run's prompt, so the answer has something to attach to.
+      expect(provider.calls[2].systemPrompt).toContain('<pending-question>');
+      expect(provider.calls[2].systemPrompt).toContain('用 A 还是 B？');
+      expect(shell.trace.read().some((record) => record.kind === 'suspension_answered')).toBe(true);
+    } finally {
+      await shell.stop();
+    }
+  });
+});
+

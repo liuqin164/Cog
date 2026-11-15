@@ -51,17 +51,18 @@ export interface InFlightToolCall {
 }
 
 /**
- * The one paused run (#228). A work-tier budget stop ends the run and leaves this object behind; the
- * lifecycle state is SUSPENDED while it exists.
+ * The one paused run (#228). A work-tier budget stop or a question the companion asked both end the
+ * run and leave this object behind; the lifecycle state is SUSPENDED while it exists.
  *
  * There is deliberately no expiry: a resident companion may wait days for its owner, and a pause
  * that timed out would silently drop work the user asked for. A question is retired when the owner
- * request when the owner approves or declines it. See `docs/engineering/4.0-issue-loop.md`'s round
- * record for the rules as reported.
+ * answers it (or when a new instruction supersedes the paused assignment), a budget request when the
+ * owner approves or declines it. See `docs/engineering/4.0-issue-loop.md`'s round record for the
+ * rules as reported.
  */
 export interface Suspension {
   id: string;
-  kind: 'budget';
+  kind: 'budget' | 'question';
   assignmentId: string;
   createdAt: number;
   /** The run that suspended, so the pause is attributable in the trace. */
@@ -78,6 +79,10 @@ export interface Suspension {
     /** The arithmetic in one line, so the number is auditable instead of magic. */
     basis: string;
   };
+  /** Question kind: what was asked and a short reference to what it is about. */
+  question?: { text: string; contextRef?: string };
+  /** Set when the owner's answer was delivered; cleared when the resumed run settles. */
+  answeredAt?: number;
 }
 
 export interface ShellRuntimeState {

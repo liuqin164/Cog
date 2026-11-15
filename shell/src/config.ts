@@ -131,7 +131,7 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
     // cage violation.
     budgets: overrides.budgets ?? {
       ...autonomous,
-      toolWhitelist: ['read', 'write', 'edit', 'bash', 'propose_command', 'propose_soul_edit', 'web_search', 'web_fetch', 'web_recall'],
+      toolWhitelist: ['read', 'write', 'edit', 'bash', 'propose_command', 'propose_soul_edit', 'ask_user', 'web_search', 'web_fetch', 'web_recall'],
     },
     workBudget: overrides.workBudget ?? work,
     contextSweetSpot: overrides.contextSweetSpot ?? 6_000,

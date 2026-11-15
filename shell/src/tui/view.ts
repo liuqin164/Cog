@@ -49,7 +49,7 @@ export interface StatusState {
    * A paused run (#228): what it waits for and the one line that says so. The status bar draws it,
    * because "the run stopped and nobody said why" is the failure this pause exists to avoid.
    */
-  suspended?: { kind: 'budget'; text: string };
+  suspended?: { kind: 'budget' | 'question'; text: string };
 }
 
 export interface WorkState {

@@ -28,6 +28,7 @@ import { builtinToolsPlugin } from './plugins/builtin-tools.ts';
 import { webPlugin } from './plugins/web.ts';
 import { coreCommandFor, availableCoreCommand, unknownCommandReply, type CommandHost, type CommandReply } from './commands.ts';
 import { proposalPlugin } from './plugins/proposal.ts';
+import { askPlugin } from './plugins/ask.ts';
 import { CommandProposals, executeProposal, type CommandProposal, type ProposalConfirmation } from './proposals.ts';
 import { capturePlugin } from './plugins/capture.ts';
 import { recallPlugin } from './plugins/recall.ts';
@@ -149,6 +150,11 @@ export class CompanionShell implements ShellControl, AttachShell {
   private lastUpgrade?: UpgradeOutcome;
   /** One memory notice per crossing, reset after we drop below 90% of the ceiling. */
   private memoryWarned = false;
+  /**
+   * A question the run registered through `ask_user` (#228). It is process-local because the run is
+   * still in this process; `settleAssignment` turns it into the checkpointed suspension.
+   */
+  private pendingQuestion?: { text: string; contextRef?: string };
   /** The proposal that offers `/continue` for the current pause; Esc on it is the owner's refusal. */
   private suspensionProposalId?: string;
   private readonly redactor = new SecretRedactor();
@@ -415,6 +421,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.host.register(builtinToolsPlugin(), { workspaceRoot: this.config.workspaceRoot });
     this.host.register(webPlugin({ dataDir: this.config.dataDir }));
     this.host.register(proposalPlugin());
+    this.host.register(askPlugin());
     this.host.register(capturePlugin({ agentId: this.config.agentId, projectId: this.config.projectId, sessionId: this.config.sessionId, paused: () => this.capturePaused }));
     this.host.register(recallPlugin({ agentId: this.config.agentId, projectId: this.config.projectId, limit: 3 }));
     this.host.register(soulEditPlugin());
@@ -580,7 +587,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       'To hand the user a shell command, call `propose_command` with the command and a one-line reason. It is only an offer: the command runs when the user confirms it, never before, so never say it already ran.',
       'Never invent a memory. If recall is empty, say so plainly.',
     ].filter(Boolean);
-    const tail = [this.clock ? this.clock.timeContextBlock(this.now()) : '', this.openAssignmentBlock()].filter(Boolean);
+    const tail = [this.clock ? this.clock.timeContextBlock(this.now()) : '', this.openAssignmentBlock(), this.suspensionBlock()].filter(Boolean);
     return { pinned: pinned.join('\n\n'), tail: tail.join('\n\n') };
   }
 
@@ -599,6 +606,23 @@ export class CompanionShell implements ShellControl, AttachShell {
       assignment.nextStep ? `next: ${assignment.nextStep}` : '',
       assignment.findings ? `confirmed findings: ${assignment.findings}` : '',
       '</open-assignment>',
+    ].filter(Boolean).join('\n');
+  }
+
+  /**
+   * The resumed run's half of a question pause (#228): the answer is the run's user text, and this
+   * block is what makes that answer answerable. It is rendered only while the object exists, which
+   * is until the resumed run settles — the question object is gone from an idle shell.
+   */
+  private suspensionBlock(): string {
+    const suspension = this.machine.runtime.suspension;
+    if (!suspension || suspension.kind !== 'question' || suspension.question === undefined) return '';
+    return [
+      '<pending-question>',
+      `you asked: ${suspension.question.text}`,
+      suspension.question.contextRef ? `about: ${suspension.question.contextRef}` : '',
+      "the user's next line is the answer; continue the open task from it.",
+      '</pending-question>',
     ].filter(Boolean).join('\n');
   }
 
@@ -646,13 +670,20 @@ export class CompanionShell implements ShellControl, AttachShell {
   }
 
   /**
-   * A line typed while paused (#228). A typed line is a new instruction: the paused task closes as
-   * budget_exceeded (traced) and the line starts fresh work. There is no timeout — see
-   * `Suspension`'s comment.
+   * A line typed while paused (#228). For a question the line is the answer: the same assignment
+   * continues, no new assignment record is written, and the object is marked answered so the
+   * resumed prompt can still name the question. For a budget request a typed line is a new
+   * instruction: the paused task closes as budget_exceeded (traced) and the line starts fresh work.
+   * There is no timeout for either kind — see `Suspension`'s comment.
    */
   private async submitWhileSuspended(text: string): Promise<RunSummary | undefined> {
     const suspension = this.machine.runtime.suspension;
     this.clock!.markInteraction(text, this.now());
+    if (suspension?.kind === 'question') {
+      this.machine.updateRuntime({ suspension: { ...suspension, answeredAt: this.now() } });
+      this.trace.append('suspension_answered', { id: suspension.id, assignmentId: suspension.assignmentId, chars: text.trim().length });
+      return this.executeRun(text, 'message_received', 'question_answered', 'answer_received');
+    }
     if (suspension) this.supersedeSuspension('new_input');
     this.beginUserAssignment(text);
     return this.executeRun(text, 'message_received', 'user_message');
@@ -720,8 +751,34 @@ export class CompanionShell implements ShellControl, AttachShell {
    * must not mistake it for a fresh autonomous idea.
    */
   private settleAssignment(summary: RunSummary, tier: CageTier): Trigger {
+    const question = this.pendingQuestion;
+    this.pendingQuestion = undefined;
     const assignment = this.machine.runtime.openAssignment;
+    // A question can only be waited on by a work run; the tool refuses the autonomous tier, and this
+    // is the second half of that guard rather than a second policy.
     if (!assignment || tier !== 'work') return summary.stopReason;
+    if (summary.stopReason === 'run_complete' && question) {
+      const suspension: Suspension = {
+        id: `suspension-${this.now().toString(36)}-${randomUUID().slice(0, 8)}`,
+        kind: 'question',
+        assignmentId: assignment.id,
+        createdAt: this.now(),
+        runId: summary.runId,
+        question,
+      };
+      this.machine.updateRuntime({
+        suspension,
+        openAssignment: { ...assignment, lastRunId: summary.runId, stoppedAt: this.now(), nextStep: 'continue the open task with the answer' },
+      });
+      this.trace.append('assignment_paused', {
+        runId: summary.runId,
+        assignmentId: assignment.id,
+        suspensionId: suspension.id,
+        kind: 'question',
+        questionChars: question.text.length,
+      });
+      return 'question_paused';
+    }
     if (summary.stopReason === 'run_complete') {
       this.machine.updateRuntime({ openAssignment: undefined, suspension: undefined });
       return 'run_complete';
@@ -1048,6 +1105,9 @@ export class CompanionShell implements ShellControl, AttachShell {
 
   /** The one human line the status bar, the snapshot and `/health` all carry for a pause. */
   private suspendedLine(suspension: Suspension): { kind: Suspension['kind']; text: string } {
+    if (suspension.kind === 'question') {
+      return { kind: 'question', text: `已暂停：等你回答「${suspension.question?.text ?? ''}」` };
+    }
     return {
       kind: 'budget',
       text: `已暂停：预算到顶，等批准追加 ${suspension.budget?.additionalTokens ?? 0} token / ${suspension.budget?.additionalTurns ?? 0} 回合`,
@@ -1361,6 +1421,25 @@ export class CompanionShell implements ShellControl, AttachShell {
       closedAs: 'budget_exceeded',
     });
     this.machine.updateRuntime({ suspension: undefined, openAssignment: undefined });
+  }
+
+  /**
+   * `ask_user`'s one entry (#228). Only a work run may wait for the owner: an autonomous run has no
+   * one to answer it and must not hold a pause open, so the tool refuses there and the model is told
+   * to carry on. The question is process-local until the run settles; the checkpointed object is
+   * written by `settleAssignment`.
+   */
+  askUser(input: { question: string; context?: string }): { ok: boolean; text: string } {
+    const question = input.question.trim();
+    if (question === '') return { ok: false, text: 'invalid_arguments: "question" must be a non-empty string' };
+    if (this.runTier !== 'work' || this.machine.state !== 'RUNNING') {
+      this.trace.append('question_refused_autonomous', { chars: question.length });
+      return { ok: false, text: 'ask_user_unavailable: 这次是自主 run，没有人在等你的问题；不要等，直接按现有信息做完或收尾。' };
+    }
+    const contextRef = input.context?.trim();
+    this.pendingQuestion = { text: question, ...(contextRef ? { contextRef } : {}) };
+    this.trace.append('question_registered', { chars: question.length, contextChars: contextRef?.length ?? 0 });
+    return { ok: true, text: '已登记问题：这次 run 到此挂起，用户回答后原任务原地续跑。不要再调用工具，也不要假装已经得到回答。' };
   }
 
   /**
