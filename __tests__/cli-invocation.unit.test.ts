@@ -158,14 +158,18 @@ test('absolute off PATH, bare on it, and never the bin directory', () => {
     const dir = makeTempDir('cogmem-invocation-unit-');
     const binDir = installedLauncher(dir);
     const launcher = join(binDir, 'cogmem');
+    // The managed launcher is checked before COGMEM_BIN_DIR. On a machine that has a real install
+    // in HOME this test would otherwise exercise that launcher instead of the one it just made;
+    // pinning the launcher directory keeps the branch under test the one the assertions name.
+    const env = { COGMEM_LAUNCHER_DIR: join(dir, 'no-launcher'), PATH: '/usr/bin:/bin' };
 
-    expect(resolveCogmemInvocation({ COGMEM_BIN_DIR: binDir, PATH: '/usr/bin:/bin' })).toBe(launcher);
-    expect(resolveCogmemInvocation({ COGMEM_BIN_DIR: binDir, PATH: `${binDir}:/usr/bin:/bin` })).toBe('cogmem');
+    expect(resolveCogmemInvocation({ ...env, COGMEM_BIN_DIR: binDir })).toBe(launcher);
+    expect(resolveCogmemInvocation({ ...env, COGMEM_BIN_DIR: binDir, PATH: `${binDir}:/usr/bin:/bin` })).toBe('cogmem');
     // A directory that exists but holds no launcher is not an installation.
-    expect(resolveCogmemInvocation({ COGMEM_BIN_DIR: join(dir, 'empty'), PATH: '/usr/bin:/bin' })).toBe('cogmem');
+    expect(resolveCogmemInvocation({ ...env, COGMEM_BIN_DIR: join(dir, 'empty') })).toBe('cogmem');
     // A source checkout is not an installed layout, so there is nothing to name
     // by path — the bare command is the only honest answer.
-    expect(resolveCogmemInvocation({ PATH: '/usr/bin:/bin' }, 'src/bin/doctor.ts')).toBe('cogmem');
+    expect(resolveCogmemInvocation(env, 'src/bin/doctor.ts')).toBe('cogmem');
   });
 });
 

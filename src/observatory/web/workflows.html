@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cog 工作流观测台</title>
+<meta name="color-scheme" content="dark">
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --void: #05070d;
+    --surface: #0a0f16;
+    --panel: #10161f;
+    --line: #1f2937;
+    --ink: #e9eff8;
+    --ink-dim: #a8b6ca;
+    --ink-faint: #78889e;
+    --accent: #f2c14e;
+    --live: #56b57e;
+    --warn: #e0a33e;
+    --bad: #d96a6a;
+    --focus: #7fb2ff;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--void); color: var(--ink);
+    font: 400 0.875rem/1.55 var(--sans); -webkit-font-smoothing: antialiased;
+  }
+  :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  header {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1.25rem;
+    padding: 0.75rem 1.25rem; background: var(--surface); border-bottom: 1px solid var(--line);
+  }
+  h1 { margin: 0; font-size: 1rem; font-weight: 600; letter-spacing: -0.01em; }
+  h1 small { font-weight: 400; color: var(--ink-faint); margin-left: 0.5rem; }
+  header .grow { flex: 1; }
+  a { color: var(--focus); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  label { display: flex; align-items: center; gap: 0.375rem; color: var(--ink-faint); font-size: 0.8125rem; }
+  select, button {
+    appearance: none; background: var(--panel); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 6px; padding: 0.3125rem 0.5rem; font: inherit; font-size: 0.8125rem;
+  }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--ink-faint); }
+  main { max-width: 1100px; margin: 0 auto; padding: 1.25rem; }
+  .note { color: var(--ink-faint); font-size: 0.8125rem; margin: 0 0 1rem; }
+  .cards { display: grid; gap: 0.875rem; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 0.875rem 1rem; }
+  .card-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem 0.75rem; }
+  .card-head .id { font: 600 0.9375rem/1.4 var(--mono); }
+  .card-head .title { color: var(--ink-dim); }
+  .badge {
+    margin-left: auto; font-size: 0.6875rem; letter-spacing: 0.04em; text-transform: uppercase;
+    padding: 0.125rem 0.4375rem; border-radius: 999px; border: 1px solid var(--line); color: var(--ink-dim);
+  }
+  .badge.active { color: var(--live); border-color: #2f5c45; }
+  .badge.proposed { color: var(--warn); border-color: #5c4a2a; }
+  .badge.vetoed, .badge.downgraded { color: var(--bad); border-color: #5c3030; }
+  .facts { display: flex; flex-wrap: wrap; gap: 0.25rem 1.25rem; margin: 0.5rem 0 0.75rem; color: var(--ink-dim); font-size: 0.8125rem; }
+  .facts b { color: var(--ink); font-weight: 600; }
+  .dry-run { font-size: 0.8125rem; margin: 0 0 0.75rem; }
+  .dry-run.failed { color: var(--bad); }
+  .dry-run.passed { color: var(--live); }
+  .dry-run.pending { color: var(--warn); }
+  ol.steps { margin: 0; padding-left: 1.25rem; display: grid; gap: 0.25rem; }
+  ol.steps li { color: var(--ink-dim); }
+  ol.steps code { color: var(--ink); font-family: var(--mono); font-size: 0.8125rem; }
+  .history { margin-top: 0.625rem; color: var(--ink-faint); font-size: 0.75rem; }
+  .empty { color: var(--ink-faint); text-align: center; padding: 3rem 1rem; }
+  .error { color: var(--bad); padding: 1rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Cog 工作流观测台 <small>procedure workflows</small></h1>
+  <span class="grow"></span>
+  <label>项目 <select id="project"></select></label>
+  <button id="refresh" type="button">刷新</button>
+  <a href="/observatory/">星图</a>
+</header>
+<main>
+  <p class="note">只读视图。每条记录都是内核账本上的一行；工作流是做法条目的执行形态，做法条目本身不被改写。</p>
+  <div id="root"><p class="empty">读取中…</p></div>
+</main>
+<script>
+  const root = document.getElementById('root');
+  const projectSelect = document.getElementById('project');
+  const STATUS = { proposed: '提议中', active: '已转正', vetoed: '已否决', downgraded: '已降级' };
+
+  function el(tag, props = {}, children = []) {
+    const node = document.createElement(tag);
+    for (const [key, value] of Object.entries(props)) {
+      if (key === 'text') node.textContent = value;
+      else if (key === 'className') node.className = value;
+      else node.setAttribute(key, value);
+    }
+    for (const child of children) node.append(child);
+    return node;
+  }
+
+  function latestByEntry(rows) {
+    const latest = new Map();
+    for (const row of rows) {
+      const entryId = row.payload && typeof row.payload.entryId === 'string' ? row.payload.entryId : '';
+      if (entryId) latest.set(entryId, row);
+    }
+    return latest;
+  }
+
+  function renderStep(step) {
+    const tool = step && typeof step.tool === 'string' ? step.tool : '(no tool)';
+    const args = step && step.args && typeof step.args === 'object' ? JSON.stringify(step.args) : '{}';
+    const success = step && step.success && typeof step.success === 'object'
+      ? `${step.success.type}${step.success.text ? `: ${step.success.text}` : ''}`
+      : 'not_error';
+    return el('li', {}, [
+      el('code', { text: tool }),
+      document.createTextNode(` ${args} — ${success}`),
+    ]);
+  }
+
+  function renderCard(row) {
+    const payload = row.payload || {};
+    const status = typeof payload.status === 'string' ? payload.status : 'proposed';
+    const domain = typeof payload.domain === 'string' ? payload.domain : '';
+    const key = typeof payload.key === 'string' ? payload.key : '';
+    const dryRun = payload.dryRun && typeof payload.dryRun === 'object' ? payload.dryRun : null;
+    const steps = Array.isArray(payload.steps) ? payload.steps : [];
+    const history = (payload.__history || []).length;
+    const card = el('article', { className: 'card' });
+    card.append(el('div', { className: 'card-head' }, [
+      el('span', { className: 'id', text: `${domain}/${key} v${String(payload.version ?? 1)}` }),
+      el('span', { className: 'title', text: String(payload.title ?? key) }),
+      el('span', { className: `badge ${status}`, text: STATUS[status] || status }),
+    ]));
+    card.append(el('div', { className: 'facts' }, [
+      el('span', {}, [document.createTextNode('执行 '), el('b', { text: String(payload.executions ?? 0) })]),
+      el('span', {}, [document.createTextNode('连续失败 '), el('b', { text: String(payload.consecutiveFailures ?? 0) })]),
+      el('span', { text: `最近结果 ${payload.lastOutcome ?? '—'}` }),
+      el('span', { text: `最近执行 ${payload.lastExecutedAt ? new Date(Number(payload.lastExecutedAt)).toLocaleString() : '—'}` }),
+      el('span', { text: `条目 ${String(payload.entryId ?? '')}` }),
+    ]));
+    if (dryRun) {
+      const passed = dryRun.passed === true;
+      card.append(el('p', {
+        className: `dry-run ${passed ? 'passed' : 'failed'}`,
+        text: `dry-run ${passed ? '通过' : '未通过'}${dryRun.reason ? `：${dryRun.reason}` : ''}`,
+      }));
+    } else {
+      card.append(el('p', { className: 'dry-run pending', text: 'dry-run 尚无结论' }));
+    }
+    if (steps.length > 0) {
+      card.append(el('ol', { className: 'steps' }, steps.map(renderStep)));
+    } else {
+      card.append(el('p', { className: 'history', text: '草案没有步骤（不应发生）。' }));
+    }
+    if (status === 'downgraded') {
+      card.append(el('p', { className: 'dry-run failed', text: '连续失败达到阈值：已降级，并提议撤销该工作流。做法条目保留。' }));
+    }
+    card.append(el('p', {
+      className: 'history',
+      text: `${history} 条账本记录；草案哈希 ${String(payload.draftHash ?? '—')}。`,
+    }));
+    return card;
+  }
+
+  async function load() {
+    const project = new URLSearchParams(location.search).get('project') || '';
+    root.replaceChildren(el('p', { className: 'empty', text: '读取中…' }));
+    try {
+      const response = await fetch(`/observatory/workflows.json${project ? `?project=${encodeURIComponent(project)}` : ''}`, { cache: 'no-store' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      projectSelect.replaceChildren(...data.projects.map((id) => {
+        const option = el('option', { value: id, text: id });
+        if (id === data.projectId) option.selected = true;
+        return option;
+      }));
+      if (data.projects.length === 0) projectSelect.append(el('option', { value: '', text: '（无）' }));
+      const latest = latestByEntry(data.workflows || []);
+      const history = new Map();
+      for (const row of data.workflows || []) {
+        const entryId = row.payload && typeof row.payload.entryId === 'string' ? row.payload.entryId : '';
+        if (!entryId) continue;
+        if (!history.has(entryId)) history.set(entryId, []);
+        history.get(entryId).push(row);
+      }
+      const cards = [...latest.values()]
+        .map((row) => {
+          const entryId = row.payload.entryId;
+          return renderCard({ ...row, payload: { ...row.payload, __history: history.get(entryId) || [] } });
+        })
+        .sort((left, right) => left.textContent.localeCompare(right.textContent));
+      root.replaceChildren(...(cards.length > 0
+        ? [el('div', { className: 'cards' }, cards)]
+        : [el('p', { className: 'empty', text: '这个项目还没有工作流。' })]));
+    } catch (error) {
+      root.replaceChildren(el('p', { className: 'error', text: `读取失败：${error instanceof Error ? error.message : String(error)}` }));
+    }
+  }
+
+  projectSelect.addEventListener('change', () => {
+    const project = projectSelect.value;
+    history.replaceState(null, '', project ? `?project=${encodeURIComponent(project)}` : location.pathname);
+    load();
+  });
+  document.getElementById('refresh').addEventListener('click', load);
+  load();
+</script>
+</body>
+</html>

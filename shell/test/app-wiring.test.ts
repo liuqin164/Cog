@@ -15,7 +15,7 @@ describe('shell wiring', () => {
         'DORMANT->WAKING:boot',
         'WAKING->IDLE:context_injected',
       ]);
-      for (const service of ['clock', 'model', 'cage', 'builtinTools', 'capture', 'recall', 'dream', 'emergence']) {
+      for (const service of ['clock', 'model', 'cage', 'builtinTools', 'workflows', 'capture', 'recall', 'dream', 'emergence']) {
         expect(shell.host.hasService(service)).toBe(true);
       }
       expect(shell.machine.runtime.lastTimeContext).toContain('<time-context>');

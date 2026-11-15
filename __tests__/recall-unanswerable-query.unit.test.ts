@@ -31,6 +31,9 @@ async function seed(backend: KernelAgentMemoryBackend): Promise<void> {
   }
 }
 
+// Each case ingests 60 real turns before it recalls. The work is 3–4 s warm and crosses bun's 5 s
+// default under a full-suite load, so the bound is the harness's, not the behaviour's; the
+// assertions are unchanged. Measured on t3/promote-228: 3.4–3.8 s warm, 5.2 s once under load.
 test('a query the memory cannot answer is not answered from a fixed window', async () => {
   const kernel = createMemoryKernel({ dbPath: join(makeTempDir('cogmem-unanswerable-'), 'memory.db'), vectorBackend: 'sqlite-vec' });
   const backend = new KernelAgentMemoryBackend(kernel);
@@ -55,7 +58,7 @@ test('a query the memory cannot answer is not answered from a fixed window', asy
   expect(unanswerableIds).not.toBe(answerableIds);
 
   kernel.close();
-});
+}, 30_000);
 
 test('a query the memory can answer still finds it', async () => {
   const kernel = createMemoryKernel({ dbPath: join(makeTempDir('cogmem-answerable-'), 'memory.db'), vectorBackend: 'sqlite-vec' });
@@ -68,7 +71,7 @@ test('a query the memory can answer still finds it', async () => {
   expect(JSON.stringify(related.items)).toContain('鲸鱼迁徙');
 
   kernel.close();
-});
+}, 30_000);
 
 test('two different questions do not return the same memories', async () => {
   const kernel = createMemoryKernel({ dbPath: join(makeTempDir('cogmem-distinct-'), 'memory.db'), vectorBackend: 'sqlite-vec' });
@@ -86,4 +89,4 @@ test('two different questions do not return the same memories', async () => {
   expect(firstIds).not.toBe(secondIds);
 
   kernel.close();
-});
+}, 30_000);

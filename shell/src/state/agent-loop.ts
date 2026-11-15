@@ -379,7 +379,15 @@ export class AgentRuntime {
     this.abortController?.abort();
   }
 
-  async run(input: { runId: string; sessionId: string; userText: string; origin?: RunOrigin; signal?: AbortSignal }): Promise<RunSummary> {
+  async run(input: {
+    runId: string;
+    sessionId: string;
+    userText: string;
+    origin?: RunOrigin;
+    signal?: AbortSignal;
+    /** Context the caller already established (a failed workflow's stop); appended after the user message. */
+    seed?: AgentMessage[];
+  }): Promise<RunSummary> {
     if (this.running) throw new Error('agent_already_running: at most one RUNNING state exists');
     this.running = true;
     const origin: RunOrigin = input.origin ?? 'user';
@@ -406,6 +414,7 @@ export class AgentRuntime {
       ? { role: 'system', content: renderRecallBlock([{ text: input.userText }]) }
       : { role: 'user', content: input.userText };
     context.append(userMessage);
+    for (const message of input.seed ?? []) context.append(message);
     // Pi fires before_agent_start before agent_start; an extension may hand back one injected message
     // (the shape the Cogmem pi extension uses for recall context).
     const beforeStart = await this.options.bus.emit('before_agent_start', {

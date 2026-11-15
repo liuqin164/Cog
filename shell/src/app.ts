@@ -10,7 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { ChannelContract, createMemoryKernel, KernelAgentMemoryBackend, type ChannelSession, type MemoryKernel } from 'cogmem';
+import { ChannelContract, createMemoryKernel, KernelAgentMemoryBackend, type ChannelSession, type MemoryKernel, type ProcedureWorkflow } from 'cogmem';
 import { TraceStore } from 'cogmem/internal';
 import { defaultShellConfig, type ShellConfig } from './config.ts';
 import { StateMachine } from './state/machine.ts';
@@ -29,6 +29,7 @@ import { webPlugin } from './plugins/web.ts';
 import { coreCommandFor, availableCoreCommand, unknownCommandReply, type CommandHost, type CommandReply } from './commands.ts';
 import { proposalPlugin } from './plugins/proposal.ts';
 import { askPlugin } from './plugins/ask.ts';
+import { WorkflowService, workflowsPlugin } from './plugins/workflows.ts';
 import { CommandProposals, executeProposal, type CommandProposal, type ProposalConfirmation } from './proposals.ts';
 import { capturePlugin } from './plugins/capture.ts';
 import { recallPlugin } from './plugins/recall.ts';
@@ -36,7 +37,7 @@ import { soulEditPlugin } from './plugins/soul-edit.ts';
 import { dreamPlugin } from './plugins/dream.ts';
 import { emergencePlugin } from './plugins/emergence.ts';
 import { terminalPlugin, TerminalChannel, type ShellControl } from './channels/terminal.ts';
-import { AgentRuntime, type ModelProvider, type RunSummary, type TurnUsage } from './state/agent-loop.ts';
+import { AgentRuntime, type AgentMessage, type ModelProvider, type RunSummary, type TurnUsage } from './state/agent-loop.ts';
 import { SecretRedactor, startKernelHttpFace, type HttpFaceHandle } from './kernel-host.ts';
 import { formatBytes, memoryPressureAction, readMemoryUsage } from './memory.ts';
 import { rotateLogFile, SERVICE_LOG_MAX_BYTES } from './log-rotation.ts';
@@ -135,6 +136,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   readonly proposals: CommandProposals;
   private runtime?: AgentRuntime;
   private cage?: RunCage;
+  private workflows?: WorkflowService;
   private clock?: ClockService;
   private dream?: { integrate(...args: [string, string, number?]): Promise<{ localDate: string; eventCount: number; sourceRefs: unknown[]; summary: string }> };
   private emergence?: {
@@ -452,6 +454,14 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.host.register(provider, this.config.model);
     this.host.register(cagePlugin(this.config.budgets, this.trace, { ...this.config.workBudget, toolWhitelist: this.config.budgets.toolWhitelist }));
     this.host.register(builtinToolsPlugin(), { workspaceRoot: this.config.workspaceRoot });
+    this.host.register(workflowsPlugin({
+      agentId: this.config.agentId,
+      projectId: this.config.projectId,
+      sessionId: this.config.sessionId,
+      workspaceRoot: this.config.workspaceRoot,
+      tools: this.host.tools,
+      prompt: (input) => this.recordPrompt(input),
+    }));
     this.host.register(webPlugin({ dataDir: this.config.dataDir }));
     this.host.register(proposalPlugin());
     this.host.register(askPlugin());
@@ -492,15 +502,13 @@ export class CompanionShell implements ShellControl, AttachShell {
     }
     this.clock = this.host.getService<ClockService>('clock');
     this.cage = this.host.getService<RunCage>('cage');
+    this.workflows = this.host.getService<WorkflowService>('workflows');
     const model = this.host.getService<ModelProvider>('model');
     this.runtime = new AgentRuntime({
       bus: this.host.bus,
       // Pi #10000: the whole prompt is durable before the model call, redacted so the log never holds a
       // secret the ledger would have stripped. The checkpoint keeps only the 500-char display copy.
-      onPrompt: ({ runId, sessionId, text }) => {
-        const marked = this.redactor.mark(text);
-        this.trace.append('run_prompt', { runId, sessionId, chars: text.length, text: marked.value, ...marked.metadata });
-      },
+      onPrompt: (input) => this.recordPrompt(input),
       tools: this.host.tools,
       provider: model,
       budget: this.cage,
@@ -685,6 +693,21 @@ export class CompanionShell implements ShellControl, AttachShell {
     }
   }
 
+  /**
+   * The durable prompt log. The model loop and a workflow run write the same record, because both
+   * are runs a restart has to be able to reconstruct.
+   */
+  private recordPrompt(input: { runId: string; sessionId: string; text: string }): void {
+    const marked = this.redactor.mark(input.text);
+    this.trace.append('run_prompt', {
+      runId: input.runId,
+      sessionId: input.sessionId,
+      chars: input.text.length,
+      text: marked.value,
+      ...marked.metadata,
+    });
+  }
+
   async submit(text: string): Promise<RunSummary | undefined> {
     if (this.machine.state === 'RUNNING') {
       this.runtime!.steer(text);
@@ -736,6 +759,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     trigger: 'message_received' | 'emergence_due',
     reason: string,
     dispatchTrigger: Trigger = trigger,
+    fallback?: { reason: string; workflow: ProcedureWorkflow; failedStep?: number },
   ): Promise<RunSummary> {
     const runId = `run-${this.now().toString(36)}-${randomUUID().slice(0, 8)}`;
     const origin = trigger === 'emergence_due' ? 'emergence' : 'user';
@@ -759,9 +783,54 @@ export class CompanionShell implements ShellControl, AttachShell {
       });
     }
     await this.machine.dispatch(dispatchTrigger, { runId, reason });
+
+    // An active workflow runs as the deterministic half of this turn. It is a normal run on the same
+    // bus and tool pipeline, so the cage and capture see it; a failure ends it at the failed step and
+    // the task falls back to the model with the failure in front of it.
+    const workflow = fallback ? undefined : this.workflows?.match(text);
+    if (workflow) {
+      let result;
+      try {
+        result = await this.workflows!.execute(workflow, { runId, userText: text });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.trace.append('workflow_execution_failed', { runId, entryId: workflow.entryId, message });
+        await this.machine.dispatch('run_error', { reason: `workflow_execution_failed: ${message}`, runId });
+        return this.executeRun(text, trigger, 'workflow_execution_failed', trigger, {
+          reason: `workflow_execution_failed: ${message}`,
+          workflow,
+        });
+      }
+      if (result.ok) {
+        this.settleAssignment(result.summary, tier, trigger);
+        await this.machine.dispatch(result.summary.stopReason, { reason: 'workflow_complete', runId });
+        this.hideAssignmentContext = false;
+        if (!this.clock!.nextPendingIntent()) this.clock!.scheduleIdleWake();
+        return result.summary;
+      }
+      await this.machine.dispatch(result.summary.stopReason, { reason: result.reason ?? 'workflow_failed', runId });
+      this.trace.append('workflow_fallback', {
+        runId,
+        entryId: workflow.entryId,
+        failedStep: result.failedStep,
+        reason: result.reason,
+      });
+      return this.executeRun(text, trigger, `workflow_failed: ${result.reason ?? 'step failed'}`, trigger, {
+        reason: result.reason ?? 'step failed',
+        workflow,
+        ...(result.failedStep !== undefined ? { failedStep: result.failedStep } : {}),
+      });
+    }
+
     let summary: RunSummary;
     try {
-      summary = await this.runtime!.run({ runId, sessionId: this.config.sessionId, userText: text, origin });
+      summary = await this.runtime!.run({
+        runId,
+        sessionId: this.config.sessionId,
+        userText: text,
+        origin,
+        ...(fallback ? { seed: [this.workflowFallbackMessage(fallback)] } : {}),
+      });
     } finally {
       this.hideAssignmentContext = false;
     }
@@ -772,6 +841,28 @@ export class CompanionShell implements ShellControl, AttachShell {
     }
     if (!this.clock!.nextPendingIntent()) this.clock!.scheduleIdleWake();
     return summary;
+  }
+
+  /**
+   * What the model sees after a workflow stopped. The workflow ran in its own run, so the failed
+   * step's tool results are not in this context; the note says which steps already succeeded instead
+   * of pretending the model can read them.
+   */
+  private workflowFallbackMessage(input: { reason: string; workflow: ProcedureWorkflow; failedStep?: number }): AgentMessage {
+    const completed = input.failedStep === undefined ? 0 : input.failedStep - 1;
+    return {
+      role: 'system',
+      content: [
+        '<workflow-fallback>',
+        `The active workflow ${input.workflow.domain}/${input.workflow.key} v${input.workflow.version} stopped`
+          + `${input.failedStep !== undefined ? ` at step ${input.failedStep}` : ''}: ${input.reason}`,
+        completed > 0
+          ? `Steps 1-${completed} already ran successfully; do not repeat them.`
+          : 'No step completed before the stop.',
+        'Continue the task with the model. The procedure entry and the workflow are unchanged by this fallback.',
+        '</workflow-fallback>',
+      ].join('\n'),
+    };
   }
 
   /**
