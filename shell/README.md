@@ -41,6 +41,32 @@ Native plugins can also be registered from the conversation: `/plugins add <pkg-
 `GET /health`'s `plugins` field report what actually loaded. A spec's module default-exports a native
 plugin (`{ name, inject?, provide?, apply }`, the host's own API in `src/plugins/host.ts`).
 
+## Web tools (#225)
+
+The resident registers three read-only tools from `src/plugins/web.ts`:
+
+- **`web_search`** — Exa's free MCP endpoint first, DuckDuckGo's HTML endpoint as fallback; either
+  can be disabled. Results over 30,000 characters are cached and paged with `web_recall`.
+- **`web_fetch`** — HTTP GET, Readability extraction, Markdown output. HTML only; it does **not**
+  execute JavaScript, so a client-rendered page returns `extract_failed` instead of a fake body.
+  PDFs, GitHub special handling and video are phase 2.
+- **`web_recall`** — read a cached `responseId` by `offset`/`limit` (at most 30,000 characters per
+  page) or `findText`. Cache entries expire after one hour.
+
+The optional `<dataDir>/web.json` turns either backend off; a missing file leaves both on:
+
+```json
+{ "search": { "exa": { "enabled": true }, "duckduckgo": { "enabled": true } } }
+```
+
+A malformed file or field is a startup error naming the path and the field. With both backends
+disabled, `web_search` returns `web_search_unavailable` naming the file and both fields.
+
+The fetch path is the trust boundary: only http/https, no embedded credentials, every resolved
+address is checked against loopback/private/link-local/reserved ranges, every redirect hop is
+revalidated (5 hops maximum), and each call has a 20-second timeout. Cache files live under
+`<dataDir>/web-cache` at 0700/0600 and are pruned to 64 entries / 32 MiB.
+
 ## Budget tiers (#222)
 
 The cage still has one enforcement mechanism — the same hook points, whitelist and forced
@@ -225,8 +251,8 @@ numbers.
 - `src/plugins/host.ts` — one registry, one bus; native Cordis-style plugins.
 - `src/plugins/load.ts` — resolves a registry spec (package or path) and registers its native plugin.
 - `src/plugins/*` — clock, recall, dream, emergence (conservative), cage, capture, the four tools,
-  command-proposals (the `propose_command` tool), mg provider. Dream, emergence and recall are plugins
-  like the rest: swap one by not loading it.
+  web search/fetch/recall, command-proposals (the `propose_command` tool), mg provider. Dream,
+  emergence and recall are plugins like the rest: swap one by not loading it.
 - `src/proposals.ts` — command proposals (spec §7): the registry the agent's tool records into, and the
   one execution entry `executeProposal`, gated on a user-confirmation event. The shell's `confirmProposal`
   is its only caller, and it dispatches through `runCommand`, never a second dispatcher.

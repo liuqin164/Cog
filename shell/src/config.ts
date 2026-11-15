@@ -129,7 +129,10 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
     // `propose_command` and `propose_soul_edit` are on the default whitelist because they are how
     // the agent offers the user a command or a soul draft; leaving them off would make every offer a
     // cage violation.
-    budgets: overrides.budgets ?? { ...autonomous, toolWhitelist: ['read', 'write', 'edit', 'bash', 'propose_command', 'propose_soul_edit'] },
+    budgets: overrides.budgets ?? {
+      ...autonomous,
+      toolWhitelist: ['read', 'write', 'edit', 'bash', 'propose_command', 'propose_soul_edit', 'web_search', 'web_fetch', 'web_recall'],
+    },
     workBudget: overrides.workBudget ?? work,
     contextSweetSpot: overrides.contextSweetSpot ?? 6_000,
     // The install's rhythm step is what fills these; the literals stay the fallback for a hand-run

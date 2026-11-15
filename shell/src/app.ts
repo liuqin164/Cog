@@ -24,6 +24,7 @@ import { ModelRouter, modelRouterPlugin, routeLine } from './model/router.ts';
 import { RouteStore, redactUrl } from './model/routes.ts';
 import { cagePlugin, RunCage, type CageTier } from './plugins/cage.ts';
 import { builtinToolsPlugin } from './plugins/builtin-tools.ts';
+import { webPlugin } from './plugins/web.ts';
 import { coreCommandFor, availableCoreCommand, unknownCommandReply, type CommandHost, type CommandReply } from './commands.ts';
 import { proposalPlugin } from './plugins/proposal.ts';
 import { CommandProposals, executeProposal, type CommandProposal, type ProposalConfirmation } from './proposals.ts';
@@ -383,6 +384,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.host.register(provider, this.config.model);
     this.host.register(cagePlugin(this.config.budgets, this.trace, { ...this.config.workBudget, toolWhitelist: this.config.budgets.toolWhitelist }));
     this.host.register(builtinToolsPlugin(), { workspaceRoot: this.config.workspaceRoot });
+    this.host.register(webPlugin({ dataDir: this.config.dataDir }));
     this.host.register(proposalPlugin());
     this.host.register(capturePlugin({ agentId: this.config.agentId, projectId: this.config.projectId, sessionId: this.config.sessionId, paused: () => this.capturePaused }));
     this.host.register(recallPlugin({ agentId: this.config.agentId, projectId: this.config.projectId, limit: 3 }));
