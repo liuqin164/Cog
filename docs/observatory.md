@@ -36,6 +36,8 @@ the read views, and is required for `/soul`.
 | `/observatory/snapshot?project=&agent=` | Nodes with coordinates plus `status` and `evidenceTotal`, per-type and per-relation counts, the arm legend, the time histogram, the agent roster, `source`, `generatedAt`, `watermark`. `topicPath` is not repeated per node: the arm is its disclosed form. In a single-agent view the per-type counts and the arms describe that view, while `nodesTotal` stays the project's own count |
 | `/observatory/node/:id?project=&agent=` | One node, its evidence locators (with the exact `cogmem memory show …` drilldown), and its one-hop neighbours. `404` when the node is outside the selected agent's view |
 | `/observatory/timeline?project=&agent=&from=&to=` | Events per day × event type |
+| `/observatory/workflows` | The procedure-workflow page: the current workflow per entry with its dry-run verdict, executions and failures, and the ledger rows behind it. |
+| `/observatory/workflows.json?project=` | The same read as JSON: every `PROCEDURE_WORKFLOW_*` row for the project, oldest first. `project` defaults to the project with the most workflow rows. |
 | `/observatory/recalls?project=&agent=&limit=` | Stored recall decisions, one per task. `available: false` when the database has no `trace_events` table — the honest answer, and not an error |
 | `/observatory/recalls/:recallId` | One decision's full payload and its parent chain. `404` when the id is outside the selected agent's view — the list is scope-filtered, so the detail has to be too |
 | `/observatory/events?project=&agent=&topic=&types=&since=` | Server-sent events from the kernel's memory event stream, `GET` only and no database connection behind it. The contract — envelope, cursor, filters, error codes — is [docs/events.md](events.md); `409`/`400` carry the same typed error the in-process subscription raises |
@@ -59,6 +61,16 @@ The revised zero-write proof is the same fingerprint method, applied to the whol
 soul `GET`: hash the database file and `-wal` before and after a full `GET`/`HEAD` traversal, then
 prove the two soul `POST`s move the fingerprint and write an audit row. Every other `POST` must still
 answer `405`.
+
+## Workflow page
+
+`/observatory/workflows` shows the procedure-workflow book (#228, item 4): the current workflow per
+entry, its status, dry-run verdict and reason, execution and consecutive-failure counts, and the
+steps with their frozen `{{task}}` / `{{workspace}}` slots. It reads the same zero-write connection
+as every other page — the rows are `memory_events` rows queried directly, so the page adds no table,
+no second book and no write. `project` defaults to the project with the most workflow rows; the page
+groups by `entryId` and keeps the latest row, exactly like `MemoryKernel.workflows.list`. The
+contract is [docs/procedure-workflows.md](procedure-workflows.md).
 
 Measured on the 20,343-event corpus (14,271 nodes, 17,596 edges): the snapshot is 3,355,038 bytes of
 JSON, 826,039 gzipped, 504 ms cold and 83 ms from cache.
