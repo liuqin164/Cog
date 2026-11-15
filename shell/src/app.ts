@@ -7,6 +7,7 @@
  * behaviour; the app decides which transition that behaviour is.
  */
 import { randomUUID } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { ChannelContract, createMemoryKernel, KernelAgentMemoryBackend, type ChannelSession, type MemoryKernel } from 'cogmem';
@@ -37,7 +38,9 @@ import { SecretRedactor, startKernelHttpFace, type HttpFaceHandle } from './kern
 import { defaultRunner } from './install/installer.ts';
 import { AttachServer, defaultSocketPath, type AttachShell } from './attach/server.ts';
 import { buildAwayReport, enqueueAway } from './presence.ts';
-import { readInstallState, readTreeVersion, serviceFileExists, treeOfThisProcess } from './upgrade/paths.ts';
+import { readInstallState, readTreeVersion, serviceFileExists, shellDirOfTree, treeOfThisProcess } from './upgrade/paths.ts';
+import { restartService, servicePath, type Platform, type ServiceSpec } from './install/service.ts';
+import { mergePluginSpecs, pluginsConfigPath, readPluginRegistry, writePluginRegistry } from './plugins/registry.ts';
 import { stageUpgradeTree } from './upgrade/stage.ts';
 import { spawnUpgradeSupervisor, type SpawnSupervisorResult } from './upgrade/spawn.ts';
 import {
@@ -64,9 +67,22 @@ import type { PresenceReport, StatusState, WorkState } from './tui/view.ts';
  */
 const UPGRADE_REPORT_GRACE_MS = 60_000;
 
+/**
+ * The plugin restart's grace. The reply to `/plugins add` (and its trace) must reach the attach
+ * socket and the log before systemd's SIGTERM takes the process down, or the user sees a command
+ * that neither answered nor left a record. Same spirit as the upgrade's handoff grace, sized for one
+ * socket write rather than a whole announcement.
+ */
+const PLUGIN_RESTART_GRACE_MS = 300;
+
+/** The findings handoff is a prompt line, not a transcript: one bounded paragraph. */
+const MAX_ASSIGNMENT_FINDINGS = 600;
+
 export interface PiPluginLoadResult {
   pluginName: string;
   status: string;
+  /** The loaded package's own version; absent when the entry could not be resolved. */
+  version?: string;
   /** Why a plugin that did not load is missing; set only for `status: 'failed'`. */
   reason?: string;
   tools: string[];
@@ -86,6 +102,8 @@ export interface CompanionShellOptions {
   terminalOutput?: NodeJS.WritableStream;
   /** Tests drive the supervisor handoff; production starts a real detached process. */
   upgradeSpawner?: (request: UpgradeRequest, requestPath: string) => Promise<SpawnSupervisorResult>;
+  /** Tests drive the plugin restart; production restarts through the service manager. */
+  restartResident?: () => void | Promise<void>;
 }
 
 export class CompanionShell implements ShellControl, AttachShell {
@@ -286,7 +304,10 @@ export class CompanionShell implements ShellControl, AttachShell {
     if (this.config.http.enabled) {
       this.http = await startKernelHttpFace(this.kernel, {
         ...this.config.http,
-        health: () => ({ state: this.machine.state }),
+        // The plugin half is read from this process's own load results, so "installed" is a fact the
+        // owner can curl instead of a claim the model makes. `results` is filled by loadPiPlugins
+        // below; the closure reads it lazily.
+        health: () => ({ state: this.machine.state, plugins: this.pluginHealth() }),
         connectedAgents: () => [this.config.agentId],
       });
       this.trace.append('http_face_started', { url: this.http.baseUrl, port: this.http.port });
@@ -351,6 +372,10 @@ export class CompanionShell implements ShellControl, AttachShell {
     }
     this.started = true;
     this.trace.append('shell_started', { state: this.machine.state, mi: this.machine.wakeIntents.length });
+    // A restart the plugin surface asked for is the one restart that continues the open assignment
+    // on its own. Deferred so the HTTP/attach faces are serving before the run begins; a kill (no
+    // request) never sets the flag, so recovery still lands in IDLE and waits.
+    this.resumeAfterRequestedRestart();
   }
 
   private async startPlugins(): Promise<void> {
@@ -1155,11 +1180,214 @@ export class CompanionShell implements ShellControl, AttachShell {
     switchRoute: (name: string) => this.switchModelRoute(name),
     sleep: () => this.sleep(),
     upgrade: (source: string) => this.upgrade(source),
+    pluginReport: () => this.pluginReport(),
+    installPlugin: (spec: string) => this.installPlugin(spec),
   };
 
   /** The palette's plugin half: the resident is the only process that holds the registry. */
   pluginCommands(): Array<{ name: string; description?: string; argumentHint?: string }> {
     return this.host.commands.list().map(({ name, description, argumentHint }) => ({ name, description, argumentHint }));
+  }
+
+  // ---- The Pi plugin install surface (#223) ---------------------------------------------------
+
+  /**
+   * `/plugins`: the registered list plus this process's load results. The registry file is re-read
+   * so a spec added since boot shows as "restart pending" instead of vanishing until the next start.
+   * The load status is the trace's own outcome, not the model's account of it.
+   */
+  pluginReport(): CommandReply {
+    const report = this.pluginReportData();
+    const lines = [
+      `Pi 适配层：${report.adapterEnabled ? '开' : '关（--no-pi 或 COGMEM_SHELL_PI_ADAPTER=off）'}`,
+      `已登记 ${report.registered.length} 个：${report.registered.length > 0 ? report.registered.join(', ') : '（空）'}`,
+    ];
+    for (const spec of report.registered) {
+      const result = report.results.find((entry) => entry.spec === spec);
+      if (!result) {
+        lines.push(`  - ${spec}：本进程未加载（启动后登记，或适配层关闭）；重启后生效`);
+        continue;
+      }
+      const parts = [
+        result.status,
+        result.version ? `v${result.version}` : '',
+        result.tools.length > 0 ? `tools=[${result.tools.join(', ')}]` : '',
+        result.reason ?? '',
+      ].filter(Boolean);
+      lines.push(`  - ${spec}：${parts.join(' · ')}`);
+    }
+    return { text: lines.join('\n'), receipt: true, data: { companion_plugins: report } };
+  }
+
+  private pluginReportData(): {
+    adapterEnabled: boolean;
+    registered: string[];
+    results: Array<{ spec: string; status: string; version?: string; reason?: string; tools: string[]; commands: string[] }>;
+  } {
+    return {
+      adapterEnabled: this.config.pi.adapterEnabled,
+      registered: mergePluginSpecs(this.config.pi.plugins, readPluginRegistry(this.config.dataDir)),
+      results: this.piPluginResults.map((entry) => ({
+        spec: entry.pluginName,
+        status: entry.status,
+        ...(entry.version ? { version: entry.version } : {}),
+        ...(entry.reason ? { reason: entry.reason } : {}),
+        tools: entry.tools,
+        commands: entry.commands,
+      })),
+    };
+  }
+
+  /** What `/health` reports: the registry this process started with, and every load's outcome. */
+  pluginHealth(): {
+    enabled: boolean;
+    registered: string[];
+    results: Array<{ spec: string; status: string; version?: string; reason?: string; tools: string[]; commands: string[] }>;
+  } {
+    return {
+      enabled: this.config.pi.adapterEnabled,
+      registered: [...this.config.pi.plugins],
+      results: this.piPluginResults.map((entry) => ({
+        spec: entry.pluginName,
+        status: entry.status,
+        ...(entry.version ? { version: entry.version } : {}),
+        ...(entry.reason ? { reason: entry.reason } : {}),
+        tools: entry.tools,
+        commands: entry.commands,
+      })),
+    };
+  }
+
+  /**
+   * `/plugins add <spec>`: append to the registry, trace the registration with its source, then
+   * restart through the service manager that already owns this process. The confirmation that this
+   * will execute third-party code is the command-proposal gate — the companion offers the command,
+   * the owner confirms it, and `runCommand` runs it exactly like a typed command.
+   */
+  async installPlugin(rawSpec: string): Promise<CommandReply> {
+    const spec = rawSpec.trim();
+    if (spec === '' || /[,\r\n]/u.test(spec)) {
+      return { text: 'invalid_plugin_spec: 包名不能为空，也不能包含逗号或换行（逗号是 COGMEM_SHELL_PI_PLUGINS 的分隔符）。', receipt: true };
+    }
+    const path = pluginsConfigPath(this.config.dataDir);
+    let registry: string[];
+    try {
+      registry = readPluginRegistry(this.config.dataDir);
+    } catch (error) {
+      return { text: `登记失败：${error instanceof Error ? error.message : String(error)}。先修好 ${path} 再试。`, receipt: true };
+    }
+    if (registry.includes(spec)) {
+      return { text: `${spec} 已经在注册表里（${path}）。本进程的加载结果见 /plugins 或 /health 的 plugins。`, receipt: true };
+    }
+    const next = [...registry, spec];
+    writePluginRegistry(this.config.dataDir, next);
+    this.trace.append('pi_plugin_registered', { spec, source: 'command', registry: path, registered: next });
+    const restart = this.schedulePluginRestart(spec);
+    return {
+      text: [
+        `已登记 ${spec} → ${path}（0600）。`,
+        restart.ok
+          ? `约 ${PLUGIN_RESTART_GRACE_MS} ms 后重启自己（${restart.detail}）；回来后 open-assignment 会续办。`
+          : `本进程没有服务管理器接管（${restart.detail}），需要手动重启常驻进程后生效。`,
+        '重启后用 /plugins 或 curl /health 核对是否真的加载。',
+      ].join('\n'),
+      receipt: true,
+    };
+  }
+
+  /**
+   * The existing restart path: a unit/plist on disk means a manager owns this process, so
+   * `restartService` stops and starts it. The reply must reach the socket first, hence the grace.
+   * Without a manager nothing here invents one — the receipt says the restart is the owner's.
+   */
+  private schedulePluginRestart(spec: string): { ok: boolean; detail: string } {
+    const target = this.serviceRestartTarget();
+    if (!target) {
+      this.trace.append('pi_plugin_restart_skipped', { spec, reason: 'no_service_manager' });
+      return { ok: false, detail: '找不到接管本进程（且指向这个数据目录）的 systemd unit / launchd plist' };
+    }
+    const assignment = this.machine.runtime.openAssignment;
+    if (assignment) {
+      this.machine.updateRuntime({ resumeAfterRestart: { assignmentId: assignment.id, at: this.now(), reason: 'plugins' } });
+    }
+    const restart = this.options.restartResident ?? (() => restartService(defaultRunner(), target.spec, target.platform));
+    this.trace.append('pi_plugin_restart_scheduled', {
+      spec,
+      service: target.spec.serviceName,
+      platform: target.platform,
+      graceMs: PLUGIN_RESTART_GRACE_MS,
+      resumeAssignmentId: assignment?.id ?? null,
+    });
+    const timer = setTimeout(() => {
+      void Promise.resolve()
+        .then(restart)
+        .catch((error) => this.trace.append('pi_plugin_restart_failed', { service: target.spec.serviceName, message: error instanceof Error ? error.message : String(error) }));
+    }, PLUGIN_RESTART_GRACE_MS);
+    (timer as { unref?: () => void }).unref?.();
+    return { ok: true, detail: `${target.platform === 'linux' ? 'systemctl --user restart' : 'launchctl kickstart -k'} ${target.spec.serviceName}` };
+  }
+
+  /** The spec the installer's unit was rendered from, rebuilt from the state it recorded. */
+  private serviceRestartTarget(): { spec: ServiceSpec; platform: Platform } | undefined {
+    const choices = readInstallState(this.config.dataDir)?.choices ?? {};
+    const platform = choices.platform ?? process.platform;
+    if (platform !== 'linux' && platform !== 'darwin') return undefined;
+    const spec: ServiceSpec = {
+      serviceName: choices.serviceName ?? 'cogmem-companion',
+      bunPath: process.execPath,
+      shellDir: shellDirOfTree(treeOfThisProcess()),
+      dataDir: this.config.dataDir,
+      workspaceRoot: this.config.workspaceRoot,
+      projectId: this.config.projectId,
+      agentId: this.config.agentId,
+      httpPort: choices.httpPort ?? this.config.http.port,
+      envFile: join(this.config.dataDir, 'env'),
+      logFile: join(this.config.dataDir, 'service.log'),
+      homeDir: process.env.HOME ?? homedir(),
+      env: {},
+    };
+    const unitPath = servicePath(spec, platform);
+    if (!existsSync(unitPath)) return undefined;
+    // The manager owns *this* process only if the unit it would restart names this data dir. A unit
+    // for another install on the same machine is not this process's manager: restarting it would
+    // take down a resident that never asked. (Found by the suite restarting the dev service from a
+    // temp data dir — the guard is the fix, not a test-only setting.)
+    try {
+      return readFileSync(unitPath, 'utf8').includes(spec.dataDir) ? { spec, platform } : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * The one automatic continuation: a restart this surface asked for. The flag is cleared before the
+   * run, so a run that dies does not restart into another resume. A kill never sets it.
+   */
+  private resumeAfterRequestedRestart(): void {
+    const request = this.machine.runtime.resumeAfterRestart;
+    if (!request) return;
+    this.machine.updateRuntime({ resumeAfterRestart: undefined });
+    const assignment = this.machine.runtime.openAssignment;
+    if (!assignment || assignment.id !== request.assignmentId) {
+      this.trace.append('assignment_resume_skipped', { assignmentId: request.assignmentId, reason: assignment ? 'assignment_replaced' : 'no_assignment' });
+      return;
+    }
+    this.trace.append('assignment_resume', { assignmentId: assignment.id, reason: request.reason, requestedAt: request.at });
+    setTimeout(() => {
+      void this.resumeAssignment(assignment.id).catch((error) =>
+        this.trace.append('assignment_resume_failed', { assignmentId: assignment.id, message: error instanceof Error ? error.message : String(error) }),
+      );
+    }, 0);
+  }
+
+  private async resumeAssignment(assignmentId: string): Promise<void> {
+    const assignment = this.machine.runtime.openAssignment;
+    if (!assignment || assignment.id !== assignmentId) return;
+    if (this.machine.state !== 'IDLE') {
+      this.trace.append('assignment_resume_skipped', { assignmentId, reason: `state:${this.machine.state}` });
+      return;
+    }
+    await this.executeRun(assignment.text, 'message_received', 'assignment_resume');
   }
 
   /**

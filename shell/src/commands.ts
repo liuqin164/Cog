@@ -51,6 +51,13 @@ export interface CommandHost {
    * exists to avoid.
    */
   upgrade(source: string): Promise<CommandReply>;
+  /** The Pi plugin registry and this process's load results — the "is it actually loaded" face. */
+  pluginReport(): CommandReply;
+  /**
+   * Register one Pi plugin spec in `<dataDir>/plugins.json` and make it effective. The restart is the
+   * existing service-manager path, not a new supervisor; without a manager the receipt says so.
+   */
+  installPlugin(spec: string): Promise<CommandReply>;
 }
 
 export interface CoreCommand {
@@ -136,6 +143,22 @@ export const CORE_COMMANDS: readonly CoreCommand[] = [
     argumentHint: '<新版目录>',
     surfaces: ['palette', 'resident', 'tui'],
     run: (host, args) => host.upgrade(args.trim()),
+  },
+  {
+    name: 'plugins',
+    description: 'Pi 插件：查看已登记 / 已加载，或登记一个（登记后重启生效）',
+    argumentHint: '[add <包名>]',
+    surfaces: ['palette', 'resident', 'tui'],
+    run(host, args) {
+      const [verb = '', ...rest] = args.trim().split(/\s+/u).filter(Boolean);
+      if (verb === 'add' || verb === 'install') {
+        const spec = rest.join(' ');
+        if (spec === '') return { text: '用法：/plugins add <包名>（例如 @llblab/pi-telegram）', receipt: true };
+        return host.installPlugin(spec);
+      }
+      if (verb !== '' && verb !== 'list') return { text: '用法：/plugins [add <包名>]', receipt: true };
+      return host.pluginReport();
+    },
   },
   {
     name: 'dream',

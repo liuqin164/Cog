@@ -103,6 +103,12 @@ export interface ShellRuntimeState {
     nextStep?: string;
   };
   /**
+   * A restart was requested by the plugin surface, and the open assignment should continue once the
+   * new process is up. Only a requested restart sets this: a kill does not, so the kill matrix's
+   * "recover to IDLE, never replay" rule is untouched.
+   */
+  resumeAfterRestart?: { assignmentId: string; at: number; reason: 'plugins' };
+  /**
    * `/pause`: while true the shell's ingest call points write nothing to the kernel. It is state, not
    * a UI toggle — a pause that a restart forgot would resume capturing behind the user's back, so it
    * lives in the checkpoint with everything else the next process must honour.
