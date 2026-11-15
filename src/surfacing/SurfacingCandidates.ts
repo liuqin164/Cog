@@ -245,7 +245,10 @@ export interface SurfacingDecisionStep {
 
 export interface SurfacingDecisionTrace {
   version: 'surfacing_candidate_decision.v1';
-  /** Exactly `steps.map(step => `${step.rule}=${step.outcome}`).join('; ')`. */
+  /**
+   * The steps joined by `; `; a gate that withheld names its code
+   * (`channel=withheld:policy`, `occasion=withheld:occasion_private_tier`).
+   */
   reason: string;
   steps: SurfacingDecisionStep[];
 }
@@ -321,6 +324,35 @@ export interface SurfacingCandidatesPorts {
 
 const TIER_RANK: Readonly<Record<SensitivityTier, number>> = { daily: 0, private: 1, high: 2 };
 const KEYCHAIN_SOURCE = 'keychain';
+
+/**
+ * The summary names a gate's withhold code, not only its binding or classification outcome (#219).
+ * The step keeps the frozen outcome (`bound`, `mismatch`, ...) so the trace still records what the
+ * binding resolved to; only the human-readable reason says the gate said no.
+ */
+function reasonOfStep(step: SurfacingDecisionStep): string {
+  if (step.rule === 'channel' && step.outcome === 'withheld') {
+    const detail = step.detail as {
+      hardWithhold?: boolean;
+      expired?: boolean;
+      policy?: Record<string, boolean>;
+      channel?: string;
+    };
+    const code = detail.hardWithhold
+      ? 'keychain'
+      : detail.policy?.[detail.channel ?? ''] === false
+        ? 'policy'
+        : detail.expired
+          ? 'expired'
+          : 'modulation';
+    return `channel=withheld:${code}`;
+  }
+  if (step.rule === 'occasion' && step.detail.decision === 'withheld') {
+    return `occasion=withheld:${String(step.detail.reason)}`;
+  }
+  return `${step.rule}=${step.outcome}`;
+}
+
 const SOURCE_RANK: Readonly<Record<SurfacingSource, number>> = {
   'prospective-memory': 0,
   'wake-intention': 1,
@@ -661,7 +693,7 @@ export class SurfacingCandidates {
         outcome: modulationOutcome,
         detail: modulationDetail(item.source, channel, typeState),
       });
-      const reason = steps.map((step) => `${step.rule}=${step.outcome}`).join('; ');
+      const reason = steps.map(reasonOfStep).join('; ');
       const decisionTrace: SurfacingDecisionTrace = { version: 'surfacing_candidate_decision.v1', reason, steps };
       const candidateId = candidateIdOf(item.source, item.sourceId);
 

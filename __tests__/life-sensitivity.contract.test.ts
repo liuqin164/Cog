@@ -116,7 +116,10 @@ describe('write marks and surfacing', () => {
       // F8 intersection: the same asked query on an unbound (public) connection is withheld.
       const publicAsked = backend.surfacingCandidates({ projectId, channel: 'asked', now, query: '' });
       expect(publicAsked.candidates.some((candidate) => candidate.candidateId.endsWith(event.eventId))).toBe(false);
-      expect(publicAsked.withheld.find((entry) => entry.candidateId.endsWith(event.eventId))?.sensitivity).toBe(sample.cells[0]);
+      const publicWithheld = publicAsked.withheld.find((entry) => entry.candidateId.endsWith(event.eventId));
+      expect(publicWithheld?.sensitivity).toBe(sample.cells[0]);
+      // The summary names the gate, not only the binding outcome (#219).
+      expect(publicWithheld?.reason).toContain('occasion=withheld:occasion_private_tier');
     }
   });
 

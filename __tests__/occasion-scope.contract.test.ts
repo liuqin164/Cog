@@ -249,6 +249,7 @@ describe('the same question decreases strictly across private, group and public'
       decision: 'withheld',
       reason: 'occasion_private_tier',
     });
+    expect(withheld.reason).toContain('occasion=withheld:occasion_private_tier');
 
     const recalled = recallEventIds(group, '咖啡');
     expect(recalled).not.toContain(privatePersonal.eventId);
@@ -292,6 +293,10 @@ describe('group withholds another person’s private material, not project-publi
     expect(text).not.toContain('喜欢喝咖啡');
     expect(text).toContain('周五开业');
     expect(recalled.decisionTrace?.suppressed).toContainEqual({ reason: 'occasion_third_party', count: 1 });
+
+    const surfaced = publicBackend.surfacingCandidates({ projectId, channel: 'asked', query: '小明', now, limit: 50 });
+    const withheld = surfaced.withheld.find((entry) => entry.candidateId.endsWith(dailyOther.eventId));
+    expect(withheld?.reason).toContain('occasion=withheld:occasion_third_party');
   });
 });
 

@@ -154,6 +154,10 @@ The step's detail carries `occasion`, `channelId` when bound, `declared` when th
 one, `mismatch`, `material`, `decision` (`allowed` or `withheld`) and the withhold `reason` when one
 applied.
 
+When the occasion rule withholds, the summary's occasion token is `occasion=withheld:<reason>`, so
+the reason string names the gate that said no. The step's `outcome` still records the binding
+(`bound`, `unbound` or `mismatch`).
+
 ## Errors (frozen)
 
 | Code | When |

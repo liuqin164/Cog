@@ -299,7 +299,7 @@ allowed in `asked`; only the `keychain` source is hard-withheld.
 | Field | Means |
 |---|---|
 | `version` | `surfacing_candidate_decision.v1`. |
-| `reason` | Exactly `steps.map(step => \`${step.rule}=${step.outcome}\`).join('; ')`. |
+| `reason` | The steps joined by `; `, each as `rule=outcome`; a gate that withheld is written `rule=withheld:<code>`, below. |
 | `steps` | The ordered decision, below. |
 
 ### Step fields (frozen)
@@ -318,12 +318,34 @@ is reconstructed from those steps, so a reader can check the candidate field by 
 - the `freshness` outcome is `upcoming`, `fresh` or `expired`, and its detail equals `freshness`;
 - the `sensitivity` outcome equals the candidate's `sensitivity`;
 - the `channel` outcome is `allowed` when the channel policy allows and `withheld` when it withheld
-  the entry; a withhold that feedback modulation caused is named by the `modulation` step;
+  the entry; the reason names the cause as `channel=withheld:<code>` (`keychain`, `policy`,
+  `expired` or `modulation`), and a withhold that feedback modulation caused is also named by the
+  `modulation` step;
 - the `occasion` outcome is `bound`, `unbound` or `mismatch`; its detail carries the resolved
-  occasion, the declared one when there was one, and the occasion rule's decision. The full table
+  occasion, the declared one when there was one, and the occasion rule's decision. When the
+  occasion rule withheld the entry, the reason's occasion token is
+  `occasion=withheld:<reason>` (`occasion_private_tier` or `occasion_third_party`). The full table
   is in `docs/occasion-scope.md`.
 - the `modulation` outcome is `none`, `throttled`, `stopped` or `not-applicable`; it is
   `not-applicable` on the `asked` channel, which feedback does not modulate.
+
+### Withhold codes
+
+A withheld entry's reason names the gate that said no, not only its binding or classification
+outcome. The `sensitivity` step already carries the tier; the `modulation` step already carries
+`throttled` or `stopped`.
+
+| Gate | Code | When |
+|---|---|---|
+| `channel` | `keychain` | A keychain mark hard-withheld the entry. |
+| `channel` | `policy` | The tier's channel policy withheld it. |
+| `channel` | `expired` | The candidate was expired on `proactive`. |
+| `channel` | `modulation` | Feedback modulation withheld it; the `modulation` step names `throttled` or `stopped`. |
+| `occasion` | `occasion_private_tier` | Private or high material outside `private`. |
+| `occasion` | `occasion_third_party` | Third-party material in `public`. |
+
+When more than one channel cause applies, the token names the first in table order
+(`keychain`, `policy`, `expired`, `modulation`); the other steps still carry their own outcomes.
 
 ### Modulation step (F7)
 
