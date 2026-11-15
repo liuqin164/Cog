@@ -1,7 +1,5 @@
 import type { MemoryGraph } from '../core/MemoryGraph.js';
 import type { Neuron } from '../types/index.js';
-import { isRecallableMemoryEvidence } from './RecallGovernance.js';
-import { matchesProjectScope } from '../topology/ProjectScope.js';
 
 export interface VectorFilterContext {
   projectId?: string;
@@ -34,15 +32,6 @@ abstract class MemoryGraphVectorFilterRule implements VectorFilterRule {
   }
 }
 
-export class WorkspaceFilter extends MemoryGraphVectorFilterRule {
-  readonly name = 'workspace';
-
-  filter(neuronIds: string[], context: VectorFilterContext): string[] {
-    if (context.projectId === undefined) return neuronIds;
-    return neuronIds.filter((id) => matchesProjectScope(context.projectId, this.neuron(id)?.metadata.projectId));
-  }
-}
-
 export class TopicFilter extends MemoryGraphVectorFilterRule {
   readonly name = 'topic';
 
@@ -54,38 +43,5 @@ export class TopicFilter extends MemoryGraphVectorFilterRule {
       if (!topicPath) return false;
       return topicPath === prefix || topicPath.startsWith(`${prefix}/`);
     });
-  }
-}
-
-export class StaleFilter extends MemoryGraphVectorFilterRule {
-  readonly name = 'stale';
-
-  filter(neuronIds: string[], context: VectorFilterContext): string[] {
-    const maxStaleMs = context.maxStaleMs ?? 90 * 24 * 60 * 60 * 1000;
-    const cutoff = context.queryTime - maxStaleMs;
-    return neuronIds.filter((id) => (this.neuron(id)?.metadata.createdAt ?? 0) >= cutoff);
-  }
-}
-
-export class StatusFilter extends MemoryGraphVectorFilterRule {
-  readonly name = 'status';
-
-  filter(neuronIds: string[], _context: VectorFilterContext): string[] {
-    return neuronIds.filter((id) => {
-      const neuron = this.neuron(id);
-      return isRecallableMemoryEvidence(neuron);
-    });
-  }
-}
-
-export class CredibilityFilter extends MemoryGraphVectorFilterRule {
-  readonly name = 'credibility';
-
-  constructor(memoryGraph: MemoryGraph, private readonly threshold = 0.3) {
-    super(memoryGraph);
-  }
-
-  filter(neuronIds: string[], _context: VectorFilterContext): string[] {
-    return neuronIds.filter((id) => (this.neuron(id)?.metadata.confidence ?? 1) >= this.threshold);
   }
 }
