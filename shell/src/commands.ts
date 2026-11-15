@@ -36,6 +36,30 @@ export interface CommandHost {
   promptCache(): { hit: number; miss: number; percent: number } | undefined;
   lastDream(): { localDate: string; eventCount: number; summary: string } | undefined;
   commitments(): Array<{ candidateId: string; title: string; status: string; updatedAt: number }>;
+  /**
+   * The kernel curator's review queue (#231): counts by status and the candidates still unsettled.
+   * Read-only; promotion and review stay on `cogmem memory govern|review`.
+   */
+  candidateQueue(): {
+    counts: {
+      candidate: number;
+      needsConfirmation: number;
+      promoted: number;
+      rejected: number;
+      superseded: number;
+      shadow: number;
+    };
+    items: Array<{
+      candidateId: string;
+      runId: string;
+      candidateType: string;
+      status: string;
+      confidence: number;
+      createdAt: number;
+      statusReason?: string;
+      promotionTargetType?: string;
+    }>;
+  };
   whyReport(): string;
   capturePaused(): boolean;
   setCapturePaused(paused: boolean): void;
@@ -163,6 +187,32 @@ export const CORE_COMMANDS: readonly CoreCommand[] = [
       const items = host.commitments();
       const fulfilled = items.filter((item) => item.status === 'completed').length;
       return { text: `承诺册 ${items.length} 条（已兑现 ${fulfilled} 条）`, data: { companion_commitments: { items } } };
+    },
+  },
+  {
+    name: 'candidates',
+    description: '内核候选队列：数量、来源与待审状态',
+    surfaces: ['palette', 'resident', 'tui'],
+    run(host) {
+      const { counts, items } = host.candidateQueue();
+      const byType = new Map<string, number>();
+      for (const item of items) byType.set(item.candidateType, (byType.get(item.candidateType) ?? 0) + 1);
+      const lines = [
+        `候选队列：待治理 ${counts.candidate} · 待确认 ${counts.needsConfirmation} · 影子 ${counts.shadow} · 已晋升 ${counts.promoted} · 已拒绝 ${counts.rejected} · 已取代 ${counts.superseded}`,
+        `来源（候选类型）：${byType.size > 0 ? [...byType].map(([type, count]) => `${type} ${count}`).join(' · ') : '无'}`,
+      ];
+      if (items.length === 0) lines.push('没有待审候选。');
+      else {
+        const unsettled = counts.candidate + counts.needsConfirmation + counts.shadow;
+        lines.push(unsettled > items.length
+          ? `未结候选 ${unsettled} 条（列出 ${items.length} 条）：`
+          : `未结候选 ${items.length} 条：`);
+        for (const item of items) {
+          const reason = item.statusReason ? ` · ${item.statusReason}` : '';
+          lines.push(`- ${item.candidateType} · ${item.status} · 置信度 ${item.confidence.toFixed(2)}${reason}`);
+        }
+      }
+      return { text: lines.join('\n'), data: { companion_candidates: { counts, items } } };
     },
   },
   {

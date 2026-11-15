@@ -27,6 +27,7 @@ export const RESERVED_CORE_COMMANDS: readonly string[] = [
   'soul',
   'memory',
   'commitments',
+  'candidates',
   'status',
   'context',
   'sleep',

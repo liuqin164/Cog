@@ -1491,6 +1491,25 @@ export class CompanionShell implements ShellControl, AttachShell {
     }
   }
 
+  candidateQueue(): ReturnType<CommandHost['candidateQueue']> {
+    const projectId = this.config.projectId;
+    return {
+      counts: this.kernel.getDreamCandidateQueue(projectId),
+      items: this.kernel
+        .listDreamCandidates({ projectId, statuses: ['candidate', 'needs_confirmation', 'shadow'], limit: 50 })
+        .map((candidate) => ({
+          candidateId: candidate.candidateId,
+          runId: candidate.runId,
+          candidateType: candidate.candidateType,
+          status: candidate.status,
+          confidence: candidate.confidence,
+          createdAt: candidate.createdAt,
+          statusReason: candidate.statusReason,
+          promotionTargetType: candidate.promotionTargetType,
+        })),
+    };
+  }
+
   // ---- Memory sovereignty entry points (#232): three commands over F9's face. ----
 
   forgetPreview(start: number, end: number): CommandReply {
@@ -1821,6 +1840,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     promptCache: () => this.promptCache,
     lastDream: () => this.lastDreamProduct(),
     commitments: () => this.commitments(),
+    candidateQueue: () => this.candidateQueue(),
     whyReport: () => this.whyReport(),
     capturePaused: () => this.capturePaused,
     setCapturePaused: (paused: boolean) => {

@@ -75,6 +75,7 @@ const TUI_OVERLAYS: Record<string, Overlay> = {
   context: { kind: 'context' },
   dream: { kind: 'dream' },
   commitments: { kind: 'commitments' },
+  candidates: { kind: 'info', title: '候选' },
   soul: { kind: 'info', title: 'soul' },
   memory: { kind: 'info', title: 'memory' },
   model: { kind: 'info', title: 'model' },
