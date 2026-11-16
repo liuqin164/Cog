@@ -13,6 +13,7 @@
  * One table is the fix this codebase keeps.
  */
 import { readSoul } from './install/soul.ts';
+import { laneReportLines, type LaneAssemblyView } from './state/session-lanes.ts';
 
 export type CommandSurface = 'palette' | 'resident' | 'tui';
 
@@ -28,6 +29,8 @@ export interface CommandHost {
   config(): { dbPath: string; agentId: string; contextSweetSpot: number };
   lifecycle(): { state: string; seq: number; costDayTokens: number };
   contextTokens(): number;
+  /** The newest six-lane assembly; `undefined` before the first request of the process. */
+  contextLanes(): LaneAssemblyView | undefined;
   /**
    * The provider-reported prompt-cache account for the run in flight (#165 round 21); `undefined`
    * when no provider reported a cache field. Never filled from round 17's estimate: the estimate is
@@ -229,7 +232,10 @@ export const CORE_COMMANDS: readonly CoreCommand[] = [
     description: '上下文车道构成',
     surfaces: ['palette', 'resident', 'tui'],
     run(host) {
-      const lines = [`当前组装上下文约 ${host.contextTokens()} token（甜点带宽 ${host.config().contextSweetSpot}）。本壳未接入 F14 车道控制器。`];
+      const lanes = host.contextLanes();
+      const lines = lanes
+        ? laneReportLines(lanes, host.contextTokens())
+        : [`目标带宽 ${host.config().contextSweetSpot} token，尚无车道组装记录：发一条消息后再看。`];
       const cache = host.promptCache();
       // Only a provider-reported account earns a line. With nothing reported there is none, because
       // "0%" is a claim the provider never made.

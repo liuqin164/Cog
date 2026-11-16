@@ -10,6 +10,7 @@
 import { type RenderEnv, type Row, cellWidth, seg } from './frame.ts';
 import { renderMarkdown } from './markdown.ts';
 import type { CommandProposal } from '../proposals.ts';
+import type { LaneAssemblyView } from '../state/session-lanes.ts';
 
 export type Lifecycle = 'DORMANT' | 'WAKING' | 'IDLE' | 'RUNNING' | 'DREAMING' | 'SUSPENDED';
 
@@ -33,6 +34,8 @@ export interface StatusState {
   showWorkspace: boolean;
   contextTokens: number;
   contextSweetSpot: number;
+  /** The newest six-lane assembly; `null` until a request has been assembled. */
+  contextLanes?: LaneAssemblyView | null;
   /**
    * The provider's own prompt-cache account for the run in flight (#165 round 21). `null` when the
    * provider reported no cache field, and null is drawn as nothing: a provider that never reports

@@ -13,6 +13,15 @@ import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
 const NO_DREAM = { runKernelNight: false, maxEpisodes: 5, windowStartHour: 3, windowEndHour: 3 };
 const asText = (messages: Array<{ content: unknown }> | undefined) => (messages ?? []).map((message) => String(message.content)).join('\n');
 
+/** One lane's rendered bytes: its `[lane]` header up to the next lane header. */
+const laneBlock = (text: string, lane: string): string => {
+  const start = text.indexOf(`[${lane}]`);
+  if (start < 0) return '';
+  const rest = text.slice(start + lane.length + 2);
+  const next = rest.search(/\n\[[a-z_]+\]/);
+  return next < 0 ? rest : rest.slice(0, next);
+};
+
 describe('context continuity', () => {
   test('A1: a second run carries the recent turns of the first (tail lane)', async () => {
     const provider = new ScriptedProvider([{ text: '好的，我先看回滚逻辑。', toolCalls: [] }, { text: '继续。', toolCalls: [] }]);
@@ -40,8 +49,16 @@ describe('context continuity', () => {
       const third = asText(provider.calls[2].messages);
       expect(third).toContain('第二轮：部署窗口是周二');
       expect(third).toContain('收到二。');
-      expect(third).not.toContain('第一轮：回滚逻辑要看旧版本');
-      expect(third).not.toContain('收到一。');
+      // Ruling on #249 (comment 6910745618): with tailTurns=2 the first turn leaves the verbatim
+      // tail and lands in the digest. docs/session-context.md freezes the digest entry's `text` as
+      // the ledger row's exact text, never a summary, so the cut is carried verbatim instead of
+      // silently disappearing. The old assertion ("the whole request excludes round 1") had encoded
+      // the stopgap's silent loss as the contract; A1's real guarantee is that the tail stays
+      // bounded *and* the evicted turn remains readable, verbatim, in the digest.
+      expect(laneBlock(third, 'tail')).not.toContain('第一轮：回滚逻辑要看旧版本');
+      expect(laneBlock(third, 'tail')).not.toContain('收到一。');
+      expect(laneBlock(third, 'digest')).toContain('第一轮：回滚逻辑要看旧版本');
+      expect(laneBlock(third, 'digest')).toContain('收到一。');
     } finally {
       await shell.stop();
     }
