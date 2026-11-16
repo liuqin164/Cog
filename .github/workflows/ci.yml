@@ -29,3 +29,6 @@ jobs:
       # never sees it. Its suite is a second gate with its own lockfile and its own preload.
       - run: cd shell && bun install --frozen-lockfile
       - run: cd shell && bun test test
+      # A server left running is invisible to the test runner: every test passes while
+      # the process keeps its port and memory. Check after both suites (#244).
+      - run: bun run leak:check
