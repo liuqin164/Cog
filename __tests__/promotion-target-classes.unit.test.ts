@@ -162,7 +162,11 @@ test('every promotion target a real curator writes falls in a class the docs nam
     expect(doc).toContain('memory/auditability');
   }
 
-  const observedTypes = [...new Set(observed.map((item) => item.targetType).filter((type): type is string => Boolean(type)))];
+  // Only promoted rows have a promotion target; a `needs_confirmation` row still names the type it
+  // would become, and that type is not one of the three id classes.
+  const promoted = observed.filter((item) => item.status === 'promoted');
+  const observedTypes = [...new Set(promoted.map((item) => item.targetType).filter((type): type is string => Boolean(type)))];
+  expect(promoted.length).toBeGreaterThanOrEqual(5);
   expect(observedTypes.length).toBeGreaterThanOrEqual(5);
   for (const type of observedTypes) {
     expect(`${type} ${candidatesSection.includes(type)}`).toBe(`${type} true`);

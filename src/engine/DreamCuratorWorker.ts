@@ -662,13 +662,16 @@ export class DreamCuratorWorker {
           continue;
         }
 
+        const requiresReview = isUserOwnedDurableProviderBucket(bucket) && status !== 'shadow';
         candidates.push({
           candidateType,
-          status,
+          status: requiresReview ? 'needs_confirmation' : status,
+          ...(requiresReview ? { statusReason: 'llm_inference_requires_user_review' } : {}),
           confidence: clampConfidence(record.confidence, 0.68),
           content: {
             ...record,
             source: 'llm_dream_curator_candidate',
+            sourceType: 'llm_inference',
             governance: 'candidate_only_cpu_governance_required',
             projectId: authoritativeProjectId || events[0]?.projectId,
             ...(typeof record.projectId === 'string' && record.projectId !== (authoritativeProjectId || events[0]?.projectId)

@@ -205,7 +205,7 @@ test('dream curator can use explicit memory-model generation to create governanc
     },
   });
 
-  const candidates = kernel.listDreamCandidates({ statuses: ['candidate'], limit: 50 });
+  const candidates = kernel.listDreamCandidates({ statuses: ['candidate', 'needs_confirmation'], limit: 50 });
   const candidateTypes = candidates.map((candidate) => candidate.candidateType);
 
   expect(result.skipped).toBe(false);
@@ -220,7 +220,17 @@ test('dream curator can use explicit memory-model generation to create governanc
   expect(candidateTypes).toContain('topic_summary');
   expect(candidateTypes).toContain('temporal_fact_update');
   expect(candidateTypes).toContain('conflict_candidate');
-  expect(candidates.every((candidate) => candidate.status === 'candidate')).toBe(true);
+  // User-owned durable claims wait for `memory review`; organization candidates stay ordinary
+  // CPU-governed candidates. A model proposal never becomes durable memory on its own.
+  for (const type of ['user_preference', 'long_term_goal', 'boundary', 'failure_lesson']) {
+    const candidate = candidates.find((item) => item.candidateType === type);
+    expect(candidate?.status).toBe('needs_confirmation');
+    expect(candidate?.statusReason).toBe('llm_inference_requires_user_review');
+  }
+  expect(candidates.filter((candidate) => candidate.status === 'candidate').length).toBeGreaterThan(0);
+  const modelCandidates = candidates.filter((candidate) => JSON.stringify(candidate.content).includes('"source":"llm_dream_curator_candidate"'));
+  expect(modelCandidates.length).toBeGreaterThan(0);
+  expect(modelCandidates.every((candidate) => JSON.stringify(candidate.content).includes('"sourceType":"llm_inference"'))).toBe(true);
   expect(kernel.vectorStore.getCurrentCount()).toBe(vectorCountBefore);
   expect(JSON.stringify(candidates)).toContain('sourceAnchor');
   expect(JSON.stringify(candidates)).toContain('raw ledger');
