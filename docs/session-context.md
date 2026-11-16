@@ -56,6 +56,11 @@ The pinned lane's first item is the current soul version, read verbatim from `Me
 one assembly to the next, and a saved version is effective on the next turn. The soul's own contract
 is [docs/soul-storage.md](soul-storage.md); this face only consumes its read side.
 
+The recall lane renders inside the same `<COGMEM_RECALL_CONTEXT>` envelope as the host recall
+block, under the `[recall]` header. Each item keeps the kernel's `anchorEvent` (`evt-…`),
+`sourceLocator` and `whyMatched` fields, so the model can drill down to the ledger row instead of
+repeating a summary. An item with no resolvable event id prints no key rather than a fabricated one.
+
 ## Digest entry fields (frozen)
 
 | Field | Means |

@@ -24,10 +24,10 @@ describe('recall inside the loop', () => {
       await shell.submit('zebraplan8811 是什么');
       expect(provider.calls.length).toBe(2);
       const first = provider.calls[0].messages.map((message) => message.content).join('\n');
-      expect(first).toContain('<recall-context>');
+      expect(first).toContain('<COGMEM_RECALL_CONTEXT');
       expect(first).toContain('zebraplan8811');
       const second = provider.calls[1].messages.map((message) => message.content).join('\n');
-      expect(second).toContain('<recall-context>');
+      expect(second).toContain('<COGMEM_RECALL_CONTEXT');
       expect(second).toContain('再查下 zebraplan8811 的细节');
       expect(shell.state).toBe('IDLE');
     } finally {
@@ -65,7 +65,7 @@ describe('recall inside the loop', () => {
       expect(provider.calls.length).toBe(2);
       const second = provider.calls[1].messages.map((message) => message.content).join('\n');
       expect(second).toContain('再确认下 quartzbeacon4417');
-      expect(second).toContain('<recall-context>');
+      expect(second).toContain('<COGMEM_RECALL_CONTEXT');
       expect(second).toContain('quartzbeacon4417');
       expect(shell.state).toBe('IDLE');
     } finally {

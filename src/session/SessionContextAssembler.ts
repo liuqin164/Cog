@@ -18,6 +18,7 @@
 
 import type { SessionDigest } from './SessionDigest.js';
 import { sessionError } from './SessionErrors.js';
+import { serializeUntrustedMemory } from '../agent/UntrustedMemorySerializer.js';
 
 /** The lane order, frozen by `docs/session-context.md`. */
 export const SESSION_CONTEXT_LANES = ['pinned', 'profile', 'digest', 'working_set', 'recall', 'tail'] as const;
@@ -55,6 +56,11 @@ export interface SessionContextItem {
   id: string;
   text: string;
   sourceRefs?: string[];
+  /** The ledger event this item is anchored to, when it has one (`evt-…`). */
+  anchorEvent?: string;
+  /** The kernel's read command for the anchor's original text. */
+  sourceLocator?: string;
+  whyMatched?: string;
 }
 
 export interface AssembleSessionContextInput {
@@ -235,7 +241,31 @@ function buildLanes(input: AssembleSessionContextInput, digest: SessionDigest): 
 
 function renderLane(lane: SessionContextLaneName, items: SessionContextItem[]): string {
   if (items.length === 0) return '';
+  if (lane === 'recall') return renderRecallLane(items);
   return [`[${lane}]`, ...items.map((item) => `- ${item.text}`)].join('\n');
+}
+
+/**
+ * The recall lane is the kernel's recall block, not a second envelope: the same
+ * `COGMEM_RECALL_CONTEXT` tag and the same drill-down field names a host adapter reads. The keys
+ * are the ledger's own event id and locator; an item with neither prints no key line rather than
+ * inventing an id that will not resolve.
+ */
+function renderRecallLane(items: SessionContextItem[]): string {
+  const lines = [
+    '<COGMEM_RECALL_CONTEXT volatile="true" persistence="forbidden" lifecycle="current_turn_only" source="cogmem">',
+    '[recall]',
+  ];
+  for (const item of items) {
+    lines.push(`- ${item.text}`);
+    const keys: string[] = [];
+    if (item.anchorEvent) keys.push('anchorEvent=' + serializeUntrustedMemory(item.anchorEvent, 160));
+    if (item.whyMatched) keys.push('whyMatched=' + serializeUntrustedMemory(item.whyMatched, 180));
+    if (item.sourceLocator) keys.push('sourceLocator=' + serializeUntrustedMemory(item.sourceLocator, 500));
+    if (keys.length > 0) lines.push('  ' + keys.join('; '));
+  }
+  lines.push('</COGMEM_RECALL_CONTEXT>');
+  return lines.join('\n');
 }
 
 function renderStub(lane: SessionContextLaneName, count: number): string {

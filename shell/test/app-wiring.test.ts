@@ -126,7 +126,7 @@ describe('shell wiring', () => {
       await second.submit('我刚才说的那家店有什么特征？');
       const firstPrompt = provider.calls[0].messages.map((message) => message.content).join('\n');
       // The memory half: recall from the same database brings the earlier turn back into the prompt.
-      expect(firstPrompt).toContain('<recall-context>');
+      expect(firstPrompt).toContain('<COGMEM_RECALL_CONTEXT');
       expect(firstPrompt).toContain('蓝色遮阳篷');
       expect(second.state).toBe('IDLE');
       expect(second.trace.read().some((record) => record.kind === 'illegal_transition')).toBe(false);
