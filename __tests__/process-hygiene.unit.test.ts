@@ -42,6 +42,16 @@ describe('process hygiene', () => {
     }
   });
 
+  test('every test file that starts a server registers its cleanup', () => {
+    const offenders: string[] = [];
+    for (const file of readdirSync(join(coreRoot, '__tests__')).filter((name) => name.endsWith('.test.ts'))) {
+      const source = readText(join(coreRoot, '__tests__', file));
+      if (!/\bstartServer\s*\(/.test(source)) continue;
+      if (!/\bkillTrackedServers\b/.test(source)) offenders.push(`__tests__/${file}`);
+    }
+    expect(offenders).toEqual([]);
+  });
+
   test('every shell script that backgrounds the resident kills it on exit', () => {
     const offenders: string[] = [];
 
