@@ -45,6 +45,12 @@ export class ModelRouter implements ModelProvider {
     return this.activeName;
   }
 
+  /** The active route's context budget; a route without one inherits the built-in route's. */
+  get targetTokens(): number | undefined {
+    const route = this.routes().find((entry) => entry.name === this.activeName);
+    return route?.targetTokens ?? this.options.builtin.targetTokens;
+  }
+
   routes(): ModelRoute[] {
     return [this.options.builtin, ...this.options.store.list().filter((route) => route.name !== BUILTIN_ROUTE_NAME)];
   }

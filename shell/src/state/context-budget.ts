@@ -10,12 +10,17 @@
  * context gauge reports, so it is measured where the request is built, not accumulated from events.
  *
  * This is a shell rule, not a Pi mechanism: Pi has no request-accounting hook, and its own estimate
- * omits tool schemas because the provider's usage already pays for them.
+ * omits tool schemas because the provider's usage already pays for them. When the provider reports
+ * the prompt it actually charged, that number calibrates the next request's estimate: a tokenizer
+ * that counts twice as many tokens as chars/4 must not leave the budget gauge half the real size.
  */
 import type { AgentMessage } from './agent-loop.ts';
 
-/** Pi's conservative heuristic (`compaction.js:201`). Replace when a trim decision needs real counts. */
+/** Pi's conservative heuristic (`compaction.js:201`), calibrated against provider usage below. */
 const CHARS_PER_TOKEN = 4;
+
+/** A reported/estimated deviation smaller than this is measurement noise, not a tokenizer change. */
+export const CONTEXT_CALIBRATION_THRESHOLD = 0.2;
 
 export interface ToolDeclaration {
   name: string;
@@ -32,6 +37,13 @@ export interface ContextAccount {
   /** How many messages the projection holds, for the trace to say what the number is made of. */
   messages: number;
   byRole: Record<AgentMessage['role'], number>;
+}
+
+export interface ContextCalibration {
+  factor: number;
+  estimated: number;
+  actual: number;
+  adjusted: boolean;
 }
 
 /** Pi's `estimateTokens` for the shell's message shape: content, tool-call arguments, loadout deltas. */
@@ -77,4 +89,51 @@ export function accountRequest(input: {
     messages: input.messages.length,
     byRole,
   };
+}
+
+/**
+ * The provider's reported prompt count divided by the chars/4 estimate, kept per model. The first
+ * request of a model runs at factor 1; after a report deviates by more than the threshold, the next
+ * request is measured through the new factor. A within-threshold report leaves the factor alone, so
+ * a single noisy turn does not move the budget.
+ */
+export class ContextCalibrator {
+  private readonly factors = new Map<string, number>();
+
+  factor(model: string): number {
+    return this.factors.get(model) ?? 1;
+  }
+
+  calibrate(model: string, account: ContextAccount): ContextAccount {
+    const factor = this.factor(model);
+    if (factor === 1) return account;
+    const scale = (tokens: number) => Math.round(tokens * factor);
+    const systemTokens = scale(account.systemTokens);
+    const toolTokens = scale(account.toolTokens);
+    const messageTokens = scale(account.messageTokens);
+    return {
+      totalTokens: systemTokens + toolTokens + messageTokens,
+      systemTokens,
+      toolTokens,
+      messageTokens,
+      messages: account.messages,
+      byRole: {
+        user: scale(account.byRole.user),
+        assistant: scale(account.byRole.assistant),
+        tool: scale(account.byRole.tool),
+        system: scale(account.byRole.system),
+      },
+    };
+  }
+
+  observe(model: string, estimated: number, actual: number | undefined): ContextCalibration | undefined {
+    if (actual === undefined || actual <= 0 || estimated <= 0) return undefined;
+    const factor = this.factor(model);
+    const corrected = Math.round(estimated * factor);
+    const deviation = Math.abs(actual - corrected) / Math.max(1, corrected);
+    if (deviation <= CONTEXT_CALIBRATION_THRESHOLD) return undefined;
+    const next = actual / estimated;
+    this.factors.set(model, next);
+    return { factor: next, estimated, actual, adjusted: true };
+  }
 }

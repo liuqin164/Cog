@@ -20,6 +20,11 @@ export interface ModelRoute {
   baseUrl: string;
   apiKey: string;
   model: string;
+  /**
+   * The context sweet spot for this model, in the provider's tokens. C3 (#258) fills the per-model
+   * value; until then the built-in route falls back to the shell's `contextSweetSpot`.
+   */
+  targetTokens?: number;
 }
 
 /** The built-in route's fixed name; a stored route may not shadow it. */
@@ -41,10 +46,18 @@ export interface RouteSummary {
   model: string;
   hasKey: boolean;
   builtin: boolean;
+  targetTokens?: number;
 }
 
 export function summarizeRoute(route: ModelRoute, builtin = false): RouteSummary {
-  return { name: route.name, baseUrl: route.baseUrl, model: route.model, hasKey: route.apiKey !== '', builtin };
+  return {
+    name: route.name,
+    baseUrl: route.baseUrl,
+    model: route.model,
+    hasKey: route.apiKey !== '',
+    builtin,
+    ...(route.targetTokens === undefined ? {} : { targetTokens: route.targetTokens }),
+  };
 }
 
 function asRoute(value: unknown): ModelRoute | undefined {
@@ -55,7 +68,14 @@ function asRoute(value: unknown): ModelRoute | undefined {
   const model = typeof record.model === 'string' ? record.model.trim() : '';
   const apiKey = typeof record.apiKey === 'string' ? record.apiKey : '';
   if (name === '' || baseUrl === '' || model === '') return undefined;
-  return { name, baseUrl, apiKey, model };
+  const targetTokens = Number(record.targetTokens);
+  return {
+    name,
+    baseUrl,
+    apiKey,
+    model,
+    ...(Number.isInteger(targetTokens) && targetTokens > 0 ? { targetTokens } : {}),
+  };
 }
 
 /** Replace every occurrence of a known secret with `***`; short values are left alone (not keys). */

@@ -42,7 +42,10 @@ export interface ShellConfig {
   /** IANA time zone for the time context and the dream window. */
   timeZone: string;
   model: { baseUrl: string; apiKey: string; model: string; timeoutMs: number };
-  /** The context bandwidth gauge's denominator (spec §6's "甜点带宽"); F14 has no controller yet. */
+  /**
+   * The built-in route's context sweet spot (spec §6's "甜点带宽"). C3 (#258) fills the per-model
+   * value into a route; until then this is the fallback every route without a `targetTokens` uses.
+   */
   contextSweetSpot: number;
   /** Recent turns kept verbatim in every request's tail lane (#245). */
   tailTurns: number;

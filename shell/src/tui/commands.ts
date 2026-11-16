@@ -5,6 +5,7 @@
  */
 import { cellWidth, compactNumber, formatWakeAt, seg, truncate, type RenderEnv, type Row } from './frame.ts';
 import { CORE_COMMANDS, availableCoreCommand, coreCommandFor, unknownCommandReply } from '../commands.ts';
+import { laneReportLines } from '../state/session-lanes.ts';
 import { LIFECYCLE_WORD, type Overlay, type TuiView } from './view.ts';
 
 export interface TuiCommand {
@@ -159,17 +160,19 @@ function statusLines(view: TuiView): string[] {
 
 function contextLines(view: TuiView): string[] {
   const status = view.status;
-  const ratios = Math.round((status.contextTokens / Math.max(1, status.contextSweetSpot)) * 100);
+  const lanes = status.contextLanes;
+  const lines = lanes
+    ? laneReportLines(lanes, status.contextTokens)
+    : [
+        `当前组装上下文：约 ${compactNumber(status.contextTokens)} token（目标带宽 ${compactNumber(status.contextSweetSpot)}）`,
+        '尚无车道组装记录：发一条消息后再看。',
+      ];
   const cache = status.promptCache;
-  return [
-    `当前组装上下文：约 ${compactNumber(status.contextTokens)} token（甜点带宽 ${compactNumber(status.contextSweetSpot)}，${ratios}%）`,
-    // Reported, not estimated (#165 round 21): the line exists only when the provider sent a cache
-    // field, and it is labelled as the provider's number so the estimate above is never read as it.
-    ...(cache ? [`prompt 缓存（provider 实报）：命中 ${cache.percent}%（命中 ${compactNumber(cache.hit)} / 未命中 ${compactNumber(cache.miss)} token）`] : []),
-    '车道构成：钉死 / 画像 / 摘要 / 工作集 / 召回 / 尾巴',
-    '本壳未接入 F14 车道控制器，上面是总量估算，不是车道明细。',
-    `模型路线：${status.model}`,
-  ];
+  // Reported, not estimated (#165 round 21): the line exists only when the provider sent a cache
+  // field, and it is labelled as the provider's number so the estimate above is never read as it.
+  if (cache) lines.push(`provider 实报 prompt 缓存命中 ${cache.percent}%（命中 ${compactNumber(cache.hit)} / 未命中 ${compactNumber(cache.miss)} token）`);
+  lines.push(`模型路线：${status.model}`);
+  return lines;
 }
 
 function dreamLines(view: TuiView): string[] {

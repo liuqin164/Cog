@@ -10,7 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { ChannelContract, createMemoryKernel, KernelAgentMemoryBackend, type ChannelSession, type EmbeddingProvider, type MemoryKernel, type ProcedureWorkflow } from 'cogmem';
+import { ChannelContract, createMemoryKernel, KernelAgentMemoryBackend, type ChannelSession, type EmbeddingProvider, type MemoryKernel, type ProcedureWorkflow, type SessionContextAssembly, type SessionContextItem } from 'cogmem';
 import { ModelRegistry, TraceStore, type ModelTextUsage } from 'cogmem/internal';
 import { defaultShellConfig, type ShellConfig } from './config.ts';
 import { StateMachine } from './state/machine.ts';
@@ -42,6 +42,7 @@ import { dreamPlugin } from './plugins/dream.ts';
 import { emergencePlugin } from './plugins/emergence.ts';
 import { terminalPlugin, TerminalChannel, type ShellControl } from './channels/terminal.ts';
 import { AgentRuntime, type AgentMessage, type ModelProvider, type RunSummary, type TurnUsage } from './state/agent-loop.ts';
+import { laneAssemblyView } from './state/session-lanes.ts';
 import { SecretRedactor, startKernelHttpFace, type HttpFaceHandle } from './kernel-host.ts';
 import { formatBytes, memoryPressureAction, readMemoryUsage } from './memory.ts';
 import { rotateLogFile, SERVICE_LOG_MAX_BYTES } from './log-rotation.ts';
@@ -164,8 +165,10 @@ export class CompanionShell implements ShellControl, AttachShell {
   private modelLabel = 'unknown';
   /** Present only when this process built its own provider; an injected test provider has no routes. */
   private modelRouter?: ModelRouter;
-  /** An estimate of the assembled context; the kernel has no F14 budget controller to ask. */
+  /** The request-side estimate, calibrated by the provider's reported prompt count. */
   private contextTokenEstimate = 0;
+  /** The newest six-lane assembly; `/context` and the TUI read this, not a second accounting. */
+  private lastLaneAssembly?: SessionContextAssembly;
   /** The latest project event the compiled books were last brought up to. */
   private compiledThroughEventId?: string;
   /** Whether a soul-read failure has been traced; the read itself is retried on the next turn. */
@@ -579,7 +582,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     if (!provider) {
       this.modelRouter = new ModelRouter({
         store: new RouteStore(join(this.config.dataDir, 'routes.json')).load(),
-        builtin: { name: 'mg', baseUrl: this.config.model.baseUrl, apiKey: this.config.model.apiKey, model: this.config.model.model },
+        builtin: { name: 'mg', baseUrl: this.config.model.baseUrl, apiKey: this.config.model.apiKey, model: this.config.model.model, targetTokens: this.config.contextSweetSpot },
         timeoutMs: this.config.model.timeoutMs,
       });
       // A routes file that did not parse is a real problem the user must see, but it must not stop the
@@ -609,14 +612,21 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.host.register(assignmentPlugin());
     this.host.register(hygienePlugin());
     this.host.register(capturePlugin({ agentId: this.config.agentId, projectId: this.config.projectId, sessionId: this.config.sessionId, paused: () => this.capturePaused }));
-    // Before recall: the tail sits before the newest user line, the recall block after it, so the
-    // two lanes stay independently placeable (#245 A1 / #247 A3).
     this.host.register(sessionContextPlugin({
       agentId: this.config.agentId,
       projectId: this.config.projectId,
       sessionId: this.config.sessionId,
-      targetTokens: this.config.contextSweetSpot,
+      targetTokens: () => this.targetTokens(),
       tailTurns: this.config.tailTurns,
+      pinned: () => this.lanePinned(),
+      profile: () => this.laneProfile(),
+      openLoops: () => this.laneOpenLoops(),
+      variablePrompt: () => this.systemPromptSections().tail,
+      onAssembly: (assembly) => {
+        this.lastLaneAssembly = assembly;
+        this.emitStatus();
+      },
+      recallLimit: 3,
     }));
     this.host.register(recallPlugin({ agentId: this.config.agentId, projectId: this.config.projectId, limit: 3 }));
     this.host.register(soulEditPlugin());
@@ -693,6 +703,7 @@ export class CompanionShell implements ShellControl, AttachShell {
         this.contextTokenEstimate = account.totalTokens;
         this.emitStatus();
       },
+      contextLanes: () => (this.lastLaneAssembly ? laneAssemblyView(this.lastLaneAssembly) : undefined),
     });
     this.modelLabel = `${this.host.getService<ModelProvider>('model').name}/${model.model}`;
     this.attachWorkListeners();
@@ -795,7 +806,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   }
 
   /**
-   * F14's open-item lane, on the prompt's existing variable-tail seam. A budget stop writes where it
+   * The open assignment as the `working_set` lane's first open loop. A budget stop writes where it
    * stopped and what is next; the next run (user or autonomous wake) reads it verbatim, so the work
    * does not restart from the same file read.
    */
@@ -832,6 +843,46 @@ export class CompanionShell implements ShellControl, AttachShell {
   systemPrompt(): string {
     const { pinned, tail } = this.systemPromptSections();
     return [pinned, tail].filter(Boolean).join('\n\n');
+  }
+
+  /** The active model route's sweet spot, with the shell config as the built-in route's value. */
+  private targetTokens(): number {
+    return this.modelRouter?.targetTokens ?? this.config.contextSweetSpot;
+  }
+
+  /** The stable pinned lane: the soul and the shell's rules, split into renderable paragraphs. */
+  private lanePinned(): string[] {
+    return this.systemPromptSections().pinned.split('\n\n').filter(Boolean);
+  }
+
+  /** The compiled profile's current entries, one renderable line per entry. */
+  private laneProfile(): string[] {
+    try {
+      return this.kernel.profile
+        .entries({ projectId: this.config.projectId })
+        .map((entry) => `${entry.ledger}/${entry.key}: ${entry.value}`);
+    } catch (error) {
+      this.trace.append('profile_lane_failed', { message: error instanceof Error ? error.message : String(error) });
+      return [];
+    }
+  }
+
+  /** The open loops that must survive a restart: the open assignment and unconsumed wake intents. */
+  private laneOpenLoops(): SessionContextItem[] {
+    const items: SessionContextItem[] = [];
+    const assignment = this.machine.runtime.openAssignment;
+    const assignmentText = this.openAssignmentBlock();
+    if (assignment && assignmentText) {
+      items.push({ id: `assignment:${assignment.id}`, text: assignmentText });
+    }
+    for (const intent of this.machine.wakeIntents) {
+      if (intent.consumedAt) continue;
+      items.push({
+        id: `wake:${intent.id}`,
+        text: `wake intent: ${intent.reason} (scheduled ${new Date(intent.at).toISOString()})`,
+      });
+    }
+    return items;
   }
 
   /**
@@ -1620,7 +1671,8 @@ export class CompanionShell implements ShellControl, AttachShell {
       workspace: this.config.workspaceRoot,
       showWorkspace: true,
       contextTokens: this.contextTokenEstimate,
-      contextSweetSpot: this.config.contextSweetSpot,
+      contextSweetSpot: this.targetTokens(),
+      contextLanes: this.lastLaneAssembly ? laneAssemblyView(this.lastLaneAssembly) : null,
       promptCache: this.promptCache ?? null,
       costTokens: this.machine.runtime.costDayDate === today ? this.machine.runtime.costDayTokens ?? 0 : 0,
       timeZone: this.config.timeZone,
@@ -2164,6 +2216,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     config: () => this.config,
     lifecycle: () => ({ state: this.machine.state, seq: this.machine.seq, costDayTokens: this.machine.runtime.costDayTokens ?? 0 }),
     contextTokens: () => this.contextTokenEstimate,
+    contextLanes: () => (this.lastLaneAssembly ? laneAssemblyView(this.lastLaneAssembly) : undefined),
     promptCache: () => this.promptCache,
     lastDream: () => this.lastDreamProduct(),
     commitments: () => this.commitments(),
