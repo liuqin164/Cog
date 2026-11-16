@@ -32,6 +32,7 @@
 import { createHash } from 'node:crypto';
 
 import { profileCues } from '../profile/ProfileCompiler.js';
+import { correctionAffects, profileCorrectionSignals } from '../profile/CorrectionSignal.js';
 import { sessionTokens } from '../session/SessionContextAssembler.js';
 import type { EventStore } from '../store/EventStore.js';
 import type { MemoryEvent, MemorySourceRef } from '../types/index.js';
@@ -112,7 +113,7 @@ export const PROCEDURE_ORIGIN_WEIGHT: Readonly<Record<ProcedureOrigin, number>> 
   imported: PROCEDURE_ORIGINS.length - 2,
 };
 
-export type ProcedureEntryStatus = 'current' | 'superseded' | 'retired';
+export type ProcedureEntryStatus = 'current' | 'superseded' | 'retired' | 'stale';
 
 export interface ProcedureSupport {
   successes: number;
@@ -247,6 +248,8 @@ interface Candidate {
   domain: string;
   key: string;
   own: boolean;
+  /** The owner corrected the claim this entry was derived from; it must not be presented as current. */
+  stale?: boolean;
   entry: Omit<ProcedureEntry, 'entryId' | 'compiledAt' | 'version' | 'status'>;
 }
 
@@ -371,8 +374,13 @@ function groupKey(domain: string, key: string): string {
   return `${domain.toLowerCase()}\u0000${key.toLowerCase()}`;
 }
 
-function sameValue(left: ProcedureEntry, right: Candidate['entry']): boolean {
+function candidateText(entry: Candidate['entry']): string {
+  return `${entry.domain} ${entry.key} ${entry.title} ${entry.steps.join(' ')} ${entry.tools.join(' ')}`;
+}
+
+function sameValue(left: ProcedureEntry, right: Candidate['entry'], stale: boolean): boolean {
   return left.title === right.title
+    && left.status === (stale ? 'stale' : 'current')
     && left.grade === right.grade
     && left.origin === right.origin
     && left.delivery === right.delivery
@@ -433,6 +441,7 @@ export class ProcedureCompiler {
     const now = input.now ?? Date.now();
     const cues = profileCues(task);
     const scored = this.currentEntries(projectId)
+      .filter((entry) => entry.status === 'current')
       .filter((entry) => cues.length === 0 || cues.some((cue) => this.searchText(entry).includes(cue)))
       .map((entry) => ({
         ...entry,
@@ -574,6 +583,16 @@ export class ProcedureCompiler {
       const title = imported.get(id)?.[0]?.descriptor.title;
       candidates.push(this.correctionCandidate(correction, title));
     }
+    const signals = profileCorrectionSignals(this.events, projectId);
+    if (signals.length > 0) {
+      for (const candidate of candidates) {
+        candidate.stale = signals.some((signal) => correctionAffects(signal, {
+          text: candidateText(candidate.entry),
+          sourceRefs: candidate.entry.sourceRefs,
+          recordedAt: candidate.entry.recordedAt,
+        }));
+      }
+    }
     return candidates;
   }
 
@@ -663,7 +682,7 @@ export class ProcedureCompiler {
     const entryId = entryIdOf(projectId, candidate.entry.domain, candidate.entry.key, candidate.own);
     const group = index.get(entryId);
     const current = group?.versions[group.versions.length - 1];
-    if (current && !group?.retired && sameValue(current, candidate.entry)) return false;
+    if (current && !group?.retired && sameValue(current, candidate.entry, candidate.stale === true)) return false;
     if (current && candidate.entry.recordedAt < current.recordedAt) return false;
     const version = (current?.version ?? 0) + 1;
     const entry: ProcedureEntry = {
@@ -671,7 +690,7 @@ export class ProcedureCompiler {
       entryId,
       compiledAt: now,
       version,
-      status: 'current',
+      status: candidate.stale ? 'stale' : 'current',
     };
     this.appendVersion(projectId, entry, 'PROCEDURE_ENTRY_COMPILED');
     const next = index.get(entryId) ?? { versions: [], retired: false };
@@ -724,7 +743,7 @@ export class ProcedureCompiler {
     const out: ProcedureEntry[] = [];
     for (const group of this.entryGroups(projectId).values()) {
       const current = group.versions[group.versions.length - 1];
-      if (current && !group.retired) out.push({ ...current, status: 'current' });
+      if (current && !group.retired) out.push({ ...current });
     }
     return out;
   }
@@ -821,6 +840,6 @@ function entryFromPayload(payload: Record<string, unknown>, event: MemoryEvent):
     recordedAt: Number(payload.recordedAt ?? event.occurredAt),
     compiledAt: Number(payload.compiledAt ?? event.occurredAt),
     version: Number(payload.version ?? 1),
-    status: 'current',
+    status: payload.status === 'stale' ? 'stale' : 'current',
   };
 }

@@ -441,6 +441,8 @@ export interface MaintenanceTickResult {
     activationDecay: ActivationDecayResult;
     /** Conversations the tick judged over: their episodes are sealed for Dream (#87). */
     episodeSealing: { idleGapMs: number; idleBefore: number; sealedEpisodes: number };
+    /** Workflows whose source practice was corrected; their frozen steps stay, the status changes. */
+    workflowsMarkedStale: number;
     memoryAtlasRefresh: { documents: number; actions: number; refreshed: boolean; /** This tick was told not to run the pass. */ skipped?: boolean; errors?: Array<{ projectId: string; error: string }> };
     memoryAtlasActivationDecay: number;
     memoryAtlasAccessPruned: number;
@@ -3636,6 +3638,7 @@ export class MemoryKernel {
         'memory', 'map', ...(projectId !== undefined ? ['--project', projectId] : []), '--json'
       ], `${hotspots.length} activation hotspots remain after decay.`));
     }
+    const workflowsMarkedStale = projectId ? this.workflows.reconcileStale({ projectId, now: ranAt }) : 0;
 
     return {
       version: 'maintenance_tick.v1',
@@ -3657,6 +3660,7 @@ export class MemoryKernel {
       executed: {
         activationDecay,
         episodeSealing,
+        workflowsMarkedStale,
         memoryAtlasRefresh,
         memoryAtlasActivationDecay,
         memoryAtlasAccessPruned,
