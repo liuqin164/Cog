@@ -71,6 +71,7 @@ The state machine is derived, not stored: a clock alone never writes a row.
 | `done` | Closed by completion evidence: the agent's later word or an artifact naming the intention. |
 | `abandoned` | Closed by the agent's own abandonment or the owner's veto. |
 | `converted` | Closed because the plan became a commitment; `convertedTo` names the F16 entry. |
+| `stale` | Open, but the claim it was derived from was corrected. It is surfaced for review and excluded from the wake assembly; it is not silently closed. |
 
 ## Origins (frozen)
 
@@ -116,7 +117,7 @@ Adding a method is an additive change and does not bump the constant. Removing o
 | `agentId` | The agent whose plan this is; absent when the ledger named none (the single-agent case). |
 | `content` | The clause, quoted. Never a paraphrase. |
 | `origin` | `conversation` or `dream`. |
-| `status` | One of the four derived statuses. |
+| `status` | One of the five derived statuses. |
 | `dueAt` | The optional target instant. |
 | `wakeIntentionId` | The F2 wake intention registered by `schedule`, once. |
 | `convertedTo` | The F16 `commitmentId` this intention became, once converted. |
@@ -135,6 +136,13 @@ Adding a method is an additive change and does not bump the constant. Removing o
 | `INTENTION_OPENED` | A compile derives a plan it had not recorded, or a dream candidate is proposed. | `intentionId`, `projectId`, `agentId`, `content`, `origin`, `dueAt?`, `sourceRefs`, `openedAt`, `version` |
 | `INTENTION_UPDATED` | The agent corrects content or target time, or schedules the plan. | `intentionId`, `projectId`, `content?`, `dueAt?`, `wakeIntentionId?`, `updatedAt`, `version` |
 | `INTENTION_CLOSED` | Completion, abandonment, veto or conversion lands. | `intentionId`, `projectId`, `status`, `closeReason`, `closedAt`, `sourceRefs`, `convertedTo?`, `vetoEventId?`, `version` |
+
+## Correction propagation (#242)
+
+An open plan whose content or source evidence is about a claim the owner corrected is derived as
+`stale` on every read. `list` shows it for review; `activeForAgent` omits it, so a corrected plan no
+longer enters the wake assembly. The row is not rewritten and no close is invented: the profile
+correction is the audit, and the plan can still be explicitly closed or vetoed.
 
 ## Consumption
 

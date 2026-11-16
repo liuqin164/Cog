@@ -78,7 +78,7 @@ release checklist or a safety procedure is marked `checklist: true` in its descr
 | Method | Writes | Does |
 |---|---|---|
 | `compile` | entry versions + a book receipt | Derive entries from the evidence and append a version per changed entry. Idempotent. |
-| `entries` | — | Current entries, one per (domain, key, origin class). |
+| `entries` | — | The newest version per entry, one per (domain, key, origin class); `stale` rows are included for review. |
 | `recall` | — | Entries cue-matched against the task description, ranked by the frozen score; checklist entries whose domain is hit are always returned. |
 | `assembleTask` | — | The start-of-work projection: procedures by task plus the owner's preferences on the same task, fitted to `targetTokens` unless a checklist entry says otherwise. |
 | `audit` | — | Every procedure row for the project, oldest first. |
@@ -103,7 +103,7 @@ Adding a method is an additive change and does not bump the constant. Removing o
 | `recordedAt` | When the latest evidence behind this version was recorded — the decay clock. |
 | `compiledAt` | When this version was written. |
 | `version` | 1 for the first version, +1 per later one. |
-| `status` | `current`, `superseded`, or `retired` when a recompile no longer derives the key. |
+| `status` | `current`, `superseded`, `stale` when the claim it was derived from was corrected, or `retired` when a recompile no longer derives the key. |
 
 ## Book events (frozen)
 
@@ -112,6 +112,19 @@ Adding a method is an additive change and does not bump the constant. Removing o
 | `PROCEDURE_ENTRY_COMPILED` | A compile derives a value that changed. | `entryId`, `projectId`, `domain`, `key`, `title`, `steps`, `tools`, `grade`, `origin`, `delivery`, `support`, `sourceRefs`, `recordedAt`, `compiledAt`, `version` |
 | `PROCEDURE_ENTRY_RETIRED` | A full recompile no longer derives the key. | The same, carrying the value the entry had. |
 | `PROCEDURE_BOOK_RECOMPILED` | A compile finishes. | `projectId`, `entries`, `written`, `compiledAt` |
+
+## Correction propagation (#242)
+
+The owner's correction is one act, not a profile-only edit. A `PROFILE_ENTRY_CORRECTED` row names the
+value it replaced (`previousValue`) and the evidence that used to support it (`previousSourceRefs`).
+On the next `compile`, an entry whose text or source evidence is about that replaced claim and whose
+latest evidence is older than the correction is written with `status: stale`. A newer experience
+after the correction wins and the entry returns to `current`; the old value is never presented as
+current in between.
+
+`entries` and `audit` show the stale row; `recall` and `assembleTask` omit it, so the old steps cannot
+be handed to a model as the plan. The stale status is a version in the same ledger, not an edit of
+history.
 
 ## Recall (frozen)
 
