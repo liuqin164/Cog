@@ -1041,6 +1041,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     if (assignment && assignmentText) {
       items.push({ id: `assignment:${assignment.id}`, text: assignmentText });
     }
+    items.push(...this.laneProcedures());
     // A constraint the task-end exit retained is not task material (#255, #263). It was already
     // classified by the kernel's own markers during the last assembly; the shell only keeps the
     // text and re-marks it, so the next assembly's protection rule is unchanged.
@@ -1056,6 +1057,45 @@ export class CompanionShell implements ShellControl, AttachShell {
       });
     }
     return items;
+  }
+
+  /**
+   * The practice lane at the start of work (#261): the task's own description is what recalls a
+   * practice, never a skill name. A `checklist` entry is carried whole and marked protected so the
+   * lane's budget rule cannot fold it into a pointer; a `recall` entry is an ordinary working-set
+   * item and may be downgraded. The book exits with the assignment at task end (#263).
+   */
+  private laneProcedures(): SessionContextItem[] {
+    const assignment = this.machine.runtime.openAssignment;
+    if (!assignment || this.hideAssignmentContext) return [];
+    try {
+      const assembly = this.backend.assembleTaskProcedures({
+        projectId: this.config.projectId,
+        task: assignment.text,
+      });
+      return assembly.items
+        .filter((item) => item.kind === 'procedure')
+        .map((item) => {
+          const anchor = item.sourceRefs[0]?.eventId;
+          return {
+            id: `procedure:${item.entryId}`,
+            text: item.text,
+            ...(item.mandatory ? { protected: true } : {}),
+            ...(anchor === undefined ? {} : {
+              sourceRefs: item.sourceRefs
+                .map((ref) => ref.eventId)
+                .filter((id): id is string => typeof id === 'string' && id !== ''),
+              anchorEvent: anchor,
+              sourceLocator: `read mem:${anchor}`,
+            }),
+          };
+        });
+    } catch (error) {
+      this.trace.append('procedure_lane_failed', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    }
   }
 
   /**

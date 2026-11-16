@@ -119,6 +119,18 @@ in `browseIds`. `SessionContextAssembly.autoExpanded` lists the stub ids that su
 request — the count is its length — and the shell carries it into the `context_assembled` trace
 (#268 reads it).
 
+## The practice lane at task start (#261)
+
+While an assignment is open, the shell asks the procedure book for practices recalled by that
+assignment's own text and adds them to `working_set` as `procedure:<entryId>` items. This is the
+same `assembleTaskProcedures` read the book publishes, so an attached embedding provider is the
+recall path; the lane does not add a lexical matcher of its own. A `checklist` entry is delivered
+whole and marked `protected`, which is what makes it non-downgradable under budget; a `recall` entry
+is an ordinary item and the lane's fold rule may replace it with its id in `browseIds`. The items
+carry the entry's ledger `sourceRefs` and `anchorEvent`, so `read mem:<eventId>` opens the evidence.
+The lane ends with the assignment at an explicit task end (#263); the book's producer is
+[docs/procedure-compilation.md](procedure-compilation.md).
+
 ## Task-exit stubs (#263)
 
 An explicit task end (`declare_task` with `action: "end"`, #246) is the only exit signal. Without
