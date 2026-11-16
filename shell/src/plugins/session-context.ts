@@ -70,6 +70,7 @@ export function sessionContextPlugin(config: SessionContextPluginConfig): Native
             workingSet: config.workingSet?.() ?? [],
             openLoops: config.openLoops?.() ?? [],
             recall,
+            recentText: recentText(messages),
           });
           config.onAssembly?.(assembly);
           pendingBlock = assembly.lanes
@@ -111,12 +112,33 @@ function newestUserText(messages: readonly AgentMessage[]): string | undefined {
   return text === '' ? undefined : text;
 }
 
+/**
+ * What a stub may be named by: the newest user message and the latest model output the request
+ * carries (#253). The model's own words are included because a run can refer back to a stub on the
+ * next request without the owner repeating the term.
+ */
+function recentText(messages: readonly AgentMessage[]): string[] {
+  const texts: string[] = [];
+  const user = newestUserText(messages);
+  if (user) texts.push(user);
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].role !== 'assistant') continue;
+    const text = messages[index].content.trim();
+    if (text !== '') {
+      texts.push(text);
+      break;
+    }
+  }
+  return texts;
+}
+
 function toContextItem(item: AgentRecallItem): SessionContextItem {
   const eventId = item.sourceAnchor?.eventId;
   const sourceLocator = item.sourceContext?.locator?.command;
   return {
     id: eventId ?? item.id,
     text: item.text,
+    ...(item.sourceContext?.event?.text === undefined ? {} : { originalText: item.sourceContext.event.text }),
     ...(eventId === undefined ? {} : { sourceRefs: [eventId], anchorEvent: eventId }),
     ...(sourceLocator === undefined ? {} : { sourceLocator }),
     ...(item.whyMatched === undefined ? {} : { whyMatched: item.whyMatched }),

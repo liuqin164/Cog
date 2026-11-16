@@ -83,6 +83,37 @@ block, under the `[recall]` header. Each item keeps the kernel's `anchorEvent` (
 `sourceLocator` and `whyMatched` fields, so the model can drill down to the ledger row instead of
 repeating a summary. An item with no resolvable event id prints no key rather than a fabricated one.
 
+## Auto-expansion (#253)
+
+A recall item is a **stub** when it carries `originalText` — the ledger text the model does not see
+because `text` is a compiled projection of it. When the request's own words name the stub, the
+assembly expands that original into `working_set` before the provider call. This is a cost
+optimisation (it removes a drill-down round trip), not a correctness fallback: the stub and its key
+stay in the recall lane either way, and nothing is written to the ledger.
+
+The match is deterministic and reads only what the stub itself carries:
+
+- its keys: `anchorEvent`, `sourceLocator`, and every `sourceRefs` entry (`evt-…`);
+- its entity words: the kernel's verbatim anchors (`digestAnchors`) — quoted spans, numbers with a
+  separator or several digits, and names introduced by 叫/名叫/名字是 — at least two characters
+  long.
+
+Both sides are normalized the way the fold/drill experiment normalized them (#254): NFKC,
+lower-case, no whitespace. No keyword list is kept: the anchor shapes are content-bearing on their
+own, so no stopword list is needed either. A single digit is dropped by the length floor, and a
+quoted span matches only as a whole, so an ordinary word that grazes it does not fire.
+
+The trigger is `recentText`: the newest user message plus the latest model output the request
+carries. An original already rendered in another lane is not expanded again, and a `protected` item
+is never expanded — a constraint is already verbatim in its lane (#255).
+
+An expansion is an ordinary `working_set` item, so the lane's budget and downgrade semantics apply.
+It is the first thing the controller gives back when the lane is over budget: the expansion is
+trimmed before an open loop or a protected item can leave the lane, and the trimmed stub's id stays
+in `browseIds`. `SessionContextAssembly.autoExpanded` lists the stub ids that survived into the
+request — the count is its length — and the shell carries it into the `context_assembled` trace
+(#268 reads it).
+
 ## Digest entry fields (frozen)
 
 | Field | Means |

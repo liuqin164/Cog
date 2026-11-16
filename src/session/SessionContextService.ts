@@ -147,6 +147,7 @@ export class SessionContextService {
           targetTokens: assembly.targetTokens,
           usedTokens: assembly.usedTokens,
           downgrades: assembly.decisionTrace,
+          autoExpanded: assembly.autoExpanded,
         },
       });
     } catch {
