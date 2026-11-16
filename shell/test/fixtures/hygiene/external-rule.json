@@ -1,0 +1,13 @@
+{
+  "kind": "rule",
+  "origin": "web",
+  "reason": "从网页文章里学到一个引用来源的规矩，先交给用户决定是否采纳。",
+  "files": [
+    {
+      "path": "rules/source-hygiene.md",
+      "content": "引用外部内容时必须注明来源，不要把别人的话当成自己的判断。\n"
+    }
+  ],
+  "diff": { "added": 2, "removed": 0, "files": 1 },
+  "rollback": "删除 rules/source-hygiene.md"
+}
