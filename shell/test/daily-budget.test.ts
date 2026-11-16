@@ -6,6 +6,10 @@ import { defaultShellConfig } from '../src/config.ts';
 import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
 
 const BASE = new Date('2026-01-01T12:00:00Z').getTime();
+/** 2026-01-02 04:00 UTC = Jan 1 23:00 in New York; Tokyo has already turned to Jan 2. */
+const NY_LATE = Date.UTC(2026, 0, 2, 4, 0, 0);
+/** 2026-01-02 05:10 UTC = Jan 2 00:10 in New York, the other side of its midnight. */
+const NY_AFTER = Date.UTC(2026, 0, 2, 5, 10, 0);
 
 function tokyoDate(at: number): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tokyo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(at));
@@ -111,6 +115,38 @@ describe('the daily budget (#233)', () => {
       await shell.submit('spend a little');
       expect(shell.machine.runtime.costDayTokens).toBe(122);
       expect(shell.trace.read().some((record) => record.kind === 'daily_budget_crossed')).toBe(true);
+    } finally {
+      await shell.stop();
+    }
+  });
+
+  test("the token day pages at the configured zone's midnight (#285)", async () => {
+    const dir = makeTempDir();
+    let now = NY_LATE;
+    const shell = makeShell(dir, undefined, { timeZone: 'America/New_York' }, { now: () => now });
+    await shell.start();
+    try {
+      shell.machine.updateRuntime({ costDayDate: '2026-01-01', costDayTokens: 900 });
+      expect(shell.currentStatus().costTokens).toBe(900);
+      now = NY_AFTER;
+      // The New York day has turned; the checkpointed count belongs to yesterday and reads as zero.
+      expect(shell.currentStatus().costTokens).toBe(0);
+    } finally {
+      await shell.stop();
+    }
+  });
+
+  test('an Asia/Tokyo install keeps the same instants on one day (#285 regression)', async () => {
+    const dir = makeTempDir();
+    let now = NY_LATE;
+    const shell = makeShell(dir, undefined, { timeZone: 'Asia/Tokyo' }, { now: () => now });
+    await shell.start();
+    try {
+      shell.machine.updateRuntime({ costDayDate: '2026-01-02', costDayTokens: 900 });
+      now = NY_AFTER;
+      // Both instants are Jan 2 in Tokyo, so New York's midnight does not turn the Tokyo day.
+      expect(tokyoDate(now)).toBe('2026-01-02');
+      expect(shell.currentStatus().costTokens).toBe(900);
     } finally {
       await shell.stop();
     }

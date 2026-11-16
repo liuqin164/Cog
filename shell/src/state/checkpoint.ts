@@ -206,10 +206,10 @@ export interface ShellRuntimeState {
   suspension?: Suspension;
   /**
    * Emergence's own ledger (#229). Counts and one-shot candidate keys live here so a restart cannot
-   * repeat yesterday's surfacing; the day is Asia/Tokyo's, independent of the display time zone.
+   * repeat yesterday's surfacing; the day is the configured project time zone's (#285).
    */
   emergence?: {
-    /** Asia/Tokyo local date the count belongs to. */
+    /** Configured local date the count belongs to. */
     day: string;
     count: number;
     lastAt?: number;
