@@ -41,7 +41,8 @@ describe('recall drill-down keys (#251 B1)', () => {
         .filter((event): event is NonNullable<typeof event> => Boolean(event));
       expect(events.some((event) => String((event.payload as { text?: unknown }).text).includes(seed))).toBe(true);
 
-      expect(text).toContain('sourceLocator=cogmem memory show --event');
+      expect(text).toContain('sourceLocator=read mem:');
+      expect(text).not.toContain('cogmem memory show');
       expect(text).toContain('whyMatched=');
     } finally {
       await shell.stop();

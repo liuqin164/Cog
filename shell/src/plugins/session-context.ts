@@ -137,7 +137,9 @@ function recentText(messages: readonly AgentMessage[]): string[] {
 
 function toContextItem(item: AgentRecallItem): SessionContextItem {
   const eventId = item.sourceAnchor?.eventId;
-  const sourceLocator = item.sourceContext?.locator?.command;
+  // The companion is one process with the kernel. Its drill-down is the builtin `read` tool, not
+  // the operator's CLI: that CLI resolves its own config and may be a different database (#277).
+  const sourceLocator = eventId === undefined ? undefined : `read mem:${eventId}`;
   return {
     id: eventId ?? item.id,
     text: item.text,
