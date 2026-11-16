@@ -1143,7 +1143,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       // here is "not yet", not "no calls". Only the settle pass may conclude there was no evidence.
       if (final) {
         this.machine.updateRuntime({ lastEndedTask: { ...pending, procedure: undefined } });
-        this.trace.append('task_procedure_skipped', { assignmentId: pending.assignmentId, reason: 'no_tool_calls' });
+        this.trace.append('task_procedure_skipped', { assignmentId: pending.assignmentId, reason: 'no_trace_evidence' });
       }
       return;
     }
@@ -3372,12 +3372,17 @@ function buildTaskStub(
 
 /**
  * The procedure's evidence, from the task's captured tool calls only (#262). One step per real
- * call, in order; the boundary tool itself is not a step of the task. No calls means no evidence —
- * the caller writes nothing rather than an empty practice. The compiler's frozen caps
- * (`MAX_STEPS` 16, `MAX_TOOLS` 8) are applied here so the trace records what was kept.
+ * call, in order, cut at the end declaration's own row: a call made after the task was declared
+ * over is not a step of it, and the boundary tool is never a step. No calls before the boundary
+ * means no evidence — the caller writes nothing rather than an empty practice. The compiler's
+ * frozen caps (`MAX_STEPS` 16, `MAX_TOOLS` 8) are applied here so the trace records what was kept.
  */
 function procedureEvidenceOf(calls: readonly SessionToolCall[]): { steps: string[]; tools: string[] } | undefined {
-  const ordered = calls.filter((call) => call.toolName !== 'declare_task');
+  const end = calls.findIndex((call) =>
+    call.toolName === 'declare_task'
+    && (call.input as { action?: unknown } | undefined)?.action === 'end');
+  if (end < 0) return undefined;
+  const ordered = calls.slice(0, end).filter((call) => call.toolName !== 'declare_task');
   if (ordered.length === 0) return undefined;
   const steps = ordered.slice(0, 16).map((call) => {
     const input = compactToolInput(call.input);

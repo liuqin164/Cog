@@ -33,15 +33,17 @@ describe('the task-end producer leaves only the real trajectory (#262)', () => {
           input: { action: 'end', domain: '发布', key: 'npm-publish', checklist: true },
         }],
       },
+      // After the declaration the run continues; this call is not a step of the task it ended.
+      { text: '顺手看一眼。', toolCalls: [{ toolCallId: 'c4', toolName: 'read', input: { path: 'notes.txt' } }] },
       { text: '收尾。', toolCalls: [] },
       {
         text: '再核一遍。',
-        toolCalls: [{ toolCallId: 'c4', toolName: 'read', input: { path: 'release.txt' } }],
+        toolCalls: [{ toolCallId: 'c5', toolName: 'read', input: { path: 'release.txt' } }],
       },
       {
         text: '这次真的做完了。',
         toolCalls: [{
-          toolCallId: 'c5',
+          toolCallId: 'c6',
           toolName: 'declare_task',
           // A model that tries to write its own steps: the input is ignored past domain/key/checklist.
           input: {
@@ -74,6 +76,7 @@ describe('the task-end producer leaves only the real trajectory (#262)', () => {
       ]);
       expect(entry!.tools).toEqual(['write', 'read']);
       expect(entry!.steps.join('\n')).not.toContain('编造的步骤');
+      expect(entry!.steps.join('\n')).not.toContain('notes.txt');
       expect(entry!.tools).not.toContain('fabricated-tool');
     } finally {
       await shell.stop();

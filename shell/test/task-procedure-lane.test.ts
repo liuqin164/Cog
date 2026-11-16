@@ -52,15 +52,16 @@ const taskAScript: ModelTurn[] = [
       input: { action: 'end', domain: '发布', key: 'npm-publish', checklist: true },
     }],
   },
+  { text: '顺手看一眼。', toolCalls: [{ toolCallId: 'c4', toolName: 'read', input: { path: 'notes.txt' } }] },
   { text: '收尾。', toolCalls: [] },
   {
     text: '再核一遍。',
-    toolCalls: [{ toolCallId: 'c4', toolName: 'read', input: { path: 'release.txt' } }],
+    toolCalls: [{ toolCallId: 'c5', toolName: 'read', input: { path: 'release.txt' } }],
   },
   {
     text: '这次真的做完了。',
     toolCalls: [{
-      toolCallId: 'c5',
+      toolCallId: 'c6',
       toolName: 'declare_task',
       input: { action: 'end', domain: '发布', key: 'npm-publish', checklist: true },
     }],
