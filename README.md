@@ -55,35 +55,59 @@ The scenario memory systems actually fail: a fact is stated, then corrected, the
 
 ## Quick Start
 
-Two install paths. They install the same thing and end on the same check; they differ only in who answers the setup questions.
-
-You are at the keyboard:
+Install the package, run the six-step companion install, then open it:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/liuqin164/Cog/main/install.sh | bash
-cogmem init
-cogmem doctor
+cogmem install
+cog
 ```
 
-An agent is installing it for you — give it this prompt and nothing else:
+The installer resolves the package from the npm registry, then runs the six-step companion install.
+
+`cogmem install` asks for the model route first. `mg` is one explicit choice — a local
+OpenAI-compatible gateway — and `openai_compatible` is any endpoint you name. Nothing is guessed on
+your behalf. An unattended install must name the whole route:
+
+```bash
+MG_API_KEY=... cogmem install --yes \
+  --provider openai_compatible \
+  --base-url https://api.example.com/openai \
+  --model your-model
+```
+
+A missing `--provider`, `--base-url` or `--model` stops the install before it touches the machine,
+naming what is missing. The key is read from `MG_API_KEY` (or `COGMEM_MODEL_KEY`), never from an
+argument. The resident's default daily ceiling is 2M tokens; a hosted endpoint bills per token, so
+point it at a plan or spend limit you are willing to pay.
+
+The installer creates the data directory, initializes an empty brain, proves the endpoint with one
+real chat call, registers the resident as a user-level service, and finishes with a first-wake
+self-check: write a probe memory, restart, recall it. Only then does it print success.
+
+What you get is the companion, not a memory library. `cog` attaches to that resident and opens the
+terminal interface; `cogmem` stays the management CLI (`doctor`, `update`, `observatory`, `memory`,
+`episode`, `dream` and the rest). Both bins live in the same package.
+
+An agent installing it for you can follow the same path — give it this prompt and nothing else:
 
 ```text
 Install cogmem on this machine by following docs/agent-install.md from the
 project repository (https://github.com/liuqin164/Cog/blob/main/docs/agent-install.md).
-Do not follow any other install guide. Report back with the `cogmem doctor`
-result and the smoke-test recall.
+Do not follow any other install guide. Report back with the `cogmem install`
+result, `cogmem doctor`, and the smoke-test recall.
 ```
 
-`init` writes `.cogmem/config.toml`; `doctor` is the gate: it answers **not installed**, **OK**, **WARN**, or **FAIL**, and always names the next step. The installer resolves the package from the npm registry and links the CLI; it never runs the wizard and never writes config. An unattended install never writes an API key, never invents a passphrase, and never spends money. What each path decides, and why, is [ADR-0003](docs/adr/0003-two-install-paths.md).
-
-Already have a JavaScript project? Install the package instead and skip the installer:
+Already have a JavaScript project? Install the package locally and run the same installer:
 
 ```bash
 npm install cogmem@latest --save
-./node_modules/.bin/cogmem init
+./node_modules/.bin/cogmem install
 ```
 
-The package ships two commands. `cogmem` is the management CLI — `init`, `doctor`, `update`, `observatory`, `memory`, `episode`, `dream` and the rest. `cog` is the product's own entry point: today it is the same dispatcher under the product's name, and the companion shell grows there.
+Working from a source checkout is the developer path, not the install path: `bun install`,
+`bun run build`, then `bun run shell/bin/install`. The published package already contains the built
+shell, so a user never needs the source tree.
 
 ## Bring your history
 

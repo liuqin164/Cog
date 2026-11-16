@@ -55,7 +55,10 @@ export async function spawnUpgradeSupervisor(
   const command = [request.bunPath, entry, '--request', requestPath];
   const env = { ...process.env, ...parseEnvFile(request.envFile) } as Record<string, string>;
 
-  if (request.serviceMode || systemdStartedThisProcess(env)) {
+  // Only a real unit needs the transient unit. A `--skip-service` resident that inherited
+  // `INVOCATION_ID` is not owned by systemd; putting its supervisor in a transient unit makes that
+  // unit's exit take the newly started resident with it (found on the 2026-11-17 rehearsal).
+  if (request.serviceMode) {
     const unit = upgradeUnitName(request.id);
     const result = await deps.run(
       'systemd-run',

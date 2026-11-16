@@ -53,7 +53,7 @@ import { readInstallState, readTreeVersion, serviceFileExists, shellDirOfTree, t
 import { restartService, servicePath, type Platform, type ServiceSpec } from './install/service.ts';
 import { pluginsConfigPath, readPluginRegistry, writePluginRegistry } from './plugins/registry.ts';
 import { loadNativePlugins, type PluginLoadResult } from './plugins/load.ts';
-import { stageUpgradeTree } from './upgrade/stage.ts';
+import { stageUpgradeTree, type StageUpgradeInput, type StagedTree } from './upgrade/stage.ts';
 import { spawnUpgradeSupervisor, type SpawnSupervisorResult } from './upgrade/spawn.ts';
 import {
   clearUpgradeRequest,
@@ -146,6 +146,8 @@ export interface CompanionShellOptions {
   terminalOutput?: NodeJS.WritableStream;
   /** Tests drive the supervisor handoff; production starts a real detached process. */
   upgradeSpawner?: (request: UpgradeRequest, requestPath: string) => Promise<SpawnSupervisorResult>;
+  /** Tests drive staging; production installs the package from npm or copies a source tree. */
+  stageUpgrade?: (input: StageUpgradeInput) => StagedTree;
   /** Tests drive the plugin restart; production restarts through the service manager. */
   restartResident?: () => void | Promise<void>;
 }
@@ -3110,13 +3112,9 @@ export class CompanionShell implements ShellControl, AttachShell {
         receipt: true,
       };
     }
-    const trimmed = source.trim();
-    if (trimmed === '') {
-      return {
-        text: '用法：/upgrade <新版目录> —— 指向一份新的 Cog 树（含 shell/ 与 src/）。升级会：旁置装新版 → 迁移前整脑快照 → 用新版迁移+自检 → 切换 → 起新版；任一步不过自动回滚旧版。',
-        receipt: true,
-      };
-    }
+    // No argument means the ordinary release path: install the next `cogmem` from npm. A directory
+    // (or a local tarball) is still accepted for developers, but it is not what a user is asked to do.
+    const trimmed = source.trim() === '' ? 'latest' : source.trim();
     const pending = readUpgradeRequest(this.config.dataDir);
     if (pending) {
       this.trace.append('upgrade_refused', { reason: 'in_flight', upgradeId: pending.id });
@@ -3125,7 +3123,7 @@ export class CompanionShell implements ShellControl, AttachShell {
 
     let staged: { tree: string; version: string };
     try {
-      staged = stageUpgradeTree({ source: trimmed, dataDir: this.config.dataDir, currentTree: treeOfThisProcess() });
+      staged = (this.options.stageUpgrade ?? stageUpgradeTree)({ source: trimmed, dataDir: this.config.dataDir, currentTree: treeOfThisProcess(), bunPath: process.execPath });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.trace.append('upgrade_stage_failed', { source: trimmed, message });

@@ -8,9 +8,10 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_SOUL, readSoul, writeDefaultSoul } from '../src/install/soul.ts';
 import { probeModel } from '../src/install/model.ts';
-import { renderLaunchdPlist, renderSystemdUnit, launchdLabel, type Runner, type ServiceSpec } from '../src/install/service.ts';
+import { renderLaunchdPlist, renderSystemdUnit, residentArgs, launchdLabel, type Runner, type ServiceSpec } from '../src/install/service.ts';
 import { createScriptedIO } from '../src/install/io.ts';
 import { Installer, parseEnvFile, parseInstallFlags, type InstallerHooks, type InstallFlags } from '../src/install/installer.ts';
+import { cliEntry, cogEntry, defaultShellHome, isSourceShell, supervisorEntry } from '../src/install/layout.ts';
 import { makeTempDir } from './helpers.ts';
 
 const SHELL_DIR = fileURLToPath(new URL('..', import.meta.url));
@@ -66,7 +67,13 @@ interface Harness {
   stored: { text: string };
 }
 
-function makeHarness(options: { probeOk: boolean; hooks?: Partial<InstallerHooks>; io?: ReturnType<typeof createScriptedIO>; flags?: Partial<InstallFlags> } = { probeOk: true }): Harness {
+function makeHarness(options: {
+  probeOk: boolean;
+  hooks?: Partial<InstallerHooks>;
+  io?: ReturnType<typeof createScriptedIO>;
+  flags?: Partial<InstallFlags>;
+  shellDir?: string;
+} = { probeOk: true }): Harness {
   const dir = makeTempDir();
   const dataDir = join(dir, 'data');
   const workspace = join(dir, 'ws');
@@ -116,7 +123,7 @@ function makeHarness(options: { probeOk: boolean; hooks?: Partial<InstallerHooks
       model: 'auto/deepseek-v4.1-flash',
       ...options.flags,
     },
-    shellDir: SHELL_DIR,
+    shellDir: options.shellDir ?? SHELL_DIR,
     bunPath: '/usr/local/bin/bun',
     cwd: workspace,
     platform: 'linux',
@@ -425,6 +432,22 @@ describe('the six-step install', () => {
     expect(output).toContain('安装完成');
   });
 
+  test('an installed package layout resolves every entry without a source checkout', () => {
+    const dir = makeTempDir();
+    const pkg = join(dir, 'node_modules', 'cogmem');
+    mkdirSync(join(pkg, 'dist', 'shell', 'install'), { recursive: true });
+    writeFileSync(join(pkg, 'dist', 'shell', 'cli.js'), '');
+    writeFileSync(join(pkg, 'dist', 'public.js'), '');
+
+    expect(isSourceShell(pkg)).toBe(false);
+    expect(cliEntry(pkg)).toBe(join(pkg, 'dist', 'shell', 'cli.js'));
+    expect(cogEntry(pkg)).toBe(join(pkg, 'dist', 'shell', 'cog.js'));
+    expect(supervisorEntry(pkg)).toBe(join(pkg, 'dist', 'shell', 'upgrade', 'supervisor.js'));
+    expect(defaultShellHome(join(pkg, 'dist', 'shell', 'install'))).toBe(pkg);
+    const spec = { ...serviceSpec(dir), shellDir: pkg };
+    expect(residentArgs(spec)).toContain(join(pkg, 'dist', 'shell', 'cli.js'));
+  });
+
   test('parser keeps booleans and values in their own slots', () => {
     const flags = parseInstallFlags(['--yes', '--skip-service', '--data', '/tmp/d', '--http-port', '17338', '--platform', 'darwin']);
     expect(flags.yes).toBe(true);
@@ -449,11 +472,10 @@ describe('the six-step install', () => {
 
     expect(await harness.installer.run()).toBe(1);
     expect(probed).toBe(false);
-    const state = JSON.parse(readFileSync(join(harness.dataDir, 'install.json'), 'utf8')) as { done: string[]; failedAt: string };
-    expect(state.done).toEqual(['preflight', 'place']);
-    expect(state.failedAt).toBe('model');
+    expect(existsSync(join(harness.dataDir, 'install.json'))).toBe(false);
     const output = harness.io.lines.join('\n');
-    expect(output).toContain('--yes 缺少模型路线参数：--provider、--base-url、--model');
+    expect(output).toContain('安装没有开始：--yes 缺少模型路线参数');
+    expect(output).toContain('--provider、--base-url、--model');
     expect(output).not.toContain('探活：');
   });
 });

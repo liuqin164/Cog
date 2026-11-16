@@ -5,6 +5,7 @@
  * base URL, model id `auto/deepseek-v4.1-flash`.
  */
 import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readPluginRegistry } from './plugins/registry.ts';
 import { DEFAULT_MAX_IDLE_TURNS } from './state/agent-loop.ts';
@@ -179,9 +180,23 @@ export const DEFAULT_DAILY_BUDGET: DailyBudget = { maxTokensPerDay: 2_000_000 };
  */
 export const DEFAULT_NIGHT_BUDGET: NightBudget = { maxTokensPerNight: 200_000 };
 
+/** The installer's default home. Its `install.json` is the fact that a companion is installed. */
+function installedCompanion(): { dataDir: string; choices: Record<string, unknown> } | undefined {
+  const dataDir = join(homedir(), '.cogmem', 'companion');
+  try {
+    const state = JSON.parse(readFileSync(join(dataDir, 'install.json'), 'utf8')) as { choices?: Record<string, unknown> };
+    return { dataDir, choices: state.choices ?? {} };
+  } catch {
+    return undefined;
+  }
+}
+
 export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellConfig {
-  const workspaceRoot = overrides.workspaceRoot ?? env('COGMEM_SHELL_WORKSPACE') ?? process.cwd();
-  const dataDir = overrides.dataDir ?? env('COGMEM_SHELL_DATA') ?? `${workspaceRoot}/.cogmem-shell`;
+  const explicitData = overrides.dataDir ?? env('COGMEM_SHELL_DATA');
+  const installed = explicitData ? undefined : installedCompanion();
+  const choices = installed?.choices ?? {};
+  const workspaceRoot = overrides.workspaceRoot ?? env('COGMEM_SHELL_WORKSPACE') ?? (typeof choices.workspaceRoot === 'string' ? choices.workspaceRoot : undefined) ?? process.cwd();
+  const dataDir = explicitData ?? installed?.dataDir ?? `${workspaceRoot}/.cogmem-shell`;
   const operating = readBudgetConfig(dataDir);
   const autonomous: RunBudget = { ...DEFAULT_AUTONOMOUS_BUDGET, ...operating.autonomous };
   const work: RunBudget = { ...DEFAULT_WORK_BUDGET, ...operating.work };
@@ -193,8 +208,8 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
   const registryPlugins = readPluginRegistry(dataDir);
   return {
     workspaceRoot,
-    projectId: overrides.projectId ?? env('COGMEM_SHELL_PROJECT') ?? 'companion',
-    agentId: overrides.agentId ?? env('COGMEM_SHELL_AGENT') ?? 'cogmem-companion',
+    projectId: overrides.projectId ?? env('COGMEM_SHELL_PROJECT') ?? (typeof choices.projectId === 'string' ? choices.projectId : undefined) ?? 'companion',
+    agentId: overrides.agentId ?? env('COGMEM_SHELL_AGENT') ?? (typeof choices.agentId === 'string' ? choices.agentId : undefined) ?? 'cogmem-companion',
     // The installer writes this once per install and never overwrites it. A hand-run shell that was
     // never installed keeps one fixed id instead of minting a new lane each process start.
     sessionId: overrides.sessionId ?? env('COGMEM_SHELL_SESSION') ?? 'session-default',
@@ -235,7 +250,7 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
     tickIntervalMs: overrides.tickIntervalMs ?? 30_000,
     http: overrides.http ?? {
       enabled: env('COGMEM_SHELL_HTTP') !== 'off',
-      port: Number(env('COGMEM_SHELL_HTTP_PORT') ?? 7338),
+      port: Number(env('COGMEM_SHELL_HTTP_PORT') ?? (typeof choices.httpPort === 'number' ? choices.httpPort : undefined) ?? 7338),
       hostname: '127.0.0.1',
     },
     plugins: overrides.plugins ?? registryPlugins,

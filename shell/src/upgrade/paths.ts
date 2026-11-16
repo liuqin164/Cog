@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 
 import { residentArgs, servicePath, type Platform, type ServiceSpec } from '../install/service.ts';
 import { parseEnvFile } from '../install/installer.ts';
+import { isInstalledShell, supervisorEntry } from '../install/layout.ts';
 import type { UpgradeRequest } from './records.ts';
 
 /** The tree this module is being served from: `.../shell/src/upgrade/paths.ts` → the checkout root. */
@@ -20,12 +21,15 @@ export function treeOfThisProcess(): string {
 }
 
 export function shellDirOfTree(tree: string): string {
-  return join(tree, 'shell');
+  // A source checkout keeps the shell package one directory down; the published package is the shell.
+  return existsSync(join(tree, 'shell', 'src', 'cli.ts')) ? join(tree, 'shell') : tree;
 }
 
-/** A tree this upgrade can hand the service to: the shell entry and the kernel source beside it. */
+/** A tree this upgrade can hand the service to: a source checkout or an installed package. */
 export function looksLikeCogTree(tree: string): boolean {
-  return existsSync(join(tree, 'shell', 'src', 'cli.ts')) && existsSync(join(tree, 'src', 'public.ts'));
+  const source = existsSync(join(tree, 'shell', 'src', 'cli.ts')) && existsSync(join(tree, 'src', 'public.ts'));
+  const installed = isInstalledShell(tree) && existsSync(join(tree, 'dist', 'public.js'));
+  return source || installed;
 }
 
 /**
@@ -114,7 +118,7 @@ export function serviceFileExists(request: UpgradeRequest): boolean {
 
 /** The supervisor entry inside a tree: the code that drives the cycle lives with the code it upgrades. */
 export function supervisorEntryPath(tree: string): string {
-  return join(tree, 'shell', 'src', 'upgrade', 'supervisor.ts');
+  return supervisorEntry(shellDirOfTree(tree));
 }
 
 /** The argv a resident of `shellDir` starts with; the same list the installer's unit embeds. */

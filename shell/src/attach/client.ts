@@ -15,6 +15,8 @@ export class AttachClient {
   private snapshotResolve?: (snapshot: AttachSnapshot) => void;
   private snapshotReject?: (error: Error) => void;
   private closed = false;
+  /** The first message, kept for faces (line mode) that render the away report themselves. */
+  snapshot?: AttachSnapshot;
 
   onEvent: (message: AttachServerMessage) => void = () => {};
   onClose: (reason: string) => void = () => {};
@@ -57,6 +59,7 @@ export class AttachClient {
         continue; // A malformed line is the resident's bug; dropping it must not kill the view.
       }
       if (message.t === 'snapshot' && this.snapshotResolve) {
+        this.snapshot = message;
         const resolvePromise = this.snapshotResolve;
         this.snapshotResolve = undefined;
         this.snapshotReject = undefined;

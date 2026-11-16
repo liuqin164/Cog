@@ -75,7 +75,7 @@ export class XenovaEmbeddingProvider implements EmbeddingProvider {
     });
     this.setState('loading');
     try {
-      this.worker = new Worker(new URL('./worker.ts', import.meta.url).href);
+      this.worker = new Worker(new URL(import.meta.url.endsWith('.ts') ? './worker.ts' : './worker.js', import.meta.url).href);
     } catch (error) {
       this.fail(error);
       return this.ready;

@@ -1,9 +1,9 @@
 {
   "name": "@cogmem/companion-shell",
   "private": true,
-  "version": "0.1.0-spike",
+  "version": "5.0.0",
   "type": "module",
-  "description": "Companion shell spike (F11 #165 stage one): state machine, plugin host, minimal resident loop.",
+  "description": "Cog's resident companion shell: state machine, plugin host and terminal interface. Built into the cogmem package as dist/shell; not installed separately.",
   "bin": {
     "cog": "src/cog.ts"
   },

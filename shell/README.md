@@ -1,11 +1,12 @@
 # @cogmem/companion-shell (F11 #165, stage one)
 
 A resident companion shell for Cogmem: a memory-native state machine, a plugin host, and the four
-basic tools. It lives in the main tree as a private, unpublished package — `files` in the root
-`package.json` does not list `shell/`, so it is not in the npm tarball — and every gap it hit is a
-ticket proposal in `src/probes/gaps.ts` and on #165. The kernel takes zero diff from it: the shell
-reaches the kernel through this directory's own `tsconfig.json` paths (`cogmem` → `../src/public.ts`,
-`cogmem/internal` → `../src/internal.ts`).
+basic tools. It is built into the `cogmem` package as `dist/shell`, and `cog` opens it; this
+directory is the source layout for development, not a package a user installs first. Every gap it hit
+is a ticket proposal in `src/probes/gaps.ts` and on #165. The kernel takes zero diff from it: in the
+source tree the shell reaches the kernel through this directory's own `tsconfig.json` paths
+(`cogmem` → `../src/public.ts`, `cogmem/internal` → `../src/internal.ts`), and the published build
+imports the package itself.
 
 ## Run
 
@@ -162,8 +163,9 @@ shape of the change.
 
 ## `install`: the F21 bootstrap (#203)
 
-`bin/install` is the install guide for a self-owned companion — six steps, text in / text out, no TUI
-framework. It is *not* wired into the main tree's `cogmem` bin; that integration is a post-4.2 step.
+`bin/install` is the source-checkout shim over the install guide for a self-owned companion — six
+steps, text in / text out, no TUI framework. The published package exposes the same installer as
+`cogmem install`.
 
 ```sh
 bun run bin/install                 # interactive; asks the model route first
@@ -211,13 +213,16 @@ printed and never enters the trace.
 
 ## `upgrade`: the resident form (#165)
 
-`/upgrade <新版目录>` upgrades the *resident* the way `cogmem update` upgrades a CLI install: 停服 →
-换版 → 迁移 → 启服, with rollback. The full contract is [`UPGRADE.md`](UPGRADE.md); the short shape:
+`/upgrade` upgrades the *resident* the way `cogmem update` upgrades a CLI install: 停服 → 换版 →
+迁移 → 启服, with rollback. With no argument it installs the next `cogmem` from npm; a version or
+tarball names the release, and a directory stays available as a developer path. The full contract is
+[`UPGRADE.md`](UPGRADE.md); the short shape:
 
 - **only from a silent state** — `IDLE` or `DORMANT`. In `RUNNING` / `DREAMING` / `WAKING` it is refused
   with a receipt that names the state, and nothing is staged, snapshotted or promised.
-- **the new tree is staged beside** the serving one, not over it:
-  `<dataDir>/app/versions/<version>/`, `node_modules` symlinked from the source.
+- **the new package is staged beside** the serving one, not over it:
+  `<dataDir>/app/versions/npm-<version>/node_modules/cogmem`, with its dependencies resolved inside
+  that prefix. A source directory is copied under `<dataDir>/app/versions/<version>/` instead.
 - **the brain is snapshotted before it is migrated** — the new version opening the database *is* the
   migration, so the snapshot is taken while the old version is stopped and nothing has opened it:
   `<dataDir>/snapshots/pre-upgrade-<from>-<stamp>.snap`, one file, checksummed, restorable.
@@ -241,7 +246,8 @@ cgroup would be stopped by the stop it is about to run.
 ```sh
 # the cycle, by hand (the resident must be IDLE first)
 bun run src/cog.ts            # attach
-> /upgrade /path/to/new/cog-tree
+> /upgrade                    # next cogmem from npm
+> /upgrade 5.0.1              # or a named release
 ```
 
 ## Model routes (OpenAI protocol)

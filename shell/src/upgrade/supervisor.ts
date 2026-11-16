@@ -25,6 +25,7 @@ import { launchdLabel, renderLaunchdPlist, renderSystemdUnit, serviceStatus, typ
 import { defaultFetchHealth, parseEnvFile } from '../install/installer.ts';
 import { DEFAULT_SOUL, readSoul } from '../install/soul.ts';
 import { runDoctor, type HealthPayload } from '../install/doctor.ts';
+import { cliEntry } from '../install/layout.ts';
 import { TraceLog } from '../trace.ts';
 import { residentArgsFor, serviceSpecFromRequest, shellDirOfTree, supervisorEntryPath } from './paths.ts';
 import { spawnDetached, systemdStartedThisProcess } from './spawn.ts';
@@ -235,7 +236,11 @@ export function defaultUpgradeOps(options: DefaultOpsOptions): UpgradeOps {
   const healthUrl = (request: UpgradeRequest): string => `http://127.0.0.1:${request.httpPort}/health`;
 
   const stopResident = async (request: UpgradeRequest, pid?: number): Promise<UpgradeOpResult> => {
-    if (request.serviceMode || systemdStartedThisProcess()) {
+    // The manager owns the process only when a unit exists. `systemdStartedThisProcess()` also fires
+    // for a `--skip-service` resident that merely inherited `INVOCATION_ID`, and then `systemctl stop`
+    // succeeds against no unit while the resident keeps running — the snapshot and the gate would then
+    // race a live writer (found on the 2026-11-17 upgrade rehearsal).
+    if (request.serviceMode) {
       // The manager's stop, always — not a signal to the pid, even when a rollback is stopping a
       // process it started itself. The unit carries `Restart=always`, so a SIGTERM to a
       // systemd-owned pid is followed by systemd starting the unit again, which would race the very
@@ -327,7 +332,7 @@ export function defaultUpgradeOps(options: DefaultOpsOptions): UpgradeOps {
       }
     },
     async gate(request, tree) {
-      const entry = join(shellDirOfTree(tree), 'src', 'cli.ts');
+      const entry = cliEntry(shellDirOfTree(tree));
       if (!existsSync(entry)) return { ok: false, detail: `staged tree has no ${entry}`, checks: [] };
       const result = await options.run(
         request.bunPath,
@@ -437,7 +442,7 @@ async function main(argv: string[]): Promise<number> {
   }
   const { readFileSync } = await import('node:fs');
   const request = JSON.parse(readFileSync(requestPath, 'utf8')) as UpgradeRequest;
-  const { defaultRunner } = await import('../install/installer.ts');
+  const { defaultRunner } = await import(import.meta.url.endsWith('.ts') ? '../install/installer.ts' : '../install/installer.js');
   // First act: say which process owns this cycle, so the resident that comes back can tell "still
   // working" from "gone silent". Removed in the same breath as the outcome is written.
   writeFileSync(upgradeSupervisorPidPath(request.dataDir), `${process.pid}\n`, { mode: 0o600 });

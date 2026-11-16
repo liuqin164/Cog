@@ -5,8 +5,14 @@
 Ryu 2026-11-12 定的五条要求各自落在哪一行代码、哪个判别测试上。
 
 ```
-/upgrade <新版目录>
+/upgrade                     # 从 npm 取新版（默认 latest）
+/upgrade <版本或 tarball>     # 指定 release
+/upgrade <新版目录>           # 开发者路径：旁置复制一棵源码树
 ```
+
+发布路径不再要求源码 checkout：监督进程把新版 `cogmem` 包侧装到
+`<dataDir>/app/versions/npm-<version>/node_modules/cogmem`，依赖在同一个前缀里解析，健康门用
+新版包自己的 `dist/shell/cli.js` 跑。源码目录仍被接受，但它是开发者路径。
 
 ## 五条要求 → 实现 → 判别
 

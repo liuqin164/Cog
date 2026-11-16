@@ -8,6 +8,7 @@
  */
 import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { cliEntry } from './layout.ts';
 
 export type Platform = 'linux' | 'darwin';
 
@@ -64,7 +65,7 @@ export function residentArgs(spec: ServiceSpec): string[] {
   return [
     spec.bunPath,
     'run',
-    join(spec.shellDir, 'src', 'cli.ts'),
+    cliEntry(spec.shellDir),
     'start',
     '--attach',
     '--no-terminal',
