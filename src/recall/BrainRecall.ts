@@ -33,6 +33,7 @@ import type { TopicSummaryBoard } from './TopicSummaryBoard.js';
 import type { GraphCommunityEngine } from '../engine/GraphCommunityEngine.js';
 import type { EmbeddingProvider } from '../embedding/EmbeddingProvider.js';
 import type { NeuronEmbeddingStore } from '../embedding/NeuronEmbeddingStore.js';
+import { nearestNeuronIds } from '../embedding/vectorRecall.js';
 import { isRecallableMemoryEvidence } from './RecallGovernance.js';
 import { matchesProjectScope } from '../topology/ProjectScope.js';
 
@@ -724,9 +725,8 @@ export class BrainRecall {
     if (!this.deps.vectorSearchFn && !(this.deps.neuronEmbeddingStore && this.deps.embeddingProvider)) return false;
     if (candidateNeuronIds.length >= recallCfg.vectorFallbackThreshold) return false;
 
-    const syncEmbed = (this.deps.embeddingProvider as unknown as { embedSync?: (text: string) => Float32Array } | undefined)?.embedSync;
-    const rawVectorIds = this.deps.neuronEmbeddingStore && this.deps.embeddingProvider && syncEmbed
-      ? this.deps.neuronEmbeddingStore.findNearest(syncEmbed(query), projectId, limit * 4, this.deps.embeddingProvider.modelId).map((item) => item.neuronId)
+    const rawVectorIds = this.deps.neuronEmbeddingStore && this.deps.embeddingProvider
+      ? nearestNeuronIds(this.deps.neuronEmbeddingStore, this.deps.embeddingProvider, query, projectId, limit * 4)
       : this.deps.vectorSearchFn?.(query, projectId, limit * 4) ?? [];
     return this.appendVectorResultIds(candidateNeuronIds, rawVectorIds, projectId, topicPath, query);
   }

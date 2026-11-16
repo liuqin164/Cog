@@ -96,11 +96,13 @@ parentPort?.on('message', (message: Record<string, unknown>) => {
   }
   if (message.type === 'embedSync') {
     const sab = message.sab as SharedArrayBuffer;
+    const prefix = message.prefix !== false;
     const flag = new Int32Array(sab, 0, 1);
     const out = new Float32Array(sab, 4);
     enqueue(async () => {
       try {
-        const [vector] = await embedMany([EMBEDDING_QUERY_PREFIX + String(message.text)]);
+        const text = String(message.text);
+        const [vector] = await embedMany([prefix ? EMBEDDING_QUERY_PREFIX + text : text]);
         if (vector && vector.length === out.length) out.set(vector);
         Atomics.store(flag, 0, vector && vector.length === out.length ? 1 : -1);
       } catch {

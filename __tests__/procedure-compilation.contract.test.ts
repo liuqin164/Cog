@@ -105,8 +105,8 @@ describe('the contract document and the frozen lists agree', () => {
     expect(backtickedFirstColumn(sectionAfter('## Errors (frozen)'))).toEqual([...PROCEDURE_ERROR_CODES]);
   });
 
-  test('every frozen method exists, the version is 1, and the delivery policy has one row per tier', () => {
-    expect(PROCEDURE_CONTRACT_VERSION).toBe(1);
+  test('every frozen method exists, the version is 2, and the delivery policy has one row per tier', () => {
+    expect(PROCEDURE_CONTRACT_VERSION).toBe(2);
     for (const method of PROCEDURE_API_METHODS) {
       expect(typeof (kernel.procedures as unknown as Record<string, unknown>)[method]).toBe('function');
     }

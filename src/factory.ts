@@ -71,6 +71,7 @@ import type { EmbeddingProvider } from './embedding/EmbeddingProvider.js';
 import { NeuronEmbeddingStore } from './embedding/NeuronEmbeddingStore.js';
 import { ReEmbeddingPipeline } from './embedding/ReEmbeddingPipeline.js';
 import type { ReEmbeddingStatus } from './embedding/ReEmbeddingStatus.js';
+import { nearestNeuronIds } from './embedding/vectorRecall.js';
 import type { EncryptionProvider } from './encryption/index.js';
 import { TopicAliasRegistry, TopicGovernance, TopicPathRegistry as UserTopicPathRegistry, TopicRelationGraph } from './topic/index.js';
 import { CorrectionResolver } from './episode/CorrectionResolver.js';
@@ -1115,6 +1116,7 @@ export class MemoryKernel {
     // Preferences are read through F5's own recall rather than copied into a second ledger.
     this.procedures = new ProcedureCompiler({
       events: this.eventStore,
+      embedding: () => this.embeddingProvider,
       preferences: ({ projectId, query, now, limit }) => this.profile
         .recall({ projectId, query, ledger: 'preferences', now, limit })
         .map((entry) => ({
@@ -1642,6 +1644,16 @@ export class MemoryKernel {
     const limit = Math.max(1, options.limit ?? 8);
     const seedLimit = Math.min(Math.max(limit * 4, 24), 120);
     const seedNeuronIds = this.memoryGraph.fullTextSearch(query, options.projectId, seedLimit);
+    // Fusion: the lexical seeds stay first. When they are sparse (the same
+    // threshold `BrainRecall` uses for its vector fallback), the vector lane
+    // contributes ranked ids next, and the navigator's fused/branch/cognitive
+    // candidates follow. Duplicates keep their first position. With enough
+    // lexical seeds no vector query runs and the previous order is unchanged.
+    const vectorSeedIds = config.recall.vectorEnabled
+      && this.embeddingProvider
+      && seedNeuronIds.length < config.recall.vectorFallbackThreshold
+      ? nearestNeuronIds(this.neuronEmbeddingStore, this.embeddingProvider, query, options.projectId, seedLimit)
+      : [];
     const cognitiveContext = this.cognitiveGraphStore.collectContext({
       projectId: options.projectId,
       terms: extractNavigationTerms(query),
@@ -1670,6 +1682,7 @@ export class MemoryKernel {
       entityNeuronIds: [],
     });
     const candidateIds = uniqueStrings([
+      ...(vectorSeedIds.length > 0 ? [...seedNeuronIds, ...vectorSeedIds] : []),
       ...navigation.pulse.fusedIds,
       ...navigation.branchSearch.neuronIds,
       ...navigation.branchSearch.temporalTraversal.neuronIds,
