@@ -123,6 +123,12 @@ export interface ShellRuntimeState {
   costDayDate?: string;
   costDayTokens?: number;
   /**
+   * The day counter's value when the current Night started. The night cap is a delta over the one
+   * day counter, so a restart mid-night cannot refund the model spend it already made.
+   */
+  dreamNightDate?: string;
+  dreamNightStartTokens?: number;
+  /**
    * The user-assigned task open across runs. Its `origin` is the ledger provenance the budget tier
    * reads: only `user_message` earns the work cage and only while the task is unfinished. A budget
    * stop fills `stoppedStep` / `nextStep`, which the next run gets in its prompt tail.

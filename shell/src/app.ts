@@ -193,6 +193,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   private nightSpent = 0;
   private nightCap = 0;
   private nightDay?: string;
+  private nightStartTokens = 0;
   private dreamModelActive = false;
   /**
    * The window `/forget` previewed and `/forget confirm` may execute. Process-local: a restart
@@ -362,9 +363,18 @@ export class CompanionShell implements ShellControl, AttachShell {
   }
 
   private beginDreamModelBudget(at: number): void {
-    const dailyRemaining = Math.max(0, this.config.dailyBudget.maxTokensPerDay - this.dailySpent(at));
-    this.nightDay = tokyoDate(at);
-    this.nightSpent = 0;
+    const day = tokyoDate(at);
+    const spent = this.dailySpent(at);
+    const persisted = this.machine.runtime.dreamNightDate === day
+      ? this.machine.runtime.dreamNightStartTokens
+      : undefined;
+    this.nightStartTokens = persisted ?? spent;
+    if (persisted === undefined) {
+      this.machine.updateRuntime({ dreamNightDate: day, dreamNightStartTokens: this.nightStartTokens });
+    }
+    this.nightDay = day;
+    this.nightSpent = Math.max(0, spent - this.nightStartTokens);
+    const dailyRemaining = Math.max(0, this.config.dailyBudget.maxTokensPerDay - spent);
     this.nightCap = Math.min(this.config.nightBudget.maxTokensPerNight, dailyRemaining);
     this.dreamModelActive = true;
     this.trace.append('dream_model_budget', {
@@ -401,9 +411,9 @@ export class CompanionShell implements ShellControl, AttachShell {
     if (!this.dreamModelActive) return;
     const tokens = (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0);
     if (tokens <= 0) return;
-    this.nightSpent += tokens;
     // One counter for the day (#233). The night cap limits this run; it is not a second ledger.
     this.chargeCost(tokens);
+    this.nightSpent = Math.max(0, this.dailySpent() - this.nightStartTokens);
     this.trace.append('dream_model_usage', {
       day: this.nightDay,
       inputTokens: usage.inputTokens,

@@ -111,8 +111,10 @@ out loud once. Raise the number in this file and restart to continue.
 
 `maxTokensPerNight` (#231 route A) caps the Dream memory model's calls, which do not run through
 the agent loop. It is charged to the same `costDayTokens` counter as `maxTokensPerDay`, not a
-second ledger. A night that reaches the cap records `dream_model_budget_exceeded`, the kernel keeps
-the deterministic candidates and falls back to rule-only, and no model candidate is written. The
+second ledger; the night's start is checkpointed with that counter, so a restart mid-night resumes
+rather than refunds the night. A night that reaches the cap records
+`dream_model_budget_exceeded`, the kernel keeps the deterministic candidates and falls back to
+rule-only, and no model candidate is written. The
 memory role is the resident's mg route; the embedding role stays `deterministic_local` and recall
 reports `semanticIndex: false` until a host supplies an embedding provider. `MemoryKernel.reEmbed
 (projectId)` is the bounded migration path for an existing brain once that provider exists.
