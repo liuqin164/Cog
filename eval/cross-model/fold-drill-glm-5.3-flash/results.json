@@ -1,0 +1,2844 @@
+{
+  "experiment": "fold-drill",
+  "issue": 254,
+  "generatedAt": "2026-11-16T12:27:43.568Z",
+  "head": "a09a226e9345",
+  "model": "workbuddy-ai/glm-5.3-flash",
+  "baseUrl": "http://127.0.0.1:3425/v1",
+  "limit": 24,
+  "stats": {
+    "tasks": 24,
+    "byType": {
+      "number": 6,
+      "name": 6,
+      "constraint": 6,
+      "step": 6
+    },
+    "autoExpandHits": 19,
+    "autoExpandMisses": 5,
+    "avgTurns": 24,
+    "avgChars": 665.125
+  },
+  "summary": [
+    {
+      "arm": "full",
+      "tasks": 24,
+      "correct": 23,
+      "hallucinated": 2,
+      "targetDrill": 0,
+      "anyDrill": 0,
+      "avgPromptTokens": 718.9166666666666,
+      "avgModelCalls": 1,
+      "avgToolCalls": 0,
+      "avgContextChars": 1026.1666666666667
+    },
+    {
+      "arm": "folded_key",
+      "tasks": 24,
+      "correct": 24,
+      "hallucinated": 0,
+      "targetDrill": 24,
+      "anyDrill": 24,
+      "avgPromptTokens": 1913.4583333333333,
+      "avgModelCalls": 2,
+      "avgToolCalls": 1.125,
+      "avgContextChars": 1094.2083333333333
+    },
+    {
+      "arm": "folded_auto",
+      "tasks": 24,
+      "correct": 23,
+      "hallucinated": 0,
+      "targetDrill": 7,
+      "anyDrill": 7,
+      "avgPromptTokens": 1265.5416666666667,
+      "avgModelCalls": 1.2916666666666667,
+      "avgToolCalls": 0.375,
+      "avgContextChars": 1178.2916666666667
+    }
+  ],
+  "groups": [
+    {
+      "arm": "full",
+      "group": "trigger_hit",
+      "tasks": 19,
+      "correct": 19,
+      "hallucinated": 1,
+      "targetDrill": 0
+    },
+    {
+      "arm": "full",
+      "group": "trigger_miss",
+      "tasks": 5,
+      "correct": 4,
+      "hallucinated": 1,
+      "targetDrill": 0
+    },
+    {
+      "arm": "folded_key",
+      "group": "trigger_hit",
+      "tasks": 19,
+      "correct": 19,
+      "hallucinated": 0,
+      "targetDrill": 19
+    },
+    {
+      "arm": "folded_key",
+      "group": "trigger_miss",
+      "tasks": 5,
+      "correct": 5,
+      "hallucinated": 0,
+      "targetDrill": 5
+    },
+    {
+      "arm": "folded_auto",
+      "group": "trigger_hit",
+      "tasks": 19,
+      "correct": 19,
+      "hallucinated": 0,
+      "targetDrill": 2
+    },
+    {
+      "arm": "folded_auto",
+      "group": "trigger_miss",
+      "tasks": 5,
+      "correct": 4,
+      "hallucinated": 0,
+      "targetDrill": 5
+    }
+  ],
+  "runs": [
+    {
+      "taskId": "f01",
+      "type": "number",
+      "arm": "full",
+      "autoExpand": true,
+      "question": "上传失败后的重试上限是多少次？",
+      "expected": "7",
+      "answerLine": "7 次",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1053,
+      "promptTokens": 741,
+      "completionTokens": 18,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 1741,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 741,
+          "completionTokens": 18,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f01",
+      "type": "number",
+      "arm": "folded_key",
+      "autoExpand": true,
+      "question": "上传失败后的重试上限是多少次？",
+      "expected": "7",
+      "answerLine": "最多重试 7 次，超过就进死信队列。",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1117,
+      "promptTokens": 1987,
+      "completionTokens": 70,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 2,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:f01-t02",
+        "digest:f01-t11"
+      ],
+      "exhausted": false,
+      "elapsedMs": 12327,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 946,
+          "completionTokens": 52,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:f01-t02",
+              "target": true,
+              "known": true
+            },
+            {
+              "name": "read_memory",
+              "key": "digest:f01-t11",
+              "target": false,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 1041,
+          "completionTokens": 18,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f01",
+      "type": "number",
+      "arm": "folded_auto",
+      "autoExpand": true,
+      "question": "上传失败后的重试上限是多少次？",
+      "expected": "7",
+      "answerLine": "最多重试 7 次",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1234,
+      "promptTokens": 1002,
+      "completionTokens": 20,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 3040,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 1002,
+          "completionTokens": 20,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f02",
+      "type": "number",
+      "arm": "full",
+      "autoExpand": true,
+      "question": "批处理每批最多多少条？",
+      "expected": "480",
+      "answerLine": "480 条",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1032,
+      "promptTokens": 727,
+      "completionTokens": 9,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 4839,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 727,
+          "completionTokens": 9,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f02",
+      "type": "number",
+      "arm": "folded_key",
+      "autoExpand": true,
+      "question": "批处理每批最多多少条？",
+      "expected": "480",
+      "answerLine": "480 条记录",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1093,
+      "promptTokens": 1918,
+      "completionTokens": 34,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 1,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:f02-t02"
+      ],
+      "exhausted": false,
+      "elapsedMs": 4060,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 936,
+          "completionTokens": 27,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:f02-t02",
+              "target": true,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 982,
+          "completionTokens": 7,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f02",
+      "type": "number",
+      "arm": "folded_auto",
+      "autoExpand": true,
+      "question": "批处理每批最多多少条？",
+      "expected": "480",
+      "answerLine": "480 条",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1199,
+      "promptTokens": 2016,
+      "completionTokens": 22,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 1,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:f02-t02"
+      ],
+      "exhausted": false,
+      "elapsedMs": 6737,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 985,
+          "completionTokens": 16,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:f02-t02",
+              "target": true,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 1031,
+          "completionTokens": 6,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f03",
+      "type": "number",
+      "arm": "full",
+      "autoExpand": true,
+      "question": "商品详情缓存的有效期是多少分钟？",
+      "expected": "45",
+      "answerLine": "45",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1044,
+      "promptTokens": 726,
+      "completionTokens": 5,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 1310,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 726,
+          "completionTokens": 5,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f03",
+      "type": "number",
+      "arm": "folded_key",
+      "autoExpand": true,
+      "question": "商品详情缓存的有效期是多少分钟？",
+      "expected": "45",
+      "answerLine": "45 分钟",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1101,
+      "promptTokens": 1913,
+      "completionTokens": 31,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 1,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:f03-t02"
+      ],
+      "exhausted": false,
+      "elapsedMs": 7015,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 935,
+          "completionTokens": 25,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:f03-t02",
+              "target": true,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 978,
+          "completionTokens": 6,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f03",
+      "type": "number",
+      "arm": "folded_auto",
+      "autoExpand": true,
+      "question": "商品详情缓存的有效期是多少分钟？",
+      "expected": "45",
+      "answerLine": "45 分钟",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1204,
+      "promptTokens": 981,
+      "completionTokens": 6,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 4695,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 981,
+          "completionTokens": 6,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f04",
+      "type": "number",
+      "arm": "full",
+      "autoExpand": false,
+      "question": "刚才那个上限最后定成了多少？",
+      "expected": "64",
+      "answerLine": "64",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1024,
+      "promptTokens": 722,
+      "completionTokens": 5,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 1555,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 722,
+          "completionTokens": 5,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f04",
+      "type": "number",
+      "arm": "folded_key",
+      "autoExpand": false,
+      "question": "刚才那个上限最后定成了多少？",
+      "expected": "64",
+      "answerLine": "64",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1104,
+      "promptTokens": 2003,
+      "completionTokens": 126,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 3,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:f04-t02",
+        "digest:f04-t11",
+        "digest:f04-t20"
+      ],
+      "exhausted": false,
+      "elapsedMs": 9153,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 942,
+          "completionTokens": 100,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:f04-t02",
+              "target": true,
+              "known": true
+            },
+            {
+              "name": "read_memory",
+              "key": "digest:f04-t11",
+              "target": false,
+              "known": true
+            },
+            {
+              "name": "read_memory",
+              "key": "digest:f04-t20",
+              "target": false,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 1061,
+          "completionTokens": 26,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f04",
+      "type": "number",
+      "arm": "folded_auto",
+      "autoExpand": false,
+      "question": "刚才那个上限最后定成了多少？",
+      "expected": "64",
+      "answerLine": "64",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1104,
+      "promptTokens": 2017,
+      "completionTokens": 155,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 3,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:f04-t02",
+        "digest:f04-t11",
+        "digest:f04-t20"
+      ],
+      "exhausted": false,
+      "elapsedMs": 7171,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 949,
+          "completionTokens": 128,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:f04-t02",
+              "target": true,
+              "known": true
+            },
+            {
+              "name": "read_memory",
+              "key": "digest:f04-t11",
+              "target": false,
+              "known": true
+            },
+            {
+              "name": "read_memory",
+              "key": "digest:f04-t20",
+              "target": false,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 1068,
+          "completionTokens": 27,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f05",
+      "type": "number",
+      "arm": "full",
+      "autoExpand": true,
+      "question": "网关的读超时是多少毫秒？",
+      "expected": "2500",
+      "answerLine": "2500",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1015,
+      "promptTokens": 725,
+      "completionTokens": 6,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 1789,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 725,
+          "completionTokens": 6,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f05",
+      "type": "number",
+      "arm": "folded_key",
+      "autoExpand": true,
+      "question": "网关的读超时是多少毫秒？",
+      "expected": "2500",
+      "answerLine": "2500 毫秒",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1079,
+      "promptTokens": 1904,
+      "completionTokens": 35,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 1,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:f05-t02"
+      ],
+      "exhausted": false,
+      "elapsedMs": 13587,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 928,
+          "completionTokens": 25,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:f05-t02",
+              "target": true,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 976,
+          "completionTokens": 10,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f05",
+      "type": "number",
+      "arm": "folded_auto",
+      "autoExpand": true,
+      "question": "网关的读超时是多少毫秒？",
+      "expected": "2500",
+      "answerLine": "2500 毫秒",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1181,
+      "promptTokens": 979,
+      "completionTokens": 10,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 4676,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 979,
+          "completionTokens": 10,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f06",
+      "type": "number",
+      "arm": "full",
+      "autoExpand": true,
+      "question": "容量告警阈值是多少？",
+      "expected": "85",
+      "answerLine": "85%",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1017,
+      "promptTokens": 717,
+      "completionTokens": 6,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 1501,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 717,
+          "completionTokens": 6,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f06",
+      "type": "number",
+      "arm": "folded_key",
+      "autoExpand": true,
+      "question": "容量告警阈值是多少？",
+      "expected": "85",
+      "answerLine": "85%，达到后先通知值班，不自动扩容",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1085,
+      "promptTokens": 1907,
+      "completionTokens": 32,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 1,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:f06-t02"
+      ],
+      "exhausted": false,
+      "elapsedMs": 6512,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 930,
+          "completionTokens": 16,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:f06-t02",
+              "target": true,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 977,
+          "completionTokens": 16,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f06",
+      "type": "number",
+      "arm": "folded_auto",
+      "autoExpand": true,
+      "question": "容量告警阈值是多少？",
+      "expected": "85",
+      "answerLine": "85%",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1190,
+      "promptTokens": 2007,
+      "completionTokens": 22,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 1,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:f06-t02"
+      ],
+      "exhausted": false,
+      "elapsedMs": 11670,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 980,
+          "completionTokens": 16,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:f06-t02",
+              "target": true,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 1027,
+          "completionTokens": 6,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f07",
+      "type": "name",
+      "arm": "full",
+      "autoExpand": true,
+      "question": "计费迁移的负责人是谁？",
+      "expected": "林雯",
+      "answerLine": "林雯",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1015,
+      "promptTokens": 711,
+      "completionTokens": 6,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 1309,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 711,
+          "completionTokens": 6,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f07",
+      "type": "name",
+      "arm": "folded_key",
+      "autoExpand": true,
+      "question": "计费迁移的负责人是谁？",
+      "expected": "林雯",
+      "answerLine": "林雯",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1088,
+      "promptTokens": 1899,
+      "completionTokens": 22,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 1,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:f07-t02"
+      ],
+      "exhausted": false,
+      "elapsedMs": 15977,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 927,
+          "completionTokens": 16,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:f07-t02",
+              "target": true,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 972,
+          "completionTokens": 6,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f07",
+      "type": "name",
+      "arm": "folded_auto",
+      "autoExpand": true,
+      "question": "计费迁移的负责人是谁？",
+      "expected": "林雯",
+      "answerLine": "林雯",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1191,
+      "promptTokens": 975,
+      "completionTokens": 6,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 4812,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 975,
+          "completionTokens": 6,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f08",
+      "type": "name",
+      "arm": "full",
+      "autoExpand": false,
+      "question": "今晚值班的是谁？",
+      "expected": "周启",
+      "answerLine": "周启",
+      "correct": true,
+      "hallucinated": true,
+      "reason": "number 8 not in ledger",
+      "contextChars": 1033,
+      "promptTokens": 716,
+      "completionTokens": 83,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 2445,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 716,
+          "completionTokens": 83,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f08",
+      "type": "name",
+      "arm": "folded_key",
+      "autoExpand": false,
+      "question": "今晚值班的是谁？",
+      "expected": "周启",
+      "answerLine": "周启",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1106,
+      "promptTokens": 1911,
+      "completionTokens": 60,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 1,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:f08-t02"
+      ],
+      "exhausted": false,
+      "elapsedMs": 10131,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 933,
+          "completionTokens": 25,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:f08-t02",
+              "target": true,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 978,
+          "completionTokens": 35,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f08",
+      "type": "name",
+      "arm": "folded_auto",
+      "autoExpand": false,
+      "question": "今晚值班的是谁？",
+      "expected": "周启",
+      "answerLine": "周启",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1106,
+      "promptTokens": 1925,
+      "completionTokens": 41,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 1,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:f08-t02"
+      ],
+      "exhausted": false,
+      "elapsedMs": 6072,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 940,
+          "completionTokens": 35,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:f08-t02",
+              "target": true,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 985,
+          "completionTokens": 6,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f09",
+      "type": "name",
+      "arm": "full",
+      "autoExpand": true,
+      "question": "鉴权模块的评审人是谁？",
+      "expected": "顾言",
+      "answerLine": "顾言",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1016,
+      "promptTokens": 721,
+      "completionTokens": 6,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 1308,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 721,
+          "completionTokens": 6,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f09",
+      "type": "name",
+      "arm": "folded_key",
+      "autoExpand": true,
+      "question": "鉴权模块的评审人是谁？",
+      "expected": "顾言",
+      "answerLine": "顾言",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1110,
+      "promptTokens": 1943,
+      "completionTokens": 22,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 1,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:f09-t02"
+      ],
+      "exhausted": false,
+      "elapsedMs": 7113,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 949,
+          "completionTokens": 16,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:f09-t02",
+              "target": true,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 994,
+          "completionTokens": 6,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f09",
+      "type": "name",
+      "arm": "folded_auto",
+      "autoExpand": true,
+      "question": "鉴权模块的评审人是谁？",
+      "expected": "顾言",
+      "answerLine": "顾言",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1213,
+      "promptTokens": 997,
+      "completionTokens": 6,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 4817,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 997,
+          "completionTokens": 6,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f10",
+      "type": "name",
+      "arm": "full",
+      "autoExpand": true,
+      "question": "客户侧的对接口是谁？",
+      "expected": "唐宁",
+      "answerLine": "唐宁",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1012,
+      "promptTokens": 712,
+      "completionTokens": 14,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 3005,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 712,
+          "completionTokens": 14,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f10",
+      "type": "name",
+      "arm": "folded_key",
+      "autoExpand": true,
+      "question": "客户侧的对接口是谁？",
+      "expected": "唐宁",
+      "answerLine": "唐宁",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1090,
+      "promptTokens": 1906,
+      "completionTokens": 31,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 1,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:f10-t02"
+      ],
+      "exhausted": false,
+      "elapsedMs": 13019,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 931,
+          "completionTokens": 25,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:f10-t02",
+              "target": true,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 975,
+          "completionTokens": 6,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f10",
+      "type": "name",
+      "arm": "folded_auto",
+      "autoExpand": true,
+      "question": "客户侧的对接口是谁？",
+      "expected": "唐宁",
+      "answerLine": "唐宁",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1193,
+      "promptTokens": 978,
+      "completionTokens": 6,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 5661,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 978,
+          "completionTokens": 6,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f11",
+      "type": "name",
+      "arm": "full",
+      "autoExpand": true,
+      "question": "这次发布的 release manager 是谁？",
+      "expected": "郑昊",
+      "answerLine": "郑昊",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1051,
+      "promptTokens": 713,
+      "completionTokens": 6,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 1280,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 713,
+          "completionTokens": 6,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f11",
+      "type": "name",
+      "arm": "folded_key",
+      "autoExpand": true,
+      "question": "这次发布的 release manager 是谁？",
+      "expected": "郑昊",
+      "answerLine": "郑昊",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1133,
+      "promptTokens": 1910,
+      "completionTokens": 29,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 1,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:f11-t02"
+      ],
+      "exhausted": false,
+      "elapsedMs": 7066,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 934,
+          "completionTokens": 23,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:f11-t02",
+              "target": true,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 976,
+          "completionTokens": 6,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f11",
+      "type": "name",
+      "arm": "folded_auto",
+      "autoExpand": true,
+      "question": "这次发布的 release manager 是谁？",
+      "expected": "郑昊",
+      "answerLine": "郑昊",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1246,
+      "promptTokens": 979,
+      "completionTokens": 6,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 4770,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 979,
+          "completionTokens": 6,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f12",
+      "type": "name",
+      "arm": "full",
+      "autoExpand": false,
+      "question": "那个脚本最后交给谁了？",
+      "expected": "孟遥",
+      "answerLine": "孟遥",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1014,
+      "promptTokens": 710,
+      "completionTokens": 14,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 1471,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 710,
+          "completionTokens": 14,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f12",
+      "type": "name",
+      "arm": "folded_key",
+      "autoExpand": false,
+      "question": "那个脚本最后交给谁了？",
+      "expected": "孟遥",
+      "answerLine": "孟遥",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1093,
+      "promptTokens": 1902,
+      "completionTokens": 31,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 1,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:f12-t02"
+      ],
+      "exhausted": false,
+      "elapsedMs": 9940,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 931,
+          "completionTokens": 25,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:f12-t02",
+              "target": true,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 971,
+          "completionTokens": 6,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f12",
+      "type": "name",
+      "arm": "folded_auto",
+      "autoExpand": false,
+      "question": "那个脚本最后交给谁了？",
+      "expected": "孟遥",
+      "answerLine": "孟遥",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1093,
+      "promptTokens": 1916,
+      "completionTokens": 45,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 1,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:f12-t02"
+      ],
+      "exhausted": false,
+      "elapsedMs": 11162,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 938,
+          "completionTokens": 39,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:f12-t02",
+              "target": true,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 978,
+          "completionTokens": 6,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f13",
+      "type": "constraint",
+      "arm": "full",
+      "autoExpand": true,
+      "question": "数据库迁移窗口是什么时间？",
+      "expected": "周日 02:00 到 04:00",
+      "answerLine": "周日 02:00 到 04:00",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1050,
+      "promptTokens": 731,
+      "completionTokens": 14,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 1397,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 731,
+          "completionTokens": 14,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f13",
+      "type": "constraint",
+      "arm": "folded_key",
+      "autoExpand": true,
+      "question": "数据库迁移窗口是什么时间？",
+      "expected": "周日 02:00 到 04:00",
+      "answerLine": "周日 02:00 到 04:00（其他时间不允许动生产库）",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1087,
+      "promptTokens": 1902,
+      "completionTokens": 47,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 1,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:f13-t02"
+      ],
+      "exhausted": false,
+      "elapsedMs": 7987,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 926,
+          "completionTokens": 25,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:f13-t02",
+              "target": true,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 976,
+          "completionTokens": 22,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f13",
+      "type": "constraint",
+      "arm": "folded_auto",
+      "autoExpand": true,
+      "question": "数据库迁移窗口是什么时间？",
+      "expected": "周日 02:00 到 04:00",
+      "answerLine": "周日 02:00 到 04:00",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1202,
+      "promptTokens": 979,
+      "completionTokens": 57,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 5656,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 979,
+          "completionTokens": 57,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f14",
+      "type": "constraint",
+      "arm": "full",
+      "autoExpand": true,
+      "question": "接口限流是多少？",
+      "expected": "120",
+      "answerLine": "每分钟 120 次",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1017,
+      "promptTokens": 716,
+      "completionTokens": 20,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 1630,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 716,
+          "completionTokens": 20,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f14",
+      "type": "constraint",
+      "arm": "folded_key",
+      "autoExpand": true,
+      "question": "接口限流是多少？",
+      "expected": "120",
+      "answerLine": "接口限流按每分钟 120 次设计，超过就排队，不直接报错。",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1079,
+      "promptTokens": 1897,
+      "completionTokens": 51,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 1,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:f14-t02"
+      ],
+      "exhausted": false,
+      "elapsedMs": 7899,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 924,
+          "completionTokens": 25,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:f14-t02",
+              "target": true,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 973,
+          "completionTokens": 26,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f14",
+      "type": "constraint",
+      "arm": "folded_auto",
+      "autoExpand": true,
+      "question": "接口限流是多少？",
+      "expected": "120",
+      "answerLine": "按每分钟 120 次设计，超过就排队，不直接报错。",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1185,
+      "promptTokens": 976,
+      "completionTokens": 86,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 5845,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 976,
+          "completionTokens": 86,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f15",
+      "type": "constraint",
+      "arm": "full",
+      "autoExpand": true,
+      "question": "审计日志保留多少天？",
+      "expected": "30",
+      "answerLine": "30 天",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1018,
+      "promptTokens": 711,
+      "completionTokens": 6,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 2313,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 711,
+          "completionTokens": 6,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f15",
+      "type": "constraint",
+      "arm": "folded_key",
+      "autoExpand": true,
+      "question": "审计日志保留多少天？",
+      "expected": "30",
+      "answerLine": "审计日志只保留 30 天，过期后由清理任务统一删除。",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1080,
+      "promptTokens": 1889,
+      "completionTokens": 45,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 1,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:f15-t02"
+      ],
+      "exhausted": false,
+      "elapsedMs": 11816,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 923,
+          "completionTokens": 25,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:f15-t02",
+              "target": true,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 966,
+          "completionTokens": 20,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f15",
+      "type": "constraint",
+      "arm": "folded_auto",
+      "autoExpand": true,
+      "question": "审计日志保留多少天？",
+      "expected": "30",
+      "answerLine": "30 天",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1183,
+      "promptTokens": 969,
+      "completionTokens": 6,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 4565,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 969,
+          "completionTokens": 6,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f16",
+      "type": "constraint",
+      "arm": "full",
+      "autoExpand": false,
+      "question": "什么时候不能上线？",
+      "expected": "周五 18:00",
+      "answerLine": "周末不允许上线",
+      "correct": false,
+      "hallucinated": false,
+      "reason": "wrong",
+      "contextChars": 1038,
+      "promptTokens": 727,
+      "completionTokens": 11,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 1278,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 727,
+          "completionTokens": 11,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f16",
+      "type": "constraint",
+      "arm": "folded_key",
+      "autoExpand": false,
+      "question": "什么时候不能上线？",
+      "expected": "周五 18:00",
+      "answerLine": "周末不允许上线（发布封禁从周五 18:00 开始，周一早上恢复）",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1094,
+      "promptTokens": 1920,
+      "completionTokens": 52,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 1,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:f16-t02"
+      ],
+      "exhausted": false,
+      "elapsedMs": 8972,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 937,
+          "completionTokens": 29,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:f16-t02",
+              "target": true,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 983,
+          "completionTokens": 23,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f16",
+      "type": "constraint",
+      "arm": "folded_auto",
+      "autoExpand": false,
+      "question": "什么时候不能上线？",
+      "expected": "周五 18:00",
+      "answerLine": "周末不允许上线",
+      "correct": false,
+      "hallucinated": false,
+      "reason": "wrong",
+      "contextChars": 1094,
+      "promptTokens": 1934,
+      "completionTokens": 108,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 1,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:f16-t02"
+      ],
+      "exhausted": false,
+      "elapsedMs": 6159,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 944,
+          "completionTokens": 45,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:f16-t02",
+              "target": true,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 990,
+          "completionTokens": 63,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f17",
+      "type": "constraint",
+      "arm": "full",
+      "autoExpand": true,
+      "question": "管理员密码多久必须更换？",
+      "expected": "90",
+      "answerLine": "每 90 天",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1029,
+      "promptTokens": 719,
+      "completionTokens": 8,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 1721,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 719,
+          "completionTokens": 8,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f17",
+      "type": "constraint",
+      "arm": "folded_key",
+      "autoExpand": true,
+      "question": "管理员密码多久必须更换？",
+      "expected": "90",
+      "answerLine": "管理员密码每 90 天必须更换一次，不能重复使用最近五次。",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1087,
+      "promptTokens": 1898,
+      "completionTokens": 46,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 1,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:f17-t02"
+      ],
+      "exhausted": false,
+      "elapsedMs": 7608,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 927,
+          "completionTokens": 25,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:f17-t02",
+              "target": true,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 971,
+          "completionTokens": 21,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f17",
+      "type": "constraint",
+      "arm": "folded_auto",
+      "autoExpand": true,
+      "question": "管理员密码多久必须更换？",
+      "expected": "90",
+      "answerLine": "每 90 天必须更换一次，不能重复使用最近五次。",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1193,
+      "promptTokens": 974,
+      "completionTokens": 19,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 5458,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 974,
+          "completionTokens": 19,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f18",
+      "type": "constraint",
+      "arm": "full",
+      "autoExpand": true,
+      "question": "磁盘使用率超过多少必须扩容？",
+      "expected": "80",
+      "answerLine": "80%",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1028,
+      "promptTokens": 729,
+      "completionTokens": 12,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 1426,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 729,
+          "completionTokens": 12,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f18",
+      "type": "constraint",
+      "arm": "folded_key",
+      "autoExpand": true,
+      "question": "磁盘使用率超过多少必须扩容？",
+      "expected": "80",
+      "answerLine": "磁盘使用率超过 80% 就必须扩容，告警只是提醒，不能代替扩容。",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1084,
+      "promptTokens": 1909,
+      "completionTokens": 42,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 1,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:f18-t02"
+      ],
+      "exhausted": false,
+      "elapsedMs": 10066,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 930,
+          "completionTokens": 16,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:f18-t02",
+              "target": true,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 979,
+          "completionTokens": 26,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f18",
+      "type": "constraint",
+      "arm": "folded_auto",
+      "autoExpand": true,
+      "question": "磁盘使用率超过多少必须扩容？",
+      "expected": "80",
+      "answerLine": "80%",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1193,
+      "promptTokens": 982,
+      "completionTokens": 6,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 11292,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 982,
+          "completionTokens": 6,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f19",
+      "type": "step",
+      "arm": "full",
+      "autoExpand": true,
+      "question": "回滚流程的第三步是什么？",
+      "expected": "先关闭 feature flag，再重启 worker",
+      "answerLine": "先关闭 feature flag，再重启 worker，确认没有新请求后继续。",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1046,
+      "promptTokens": 727,
+      "completionTokens": 20,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 1882,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 727,
+          "completionTokens": 20,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f19",
+      "type": "step",
+      "arm": "folded_key",
+      "autoExpand": true,
+      "question": "回滚流程的第三步是什么？",
+      "expected": "先关闭 feature flag，再重启 worker",
+      "answerLine": "先关闭 feature flag，再重启 worker，确认没有新请求后继续。",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1097,
+      "promptTokens": 1924,
+      "completionTokens": 36,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 1,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:f19-t02"
+      ],
+      "exhausted": false,
+      "elapsedMs": 7105,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 937,
+          "completionTokens": 16,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:f19-t02",
+              "target": true,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 987,
+          "completionTokens": 20,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f19",
+      "type": "step",
+      "arm": "folded_auto",
+      "autoExpand": true,
+      "question": "回滚流程的第三步是什么？",
+      "expected": "先关闭 feature flag，再重启 worker",
+      "answerLine": "回滚流程的第三步是先关闭 feature flag，再重启 worker，确认没有新请求后继续。",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1222,
+      "promptTokens": 990,
+      "completionTokens": 27,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 5239,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 990,
+          "completionTokens": 27,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f20",
+      "type": "step",
+      "arm": "full",
+      "autoExpand": false,
+      "question": "第二步具体做什么？",
+      "expected": "先校验备份校验和，再解压到临时目录",
+      "answerLine": "先校验备份校验和，再解压到临时目录",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1017,
+      "promptTokens": 709,
+      "completionTokens": 54,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 2062,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 709,
+          "completionTokens": 54,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f20",
+      "type": "step",
+      "arm": "folded_key",
+      "autoExpand": false,
+      "question": "第二步具体做什么？",
+      "expected": "先校验备份校验和，再解压到临时目录",
+      "answerLine": "恢复流程的第二步是先校验备份校验和，再解压到临时目录。",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1088,
+      "promptTokens": 1889,
+      "completionTokens": 57,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 1,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:f20-t02"
+      ],
+      "exhausted": false,
+      "elapsedMs": 11109,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 921,
+          "completionTokens": 33,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:f20-t02",
+              "target": true,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 968,
+          "completionTokens": 24,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f20",
+      "type": "step",
+      "arm": "folded_auto",
+      "autoExpand": false,
+      "question": "第二步具体做什么？",
+      "expected": "先校验备份校验和，再解压到临时目录",
+      "answerLine": "恢复流程的第二步是先校验备份校验和，再解压到临时目录。",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1088,
+      "promptTokens": 1903,
+      "completionTokens": 68,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 1,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:f20-t02"
+      ],
+      "exhausted": false,
+      "elapsedMs": 12098,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 928,
+          "completionTokens": 44,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:f20-t02",
+              "target": true,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 975,
+          "completionTokens": 24,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f21",
+      "type": "step",
+      "arm": "full",
+      "autoExpand": true,
+      "question": "事故止血的第一步做什么？",
+      "expected": "先冻结发布，再拉齐值班人",
+      "answerLine": "先冻结发布，再拉齐值班人",
+      "correct": true,
+      "hallucinated": true,
+      "reason": "number 21 not in ledger",
+      "contextChars": 1014,
+      "promptTokens": 709,
+      "completionTokens": 46,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 1762,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 709,
+          "completionTokens": 46,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f21",
+      "type": "step",
+      "arm": "folded_key",
+      "autoExpand": true,
+      "question": "事故止血的第一步做什么？",
+      "expected": "先冻结发布，再拉齐值班人",
+      "answerLine": "事故止血流程的第一步是先冻结发布，再拉齐值班人。",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1093,
+      "promptTokens": 1895,
+      "completionTokens": 43,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 1,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:f21-t02"
+      ],
+      "exhausted": false,
+      "elapsedMs": 8652,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 926,
+          "completionTokens": 23,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:f21-t02",
+              "target": true,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 969,
+          "completionTokens": 20,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f21",
+      "type": "step",
+      "arm": "folded_auto",
+      "autoExpand": true,
+      "question": "事故止血的第一步做什么？",
+      "expected": "先冻结发布，再拉齐值班人",
+      "answerLine": "先冻结发布，再拉齐值班人。",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1194,
+      "promptTokens": 972,
+      "completionTokens": 30,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 5502,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 972,
+          "completionTokens": 30,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f22",
+      "type": "step",
+      "arm": "full",
+      "autoExpand": true,
+      "question": "发布流程的第四步是什么？",
+      "expected": "先跑冒烟测试，再切换流量",
+      "answerLine": "先跑冒烟测试，再切换流量",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1014,
+      "promptTokens": 712,
+      "completionTokens": 20,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 1479,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 712,
+          "completionTokens": 20,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f22",
+      "type": "step",
+      "arm": "folded_key",
+      "autoExpand": true,
+      "question": "发布流程的第四步是什么？",
+      "expected": "先跑冒烟测试，再切换流量",
+      "answerLine": "先跑冒烟测试，再切换流量。",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1090,
+      "promptTokens": 1899,
+      "completionTokens": 30,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 1,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:f22-t02"
+      ],
+      "exhausted": false,
+      "elapsedMs": 7640,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 928,
+          "completionTokens": 16,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:f22-t02",
+              "target": true,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 971,
+          "completionTokens": 14,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f22",
+      "type": "step",
+      "arm": "folded_auto",
+      "autoExpand": true,
+      "question": "发布流程的第四步是什么？",
+      "expected": "先跑冒烟测试，再切换流量",
+      "answerLine": "发布流程的第四步是先跑冒烟测试，再切换流量。",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1189,
+      "promptTokens": 974,
+      "completionTokens": 20,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 5681,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 974,
+          "completionTokens": 20,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f23",
+      "type": "step",
+      "arm": "full",
+      "autoExpand": true,
+      "question": "数据清理的第一步是什么？",
+      "expected": "先导出快照，再删除过期分区",
+      "answerLine": "先导出快照，再删除过期分区",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1024,
+      "promptTokens": 713,
+      "completionTokens": 14,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 1551,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 713,
+          "completionTokens": 14,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f23",
+      "type": "step",
+      "arm": "folded_key",
+      "autoExpand": true,
+      "question": "数据清理的第一步是什么？",
+      "expected": "先导出快照，再删除过期分区",
+      "answerLine": "数据清理流程的第一步是先导出快照，再删除过期分区。",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1096,
+      "promptTokens": 1898,
+      "completionTokens": 37,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 1,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:f23-t02"
+      ],
+      "exhausted": false,
+      "elapsedMs": 7282,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 927,
+          "completionTokens": 16,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:f23-t02",
+              "target": true,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 971,
+          "completionTokens": 21,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f23",
+      "type": "step",
+      "arm": "folded_auto",
+      "autoExpand": true,
+      "question": "数据清理的第一步是什么？",
+      "expected": "先导出快照，再删除过期分区",
+      "answerLine": "先导出快照，再删除过期分区。",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1198,
+      "promptTokens": 974,
+      "completionTokens": 36,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 5186,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 974,
+          "completionTokens": 36,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f24",
+      "type": "step",
+      "arm": "full",
+      "autoExpand": true,
+      "question": "迁移流程的第五步是什么？",
+      "expected": "先停写，再切换读流量",
+      "answerLine": "先停写，再切换读流量。",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1007,
+      "promptTokens": 710,
+      "completionTokens": 13,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 2086,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 710,
+          "completionTokens": 13,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f24",
+      "type": "step",
+      "arm": "folded_key",
+      "autoExpand": true,
+      "question": "迁移流程的第五步是什么？",
+      "expected": "先停写，再切换读流量",
+      "answerLine": "迁移流程的第五步是先停写，再切换读流量。",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1087,
+      "promptTokens": 1900,
+      "completionTokens": 62,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 1,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:f24-t02"
+      ],
+      "exhausted": false,
+      "elapsedMs": 8352,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 929,
+          "completionTokens": 43,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:f24-t02",
+              "target": true,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 971,
+          "completionTokens": 19,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "f24",
+      "type": "step",
+      "arm": "folded_auto",
+      "autoExpand": true,
+      "question": "迁移流程的第五步是什么？",
+      "expected": "先停写，再切换读流量",
+      "answerLine": "迁移流程的第五步是先停写，再切换读流量。",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 1184,
+      "promptTokens": 974,
+      "completionTokens": 42,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 10523,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 974,
+          "completionTokens": 42,
+          "toolCalls": []
+        }
+      ]
+    }
+  ]
+}
