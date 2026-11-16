@@ -706,6 +706,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       workspaceRoot: this.config.workspaceRoot,
       dataDir: this.config.dataDir,
       trace: this.trace,
+      kernel: this.kernel,
     });
     this.host.register(workflowsPlugin({
       agentId: this.config.agentId,
