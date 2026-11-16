@@ -1,0 +1,137 @@
+{
+  "at": "2026-11-16T08:19:46.842Z",
+  "head": "d54fda50",
+  "model": "Xenova/bge-base-zh-v1.5",
+  "dimensions": 768,
+  "semanticIndex": true,
+  "loadMs": 594,
+  "queryMs": 4825,
+  "reEmbed": {
+    "first": {
+      "processed": 0,
+      "remaining": 0
+    },
+    "second": {
+      "processed": 0,
+      "remaining": 0
+    }
+  },
+  "metrics": {
+    "memory": {
+      "n": 20,
+      "recall1": 0.1,
+      "recall5": 0.3
+    },
+    "procedure": {
+      "n": 10,
+      "recall1": 0.2,
+      "recall5": 0.2
+    },
+    "all": {
+      "n": 30,
+      "recall1": 0.13333333333333333,
+      "recall5": 0.26666666666666666
+    }
+  },
+  "evidenceLane": {
+    "n": 20,
+    "recall1": 0.75,
+    "recall5": 0.95
+  },
+  "rssMb": 675,
+  "peakMb": 678,
+  "misses": {
+    "memory": [
+      {
+        "id": "m01",
+        "rank": 18
+      },
+      {
+        "id": "m03",
+        "rank": 10
+      },
+      {
+        "id": "m04",
+        "rank": 16
+      },
+      {
+        "id": "m05",
+        "rank": 15
+      },
+      {
+        "id": "m07",
+        "rank": 13
+      },
+      {
+        "id": "m08",
+        "rank": 11
+      },
+      {
+        "id": "m10",
+        "rank": 20
+      },
+      {
+        "id": "m11",
+        "rank": 6
+      },
+      {
+        "id": "m12",
+        "rank": 9
+      },
+      {
+        "id": "m14",
+        "rank": 8
+      },
+      {
+        "id": "m17",
+        "rank": 12
+      },
+      {
+        "id": "m18",
+        "rank": 17
+      },
+      {
+        "id": "m19",
+        "rank": 14
+      },
+      {
+        "id": "m20",
+        "rank": 7
+      }
+    ],
+    "procedure": [
+      {
+        "id": "p01",
+        "rank": null
+      },
+      {
+        "id": "p02",
+        "rank": null
+      },
+      {
+        "id": "p03",
+        "rank": null
+      },
+      {
+        "id": "p04",
+        "rank": null
+      },
+      {
+        "id": "p06",
+        "rank": null
+      },
+      {
+        "id": "p08",
+        "rank": null
+      },
+      {
+        "id": "p09",
+        "rank": null
+      },
+      {
+        "id": "p10",
+        "rank": null
+      }
+    ]
+  }
+}
