@@ -275,6 +275,10 @@ describe('the six-step install', () => {
     expect(env).toContain('MG_MODEL=auto/deepseek-v4.1-flash');
     expect(env).toContain('COGMEM_SHELL_TZ=');
     expect(env).toContain('COGMEM_SHELL_DREAM_START=2');
+    // The observatory's soul-write token (#283): minted once, owner-only.
+    const tokenPath = join(harness.dataDir, 'observatory-token');
+    expect(readFileSync(tokenPath, 'utf8').trim()).toMatch(/^[0-9a-f]{64}$/u);
+    expect(statSync(tokenPath).mode & 0o777).toBe(0o600);
     // mg is the built-in route: a default install writes no custom-route file at all.
     expect(existsSync(join(harness.dataDir, 'routes.json'))).toBe(false);
 
@@ -298,9 +302,11 @@ describe('the six-step install', () => {
     // What `/plugins add` would have written. A re-run that goes through the place step again (a lost
     // install.json is the realistic case) must keep it, the same way budgets.json is kept.
     writeFileSync(pluginsPath, `${JSON.stringify(['./plugins/hello.ts'])}\n`, 'utf8');
+    const token = readFileSync(join(harness.dataDir, 'observatory-token'), 'utf8');
     rmSync(join(harness.dataDir, 'install.json'), { force: true });
     expect(await harness.installer.run()).toBe(0);
     expect(JSON.parse(readFileSync(pluginsPath, 'utf8'))).toEqual(['./plugins/hello.ts']);
+    expect(readFileSync(join(harness.dataDir, 'observatory-token'), 'utf8')).toBe(token);
   });
 
   test('a fresh install persists a stable session id; a re-run with the state file gone keeps it', async () => {

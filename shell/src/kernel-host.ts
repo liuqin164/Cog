@@ -22,6 +22,7 @@ import { readMemoryUsage } from './memory.ts';
 
 const OBSERVATORY_MODULE = '../../src/observatory/MemoryObservatory.ts';
 const OBSERVATORY_ROUTES = '../../src/observatory/routes.ts';
+const OBSERVATORY_TOKEN = '../../src/observatory/token.ts';
 
 export interface HttpFaceOptions {
   port: number;
@@ -55,9 +56,10 @@ async function openObservatory(
 ): Promise<{ db: Database; handle: (request: Request, remoteAddress?: string) => Promise<Response | null> } | undefined> {
   if (!dbPath || dbPath === ':memory:' || dbPath.startsWith('file:')) return undefined;
   try {
-    const [observatoryModule, routesModule] = await Promise.all([
+    const [observatoryModule, routesModule, tokenModule] = await Promise.all([
       import(OBSERVATORY_MODULE),
       import(OBSERVATORY_ROUTES),
+      import(OBSERVATORY_TOKEN),
     ]);
     const db = new Database(dbPath, { readonly: true });
     const atlas = (kernel as { memoryAtlasService?: { node(...args: unknown[]): any } }).memoryAtlasService;
@@ -73,7 +75,12 @@ async function openObservatory(
       connectedAgents,
       tracePath: tracePath ?? (dbPath ? join(dirname(dbPath), 'shell-events.jsonl') : undefined),
     });
-    return { db, handle: routesModule.createObservatoryRoutes(observatory, events, soul) };
+    return {
+      db,
+      handle: routesModule.createObservatoryRoutes(observatory, events, soul, {
+        token: tokenModule.readObservatoryToken(dirname(dbPath)),
+      }),
+    };
   } catch {
     return undefined;
   }
