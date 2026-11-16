@@ -8,6 +8,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
+import type { MemoryEvent, MemoryKernel } from 'cogmem';
 import type { TraceLog } from '../trace.ts';
 import type { NativePlugin, ToolDefinition, ToolOutcome } from './host.ts';
 
@@ -29,6 +30,8 @@ export interface BuiltinToolsConfig {
    */
   dataDir?: string;
   trace?: TraceLog;
+  /** The kernel's read face: `mem:<eventId>` resolves through it, never through the SQLite file. */
+  kernel?: MemoryKernel;
 }
 
 function inside(root: string, candidate: string): string {
@@ -47,6 +50,32 @@ function writableInside(root: string, candidate: string, dataDir?: string): stri
     if (resolved === data || resolved.startsWith(data + sep)) throw new Error(`path_in_data_dir: ${candidate}`);
   }
   return resolved;
+}
+
+/** `mem:<eventId>` is the ledger's read key; it is a separate namespace from workspace paths. */
+const MEMORY_PATH_PREFIX = 'mem:';
+
+function memoryEventId(path: string): string | undefined {
+  if (!path.startsWith(MEMORY_PATH_PREFIX)) return undefined;
+  const eventId = path.slice(MEMORY_PATH_PREFIX.length);
+  if (eventId === '') throw new Error('invalid_memory_path: expected mem:<eventId>');
+  return eventId;
+}
+
+/** The same rule the CLI's drill-down uses for "the event's own text". */
+function memoryEventText(event: MemoryEvent): string {
+  const payload = event.payload as { text?: unknown; output?: unknown; title?: unknown };
+  if (typeof payload.text === 'string') return payload.text;
+  if (typeof payload.output === 'string') return payload.output;
+  if (typeof payload.title === 'string') return payload.title;
+  return JSON.stringify(event.payload);
+}
+
+/** A refusal is evidence: the model should learn the path is read-only, not retry it. */
+function refuseMemoryWrite(path: string, tool: 'write' | 'edit', trace?: TraceLog): void {
+  if (!path.startsWith(MEMORY_PATH_PREFIX)) return;
+  trace?.append('memory_path_write_refused', { tool, path });
+  throw new Error(`read_only_memory_path: ${path} is a ledger event; read it with read mem:<eventId>`);
 }
 
 /**
@@ -110,12 +139,38 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
 
+/** The first `maxBytes` bytes of `text`, cut back to the previous character boundary. */
+function headBytes(text: string, maxBytes: number): string {
+  const buffer = Buffer.from(text, 'utf8');
+  if (buffer.length <= maxBytes) return text;
+  let end = maxBytes;
+  while (end > 0 && (buffer[end] & 0xc0) === 0x80) end -= 1;
+  return buffer.subarray(0, end).toString('utf8');
+}
+
 /** The last `maxBytes` bytes of `text`, moved forward to the next character boundary. */
 function tailBytes(text: string, maxBytes: number): string {
   const buffer = Buffer.from(text, 'utf8');
   let start = buffer.length - maxBytes;
   while (start < buffer.length && (buffer[start] & 0xc0) === 0x80) start += 1;
   return buffer.subarray(start).toString('utf8');
+}
+
+/**
+ * A ledger event's text by `mem:<eventId>`. The read is idempotent and the same 256 KiB cap as a
+ * file read; an event past it is cut and the cut is traced rather than retried through bash.
+ */
+function readMemoryEvent(eventId: string, kernel: MemoryKernel | undefined, trace?: TraceLog): string {
+  if (!kernel) throw new Error('memory_unavailable: this shell has no kernel attached');
+  const event = kernel.getEventContext(eventId, { before: 0, after: 0 })?.event;
+  if (!event) {
+    throw new Error(`memory_event_not_found: no ledger event ${eventId}; use a mem:<eventId> key from a recall anchor or session digest`);
+  }
+  const text = memoryEventText(event);
+  const bytes = Buffer.byteLength(text, 'utf8');
+  if (bytes <= MAX_READ_BYTES) return text;
+  trace?.append('memory_read_truncated', { eventId, bytes, cap: MAX_READ_BYTES });
+  return `${headBytes(text, MAX_READ_BYTES)}\n\n[memory event truncated: showing ${formatSize(MAX_READ_BYTES)} of ${formatSize(bytes)}]`;
 }
 
 /**
@@ -166,19 +221,32 @@ function capBashOutput(fullText: string, workspaceRoot: string): string {
   return `${shown}\n\n[showing lines ${startLine}-${totalLines} of ${totalLines}${limit}; full output: ${pointer}]`;
 }
 
-function definitions(workspaceRoot: string, sandbox?: { dataDir: string; trace?: TraceLog }): ToolDefinition[] {
+function definitions(
+  workspaceRoot: string,
+  sandbox: { dataDir: string; trace?: TraceLog } | undefined,
+  ledger: { kernel?: MemoryKernel; trace?: TraceLog },
+): ToolDefinition[] {
   return [
     {
       name: 'read',
-      description: 'Read a UTF-8 text file inside the workspace. Output is capped at 256 KiB.',
+      description: 'Read a UTF-8 text file inside the workspace, or a ledger event by mem:<eventId>. Output is capped at 256 KiB.',
       replay: 'safe',
       parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
       rehearse({ args }) {
-        const path = inside(workspaceRoot, asString(args, 'path'));
+        const requested = asString(args, 'path');
+        const eventId = memoryEventId(requested);
+        if (eventId !== undefined) {
+          if (!ledger.kernel) throw new Error('memory_unavailable: this shell has no kernel attached');
+          return `would read memory event ${eventId}`;
+        }
+        const path = inside(workspaceRoot, requested);
         return `would read ${path}`;
       },
       execute({ args }) {
-        const path = inside(workspaceRoot, asString(args, 'path'));
+        const requested = asString(args, 'path');
+        const eventId = memoryEventId(requested);
+        if (eventId !== undefined) return readMemoryEvent(eventId, ledger.kernel, ledger.trace);
+        const path = inside(workspaceRoot, requested);
         const size = statSync(path).size;
         if (size > MAX_READ_BYTES) throw new Error(`file_too_large: ${size} bytes (cap ${MAX_READ_BYTES})`);
         return readFileSync(path, 'utf8');
@@ -194,12 +262,16 @@ function definitions(workspaceRoot: string, sandbox?: { dataDir: string; trace?:
         required: ['path', 'content'],
       },
       rehearse({ args }) {
-        const path = writableInside(workspaceRoot, asString(args, 'path'), sandbox?.dataDir);
+        const requested = asString(args, 'path');
+        refuseMemoryWrite(requested, 'write', ledger.trace);
+        const path = writableInside(workspaceRoot, requested, sandbox?.dataDir);
         const content = asString(args, 'content', false);
         return `would write ${Buffer.byteLength(content)} bytes to ${path}`;
       },
       execute({ args }) {
-        const path = writableInside(workspaceRoot, asString(args, 'path'), sandbox?.dataDir);
+        const requested = asString(args, 'path');
+        refuseMemoryWrite(requested, 'write', ledger.trace);
+        const path = writableInside(workspaceRoot, requested, sandbox?.dataDir);
         const content = asString(args, 'content', false);
         mkdirSync(dirname(path), { recursive: true });
         writeFileSync(path, content, 'utf8');
@@ -216,13 +288,17 @@ function definitions(workspaceRoot: string, sandbox?: { dataDir: string; trace?:
         required: ['path', 'old_string', 'new_string'],
       },
       rehearse({ args }) {
-        const path = writableInside(workspaceRoot, asString(args, 'path'), sandbox?.dataDir);
+        const requested = asString(args, 'path');
+        refuseMemoryWrite(requested, 'edit', ledger.trace);
+        const path = writableInside(workspaceRoot, requested, sandbox?.dataDir);
         asString(args, 'old_string');
         asString(args, 'new_string', false);
         return `would edit ${path}`;
       },
       execute({ args }) {
-        const path = writableInside(workspaceRoot, asString(args, 'path'), sandbox?.dataDir);
+        const requested = asString(args, 'path');
+        refuseMemoryWrite(requested, 'edit', ledger.trace);
+        const path = writableInside(workspaceRoot, requested, sandbox?.dataDir);
         const oldString = asString(args, 'old_string');
         const newString = asString(args, 'new_string', false);
         const original = readFileSync(path, 'utf8');
@@ -316,10 +392,10 @@ export function builtinToolsPlugin(): NativePlugin {
     name: 'builtin-tools',
     provide: ['builtinTools'],
     apply(ctx, config) {
-      const { workspaceRoot, dataDir, trace } = config as BuiltinToolsConfig;
+      const { workspaceRoot, dataDir, trace, kernel } = config as BuiltinToolsConfig;
       const sandbox = dataDir && bwrapUsable() ? { dataDir, trace } : undefined;
       if (dataDir && !sandbox) trace?.append('bash_sandbox_unavailable', { dataDir, reason: 'bwrap_not_usable' });
-      for (const definition of definitions(workspaceRoot, sandbox)) {
+      for (const definition of definitions(workspaceRoot, sandbox, { kernel, trace })) {
         ctx.registerTool(definition, { builtin: true });
       }
       ctx.provide('builtinTools', { names: ['read', 'write', 'edit', 'bash'] });
