@@ -294,11 +294,14 @@ numbers.
 
 ## Failure ladder
 
-A failed model call goes down one ladder, in Pi's fixed order: **context overflow first**, then
-**retryability** (account/subscription limits are classified non-retryable and are checked before the
-transient table, because they reset in hours and retrying only burns the day), then a **bounded retry**
-with exponential backoff capped at 60 s. The pattern tables are ported from pinned
-`@earendil-works/pi-ai@1.5.0` (`utils/retry.ts`, `utils/overflow.ts`).
+A failed model call goes down one ladder: **context overflow first**, then **account/subscription
+limits** (non-retryable; they reset in hours and retrying only burns the day), then a **whole-turn
+timeout** (non-retryable: the cap covers connect, prefill and every token, so retrying it multiplied one
+silent wait into up to ~8 minutes — #240), then a **bounded retry** for transport failures only (a
+connection that failed, not a server that answered: 429/5xx fail fast) with exponential backoff capped
+at 60 s. The pattern tables are ported from pinned `@earendil-works/pi-ai@1.5.0`
+(`utils/retry.ts`, `utils/overflow.ts`); the timeout rung and the transport-only narrowing are the
+deliberate deviations.
 
 An overflow gets exactly one recovery attempt per run (the **one-shot latch** — read it back in the
 trace as `provider_call_failed` with `next: "recover_overflow"`, then `next: "fail"` on the second
@@ -317,11 +320,12 @@ and `delayMs`.
 **A custom endpoint's classes are named, and the ladder still decides.** `classifyEndpointFailure`
 (`src/state/retry.ts`) names what a failure is — `auth` (401/403), `model_not_found` (404),
 `rate_limit` (429), `unreachable`, `timeout`, `http` — for the diagnosis that says "check the key" or
-"check the model name". It does not replace the ladder: 401/403/404 stay `fatal` (no retry), while a
-refused connection and a timeout stay `retryable` with the same capped exponential backoff as any other
-transient failure. The route probe uses the same classifier, so the install's wording and the runtime's
-behaviour cannot drift apart. (One pattern was added to the ported table: Bun's fetch says "Unable to
-connect" for a refused connection, and Pi's table predates that phrasing.)
+"check the model name". It does not replace the ladder: 401/403/404 and 429 stay `fatal` (no retry),
+while a refused connection stays `retryable` with the same capped exponential backoff as any other
+transport failure; a timeout fails fast and names itself. The route probe uses the same classifier, so
+the install's wording and the runtime's behaviour cannot drift apart. (One pattern was added to the
+ported table: Bun's fetch says "Unable to connect" for a refused connection, and Pi's table predates
+that phrasing.)
 
 ## Capture and redaction
 
