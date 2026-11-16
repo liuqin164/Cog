@@ -1,9 +1,12 @@
 export {
   SESSION_LEDGER_MAX_TURNS,
   readSessionTurns,
+  readSessionToolCalls,
   type SessionTurn,
   type SessionTurnRead,
   type SessionTurnReadInput,
+  type SessionToolCall,
+  type SessionToolCallReadInput,
 } from './SessionLedger.js';
 export {
   SESSION_DIGEST_ENTRY_FIELDS,

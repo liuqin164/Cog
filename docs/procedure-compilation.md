@@ -42,6 +42,27 @@ inside it. One entry exists per (domain, key, own-or-imported): an imported guid
 practice for the same key coexist, and recall ranks the own practice first. A correction to an
 imported-only key becomes its own entry rather than editing the book that was read.
 
+## The producer (#262)
+
+The compiler reads descriptors; it does not invent them. The shell writes the one an own attempt
+leaves, at `declare_task` with `action: "end"`:
+
+- `domain` and `key` are the model's explicit fill at the end, and the tool description says so.
+  Missing either (or ending without the tool) writes no descriptor — an empty book is the intended
+  state, not a gap to guess around.
+- `steps` and `tools` come only from the `tool_call` rows captured for that assignment's session
+  window, in capture order: one step per real call, the boundary `declare_task` call excluded, and
+  the compiler's frozen caps (16 steps, 8 tools) applied before the row is written. A task that
+  made no tool calls leaves no entry. The model cannot supply steps: extra tool arguments are
+  ignored at the boundary, and no field of the descriptor is taken from its prose.
+
+The descriptor is written as a `task_event` with `metadata.procedure` `{ domain, key, steps,
+tools, checklist?, outcome: "succeeded" }`, and the shell compiles the book in the same turn. One
+success is `tentative` by the grade table above; the same practice completed twice is
+`established`. `lastEndedTask` is the checkpointed binding: the descriptor is written after capture
+has flushed the run's rows, and the declaration is cleared once the row exists, so a restart retries
+instead of duplicating.
+
 ## Grades (frozen)
 
 Support count is confidence.

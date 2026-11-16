@@ -180,6 +180,16 @@ export interface ShellRuntimeState {
     runId?: string;
     /** The turn the end declaration arrived in; `<runId>:0` when the tool supplied one. */
     turnId?: string;
+    /**
+     * What the model explicitly declared when it ended the task (#262). The shell builds the
+     * procedure descriptor from this plus the task's captured `tool_call` rows; absent when the
+     * model filled no domain/key, in which case the book stays unchanged rather than guessing.
+     */
+    procedure?: {
+      domain: string;
+      key: string;
+      checklist: boolean;
+    };
   };
   /**
    * The digest stubs finished tasks left behind (#263). Each is a `SessionDigest` entry built from

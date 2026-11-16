@@ -10,7 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { ChannelContract, createMemoryKernel, digestAnchors, KernelAgentMemoryBackend, readSessionTurns, type ChannelSession, type EmbeddingProvider, type MemoryKernel, type ProcedureWorkflow, type SessionContextAssembly, type SessionContextItem, type SessionDigestEntry, type SessionTurn } from 'cogmem';
+import { ChannelContract, createMemoryKernel, digestAnchors, KernelAgentMemoryBackend, readSessionToolCalls, readSessionTurns, type ChannelSession, type EmbeddingProvider, type MemoryKernel, type ProcedureWorkflow, type SessionContextAssembly, type SessionContextItem, type SessionDigestEntry, type SessionToolCall, type SessionTurn } from 'cogmem';
 import { ModelRegistry, TraceStore, type ModelRoleConfig, type ModelRoleName, type ModelTextUsage } from 'cogmem/internal';
 import { defaultShellConfig, type ShellConfig } from './config.ts';
 import { StateMachine } from './state/machine.ts';
@@ -1064,8 +1064,93 @@ export class CompanionShell implements ShellControl, AttachShell {
    * retries here on the next assembly.
    */
   private laneDigestStubs(): SessionDigestEntry[] {
+    this.materializeTaskProcedure(false);
     this.materializeTaskEndStub();
     return [...(this.machine.runtime.taskStubs ?? [])];
+  }
+
+  /**
+   * The procedure book's producer (#262): a declared task end leaves one `task_event` whose
+   * `metadata.procedure` the compiler reads. `domain` and `key` are the model's own end-time fill;
+   * `steps` and `tools` are built only from the task's captured `tool_call` rows, in capture order.
+   * A task that made no tool calls leaves no entry — an empty book beats a fabricated one.
+   *
+   * Called after capture has written the end run's rows (settle, or the next assembly after a
+   * restart); the declaration is cleared once the row exists so a retry cannot write it twice.
+   */
+  private materializeTaskProcedure(final: boolean): void {
+    const pending = this.machine.runtime.lastEndedTask;
+    const declaration = pending?.procedure;
+    if (!pending || !declaration) return;
+    let calls: SessionToolCall[];
+    try {
+      calls = readSessionToolCalls(this.kernel.factStore.getDatabase(), {
+        projectId: this.config.projectId,
+        agentId: this.config.agentId,
+        sessionId: this.config.sessionId,
+        since: pending.startedAt,
+      });
+    } catch (error) {
+      this.trace.append('task_procedure_failed', {
+        assignmentId: pending.assignmentId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    const evidence = procedureEvidenceOf(calls);
+    if (!evidence) {
+      // Before the run settles, capture has not written this run's tool rows yet: an empty read
+      // here is "not yet", not "no calls". Only the settle pass may conclude there was no evidence.
+      if (final) {
+        this.machine.updateRuntime({ lastEndedTask: { ...pending, procedure: undefined } });
+        this.trace.append('task_procedure_skipped', { assignmentId: pending.assignmentId, reason: 'no_tool_calls' });
+      }
+      return;
+    }
+    try {
+      // shortcut: a kill between this append and the checkpoint clear below would write the row
+      // twice, and two identical experiences read as `established`; key the row by assignmentId
+      // when a duplicate is ever observed.
+      this.kernel.recordTaskEvent({
+        projectId: this.config.projectId,
+        workspaceId: this.config.projectId,
+        threadId: this.config.sessionId,
+        sessionId: this.config.sessionId,
+        ...(pending.turnId ? { turnId: pending.turnId } : {}),
+        title: `${declaration.domain}/${declaration.key}`,
+        content: `task completed: ${declaration.domain}/${declaration.key} (${evidence.steps.length} tool calls)`,
+        occurredAt: this.now(),
+        sourceId: `${this.config.agentId}:${this.config.sessionId}`,
+        metadata: {
+          sourceAgent: this.config.agentId,
+          source: 'companion-shell',
+          kind: 'task-procedure',
+          procedure: {
+            domain: declaration.domain,
+            key: declaration.key,
+            checklist: declaration.checklist,
+            outcome: 'succeeded',
+            steps: evidence.steps,
+            tools: evidence.tools,
+          },
+        },
+      });
+      this.kernel.procedures.compile({ projectId: this.config.projectId, now: this.now() });
+    } catch (error) {
+      this.trace.append('task_procedure_failed', {
+        assignmentId: pending.assignmentId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    this.machine.updateRuntime({ lastEndedTask: { ...pending, procedure: undefined } });
+    this.trace.append('task_procedure_written', {
+      assignmentId: pending.assignmentId,
+      domain: declaration.domain,
+      key: declaration.key,
+      steps: evidence.steps.length,
+      tools: evidence.tools,
+    });
   }
 
   /**
@@ -1287,7 +1372,9 @@ export class CompanionShell implements ShellControl, AttachShell {
     }
     const outcome = this.settleAssignment(summary, tier, trigger);
     // `agent_end` capture has written this run's rows by the time `run()` returns, so the declared
-    // task end's stub can quote them here instead of waiting for the next request (#263).
+    // task end's procedure (#262) and stub (#263) can read them here instead of waiting for the
+    // next request.
+    this.materializeTaskProcedure(true);
     this.materializeTaskEndStub(summary.turnId, summary.runId);
     if (summary.stopReason === 'run_error' && summary.error?.startsWith('model_timeout:')) this.announceModelTimeout(summary);
     if (summary.stopReason === 'run_error' && summary.error?.startsWith('no_progress:')) this.announceNoProgress(summary);
@@ -2502,7 +2589,7 @@ export class CompanionShell implements ShellControl, AttachShell {
    * declaration, and the shell settles the old assignment the way a completed run does. The trace
    * record is the auditable shape C5/D3 will consume.
    */
-  declareTask(input: { action?: string; runId?: string }): { ok: boolean; text: string } {
+  declareTask(input: { action?: string; runId?: string; domain?: string; key?: string; checklist?: boolean }): { ok: boolean; text: string } {
     const action = input.action;
     if (action !== 'start' && action !== 'end') {
       return { ok: false, text: 'invalid_arguments: "action" must be "start" or "end"' };
@@ -2528,6 +2615,13 @@ export class CompanionShell implements ShellControl, AttachShell {
         ? [...(this.machine.runtime.retainedConstraints ?? []), { id: `constraint:${previous.id}`, text: workingItem.text }]
             .slice(-MAX_RETAINED_CONSTRAINTS)
         : this.machine.runtime.retainedConstraints;
+      // #262: domain and key are the model's explicit fill at the end; steps and tools come from
+      // the task's captured tool calls, never from this input. Missing either means no entry.
+      const domain = input.domain?.trim() ?? '';
+      const key = input.key?.trim() ?? '';
+      const procedure = domain !== '' && key !== ''
+        ? { domain, key, checklist: input.checklist === true }
+        : undefined;
       this.machine.updateRuntime({
         openAssignment: undefined,
         lastEndedTask: {
@@ -2535,6 +2629,7 @@ export class CompanionShell implements ShellControl, AttachShell {
           startedAt: previous.startedAt,
           endedAt: this.now(),
           ...(input.runId ? { runId: input.runId, turnId: `${input.runId}:0` } : {}),
+          ...(procedure ? { procedure } : {}),
         },
         ...(retained === undefined ? {} : { retainedConstraints: retained }),
       });
@@ -2545,8 +2640,14 @@ export class CompanionShell implements ShellControl, AttachShell {
         assignmentId: null,
         textChars: previous.text.length,
         protectedRetained: workingItem?.protected === true,
+        procedure: procedure ? `${procedure.domain}/${procedure.key}` : null,
       });
-      return { ok: true, text: '已声明任务结束：open assignment 已收束，本 run 剩余部分不再把它当待办。' };
+      return {
+        ok: true,
+        text: procedure
+          ? '已声明任务结束：open assignment 已收束，本 run 剩余部分不再把它当待办；做法条目将由本任务的真实工具轨迹生成。'
+          : '已声明任务结束：open assignment 已收束，本 run 剩余部分不再把它当待办。未填 domain/key，本次不写入做法册。',
+      };
     }
     const brief = (previous.latestUserText ?? previous.text).trim().slice(0, 500);
     const assignment = {
@@ -3227,6 +3328,32 @@ function buildTaskStub(
     sourceRefs: [...new Set([closing.eventId, ...quotes.map((quote) => quote.turn.eventId)])],
     anchor: digestAnchors(text).length > 0,
   };
+}
+
+/**
+ * The procedure's evidence, from the task's captured tool calls only (#262). One step per real
+ * call, in order; the boundary tool itself is not a step of the task. No calls means no evidence —
+ * the caller writes nothing rather than an empty practice. The compiler's frozen caps
+ * (`MAX_STEPS` 16, `MAX_TOOLS` 8) are applied here so the trace records what was kept.
+ */
+function procedureEvidenceOf(calls: readonly SessionToolCall[]): { steps: string[]; tools: string[] } | undefined {
+  const ordered = calls.filter((call) => call.toolName !== 'declare_task');
+  if (ordered.length === 0) return undefined;
+  const steps = ordered.slice(0, 16).map((call) => {
+    const input = compactToolInput(call.input);
+    return input ? `${call.toolName}: ${input}` : call.toolName;
+  });
+  const tools = [...new Set(ordered.map((call) => call.toolName))].slice(0, 8);
+  return { steps, tools };
+}
+
+/** A tool call's input, one line and bounded: the step names what was called, not the whole file. */
+function compactToolInput(input: unknown): string {
+  if (input === undefined) return '';
+  const text = typeof input === 'string' ? input : JSON.stringify(input);
+  if (!text) return '';
+  const oneLine = text.replace(/\s+/gu, ' ').trim();
+  return oneLine.length <= 120 ? oneLine : `${oneLine.slice(0, 119)}…`;
 }
 
 /** The first non-empty line, cut to `limit`; the kept part is an exact prefix of the ledger row. */

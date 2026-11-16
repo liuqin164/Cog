@@ -45,6 +45,22 @@ export interface SessionTurnReadInput {
   limit?: number;
 }
 
+/** One `tool_call` row: the task's own trajectory, as captured, with no model summary. */
+export interface SessionToolCall {
+  eventId: string;
+  turnId: string;
+  toolName: string;
+  input: unknown;
+}
+
+export interface SessionToolCallReadInput {
+  projectId: string;
+  agentId: string;
+  sessionId: string;
+  /** Only rows captured at or after this instant; the task's start boundary. */
+  since: number;
+}
+
 interface TurnRow {
   event_id: string;
   project_id: string | null;
@@ -97,6 +113,58 @@ export function readSessionTurns(db: Database, input: SessionTurnReadInput): Ses
   // The newest window is the one the tail must come from; the extra row is the oldest of the
   // fetched window, so drop that one rather than the newest.
   return { turns: (truncated ? rows.slice(rows.length - limit) : rows).map(mapTurn), truncated };
+}
+
+/**
+ * The tool calls a task actually made, in capture order. The shell's producer (#262) builds a
+ * procedure's steps and tools from these rows, never from the model's account of itself: a tool
+ * called outside this window is not evidence of how the task got done.
+ *
+ * `since` is the assignment's start. There is no upper bound: capture stamps rows at `agent_end`,
+ * so the end declaration's own run is written after its `endedAt` and a time window would drop it.
+ * Two task boundaries inside one run are the case this cannot order; they are not the producer's
+ * shape (an end declaration closes the assignment the run started with).
+ */
+export function readSessionToolCalls(db: Database, input: SessionToolCallReadInput): SessionToolCall[] {
+  const rows = db
+    .query(`
+      SELECT event_id, turn_id, occurred_at, global_seq,
+        json_extract(payload_json, '$.metadata.toolName') AS tool_name,
+        json_extract(payload_json, '$.metadata.input') AS tool_input
+      FROM memory_events
+      WHERE event_type = 'RAW_EVENT_RECORDED'
+        AND raw_event_type = 'tool_call'
+        AND COALESCE(project_id, '') = ?
+        AND COALESCE(session_id, '') = ?
+        AND COALESCE(source_id, '') = ?
+        AND occurred_at >= ?
+        AND json_valid(payload_json)
+      ORDER BY occurred_at ASC, COALESCE(global_seq, 0) ASC, event_id ASC
+      LIMIT 500
+    `)
+    .all(input.projectId, input.sessionId, `${input.agentId}:${input.sessionId}`, input.since) as Array<{
+      event_id: string;
+      turn_id: string | null;
+      tool_name: string | null;
+      tool_input: string | null;
+    }>;
+  return rows
+    .filter((row) => typeof row.tool_name === 'string' && row.tool_name !== '')
+    .map((row) => ({
+      eventId: row.event_id,
+      turnId: row.turn_id ?? '',
+      toolName: row.tool_name!,
+      input: parseToolInput(row.tool_input),
+    }));
+}
+
+function parseToolInput(raw: string | null): unknown {
+  if (raw === null) return undefined;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
 }
 
 function mapTurn(row: TurnRow): SessionTurn {
