@@ -97,7 +97,7 @@ async function main(): Promise<number> {
     return result.ok ? 0 : 1;
   }
   const config = defaultShellConfig({ ...overrides, terminalEnabled: parsed.command === 'once' ? false : overrides.terminalEnabled });
-  const shell = new CompanionShell({ config, onAlarm: () => process.exit(3) });
+  const shell = new CompanionShell({ config, embedding: true, onAlarm: () => process.exit(3) });
   await shell.start();
   if (parsed.command === 'once') {
     const text = parsed.positionals[0] ?? 'ping';

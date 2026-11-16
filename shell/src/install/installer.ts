@@ -35,6 +35,7 @@ import { runDoctor, type DoctorReport, type HealthPayload } from './doctor.ts';
 import { openProbeSession, type ProbeSession } from './attach.ts';
 import { createTerminalIO, type InstallIO, type TerminalStreams } from './io.ts';
 import { pluginsConfigPath, writePluginRegistry } from '../plugins/registry.ts';
+import { ensureEmbeddingModel, type EmbeddingEnsureResult, type EmbeddingProgress } from '../embedding/ensure.ts';
 
 export const INSTALL_STEPS = ['preflight', 'place', 'model', 'rhythm', 'resident', 'awake'] as const;
 export type InstallStepId = (typeof INSTALL_STEPS)[number];
@@ -100,6 +101,8 @@ export interface ResidentHandle {
 
 export interface InstallerHooks {
   probe?: typeof probeModel;
+  /** Tests stub the 99 MiB download; production uses the real Hugging Face fetch. */
+  ensureEmbedding?: (dataDir: string, onProgress?: (progress: EmbeddingProgress) => void) => Promise<EmbeddingEnsureResult>;
   fetchHealth?: (url: string) => Promise<HealthPayload>;
   /** The first-wake probe's channel to the running resident: its attach control socket. */
   openProbe?: (socketPath: string) => Promise<ProbeSession>;
@@ -469,6 +472,22 @@ export class Installer {
       return { ok: false, message: '默认 soul 写入后读不回（逐字比对不一致）', hint: `检查 ${this.dbPath} 的写权限。` };
     }
     this.io.say(`默认 soul：v${row.version}，${Buffer.byteLength(row.content)} 字节，逐字读回一致`);
+
+    // The embedding model is an optional capability, so a failed download is reported and the
+    // install continues: recall degrades to words instead of the install failing.
+    this.io.say('embedding 模型：检查本机 bge-base-zh-v1.5（约 99 MiB，缺失则从 Hugging Face 下载）…');
+    let lastFile = '';
+    const embedding = await (this.hooks.ensureEmbedding ?? ensureEmbeddingModel)(this.choices.dataDir, (progress) => {
+      if (progress.status !== 'progress' || !progress.file || progress.file === lastFile) return;
+      lastFile = progress.file;
+      this.io.say(`  下载 ${progress.file} ${Math.round(progress.progress ?? 0)}%`);
+    });
+    if (embedding.ok) {
+      this.io.say(`embedding 模型：就位（${embedding.downloaded ? '本次下载' : '已有'}）`);
+    } else {
+      this.io.say(`embedding 模型：未就位（${embedding.detail}）`);
+      this.io.say('  安装继续；召回降级为词面（lexical），健康页会显示 embedding 降级。');
+    }
     return { ok: true };
   }
 

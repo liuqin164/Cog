@@ -11,7 +11,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { ChannelContract, createMemoryKernel, KernelAgentMemoryBackend, type ChannelSession, type EmbeddingProvider, type MemoryKernel, type ProcedureWorkflow, type SessionContextAssembly, type SessionContextItem } from 'cogmem';
-import { ModelRegistry, TraceStore, type ModelTextUsage } from 'cogmem/internal';
+import { ModelRegistry, TraceStore, type ModelRoleConfig, type ModelRoleName, type ModelTextUsage } from 'cogmem/internal';
 import { defaultShellConfig, type ShellConfig } from './config.ts';
 import { StateMachine } from './state/machine.ts';
 import { CheckpointStore, type InFlightToolCall, type Suspension } from './state/checkpoint.ts';
@@ -71,6 +71,8 @@ import {
   type UpgradeRequest,
 } from './upgrade/records.ts';
 import type { PresenceReport, StatusState, WorkState } from './tui/view.ts';
+import { XenovaEmbeddingProvider, type EmbeddingStatus } from './embedding/xenova.ts';
+import { EMBEDDING_DIMENSIONS, EMBEDDING_MODEL } from './embedding/model.ts';
 
 /**
  * How long the resident gives the supervisor before the promise's due instant arrives. The report is
@@ -121,6 +123,11 @@ export interface CompanionShellOptions {
   modelRegistry?: ModelRegistry;
   /** The re-embed migration path for a brain written before an embedding role existed. */
   embeddingProvider?: EmbeddingProvider;
+  /**
+   * Production starts the local embedder in the background. Tests and embedders that supply their
+   * own provider leave it off, so constructing a shell never loads a model or touches the network.
+   */
+  embedding?: boolean;
   now?: () => number;
   tick?: boolean;
   /** Called when a checkpoint write fails; the CLI turns it into a non-zero exit. */
@@ -131,6 +138,21 @@ export interface CompanionShellOptions {
   upgradeSpawner?: (request: UpgradeRequest, requestPath: string) => Promise<SpawnSupervisorResult>;
   /** Tests drive the plugin restart; production restarts through the service manager. */
   restartResident?: () => void | Promise<void>;
+}
+
+/**
+ * The kernel's embedding role is what `semanticIndexEnabled()` reads. The role has no "local model"
+ * value, so the honest switch is the one the kernel already uses: `deterministic_local` while no
+ * vectors exist, and a real provider only after the model has loaded and re-embedding can run.
+ */
+class ShellModelRegistry extends ModelRegistry {
+  embeddingReady = false;
+
+  override getRoleConfig(role: ModelRoleName): ModelRoleConfig {
+    const config = super.getRoleConfig(role);
+    if (role !== 'embedding' || this.embeddingReady) return config;
+    return { ...config, provider: 'deterministic_local', modelName: 'deterministic_local' };
+  }
 }
 
 export class CompanionShell implements ShellControl, AttachShell {
@@ -227,6 +249,9 @@ export class CompanionShell implements ShellControl, AttachShell {
   private readonly now: () => number;
   /** This process's native plugin load outcomes; `/plugins` and `/health` read it. */
   readonly pluginResults: PluginLoadResult[] = [];
+  private readonly embedding?: XenovaEmbeddingProvider;
+  private readonly shellRegistry?: ShellModelRegistry;
+  private reEmbedRunning = false;
 
   constructor(private readonly options: CompanionShellOptions = {}) {
     this.config = defaultShellConfig(options.config);
@@ -249,13 +274,21 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.lock = new ProcessLock(this.config.dataDir);
     // The nightly snapshot lives beside the resident's other state, so a default install keeps the
     // last seven nights without an extra config key (#196).
+    const registry = options.modelRegistry ?? this.buildModelRegistry();
+    this.shellRegistry = registry instanceof ShellModelRegistry ? registry : undefined;
+    const embeddingProvider = options.embeddingProvider
+      ?? (options.embedding ? new XenovaEmbeddingProvider(this.config.dataDir) : undefined);
+    this.embedding = embeddingProvider instanceof XenovaEmbeddingProvider ? embeddingProvider : undefined;
     this.kernel = createMemoryKernel({
       dbPath: this.config.dbPath,
       projectTimeZone: this.config.timeZone,
       snapshotsDir: join(this.config.dataDir, 'snapshots'),
-      modelRegistry: options.modelRegistry ?? this.buildModelRegistry(),
-      ...(options.embeddingProvider ? { embeddingProvider: options.embeddingProvider } : {}),
+      modelRegistry: registry,
+      ...(embeddingProvider ? { embeddingProvider } : {}),
     });
+    // A host-supplied provider is ready by definition; the local one flips this when it loads. The
+    // flip comes after the kernel is built so its write-path embedder stays deterministic.
+    if (options.embeddingProvider && this.shellRegistry) this.shellRegistry.embeddingReady = true;
     // The WAL is mmap'd and counts against RSS. The 4 MB default lets it grow to the threshold on a
     // busy turn stream; 256 pages (~1 MB) keeps the native footprint bounded without a shell timer.
     this.kernel.factStore.getDatabase().exec('PRAGMA wal_autocheckpoint=256');
@@ -341,13 +374,14 @@ export class CompanionShell implements ShellControl, AttachShell {
   }
 
   /**
-   * The shell's memory role is the mg route it already uses for its own turns. Embedding stays
-   * deterministic until an embedding provider is supplied: the kernel then reports
-   * `semanticIndex: false` rather than claiming an index it does not have (#231).
+   * The shell's memory role is the mg route it already uses for its own turns. The embedding role
+   * names the local model, but `ShellModelRegistry` keeps it deterministic until the model has
+   * actually loaded: the kernel then reports `semanticIndex: false` rather than claiming an index it
+   * does not have (#231/#250).
    */
-  private buildModelRegistry(): ModelRegistry {
+  private buildModelRegistry(): ShellModelRegistry {
     const model = this.config.model;
-    return new ModelRegistry({
+    return new ShellModelRegistry({
       memory: {
         role: 'memory',
         provider: 'openai_compatible',
@@ -367,8 +401,8 @@ export class CompanionShell implements ShellControl, AttachShell {
       },
       embedding: {
         role: 'embedding',
-        provider: 'deterministic_local',
-        modelName: 'deterministic_local',
+        provider: 'openai_compatible',
+        modelName: EMBEDDING_MODEL,
         timeoutMs: 30_000,
       },
     }, {
@@ -498,6 +532,7 @@ export class CompanionShell implements ShellControl, AttachShell {
         health: () => ({
           state: this.machine.state,
           plugins: this.pluginHealth(),
+          embedding: this.embeddingStatus(),
           suspension: this.machine.runtime.suspension
             ? { ...this.suspendedLine(this.machine.runtime.suspension), id: this.machine.runtime.suspension.id, createdAt: this.machine.runtime.suspension.createdAt }
             : null,
@@ -565,6 +600,10 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.started = true;
     this.rotateServiceLog();
     this.trace.append('shell_started', { state: this.machine.state, mi: this.machine.wakeIntents.length });
+    // Loading the model (and the one-time download on an upgrade) is deliberately not awaited: the
+    // health face and the first turns must be ready before the 99 MiB arrives. Until it does, recall
+    // is lexical and `semanticIndexEnabled()` is false.
+    void this.warmEmbedding();
     // The offer is in-memory, the pause is not: a restart re-offers the approval for a budget pause.
     if (this.machine.state === 'SUSPENDED' && this.machine.runtime.suspension?.kind === 'budget') {
       this.offerResume(this.machine.runtime.suspension.id);
@@ -573,6 +612,76 @@ export class CompanionShell implements ShellControl, AttachShell {
     // on its own. Deferred so the HTTP/attach faces are serving before the run begins; a kill (no
     // request) never sets the flag, so recovery still lands in IDLE and waits.
     this.resumeAfterRequestedRestart();
+  }
+
+  /** The embedder's state for `/health`; a missing embedder says so rather than looking active. */
+  private embeddingStatus(): EmbeddingStatus | { state: 'absent'; modelId: string; dimensions: number; detail: string } {
+    return this.embedding?.status() ?? {
+      state: 'absent',
+      modelId: EMBEDDING_MODEL,
+      dimensions: EMBEDDING_DIMENSIONS,
+      detail: 'embedding host not enabled for this process',
+    };
+  }
+
+  private async warmEmbedding(): Promise<void> {
+    if (!this.embedding) return;
+    try {
+      await this.embedding.warm();
+      if (this.shellRegistry) this.shellRegistry.embeddingReady = true;
+      this.trace.append('embedding_ready', {
+        modelId: EMBEDDING_MODEL,
+        dimensions: EMBEDDING_DIMENSIONS,
+        loadMs: this.embedding.status().loadMs ?? null,
+      });
+      await this.reEmbedExisting();
+    } catch (error) {
+      // A missing model, a failed download or a broken ONNX file all land here. The companion keeps
+      // answering with lexical recall; health and this trace record why.
+      this.trace.append('embedding_unavailable', {
+        modelId: EMBEDDING_MODEL,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * The migration for a brain written before this process had vectors (#231 Route A). The pipeline
+   * is idempotent and checkpoints its cursor, so a second run is a no-op and a killed run resumes.
+   * Batches are yielded between passes so a recall never waits for a whole brain.
+   */
+  private async reEmbedExisting(): Promise<void> {
+    if (this.reEmbedRunning) return;
+    this.reEmbedRunning = true;
+    const projectId = this.config.projectId;
+    let processed = 0;
+    try {
+      for (let pass = 0; pass < 1_000; pass += 1) {
+        const result = await this.kernel.reEmbed(projectId);
+        processed += result.processed;
+        if (result.processed === 0 && result.remaining === 0) {
+          this.trace.append('re_embed_skipped', { projectId });
+          break;
+        }
+        this.trace.append('re_embed_progress', {
+          projectId,
+          processed: result.processed,
+          remaining: result.remaining,
+          totalProcessed: processed,
+        });
+        if (result.remaining === 0) break;
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      this.trace.append('re_embed_completed', { projectId, processed });
+    } catch (error) {
+      this.trace.append('re_embed_failed', {
+        projectId,
+        processed,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      this.reEmbedRunning = false;
+    }
   }
 
   private async startPlugins(): Promise<void> {
