@@ -7,6 +7,11 @@
  * injected after a tool batch is a new boundary, so it gets its own recall instead of continuing with
  * the previous turn's evidence (guidance conflict #7). The query is always text the user actually
  * wrote — this never invents a question to look busy.
+ *
+ * The hook runs before every provider call and its result is only this request's projection, so the
+ * block is inserted again each time (same query → same block; a new user line → a fresh recall).
+ * There is deliberately no per-run "already injected" state: that dedup was what dropped the block
+ * from the second call of a run (#247 A3).
  */
 import type { KernelAgentMemoryBackend } from 'cogmem';
 import type { AgentMessage } from '../state/agent-loop.ts';
@@ -19,32 +24,6 @@ export interface RecallPluginConfig {
   limit: number;
 }
 
-/**
- * Per-run query dedup (#226). A run's recall block is injected once per distinct user message;
- * keeping a `Map<runId, Set<query>>` for the process lifetime leaked one entry per run. The loop is
- * serial (one RUNNING at a time), so the last run id is all the state this needs.
- */
-export class RecallDedup {
-  private runId?: string;
-  private readonly queries = new Set<string>();
-
-  /** True the first time `query` is seen in `runId`; false for a repeat in the same run. */
-  firstSighting(runId: string, query: string): boolean {
-    if (runId !== this.runId) {
-      this.runId = runId;
-      this.queries.clear();
-    }
-    if (this.queries.has(query)) return false;
-    this.queries.add(query);
-    return true;
-  }
-
-  /** Exposed for the bound test: at most one run's queries are retained. */
-  get size(): number {
-    return this.queries.size;
-  }
-}
-
 export function recallPlugin(config: RecallPluginConfig): NativePlugin {
   return {
     name: 'recall',
@@ -52,7 +31,6 @@ export function recallPlugin(config: RecallPluginConfig): NativePlugin {
     provide: ['recall'],
     apply(ctx) {
       const backend = ctx.getService<KernelAgentMemoryBackend>('memory');
-      const recalled = new RecallDedup();
       // The service is what another plugin would consume; the hook below is this plugin's own use.
       ctx.provide('recall', {
         recallFor(query: string, limit = config.limit) {
@@ -72,7 +50,6 @@ export function recallPlugin(config: RecallPluginConfig): NativePlugin {
         if (lastUserIndex < 0) return value;
         const query = messages[lastUserIndex].content;
         if (!query) return value;
-        if (!recalled.firstSighting(busCtx.runId, query)) return value;
         const result = backend.recall({ agentId: config.agentId, projectId: config.projectId, query, limit: config.limit });
         if (result.items.length === 0) return value;
         const block: AgentMessage = { role: 'system', content: renderRecallBlock(result.items) };

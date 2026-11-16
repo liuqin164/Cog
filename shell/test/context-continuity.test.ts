@@ -1,8 +1,9 @@
 /**
- * Context continuity across runs (#245 A1).
+ * Context continuity (#245 A1, #247 A3).
  *
- * A new run's request carries the recent verbatim turns of the session (the kernel's `tail` lane),
- * so a follow-up like "继续" can still see what the previous run was about.
+ * A1: a new run's request carries the recent verbatim turns of the session (the kernel's `tail`
+ * lane), so a follow-up like "继续" can still see what the previous run was about.
+ * A3: the recall block is part of every provider call of the run, not only the first one.
  */
 import { describe, expect, test } from 'bun:test';
 import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
@@ -55,6 +56,34 @@ describe('context continuity', () => {
       const third = asText(provider.calls[2].messages);
       expect(third).toContain('[tail: browse-only, 4 item(s)]');
       expect(third).not.toContain('第二轮：部署窗口是周二');
+    } finally {
+      await shell.stop();
+    }
+  }, 30_000);
+
+  test('A3: the recall block is still in the context after a tool call in the same run', async () => {
+    const provider = new ScriptedProvider([
+      { text: '先看一下。', toolCalls: [{ toolCallId: 'c1', toolName: 'bash', input: { command: 'echo hi' } }] },
+      { text: '看完了。', toolCalls: [] },
+    ]);
+    const shell = makeShell(makeTempDir('continuity-a3-'), provider, { dream: NO_DREAM });
+    await shell.start();
+    try {
+      await shell.backend.rememberTurnWithResult({
+        agentId: shell.config.agentId,
+        projectId: shell.config.projectId,
+        sessionId: shell.config.sessionId,
+        turnId: 'seed-1',
+        userText: '部署窗口是周二凌晨两点，周五绝对不能部署',
+        assistantText: '记下了。',
+        ingestMode: 'immediate_compile',
+      });
+      await shell.submit('帮我看看部署窗口是什么时候');
+      expect(provider.calls.length).toBeGreaterThanOrEqual(2);
+      expect(asText(provider.calls[0].messages)).toContain('<recall-context>');
+      expect(asText(provider.calls[0].messages)).toContain('周五绝对不能部署');
+      expect(asText(provider.calls[1].messages)).toContain('<recall-context>');
+      expect(asText(provider.calls[1].messages)).toContain('周五绝对不能部署');
     } finally {
       await shell.stop();
     }

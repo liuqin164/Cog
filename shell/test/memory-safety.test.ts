@@ -9,7 +9,6 @@ import { writeDefaultSoul } from '../src/install/soul.ts';
 import type { ServiceSpec } from '../src/install/service.ts';
 import { rotateLogFile } from '../src/log-rotation.ts';
 import { formatBytes, memoryPressureAction, readMemoryUsage, type MemoryReading } from '../src/memory.ts';
-import { RecallDedup } from '../src/plugins/recall.ts';
 import { TraceLog } from '../src/trace.ts';
 import { MAX_TRANSCRIPT_ENTRIES, TuiView } from '../src/tui/view.ts';
 import { makeTempDir } from './helpers.ts';
@@ -138,7 +137,7 @@ describe('on-disk caps (#226)', () => {
   });
 });
 
-describe('transcript and recall bounds (#226)', () => {
+describe('transcript bounds (#226)', () => {
   test('the mirrored transcript stops at MAX_TRANSCRIPT_ENTRIES and drops old dirty marks', () => {
     const view = new TuiView();
     for (let index = 0; index < MAX_TRANSCRIPT_ENTRIES + 37; index += 1) {
@@ -162,18 +161,6 @@ describe('transcript and recall bounds (#226)', () => {
     expect(view.entries[0]).toMatchObject({ id: 's10' });
   });
 
-  test('recall dedup retains only the current run', () => {
-    const dedup = new RecallDedup();
-    expect(dedup.firstSighting('run-1', '同一句')).toBe(true);
-    expect(dedup.firstSighting('run-1', '同一句')).toBe(false);
-    expect(dedup.firstSighting('run-1', '另一句')).toBe(true);
-    for (let index = 0; index < 200; index += 1) {
-      expect(dedup.firstSighting(`run-${index}`, `query-${index}`)).toBe(true);
-      expect(dedup.size).toBe(1);
-    }
-    // A query repeated in a new run is recalled again, which is the previous keyed-map behaviour.
-    expect(dedup.firstSighting('run-200', 'query-0')).toBe(true);
-  });
 });
 
 describe('doctor memory ceiling (#226)', () => {
