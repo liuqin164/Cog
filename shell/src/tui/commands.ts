@@ -5,7 +5,7 @@
  */
 import { cellWidth, compactNumber, formatWakeAt, seg, truncate, type RenderEnv, type Row } from './frame.ts';
 import { CORE_COMMANDS, availableCoreCommand, coreCommandFor, unknownCommandReply } from '../commands.ts';
-import { laneReportLines } from '../state/session-lanes.ts';
+import { contextMetricsLine, laneReportLines } from '../state/session-lanes.ts';
 import { LIFECYCLE_WORD, type Overlay, type TuiView } from './view.ts';
 
 export interface TuiCommand {
@@ -167,6 +167,7 @@ function contextLines(view: TuiView): string[] {
         `当前组装上下文：约 ${compactNumber(status.contextTokens)} token（目标带宽 ${compactNumber(status.contextSweetSpot)}）`,
         '尚无车道组装记录：发一条消息后再看。',
       ];
+  if (lanes && status.contextMetrics) lines.push(contextMetricsLine(status.contextMetrics));
   const cache = status.promptCache;
   // Reported, not estimated (#165 round 21): the line exists only when the provider sent a cache
   // field, and it is labelled as the provider's number so the estimate above is never read as it.

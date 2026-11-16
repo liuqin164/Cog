@@ -32,6 +32,8 @@ export interface BuiltinToolsConfig {
   trace?: TraceLog;
   /** The kernel's read face: `mem:<eventId>` resolves through it, never through the SQLite file. */
   kernel?: MemoryKernel;
+  /** One successful `mem:` read; the shell counts it for the context trace's drill metric (#268). */
+  onMemoryRead?: (eventId: string) => void;
 }
 
 function inside(root: string, candidate: string): string {
@@ -160,12 +162,18 @@ function tailBytes(text: string, maxBytes: number): string {
  * A ledger event's text by `mem:<eventId>`. The read is idempotent and the same 256 KiB cap as a
  * file read; an event past it is cut and the cut is traced rather than retried through bash.
  */
-function readMemoryEvent(eventId: string, kernel: MemoryKernel | undefined, trace?: TraceLog): string {
+function readMemoryEvent(
+  eventId: string,
+  kernel: MemoryKernel | undefined,
+  trace?: TraceLog,
+  onRead?: (eventId: string) => void,
+): string {
   if (!kernel) throw new Error('memory_unavailable: this shell has no kernel attached');
   const event = kernel.getEventContext(eventId, { before: 0, after: 0 })?.event;
   if (!event) {
     throw new Error(`memory_event_not_found: no ledger event ${eventId}; use a mem:<eventId> key from a recall anchor or session digest`);
   }
+  onRead?.(eventId);
   const text = memoryEventText(event);
   const bytes = Buffer.byteLength(text, 'utf8');
   if (bytes <= MAX_READ_BYTES) return text;
@@ -224,7 +232,7 @@ function capBashOutput(fullText: string, workspaceRoot: string): string {
 function definitions(
   workspaceRoot: string,
   sandbox: { dataDir: string; trace?: TraceLog } | undefined,
-  ledger: { kernel?: MemoryKernel; trace?: TraceLog },
+  ledger: { kernel?: MemoryKernel; trace?: TraceLog; onMemoryRead?: (eventId: string) => void },
 ): ToolDefinition[] {
   return [
     {
@@ -245,7 +253,7 @@ function definitions(
       execute({ args }) {
         const requested = asString(args, 'path');
         const eventId = memoryEventId(requested);
-        if (eventId !== undefined) return readMemoryEvent(eventId, ledger.kernel, ledger.trace);
+        if (eventId !== undefined) return readMemoryEvent(eventId, ledger.kernel, ledger.trace, ledger.onMemoryRead);
         const path = inside(workspaceRoot, requested);
         const size = statSync(path).size;
         if (size > MAX_READ_BYTES) throw new Error(`file_too_large: ${size} bytes (cap ${MAX_READ_BYTES})`);
@@ -392,10 +400,10 @@ export function builtinToolsPlugin(): NativePlugin {
     name: 'builtin-tools',
     provide: ['builtinTools'],
     apply(ctx, config) {
-      const { workspaceRoot, dataDir, trace, kernel } = config as BuiltinToolsConfig;
+      const { workspaceRoot, dataDir, trace, kernel, onMemoryRead } = config as BuiltinToolsConfig;
       const sandbox = dataDir && bwrapUsable() ? { dataDir, trace } : undefined;
       if (dataDir && !sandbox) trace?.append('bash_sandbox_unavailable', { dataDir, reason: 'bwrap_not_usable' });
-      for (const definition of definitions(workspaceRoot, sandbox, { kernel, trace })) {
+      for (const definition of definitions(workspaceRoot, sandbox, { kernel, trace, onMemoryRead })) {
         ctx.registerTool(definition, { builtin: true });
       }
       ctx.provide('builtinTools', { names: ['read', 'write', 'edit', 'bash'] });

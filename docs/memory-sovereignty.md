@@ -35,6 +35,7 @@ second implementation:
 | `/forget <from> <to>`, then `/forget confirm` | `deleteRange` | Shows the half-open window and its ledger row count first; the confirm deletes exactly that window and answers with the audit id and counts. |
 | `/export [path]` | `exportArchive` | Writes the archive (default `<dataDir>/exports/memory-<time>.md`) and answers with the path and counts. |
 | `/correct <key> <value>` | `ProfileCompiler.correct` | Records the owner's turn, corrects one current profile entry, and recompiles that ledger; the next recall reads the new value. |
+| `/correct <practice> <new practice>`, then `/correct confirm` | `ProcedureCompiler.compile` over a `metadata.procedureCorrection` turn | When no profile entry matches, proposes the practice replacement first; the confirm writes the mark and recompiles, so the new practice is current and established (#264). |
 
 The commands add no deletion or export semantics of their own: the preview counts ledger rows with
 the same half-open `occurredAt` filter `deleteRange` uses, and `/export` names no section the archive

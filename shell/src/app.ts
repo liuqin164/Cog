@@ -42,7 +42,7 @@ import { dreamPlugin } from './plugins/dream.ts';
 import { emergencePlugin } from './plugins/emergence.ts';
 import { terminalPlugin, TerminalChannel, type ShellControl } from './channels/terminal.ts';
 import { AgentRuntime, type AgentMessage, type ModelProvider, type RunSummary, type TurnUsage } from './state/agent-loop.ts';
-import { laneAssemblyView } from './state/session-lanes.ts';
+import { laneAssemblyView, type ContextMetrics } from './state/session-lanes.ts';
 import { SecretRedactor, startKernelHttpFace, type HttpFaceHandle } from './kernel-host.ts';
 import { formatBytes, memoryPressureAction, readMemoryUsage } from './memory.ts';
 import { rotateLogFile, SERVICE_LOG_MAX_BYTES } from './log-rotation.ts';
@@ -191,6 +191,10 @@ export class CompanionShell implements ShellControl, AttachShell {
   private contextTokenEstimate = 0;
   /** The newest six-lane assembly; `/context` and the TUI read this, not a second accounting. */
   private lastLaneAssembly?: SessionContextAssembly;
+  /** The projection actions that produced it (#268); reset when the next assembly is recorded. */
+  private lastContextMetrics?: ContextMetrics;
+  /** `mem:` reads since the previous assembly; the next trace reports and clears it. */
+  private drillsSinceAssembly = 0;
   /** The latest project event the compiled books were last brought up to. */
   private compiledThroughEventId?: string;
   /** Whether a soul-read failure has been traced; the read itself is retried on the next turn. */
@@ -231,6 +235,11 @@ export class CompanionShell implements ShellControl, AttachShell {
    * asks for a fresh preview rather than resuming a confirmation the owner can no longer see.
    */
   private pendingForget?: { start: number; end: number };
+  /**
+   * The practice `/correct` proposed and `/correct confirm` may write (#264). Process-local for the
+   * same reason as the forget window: a confirmation must belong to a proposal the owner just saw.
+   */
+  private pendingProcedureCorrection?: { domain: string; key: string; value: string; title: string; steps: string[] };
   /**
    * A question the run registered through `ask_user` (#228). It is process-local because the run is
    * still in this process; `settleAssignment` turns it into the checkpointed suspension.
@@ -707,6 +716,9 @@ export class CompanionShell implements ShellControl, AttachShell {
       dataDir: this.config.dataDir,
       trace: this.trace,
       kernel: this.kernel,
+      onMemoryRead: () => {
+        this.drillsSinceAssembly += 1;
+      },
     });
     this.host.register(workflowsPlugin({
       agentId: this.config.agentId,
@@ -734,6 +746,14 @@ export class CompanionShell implements ShellControl, AttachShell {
       variablePrompt: () => this.systemPromptSections().tail,
       onAssembly: (assembly) => {
         this.lastLaneAssembly = assembly;
+        this.lastContextMetrics = {
+          folds: assembly.decisionTrace.length,
+          drills: this.drillsSinceAssembly,
+          // shortcut: #253 owns deterministic auto-expansion and its trace field; this is a real
+          // zero until that lands, not a missing field. Read its count here when it merges.
+          autoExpands: 0,
+        };
+        this.drillsSinceAssembly = 0;
         this.emitStatus();
       },
       recallLimit: 3,
@@ -814,6 +834,7 @@ export class CompanionShell implements ShellControl, AttachShell {
         this.emitStatus();
       },
       contextLanes: () => (this.lastLaneAssembly ? laneAssemblyView(this.lastLaneAssembly) : undefined),
+      contextMetrics: () => this.lastContextMetrics,
     });
     this.modelLabel = `${this.host.getService<ModelProvider>('model').name}/${model.model}`;
     this.attachWorkListeners();
@@ -1784,6 +1805,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       contextTokens: this.contextTokenEstimate,
       contextSweetSpot: this.targetTokens(),
       contextLanes: this.lastLaneAssembly ? laneAssemblyView(this.lastLaneAssembly) : null,
+      contextMetrics: this.lastContextMetrics ?? null,
       promptCache: this.promptCache ?? null,
       costTokens: this.machine.runtime.costDayDate === today ? this.machine.runtime.costDayTokens ?? 0 : 0,
       timeZone: this.config.timeZone,
@@ -2010,7 +2032,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     const matches = exact.length > 0 ? exact : entries.filter((entry) => entry.key.endsWith(`.${key}`));
     if (matches.length === 0) {
       const known = entries.slice(0, 12).map((entry) => `${entry.ledger}:${entry.key}`).join('、');
-      return { text: `没有叫 ${key} 的当前画像条目。${known ? `现有：${known}` : '画像册目前是空的。'}`, receipt: true };
+      return this.proposeProcedureCorrection(key, value, known);
     }
     if (matches.length > 1) {
       return {
@@ -2047,6 +2069,105 @@ export class CompanionShell implements ShellControl, AttachShell {
       text: `已纠正 ${entry.ledger} · ${entry.key}：${entry.value} → ${corrected.value}（v${corrected.version}）。下一次召回起全局按新值。`,
       receipt: true,
       data: { profile_correction: { ledger: entry.ledger, key: entry.key, value: corrected.value, version: corrected.version } },
+    };
+  }
+
+  /**
+   * `/correct` on a practice (#264). The compiler already reads `metadata.procedureCorrection`, but
+   * nothing in the shell wrote it. A proposal is not a correction: the mark is written only by
+   * `confirmProcedureCorrection`, and until then the book is untouched.
+   */
+  private proposeProcedureCorrection(key: string, value: string, knownProfiles: string): CommandReply {
+    const projectId = this.config.projectId;
+    this.kernel.procedures.compile({ projectId, now: this.now() });
+    const current = this.kernel.procedures.entries({ projectId }).filter((entry) => entry.status === 'current');
+    const named = current.filter((entry) =>
+      entry.key === key || `${entry.domain}:${entry.key}` === key || entry.domain === key);
+    // An imported guide and an own practice can share a key; the owner's correction replaces the
+    // practice they actually do, and the imported book stays recallable as what was read.
+    const own = named.filter((entry) => entry.origin !== 'imported');
+    const matches = own.length > 0 ? own : named;
+    if (matches.length === 0) {
+      return {
+        text: `没有叫 ${key} 的当前画像或做法条目。${knownProfiles ? `现有画像：${knownProfiles}` : '画像册目前是空的。'}`,
+        receipt: true,
+      };
+    }
+    if (matches.length > 1) {
+      return {
+        text: `${key} 命中多条做法（${matches.map((entry) => `${entry.domain}:${entry.key}`).join('、')}），请用完整键再试。`,
+        receipt: true,
+      };
+    }
+    const entry = matches[0]!;
+    this.pendingProcedureCorrection = {
+      domain: entry.domain,
+      key: entry.key,
+      value,
+      title: entry.title,
+      steps: [...entry.steps],
+    };
+    this.trace.append('procedure_correction_proposed', {
+      projectId,
+      domain: entry.domain,
+      key: entry.key,
+      entryId: entry.entryId,
+    });
+    return {
+      text: `提议：把做法「${entry.title}」（${entry.domain} · ${entry.key}）改为「${value}」。这是提议，尚未生效；确认请发 /correct confirm。`,
+      receipt: true,
+      data: { procedure_correction_proposal: { domain: entry.domain, key: entry.key, value } },
+    };
+  }
+
+  /** `/correct confirm`: write the practice correction and recompile, so the next recall reads it. */
+  async confirmProcedureCorrection(): Promise<CommandReply> {
+    const pending = this.pendingProcedureCorrection;
+    if (!pending) return { text: '还没有做法提议：先 /correct <做法键> <新做法>。', receipt: true };
+    const projectId = this.config.projectId;
+    // The mark is the compiler's evidence: a `user` turn carrying the domain and key. The command
+    // line is that turn, recorded through the same backend every typed message uses.
+    const turn = await this.backend.rememberTurnWithResult({
+      agentId: this.config.agentId,
+      projectId,
+      sessionId: this.config.sessionId,
+      userText: pending.value,
+      metadata: { procedureCorrection: { domain: pending.domain, key: pending.key } },
+    });
+    const correctionEventId = turn.rawEventIds[0];
+    if (!correctionEventId) return { text: '纠正未执行：做法纠正需要一个用户回合，这次没有写进去。', receipt: true };
+    this.pendingProcedureCorrection = undefined;
+    this.kernel.procedures.compile({ projectId, now: this.now() });
+    const entry = this.kernel.procedures.entries({ projectId }).find((candidate) =>
+      candidate.domain === pending.domain && candidate.key === pending.key && candidate.origin !== 'imported');
+    this.trace.append('procedure_corrected', {
+      projectId,
+      domain: pending.domain,
+      key: pending.key,
+      eventId: correctionEventId,
+      entryId: entry?.entryId,
+      version: entry?.version,
+      grade: entry?.grade,
+    });
+    if (!entry) {
+      return {
+        text: `已写入做法纠正，但重编译后没有找到 ${pending.domain} · ${pending.key} 的现行条目；审计 ${correctionEventId}。`,
+        receipt: true,
+      };
+    }
+    return {
+      text: `已纠正做法 ${pending.domain} · ${pending.key}：「${pending.steps.join('；')}」→「${pending.value}」（${entry.grade}，v${entry.version}）。下一次同类任务按新做法。`,
+      receipt: true,
+      data: {
+        procedure_correction: {
+          domain: pending.domain,
+          key: pending.key,
+          value: pending.value,
+          entryId: entry.entryId,
+          version: entry.version,
+          grade: entry.grade,
+        },
+      },
     };
   }
 
@@ -2328,6 +2449,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     lifecycle: () => ({ state: this.machine.state, seq: this.machine.seq, costDayTokens: this.machine.runtime.costDayTokens ?? 0 }),
     contextTokens: () => this.contextTokenEstimate,
     contextLanes: () => (this.lastLaneAssembly ? laneAssemblyView(this.lastLaneAssembly) : undefined),
+    contextMetrics: () => this.lastContextMetrics,
     promptCache: () => this.promptCache,
     lastDream: () => this.lastDreamProduct(),
     commitments: () => this.commitments(),
@@ -2344,6 +2466,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     forgetConfirm: () => this.forgetConfirm(),
     exportMemory: (path: string | undefined) => this.exportMemory(path),
     correctProfile: (key: string, value: string) => this.correctProfile(key, value),
+    confirmProcedureCorrection: () => this.confirmProcedureCorrection(),
     sessionModel: () => this.modelLabel,
     modelRoutes: () => this.modelRoutes(),
     modelRouter: () =>
