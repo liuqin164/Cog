@@ -143,6 +143,14 @@ value changed **and** the derived evidence is newer than the current version's `
 owner's word stands until evidence newer than the correction says otherwise. A corrected value leaves
 the default read immediately and stays readable through `history`.
 
+The correction is global, not local to this book (#242). The `PROFILE_ENTRY_CORRECTED` row carries
+`previousValue` and `previousSourceRefs`. The old belief or fact is superseded in its own store (a
+status update of a derived table, never a rewrite of a ledger row), and a correction belief carrying
+the new value is appended, so the Atlas projection and the default belief lane stop reading the old
+value as current. Procedure entries, workflows and intentions that were derived from the replaced
+claim are updated or explicitly marked stale; the written contracts of those faces define the
+mechanics.
+
 A compile is a full recompile of the ledgers it names: a key the evidence no longer derives — a
 completed commitment, a revoked belief — gets a `PROFILE_ENTRY_RETIRED` version and leaves `entries`
 and `recall`. A correction is the owner's last word on its key and is not retired by the absence of

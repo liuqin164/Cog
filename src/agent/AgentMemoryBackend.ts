@@ -15,6 +15,7 @@ import {
 import { readRedactionMarks } from '../governance/PiiRedactor.js';
 import { isOperationalNoiseText, isRecallableMemoryEvidence } from '../recall/RecallGovernance.js';
 import { filterSuperseded } from '../recall/SupersessionFilter.js';
+import { correctionAffects, profileCorrectionSignals, supersededSourceEventIds } from '../profile/CorrectionSignal.js';
 import type { BeliefRecord, MemoryEvent, MemorySourceRef } from '../types/index.js';
 import type { ConversationTurnInput, ConversationTurnQuery, ConversationTurnRecord } from '../conversation/index.js';
 import type {
@@ -1168,6 +1169,27 @@ export class KernelAgentMemoryBackend {
     return { ...result, items: [...result.items, ...items] };
   }
 
+  /**
+   * A profile correction also governs the ordinary lanes (#242). The corrected entry's old source
+   * events are exact evidence: an item anchored there is the replaced statement, not a second
+   * answer. Text overlap catches compiled cards whose source link is older than the correction.
+   * Exact-quote and previous-session lanes are left whole — they ask for the words that were said.
+   */
+  private withoutSupersededByProfile(query: AgentRecallQuery, result: RecallCoreResult): RecallCoreResult {
+    if (!query.projectId) return result;
+    if (query.intent === 'forensic_quote' || query.intent === 'previous_session_summary') return result;
+    const signals = profileCorrectionSignals(this.kernel.eventStore, query.projectId);
+    if (signals.length === 0) return result;
+    const oldSourceIds = supersededSourceEventIds(signals);
+    const items = result.items.filter((item) => {
+      const anchor = item.sourceAnchor?.eventId;
+      if (anchor && oldSourceIds.has(anchor)) return false;
+      if (signals.some((signal) => item.text.toLowerCase().includes(signal.value.toLowerCase()))) return true;
+      return !signals.some((signal) => correctionAffects(signal, { text: item.text }));
+    });
+    return items.length === result.items.length ? result : { ...result, items };
+  }
+
   private toAgentProfileItem(entry: ProfileRecallEntry, query: AgentRecallQuery): AgentRecallItem | null {
     const eventId = entry.sourceRefs.find((ref) => ref.eventId)?.eventId;
     if (!eventId) return null;
@@ -1400,7 +1422,7 @@ export class KernelAgentMemoryBackend {
       };
       return { result: { ...empty, decisionTrace: trace, semanticIndex: this.kernel.semanticIndexEnabled() }, suppressedIds: [] };
     }
-    const result = this.withProfileItems(query, this.recallCore(query));
+    const result = this.withProfileItems(query, this.withoutSupersededByProfile(query, this.recallCore(query)));
     const gated = this.gateSocialEntries(result.items ?? [], query, forensic);
     // The secret mark is enforced here, and not only in the raw lane's scope test (#142). Measured while fixing
     // this: with the event withheld from the raw lane, the same turn still came back as an item from another

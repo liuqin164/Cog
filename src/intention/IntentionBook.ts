@@ -25,6 +25,7 @@ import {
 import type { EventStore } from '../store/EventStore.js';
 import type { RegisterWakeIntentionInput, WakeIntention } from '../temporal/index.js';
 import type { MemoryEvent, MemorySourceRef } from '../types/index.js';
+import { correctionAffects, profileCorrectionSignals } from '../profile/CorrectionSignal.js';
 import {
   INTENTION_ORIGINS,
   recognizeIntentions,
@@ -34,7 +35,7 @@ import {
 export const INTENTION_CONTRACT_VERSION = 1;
 
 /** The life cycle the book exposes. Frozen; `active` is the absence of a closing row. */
-export const INTENTION_STATUSES = ['active', 'done', 'abandoned', 'converted'] as const;
+export const INTENTION_STATUSES = ['active', 'done', 'abandoned', 'converted', 'stale'] as const;
 export type IntentionStatus = (typeof INTENTION_STATUSES)[number];
 
 /** Why a row closed. Frozen; `vetoed` and `abandoned` share the `abandoned` status. */
@@ -611,9 +612,16 @@ export class IntentionBook {
 
   private entries(projectId: string): IntentionEntry[] {
     const out: IntentionEntry[] = [];
+    const signals = profileCorrectionSignals(this.events, projectId);
     for (const state of this.states(projectId).values()) {
       const entry = toEntry(state);
-      if (entry) out.push(entry);
+      if (!entry) continue;
+      const stale = entry.status === 'active' && signals.some((signal) => correctionAffects(signal, {
+        text: entry.content,
+        sourceRefs: entry.sourceRefs,
+        recordedAt: entry.openedAt,
+      }));
+      out.push(stale ? { ...entry, status: 'stale' } : entry);
     }
     return out.sort((a, b) => b.openedAt - a.openedAt || b.version - a.version);
   }

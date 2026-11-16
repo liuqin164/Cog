@@ -281,6 +281,7 @@ export type MemoryEventType =
   | 'PROCEDURE_WORKFLOW_VETOED'
   | 'PROCEDURE_WORKFLOW_EXECUTED'
   | 'PROCEDURE_WORKFLOW_DEMOTED'
+  | 'PROCEDURE_WORKFLOW_STALE'
   // The commitment book (F16 of #193): an OPENED row is the promise, later rows are its state,
   // its announce-once marks and its close.
   | 'COMMITMENT_OPENED'

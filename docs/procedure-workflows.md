@@ -45,6 +45,7 @@ Promotion is proposed, never automatic.
 | `active` | The draft passed its dry-run and executes deterministically. |
 | `vetoed` | The owner refused this draft. It never activates and never executes. |
 | `downgraded` | Consecutive execution failures reached the threshold. It no longer executes, and revocation is proposed in the same row. |
+| `stale` | The procedure entry this workflow executes was corrected. The frozen steps are kept for audit, but the workflow no longer matches or executes. |
 
 ## Success criteria (frozen)
 
@@ -77,6 +78,7 @@ An unknown slot, an unclosed `{{`, or a non-literal argument is refused with `wo
 | `activate` | `PROCEDURE_WORKFLOW_ACTIVATED` | Activate only when the current version's dry-run passed. |
 | `veto` | `PROCEDURE_WORKFLOW_VETOED` | The owner's veto, naming the owner's turn as evidence. |
 | `recordExecution` | `PROCEDURE_WORKFLOW_EXECUTED` (+ `PROCEDURE_WORKFLOW_DEMOTED`) | Record one execution; consecutive failures demote at the threshold and propose revocation. |
+| `reconcileStale` | `PROCEDURE_WORKFLOW_STALE` | Mark a proposed or active workflow stale when its procedure entry is stale. The frozen steps are not rewritten. |
 | `match` | — | The active workflow whose domain the task hits. |
 | `list` | — | The current workflow per entry, newest version first. |
 | `audit` | — | Every workflow row for the project, oldest first. |
@@ -93,6 +95,16 @@ Adding a method is additive and does not bump the constant. Removing or renaming
 | `PROCEDURE_WORKFLOW_VETOED` | The owner vetoes a proposed or active draft. | The row with `status: vetoed`, `vetoedAt`, `vetoEventId`. |
 | `PROCEDURE_WORKFLOW_EXECUTED` | One execution finishes, succeeded or failed. | The row with `executions`, `consecutiveFailures`, `lastOutcome`, `lastExecutionRefs`. |
 | `PROCEDURE_WORKFLOW_DEMOTED` | Consecutive failures reach the threshold. | The same row with `status: downgraded`, `demotedAt`, `revocationProposedAt`. |
+| `PROCEDURE_WORKFLOW_STALE` | The source procedure entry was corrected. | The same row with `status: stale`, `staleAt`, `staleReason: source_corrected`. |
+
+## Correction propagation (#242)
+
+A workflow is a frozen literal draft and is never rewritten by a correction. When its procedure
+entry becomes `stale`, `reconcileStale` appends `PROCEDURE_WORKFLOW_STALE` with the original steps
+unchanged. `list` surfaces the row as stale for review, `match` stops returning it, and
+`recordExecution` refuses it. The maintenance tick calls `reconcileStale`; reads also derive the
+stale status from the procedure entry, so the window between a correction and the tick is not a
+silent old plan.
 
 ## Thresholds (frozen)
 

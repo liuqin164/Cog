@@ -417,7 +417,13 @@ export class ProfileCompiler {
       compiledAt: now,
       version: current.version + 1,
       eventType: 'PROFILE_ENTRY_CORRECTED',
+      previousValue: current.value,
+      previousSourceRefs: current.sourceRefs,
+      correctionEventId: event.eventId,
     });
+    // The correction is not local to this book (#242): the source belief or fact is superseded, so
+    // the Atlas and the default recall lanes stop presenting the replaced value as current.
+    this.propagateCorrection(projectId, current, value, event, now);
     // The whole ledger is recompiled, not only the corrected key: the ticket's "该册重编译".
     this.compile({ projectId, ledger, now });
     return this.entries({ projectId, ledger }).find((entry) => entry.entryId === entryId)!;
@@ -634,6 +640,9 @@ export class ProfileCompiler {
     compiledAt: number;
     version: number;
     eventType: 'PROFILE_ENTRY_COMPILED' | 'PROFILE_ENTRY_CORRECTED' | 'PROFILE_ENTRY_RETIRED';
+    previousValue?: string;
+    previousSourceRefs?: MemorySourceRef[];
+    correctionEventId?: string;
   }): void {
     this.appendVersion(projectId, input);
     const group = index.get(input.entryId) ?? { versions: [], lastEventType: input.eventType, retired: false };
@@ -663,6 +672,9 @@ export class ProfileCompiler {
     compiledAt: number;
     version: number;
     eventType: 'PROFILE_ENTRY_COMPILED' | 'PROFILE_ENTRY_CORRECTED' | 'PROFILE_ENTRY_RETIRED';
+    previousValue?: string;
+    previousSourceRefs?: MemorySourceRef[];
+    correctionEventId?: string;
   }): MemoryEvent {
     return this.events.append({
       streamId: `profile-entry:${input.entryId}`,
@@ -681,6 +693,9 @@ export class ProfileCompiler {
         recordedAt: input.recordedAt,
         compiledAt: input.compiledAt,
         version: input.version,
+        ...(input.previousValue === undefined ? {} : { previousValue: input.previousValue }),
+        ...(input.previousSourceRefs === undefined ? {} : { previousSourceRefs: input.previousSourceRefs }),
+        ...(input.correctionEventId === undefined ? {} : { correctionEventId: input.correctionEventId }),
       },
     });
   }
@@ -709,6 +724,82 @@ export class ProfileCompiler {
   private currentEntry(projectId: string, entryId: string): ProfileEntry | null {
     const current = currentIn(this.entryGroups(projectId), entryId);
     return current ? { ...current, status: 'current' } : null;
+  }
+
+  /**
+   * Carry the owner's correction into the governed evidence the profile was compiled from.
+   *
+   * A fact or preference entry came from a belief, a fact, or both. The old evidence is superseded
+   * through its own store (an update of a derived table, never a rewrite of a ledger row), and a
+   * correction belief is appended so the Atlas projection and the default belief lane read the new
+   * value. The profile correction row remains the audit of the owner's act.
+   */
+  private propagateCorrection(
+    projectId: string,
+    current: ProfileEntry,
+    value: string,
+    correction: MemoryEvent,
+    now: number,
+  ): void {
+    if (current.ledger !== 'facts' && current.ledger !== 'preferences') return;
+    const sourceIds = new Set(current.sourceRefs.map((ref) => ref.eventId).filter((id): id is string => Boolean(id)));
+    const beliefs = new Map<string, ReturnType<BeliefStore['findByCanonicalKey']>[number]>();
+    for (const belief of this.beliefs.findByCanonicalKey(current.key, projectId)) beliefs.set(belief.id, belief);
+    for (const belief of this.beliefs.listByTimeRange(0, MAX_TIME, {
+      projectId,
+      statuses: ['active'],
+      limit: PROFILE_EVIDENCE_LIMIT,
+    })) {
+      if (belief.sourceEventId && sourceIds.has(belief.sourceEventId)) beliefs.set(belief.id, belief);
+    }
+    const correctedKeys = new Set<string>();
+    for (const belief of beliefs.values()) {
+      if (belief.status !== 'active' || correctedKeys.has(belief.canonicalKey)) continue;
+      correctedKeys.add(belief.canonicalKey);
+      const corrected = this.beliefs.upsert({
+        projectId,
+        scope: belief.scope,
+        subject: belief.subject,
+        predicate: belief.predicate,
+        objectValue: { raw: value, normalized: value, type: 'string' },
+        confidence: 1,
+        trustScore: 1,
+        sourceType: 'user_input',
+        sourceEventId: correction.eventId,
+        validFrom: correction.occurredAt,
+        explanation: 'owner_profile_correction',
+        metadata: {
+          profileCorrection: {
+            entryId: current.entryId,
+            ledger: current.ledger,
+            key: current.key,
+            previousValue: current.value,
+          },
+        },
+        extractionReason: current.ledger === 'preferences' ? 'preference_signal' : 'explicit_user_statement',
+      }, now);
+      if (corrected.belief) {
+        this.beliefs.supersedeActiveForCorrection(corrected.belief.canonicalKey, projectId, corrected.belief.id, now);
+      }
+    }
+
+    for (const fact of this.facts.listFactsByTimeRange(0, MAX_TIME, {
+      projectId,
+      limit: PROFILE_EVIDENCE_LIMIT,
+    })) {
+      if (!(PROFILE_LIVE_FACT_STATUSES as readonly string[]).includes(fact.status)) continue;
+      const factKey = `${String(fact.subject).trim()}.${String(fact.predicateFamily ?? '').trim()}`;
+      const sourceEventId = this.sourceEventOfNeuron(fact.neuronId);
+      if (factKey !== current.key && !(sourceEventId && sourceIds.has(sourceEventId))) continue;
+      this.facts.updateFactStatus(fact.factId, 'superseded', undefined, {
+        profileCorrection: {
+          entryId: current.entryId,
+          ledger: current.ledger,
+          key: current.key,
+          previousValue: current.value,
+        },
+      });
+    }
   }
 
   /** entryId → its versions oldest first, plus how the newest row left it. */

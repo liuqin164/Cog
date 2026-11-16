@@ -519,6 +519,34 @@ export class BeliefStore {
     return { belief, decision };
   }
 
+  /**
+   * The owner's correction is final for a single-valued claim: any active row with the same
+   * canonical key other than the correction's new row is superseded, regardless of the strength
+   * comparison `upsert` would otherwise apply. History stays; only the current row changes.
+   */
+  supersedeActiveForCorrection(canonicalKey: string, projectId: string, supersededById: string, now: number): number {
+    const result = this.db.prepare(`
+      UPDATE beliefs
+      SET status = 'superseded', superseded_by_belief_id = ?, valid_to = COALESCE(valid_to, ?), updated_at = ?
+      WHERE canonical_key = ?
+        AND COALESCE(project_id,'') = ?
+        AND id <> ?
+        AND status IN ('active', 'suspect')
+    `).run(supersededById, now, now, canonicalKey, projectId, supersededById);
+    const changes = Number(result.changes ?? 0);
+    if (changes > 0) {
+      this.eventStore?.append({
+        streamId: supersededById,
+        streamType: 'belief',
+        eventType: 'BELIEF_SUPERSEDED',
+        projectId,
+        occurredAt: now,
+        payload: { beliefId: supersededById, canonicalKey, superseded: changes, reason: 'owner_profile_correction' },
+      });
+    }
+    return changes;
+  }
+
   attachEvidence(records: BeliefEvidenceRecord[]): void {
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO belief_evidence (

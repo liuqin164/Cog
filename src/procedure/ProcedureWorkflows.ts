@@ -49,7 +49,7 @@ export const WORKFLOW_FAILURE_DEMOTION_THRESHOLD = 2;
 export const WORKFLOW_TEMPLATE_SLOTS = ['task', 'workspace'] as const;
 export type WorkflowTemplateSlot = (typeof WORKFLOW_TEMPLATE_SLOTS)[number];
 
-export const WORKFLOW_STATUSES = ['proposed', 'active', 'vetoed', 'downgraded'] as const;
+export const WORKFLOW_STATUSES = ['proposed', 'active', 'vetoed', 'downgraded', 'stale'] as const;
 export type WorkflowStatus = (typeof WORKFLOW_STATUSES)[number];
 
 export const WORKFLOW_SUCCESS_TYPES = ['not_error', 'output_contains'] as const;
@@ -63,6 +63,7 @@ export const WORKFLOW_EVENT_TYPES = [
   'PROCEDURE_WORKFLOW_VETOED',
   'PROCEDURE_WORKFLOW_EXECUTED',
   'PROCEDURE_WORKFLOW_DEMOTED',
+  'PROCEDURE_WORKFLOW_STALE',
 ] as const;
 export type WorkflowEventType = (typeof WORKFLOW_EVENT_TYPES)[number];
 
@@ -73,6 +74,7 @@ export const WORKFLOW_API_METHODS = [
   'activate',
   'veto',
   'recordExecution',
+  'reconcileStale',
   'match',
   'list',
   'audit',
@@ -145,6 +147,9 @@ export interface ProcedureWorkflow {
   demotedAt?: number;
   /** Set together with `demotedAt`: the demotion also proposes revoking the workflow. */
   revocationProposedAt?: number;
+  /** Set when the procedure entry this workflow executes was corrected out from under it. */
+  staleAt?: number;
+  staleReason?: 'source_corrected';
   dryRun?: WorkflowDryRun;
   executions: number;
   consecutiveFailures: number;
@@ -344,6 +349,9 @@ export class ProcedureWorkflows {
     if (entry.origin !== 'experience') {
       throw workflowError('workflow_not_promotable', `${entryId} is ${entry.origin}, not an own practice`);
     }
+    if (entry.status === 'stale') {
+      throw workflowError('workflow_not_promotable', `${entryId} is stale; its claim was corrected`);
+    }
     const required = PROCEDURE_ESTABLISHED_SUCCESSES + WORKFLOW_PROMOTION_EXTRA_SUCCESSES;
     if (entry.support.successes < required) {
       throw workflowError(
@@ -463,6 +471,27 @@ export class ProcedureWorkflows {
     return workflow;
   }
 
+  /**
+   * Mark workflows whose source practice was corrected out from under them.
+   *
+   * The workflow's steps are a frozen literal draft and are never rewritten. The invalidation is
+   * its own auditable row (`PROCEDURE_WORKFLOW_STALE`), and `match` stops returning it, so an old
+   * plan cannot execute silently. `runMaintenanceTick` calls this; a read also derives the stale
+   * status from the procedure entry so the gap between the correction and the tick is not a leak.
+   */
+  reconcileStale(input: { projectId: string; now?: number }): number {
+    const projectId = requiredText(input.projectId, 'project_id_required');
+    const now = input.now ?? Date.now();
+    const staleEntryIds = this.staleEntryIds(projectId);
+    let marked = 0;
+    for (const workflow of this.storedLatestAll(projectId)) {
+      if ((workflow.status !== 'active' && workflow.status !== 'proposed') || !staleEntryIds.has(workflow.entryId)) continue;
+      this.append({ ...workflow, status: 'stale', staleAt: now, staleReason: 'source_corrected' }, 'PROCEDURE_WORKFLOW_STALE', now);
+      marked += 1;
+    }
+    return marked;
+  }
+
   /** The active workflow whose domain the task hits; the caller executes it without a model. */
   match(input: WorkflowMatchInput): ProcedureWorkflow | undefined {
     const projectId = requiredText(input.projectId, 'project_id_required');
@@ -514,6 +543,21 @@ export class ProcedureWorkflows {
   }
 
   private latestAll(projectId: string): ProcedureWorkflow[] {
+    const stale = this.staleEntryIds(projectId);
+    return this.storedLatestAll(projectId).map((workflow) => (
+      (workflow.status === 'active' || workflow.status === 'proposed') && stale.has(workflow.entryId)
+        ? { ...workflow, status: 'stale' as const, staleReason: 'source_corrected' as const }
+        : workflow
+    ));
+  }
+
+  private staleEntryIds(projectId: string): Set<string> {
+    return new Set(this.procedures.entries({ projectId })
+      .filter((entry) => entry.status === 'stale')
+      .map((entry) => entry.entryId));
+  }
+
+  private storedLatestAll(projectId: string): ProcedureWorkflow[] {
     const latest = new Map<string, ProcedureWorkflow>();
     for (const row of this.loadRows(projectId)) {
       const workflow = workflowFromPayload(row.payload, row.event);
@@ -582,6 +626,8 @@ function workflowFromPayload(payload: Record<string, unknown>, event: MemoryEven
     ...(typeof payload.vetoEventId === 'string' ? { vetoEventId: payload.vetoEventId } : {}),
     ...(payload.demotedAt !== undefined ? { demotedAt: Number(payload.demotedAt) } : {}),
     ...(payload.revocationProposedAt !== undefined ? { revocationProposedAt: Number(payload.revocationProposedAt) } : {}),
+    ...(payload.staleAt !== undefined ? { staleAt: Number(payload.staleAt) } : {}),
+    ...(payload.staleReason === 'source_corrected' ? { staleReason: 'source_corrected' as const } : {}),
     ...(dryRun ? { dryRun } : {}),
     executions: Number(payload.executions ?? 0),
     consecutiveFailures: Number(payload.consecutiveFailures ?? 0),
