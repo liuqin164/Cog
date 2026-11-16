@@ -34,6 +34,8 @@ export interface LaneAssemblyView {
   usedTokens: number;
   lanes: LaneView[];
   decisionTrace: LaneDecisionView[];
+  /** The stub ids this assembly expanded into `working_set` (#253); `[]` when none matched. */
+  autoExpanded: string[];
 }
 
 export const LANE_LABELS: Record<SessionContextLaneName, string> = {
@@ -70,6 +72,7 @@ export function laneAssemblyView(assembly: SessionContextAssembly): LaneAssembly
       omittedItems: decision.omittedItems,
       browseIds: [...decision.browseIds],
     })),
+    autoExpanded: [...assembly.autoExpanded],
   };
 }
 

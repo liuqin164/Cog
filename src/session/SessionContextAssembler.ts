@@ -23,7 +23,7 @@
  */
 
 import { ImportanceSignalDetector } from '../engine/ImportanceSignalDetector.js';
-import type { SessionDigest } from './SessionDigest.js';
+import { digestAnchors, type SessionDigest } from './SessionDigest.js';
 import { sessionError } from './SessionErrors.js';
 import { serializeUntrustedMemory } from '../agent/UntrustedMemorySerializer.js';
 
@@ -69,6 +69,13 @@ export interface SessionContextItem {
   sourceLocator?: string;
   whyMatched?: string;
   /**
+   * The ledger text this item stands for, when `text` is a stub (#253). Only a stub is expanded:
+   * an item whose text already is the ledger row carries no `originalText`.
+   */
+  originalText?: string;
+  /** Set by the assembler on the item it placed in `working_set`; never supplied by a caller. */
+  autoExpanded?: boolean;
+  /**
    * A constraint: a correction, a promise, an intention or a prohibition. The assembly never
    * downgrades, trims or folds it; it stays in the lane verbatim.
    */
@@ -95,6 +102,11 @@ export interface AssembleSessionContextInput {
   protectedIds?: readonly string[];
   /** How many recent turns stay verbatim. Defaults to `SESSION_DIGEST_TAIL_TURNS`. */
   tailTurns?: number;
+  /**
+   * The newest user message and the latest model output, as the shell has them at assembly time
+   * (#253). A stub whose key or own entity words occur here is expanded before the request.
+   */
+  recentText?: readonly string[];
 }
 
 export type SessionContextLaneStatus = 'included' | 'downgraded' | 'empty';
@@ -134,6 +146,8 @@ export interface SessionContextAssembly {
   /** The assembled context: lanes in frozen order. */
   text: string;
   digest: SessionDigest;
+  /** The stub ids this assembly expanded into `working_set` (#253); the count is `length`. */
+  autoExpanded: readonly string[];
 }
 
 /** Four characters to a token, the estimate the context cortex and the evidence pack use. */
@@ -162,6 +176,26 @@ export function assembleSessionContext(input: AssembleSessionContextInput, diges
       .sort((left, right) => left.priority - right.priority || SESSION_CONTEXT_LANES.indexOf(left.lane) - SESSION_CONTEXT_LANES.indexOf(right.lane))[0];
     if (!lane) break;
     const before = lane.tokens;
+    // An expansion is the first thing to give back: it was added this turn and must never be the
+    // reason an open loop or a constraint leaves the lane (#253).
+    const expanded = lane.items.filter((item) => item.autoExpanded === true);
+    if (expanded.length > 0) {
+      lane.items = lane.items.filter((item) => item.autoExpanded !== true);
+      lane.text = renderLane(lane.lane, lane.items);
+      lane.tokens = sessionTokens(lane.text);
+      lane.browseIds = expanded.map((item) => item.id);
+      decisions.push({
+        lane: lane.lane,
+        action: 'trimmed',
+        reason: 'budget_exceeded',
+        tokensBefore: before,
+        tokensAfter: lane.tokens,
+        omittedItems: expanded.length,
+        browseIds: expanded.slice(0, BROWSE_ID_LIMIT).map((item) => item.id),
+      });
+      total = lanes.reduce((sum, entry) => sum + entry.tokens, 0);
+      continue;
+    }
     const kept = lane.items.filter((item) => item.protected === true);
     if (kept.length > 0) {
       const omitted = lane.items.filter((item) => item.protected !== true);
@@ -227,6 +261,12 @@ export function assembleSessionContext(input: AssembleSessionContextInput, diges
   }
 
   const ordered = SESSION_CONTEXT_LANES.map((name) => lanes.find((lane) => lane.lane === name)!);
+  // The count is what survived the budget, not what was planned: an expansion trimmed away was
+  // never seen by the provider, and a trace that counted it would overstate the turn (#253).
+  const autoExpanded = ordered
+    .find((lane) => lane.lane === 'working_set')!
+    .items.filter((item) => item.autoExpanded === true)
+    .map((item) => item.id);
   return {
     projectId: input.projectId,
     agentId: input.agentId,
@@ -242,6 +282,7 @@ export function assembleSessionContext(input: AssembleSessionContextInput, diges
       .join('\n'),
     text: ordered.map((lane) => lane.text).filter(Boolean).join('\n'),
     digest,
+    autoExpanded,
   };
 }
 
@@ -261,7 +302,8 @@ function buildLanes(input: AssembleSessionContextInput, digest: SessionDigest): 
     recall: [...(input.recall ?? [])],
     tail: digest.tail.map((turn) => ({ id: turn.eventId, text: turn.text, sourceRefs: [turn.eventId] })),
   };
-  return SESSION_CONTEXT_LANES.map((lane) => {
+  itemsByLane.working_set = [...workingItems, ...expandStubs(input, itemsByLane, protectedIds)];
+  const lanes: SessionContextLane[] = SESSION_CONTEXT_LANES.map((lane) => {
     const items = itemsByLane[lane].map((item) => isProtected(item, protectedIds) ? { ...item, protected: true } : item);
     const text = renderLane(lane, items);
     return {
@@ -275,6 +317,66 @@ function buildLanes(input: AssembleSessionContextInput, digest: SessionDigest): 
       text,
     };
   });
+  return lanes;
+}
+
+/**
+ * Deterministic auto-expansion (#253). A recall item is a stub when it carries `originalText` that
+ * its own `text` does not already contain; it is expanded into `working_set` — before the request —
+ * when the newest user message or the latest model output names it. The match is a literal,
+ * normalized substring test over two things the stub itself carries:
+ *
+ * - its keys: `anchorEvent`, `sourceLocator` and every `sourceRefs` entry (`evt-…`);
+ * - its entity words: the kernel's own verbatim anchors (`digestAnchors`: quoted spans, numbers
+ *   with a separator or several digits, and names introduced by 叫/名叫/名字是), at least two
+ *   characters long. No keyword list is kept here: the shapes are content-bearing on their own, so
+ *   no stopword list is needed either. A single digit is dropped by the length floor; a quoted span
+ *   matches as a whole, so the ordinary word that grazes it does not fire.
+ *
+ * An original already rendered in another lane is not expanded again, and a protected item is
+ * never expanded: a constraint is already verbatim in its lane (#255). The read is the caller's;
+ * this function only projects what the item already carries.
+ */
+function expandStubs(
+  input: AssembleSessionContextInput,
+  itemsByLane: Record<SessionContextLaneName, SessionContextItem[]>,
+  protectedIds: ReadonlySet<string>,
+): SessionContextItem[] {
+  const haystack = normalizeMatchText((input.recentText ?? []).join('\n'));
+  if (!haystack) return [];
+  const present = new Set<string>();
+  for (const items of Object.values(itemsByLane)) for (const item of items) present.add(item.text);
+  const items: SessionContextItem[] = [];
+  for (const item of input.recall ?? []) {
+    const original = item.originalText;
+    if (!original || original === item.text) continue;
+    if (present.has(original) || isProtected(item, protectedIds)) continue;
+    if (!stubMatches(item, haystack)) continue;
+    present.add(original);
+    items.push({
+      id: item.id,
+      text: original,
+      ...(item.sourceRefs === undefined ? {} : { sourceRefs: item.sourceRefs }),
+      ...(item.anchorEvent === undefined ? {} : { anchorEvent: item.anchorEvent }),
+      ...(item.sourceLocator === undefined ? {} : { sourceLocator: item.sourceLocator }),
+      autoExpanded: true,
+    });
+  }
+  return items;
+}
+
+function stubMatches(item: SessionContextItem, haystack: string): boolean {
+  const keys = [item.anchorEvent, item.sourceLocator, ...(item.sourceRefs ?? [])]
+    .filter((key): key is string => typeof key === 'string' && key.length > 0);
+  if (keys.some((key) => haystack.includes(normalizeMatchText(key)))) return true;
+  return digestAnchors(item.text)
+    .filter((term) => term.length >= 2)
+    .some((term) => haystack.includes(normalizeMatchText(term)));
+}
+
+/** The experiment's normalization (#254): full-width to half-width, lower case, no whitespace. */
+function normalizeMatchText(text: string): string {
+  return text.normalize('NFKC').toLowerCase().replace(/[\s\u3000]+/gu, '');
 }
 
 /**
