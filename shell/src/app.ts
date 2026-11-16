@@ -990,6 +990,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       items.push({
         id: `wake:${intent.id}`,
         text: `wake intent: ${intent.reason} (scheduled ${new Date(intent.at).toISOString()})`,
+        protected: true,
       });
     }
     return items;

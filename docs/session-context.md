@@ -51,6 +51,26 @@ turns append there, but it outranks the digest and the recall lane: the recent v
 the continuity anchor. `pinned` and `profile` lead both lists because they are the prefix a provider
 can cache.
 
+## Constraints never fold (#255)
+
+A correction, a promise, an intention or a prohibition is never summarised, downgraded or trimmed
+out of the context. The kernel marks these items `protected` from markers it already keeps, not from
+a word list in the shell:
+
+- a turn named by a `COMMITMENT_OPENED` or `INTENTION_OPENED` row's `sourceRefs`;
+- a correction turn: the `PROFILE_ENTRY_CORRECTED` row's `correctionEventId`, and a turn the episode
+  classifier linked as `corrects_previous` / `rejects_assistant_proposal`;
+- a prohibition the kernel's existing importance classifier rates `permanent` (the same
+  `ImportanceSignalDetector` ingestion uses, e.g. 「绝对不能」);
+- any item the caller marks `protected: true`, and any id the caller passes in `protectedIds`.
+
+When a lane over budget carries a protected item, the lane is **trimmed to its protected items**
+instead of becoming a browse-only stub: the constraint stays verbatim and the lane's other ids stay
+in `browseIds`. The decision trace records `action: "trimmed"` for that lane. If the protected items
+alone exceed `targetTokens`, they still stay; the target is a bandwidth goal, not a licence to drop
+a constraint. A lane with no protected item keeps the ordinary behaviour — the whole lane becomes a
+pointer — so the whitelist does not turn folding off.
+
 The pinned lane's first item is the current soul version, read verbatim from `MemoryKernel.soul`
 (F17, #194). It is not compiled, paraphrased or trimmed; at one version its bytes are identical from
 one assembly to the next, and a saved version is effective on the next turn. The soul's own contract
