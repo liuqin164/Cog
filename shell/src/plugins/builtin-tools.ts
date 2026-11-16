@@ -90,7 +90,7 @@ let bwrapProbe: boolean | undefined;
 
 export function bwrapUsable(): boolean {
   if (bwrapProbe !== undefined) return bwrapProbe;
-  const probe = spawnSync('bwrap', ['--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--', '/bin/true'], {
+  const probe = spawnSync('bwrap', ['--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--unshare-net', '--', '/bin/true'], {
     timeout: 2_000,
     stdio: 'ignore',
   });
@@ -98,21 +98,78 @@ export function bwrapUsable(): boolean {
   return bwrapProbe;
 }
 
+/** System directories a command needs; everything else is invisible (#288). */
+const SANDBOX_SYSTEM_DIRS = ['/usr', '/bin', '/sbin', '/lib', '/lib64', '/etc'];
+/** Only these variables reach a bash child; API keys, tokens and the rest are absent by construction. */
+const BASH_ENV_ALLOWLIST = [
+  'LANG',
+  'LANGUAGE',
+  'LC_ALL',
+  'LC_CTYPE',
+  'LC_MESSAGES',
+  'LC_NUMERIC',
+  'LC_TIME',
+  'LC_COLLATE',
+  'LC_MONETARY',
+  'TZ',
+  'TERM',
+  'COLORTERM',
+  'NO_COLOR',
+  'FORCE_COLOR',
+];
+const SANDBOX_PATH = '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin';
+
+function isWithin(root: string, candidate: string): boolean {
+  const resolved = resolve(root);
+  const child = resolve(candidate);
+  return child === resolved || child.startsWith(resolved + sep);
+}
+
+function bashEnv(sandboxed: boolean, cliConfigPath?: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of BASH_ENV_ALLOWLIST) {
+    const value = process.env[key];
+    if (value !== undefined) env[key] = value;
+  }
+  env.PATH = sandboxed ? SANDBOX_PATH : process.env.PATH ?? SANDBOX_PATH;
+  env.HOME = sandboxed ? '/tmp' : process.env.HOME ?? '/tmp';
+  env.TMPDIR = sandboxed ? '/tmp' : process.env.TMPDIR ?? '/tmp';
+  env.SHELL = '/bin/bash';
+  if (cliConfigPath) env.COGMEM_CONFIG = cliConfigPath;
+  return env;
+}
+
 /**
- * A read-only root with the existing writable surfaces bound back in. The data dir is bound after
- * the workspace, so a default `<workspace>/.cogmem-shell` cannot be written through its parent.
- * Network is shared (no `--unshare-net`), which keeps the tool's reach exactly what it was.
+ * A minimal read-only system root plus the workspace. The data dir is masked by an empty read-only
+ * mount, so memory, budgets and the CLI config are not readable from bash (#288) whether it sits
+ * under the workspace (the default `<workspace>/.cogmem-shell`) or elsewhere. Network is unshared:
+ * a fetched page cannot ask bash to send a secret out. The runtime's own bin directory is bound
+ * when bun/node lives outside `/usr` (a per-user install); only that directory, never `$HOME`.
  */
 function sandboxArgs(workspaceRoot: string, dataDir: string, command: string): string[] {
   const workspace = realpathSync(workspaceRoot);
   const data = realpathSync(dataDir);
-  const args = ['--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--die-with-parent'];
-  for (const dir of ['/tmp', '/var/tmp']) {
-    if (existsSync(dir)) args.push('--bind', dir, dir);
+  const args = ['--die-with-parent', '--unshare-net'];
+  for (const dir of SANDBOX_SYSTEM_DIRS) {
+    if (existsSync(dir)) args.push('--ro-bind', dir, dir);
   }
-  args.push('--bind', workspace, workspace, '--ro-bind', data, data);
-  const webCache = join(data, 'web-cache');
-  if (existsSync(webCache)) args.push('--bind', webCache, webCache);
+  args.push('--dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp', '--tmpfs', '/var/tmp');
+  // An empty read-only mount at the data path: the real memory, budgets and CLI config stay
+  // invisible, while a write still fails as `read-only file system` and leaves the denial trace.
+  // Order matters when one path contains the other: the workspace mount must win where it should.
+  // `data === workspace` is a configuration where the two cannot be separated; leave it visible.
+  if (data !== workspace && isWithin(workspace, data)) {
+    args.push('--bind', workspace, workspace, '--tmpfs', data, '--remount-ro', data);
+  } else if (data !== workspace) {
+    // The workspace may itself be under the data dir; mount it while the tmpfs is still writable,
+    // then remount the parent read-only. Submounts keep their own flags.
+    args.push('--tmpfs', data, '--bind', workspace, workspace, '--remount-ro', data);
+  } else {
+    args.push('--bind', workspace, workspace);
+  }
+  // Bound after the data mask: a per-user bun/node install inside a masked home stays runnable.
+  const runtimeBin = dirname(realpathSync(process.execPath));
+  if (!SANDBOX_SYSTEM_DIRS.some((dir) => isWithin(dir, runtimeBin))) args.push('--ro-bind', runtimeBin, runtimeBin);
   args.push('--chdir', workspace, '--', '/bin/bash', '-lc', command);
   return args;
 }
@@ -242,7 +299,7 @@ function definitions(
   // The shell always has a data dir, so a bare test host without one is not a degradation to
   // announce; a shell with one and no bwrap is, on every result (#281).
   const offNote = dataDir !== undefined && !sandboxed
-    ? '[sandbox: off] bwrap is unavailable: this command ran without isolation'
+    ? '[sandbox: off] bwrap is unavailable: this command ran without isolation (filesystem and network are shared)'
     : undefined;
   return [
     {
@@ -329,7 +386,7 @@ function definitions(
     {
       name: 'bash',
       replay: 'never',
-      description: 'Run a bash command in the workspace, 30s timeout by default. stdout/stderr are combined; the last 2000 lines or 50 KiB (whichever is hit first) are returned, and the full text is written under .cogmem-shell/bash-output/ and named in the result. A non-zero exit is an error. The optional `timeout` is in seconds.',
+      description: 'Run a bash command in the workspace, 30s timeout by default. It runs with no network access and sees only system directories and the workspace: the shell data directory and the operator home are not mounted, and only a small variable allowlist reaches the child. stdout/stderr are combined; the last 2000 lines or 50 KiB (whichever is hit first) are returned, and the full text is written under .cogmem-shell/bash-output/ and named in the result. A non-zero exit is an error. The optional `timeout` is in seconds.',
       parameters: { type: 'object', properties: { command: { type: 'string' }, timeout: { type: 'number' } }, required: ['command'] },
       rehearse({ args }) {
         const command = asString(args, 'command');
@@ -339,11 +396,11 @@ function definitions(
       execute({ args, signal }) {
         const command = asString(args, 'command');
         const timeoutMs = resolveBashTimeoutMs(args);
-        const env = cliConfigPath ? { ...process.env, COGMEM_CONFIG: cliConfigPath } : undefined;
+        const env = bashEnv(sandbox !== undefined, cliConfigPath);
         return new Promise<ToolOutcome>((resolvePromise, rejectPromise) => {
           const child = sandbox
-            ? spawn('bwrap', sandboxArgs(workspaceRoot, sandbox.dataDir, command), { cwd: workspaceRoot, signal, stdio: ['ignore', 'pipe', 'pipe'], ...(env ? { env } : {}) })
-            : spawn('/bin/bash', ['-lc', command], { cwd: workspaceRoot, signal, stdio: ['ignore', 'pipe', 'pipe'], ...(env ? { env } : {}) });
+            ? spawn('bwrap', sandboxArgs(workspaceRoot, sandbox.dataDir, command), { cwd: workspaceRoot, signal, stdio: ['ignore', 'pipe', 'pipe'], env })
+            : spawn('/bin/bash', ['-lc', command], { cwd: workspaceRoot, signal, stdio: ['ignore', 'pipe', 'pipe'], env });
           let output = '';
           let settled = false;
           let timer: ReturnType<typeof setTimeout>;
@@ -417,6 +474,7 @@ export function builtinToolsPlugin(): NativePlugin {
       const { workspaceRoot, dataDir, cliConfigPath, trace, kernel, onMemoryRead } = config as BuiltinToolsConfig;
       const sandboxed = dataDir !== undefined && bwrapUsable();
       if (dataDir !== undefined && !sandboxed) trace?.append('bash_sandbox_unavailable', { dataDir, reason: 'bwrap_not_usable' });
+      if (sandboxed) trace?.append('bash_sandbox_network', { network: 'unshared' });
       for (const definition of definitions(workspaceRoot, dataDir, sandboxed, { kernel, trace, onMemoryRead }, cliConfigPath)) {
         ctx.registerTool(definition, { builtin: true });
       }

@@ -417,18 +417,22 @@ is a `tools_declared` trace record, updates `runtime.declaredTools` in the check
 the ledger as a `tool-loadout` task event — the transcript the model was told about, durably, not only
 in the run's context.
 
-## Bash sandbox (#233)
+## Bash sandbox (#233, #288)
 
-`bash` runs through `bubblewrap` when it is usable: the filesystem is a read-only bind of `/`, with
-the workspace, `/tmp`, `/var/tmp` and `<dataDir>/web-cache` bound back read-write, and `<dataDir>`
-re-bound read-only after the workspace so a default `<workspace>/.cogmem-shell` cannot be written
-through its parent. `soul_versions` (inside `memory.sqlite`), `budgets.json`, `routes.json`,
-`checkpoint.json` and `plugins.json` therefore refuse writes from the sandboxed process; a denial
-is a tool error and a `bash_sandbox_denied` trace record. Network is not namespaced, so the tool's
-reach matches the previous unsandboxed one. `write`/`edit` refuse the same data-dir paths for the
-same reason (`path_in_data_dir`). If `bwrap` is missing or its user namespace is refused, the probe
-fails once, `bash_sandbox_unavailable` is traced, and `bash` runs as before — the shell keeps
-working on machines that cannot sandbox, but says so rather than claiming protection it lacks.
+`bash` runs through `bubblewrap` when it is usable: a minimal read-only system root (`/usr`, `/bin`,
+`/sbin`, `/lib`, `/lib64`, `/etc`) plus the workspace read-write, with fresh `/tmp` and `/var/tmp`
+tmpfs mounts. The operator's home and the shell data dir are not mounted; when the data dir sits
+under the workspace (the default `<workspace>/.cogmem-shell`) an empty read-only mount masks it, so
+`memory.sqlite`, `budgets.json`, `routes.json`, `checkpoint.json` and `plugins.json` are unreadable
+and unwritable from the sandboxed process. A denied write is a tool error and a `bash_sandbox_denied`
+trace record. The network namespace is unshared, so a fetched page cannot instruct bash to send a
+secret out. The child inherits only a small variable allowlist (`PATH`, locale, `TZ`, `TERM`, ...),
+never API keys or tokens; `HOME` is `/tmp` and `COGMEM_CONFIG` still points at the companion's config,
+which the mask makes unreadable (the in-bash CLI fallback therefore cannot open the database).
+`write`/`edit` refuse the same data-dir paths for the same reason (`path_in_data_dir`). If `bwrap` is
+missing or its user namespace is refused, the probe fails once, `bash_sandbox_unavailable` is traced,
+and `bash` runs as before — the shell keeps working on machines that cannot sandbox, but says so
+rather than claiming protection it lacks.
 
 **Replay policy.** Every tool declares `replay: 'never' | 'safe'` (Pi's `AgentTool.replay`); the host
 defaults anything undeclared to `never`, `read` declares `safe`, and `bash`/`write`/`edit` declare
