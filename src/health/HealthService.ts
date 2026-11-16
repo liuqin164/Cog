@@ -17,7 +17,7 @@ import type { KernelEventStream } from '../events/index.js';
 import type { ModelRegistry } from '../models/ModelRegistry.js';
 import type { Occasion } from '../occasion/index.js';
 
-export const HEALTH_CONTRACT_VERSION = 1;
+export const HEALTH_CONTRACT_VERSION = 2;
 
 /** The four self-checks, in the order the document freezes. */
 export const HEALTH_CHECK_IDS = ['model_route', 'dream_streak', 'db_writable', 'kernel_integrity'] as const;

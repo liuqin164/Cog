@@ -8,6 +8,8 @@
 import type Database from 'bun:sqlite';
 
 export const SNAPSHOT_RETENTION = 7;
+/** Weekly archives keep a clean point across the nightly window: four ISO weeks. */
+export const SNAPSHOT_WEEKLY_RETENTION = 4;
 export const SNAPSHOT_FORMAT = 'cogmem.brain-snapshot' as const;
 export const SNAPSHOT_MANIFEST_VERSION = 1;
 export const BUNDLE_FORMAT = 'cogmem.brain-bundle' as const;
