@@ -215,7 +215,7 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
       ...autonomous,
       // cage violation. The workflow tools are the same shape: `list_workflows` presents the book,
       // `propose_workflow` offers a draft, and `veto_workflow` records the owner's refusal.
-      toolWhitelist: ['read', 'write', 'edit', 'bash', 'propose_command', 'propose_soul_edit', 'propose_self_change', 'ask_user', 'declare_task', 'web_search', 'web_fetch', 'web_recall', 'list_workflows', 'propose_workflow', 'veto_workflow'],
+      toolWhitelist: ['read', 'write', 'edit', 'bash', 'propose_command', 'propose_soul_edit', 'propose_self_change', 'apply_self_change', 'ask_user', 'declare_task', 'web_search', 'web_fetch', 'web_recall', 'list_workflows', 'propose_workflow', 'veto_workflow'],
     },
     workBudget: overrides.workBudget ?? work,
     dailyBudget: overrides.dailyBudget ?? daily,

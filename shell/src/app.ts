@@ -38,6 +38,7 @@ import { assignmentPlugin } from './plugins/assignment.ts';
 import { recallPlugin } from './plugins/recall.ts';
 import { soulEditPlugin } from './plugins/soul-edit.ts';
 import { HygienePipeline } from './hygiene.ts';
+import { SelfChangeApplier, readSelfChangeApplies } from './self-change.ts';
 import { dreamPlugin } from './plugins/dream.ts';
 import { emergencePlugin } from './plugins/emergence.ts';
 import { terminalPlugin, TerminalChannel, type ShellControl } from './channels/terminal.ts';
@@ -88,6 +89,10 @@ const UPGRADE_REPORT_GRACE_MS = 60_000;
  * socket write rather than a whole announcement.
  */
 const PLUGIN_RESTART_GRACE_MS = 300;
+
+function selfChangeLine(entry: { proposalId: string; status: string }): string {
+  return ` · 自写提案 ${entry.proposalId} · ${entry.status}`;
+}
 
 /** The findings handoff is a prompt line, not a transcript: one bounded paragraph. */
 const MAX_ASSIGNMENT_FINDINGS = 600;
@@ -177,6 +182,8 @@ export class CompanionShell implements ShellControl, AttachShell {
   readonly proposals: CommandProposals;
   /** The hygiene gate every self-written skill, plugin or rule proposal passes before review (#228). */
   readonly hygiene: HygienePipeline;
+  /** The one path that writes an approved plugin proposal; snapshot, rollback and record live here. */
+  readonly selfChange: SelfChangeApplier;
   private runtime?: AgentRuntime;
   private cage?: RunCage;
   private workflows?: WorkflowService;
@@ -289,6 +296,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       now: this.now,
       askOwner: (input) => this.askUser(input),
     });
+    this.selfChange = new SelfChangeApplier({ dataDir: this.config.dataDir, trace: this.trace, now: this.now });
     this.machine = new StateMachine({
       checkpoint: new CheckpointStore(this.config.dataDir),
       trace: this.trace,
@@ -817,21 +825,27 @@ export class CompanionShell implements ShellControl, AttachShell {
         },
       }));
     }
+    const pendingSpecs = this.selfChange.pendingSpecs();
     this.pluginResults.push(...(await loadNativePlugins(this.host, this.config.plugins, {
       cwd: this.config.workspaceRoot,
       trace: this.trace,
+      quarantine: (spec) => pendingSpecs.has(spec),
     })));
     await this.host.start();
     // The host has run every `apply`, so the registrations each plugin actually made are readable.
     for (const result of this.pluginResults) {
-      if (result.status === 'failed') {
-        // A failure a user cannot see is a failure they will blame on the plugin that did load. The
-        // notice waits until here because the terminal plugin subscribes during `host.start()`.
-        void this.host.bus.emit('terminal_print', { text: `plugin ${result.spec} failed to load: ${result.reason}\n` });
-      }
       if (result.status !== 'loaded' || !result.name) continue;
       result.tools = this.host.tools.list().filter((tool) => tool.source === `plugin:${result.name}`).map((tool) => tool.name);
       result.commands = this.host.commands.list().filter((command) => command.source === `plugin:${result.name}`).map((command) => command.name);
+    }
+    // A pending install is proved here: loaded is applied, anything else is rolled back to the
+    // snapshot taken before the write. The terminal plugin is subscribed by now, so a rollback is
+    // said out loud rather than only written to the trace.
+    this.selfChange.reconcile(this.pluginResults, (name) => this.host.plugins.get(name)?.status === 'started');
+    for (const result of this.pluginResults) {
+      if (result.status !== 'failed') continue;
+      // A failure a user cannot see is a failure they will blame on the plugin that did load.
+      void this.host.bus.emit('terminal_print', { text: `plugin ${result.spec} failed to load: ${result.reason}\n` });
     }
     this.clock = this.host.getService<ClockService>('clock');
     this.cage = this.host.getService<RunCage>('cage');
@@ -2786,8 +2800,9 @@ export class CompanionShell implements ShellControl, AttachShell {
     ];
     for (const spec of report.registered) {
       const result = report.results.find((entry) => entry.spec === spec);
+      const origin = [...report.selfChanges].reverse().find((entry) => entry.spec === spec);
       if (!result) {
-        lines.push(`  - ${spec}：本进程未加载（启动后登记）；重启后生效`);
+        lines.push(`  - ${spec}：本进程未加载（启动后登记）；重启后生效${origin ? selfChangeLine(origin) : ''}`);
         continue;
       }
       const parts = [
@@ -2796,7 +2811,14 @@ export class CompanionShell implements ShellControl, AttachShell {
         result.tools.length > 0 ? `tools=[${result.tools.join(', ')}]` : '',
         result.reason ?? '',
       ].filter(Boolean);
-      lines.push(`  - ${spec}：${parts.join(' · ')}`);
+      lines.push(`  - ${spec}：${parts.join(' · ')}${origin ? selfChangeLine(origin) : ''}`);
+    }
+    const detached = report.selfChanges.filter((entry) => !report.registered.includes(entry.spec));
+    if (detached.length > 0) {
+      lines.push('自写应用记录：');
+      for (const entry of detached) {
+        lines.push(`  - ${entry.proposalId} → ${entry.spec}：${entry.status}${entry.reason ? ` · ${entry.reason}` : ''}`);
+      }
     }
     return { text: lines.join('\n'), receipt: true, data: { companion_plugins: report } };
   }
@@ -2804,6 +2826,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   private pluginReportData(): {
     registered: string[];
     results: Array<{ spec: string; status: string; version?: string; reason?: string; tools: string[]; commands: string[] }>;
+    selfChanges: Array<{ applyId: string; proposalId: string; spec: string; status: string; reason?: string }>;
   } {
     return {
       registered: readPluginRegistry(this.config.dataDir),
@@ -2814,6 +2837,13 @@ export class CompanionShell implements ShellControl, AttachShell {
         ...(entry.reason ? { reason: entry.reason } : {}),
         tools: entry.tools,
         commands: entry.commands,
+      })),
+      selfChanges: readSelfChangeApplies(this.config.dataDir).map((entry) => ({
+        applyId: entry.applyId,
+        proposalId: entry.proposalId,
+        spec: entry.spec,
+        status: entry.status,
+        ...(entry.reason ? { reason: entry.reason } : {}),
       })),
     };
   }
@@ -2870,6 +2900,52 @@ export class CompanionShell implements ShellControl, AttachShell {
         '重启后用 /plugins 或 curl /health 核对是否真的加载。',
       ].join('\n'),
       receipt: true,
+    };
+  }
+
+  /**
+   * `apply_self_change`: the only path that writes an approved plugin proposal. The hygiene gate's
+   * approval record is checked inside the applier; the snapshot is written before the plugin files
+   * and the registry, and the existing plugin restart is what makes the next boot prove it.
+   */
+  applySelfChange(rawId: string): { ok: boolean; text: string; data?: Record<string, unknown> } {
+    const id = rawId.trim();
+    if (id === '') return { ok: false, text: 'invalid_arguments: "proposal_id" must be a non-empty string' };
+    const proposal = this.hygiene.get(id);
+    if (!proposal) {
+      this.trace.append('self_change_apply_refused', { proposalId: id, reason: 'unknown_proposal' });
+      return { ok: false, text: `self_change_apply_refused: 本进程没有提案 ${id} 的记录；没有写入任何文件。` };
+    }
+    const outcome = this.selfChange.apply(proposal);
+    if (!outcome.ok) {
+      if (outcome.refused) {
+        return { ok: false, text: `self_change_apply_refused: ${outcome.reason}；没有写入。` };
+      }
+      return {
+        ok: false,
+        text: `self_change_apply_rolled_back: ${outcome.reason}；已回滚到快照 ${outcome.record.snapshotPath}，同伴仍可用。`,
+      };
+    }
+    const restart = this.schedulePluginRestart(outcome.record.spec);
+    return {
+      ok: true,
+      text: [
+        `self_change_applied: 提案 ${id} 已写入 ${outcome.record.targetDir} 并登记到 ${pluginsConfigPath(this.config.dataDir)}。`,
+        `快照：${outcome.record.snapshotPath}（应用前 plugins.json 与目标文件）。`,
+        restart.ok
+          ? `约 ${PLUGIN_RESTART_GRACE_MS} ms 后重启自己（${restart.detail}）；回来后由加载结果判定 applied / rolled_back。`
+          : `本进程没有服务管理器接管（${restart.detail}），需要手动重启常驻进程后生效；重启前记录保持 pending。`,
+        '重启后用 /plugins 或 curl /health 核对加载结果。',
+      ].join('\n'),
+      data: {
+        companion_self_change: {
+          applyId: outcome.record.applyId,
+          proposalId: id,
+          spec: outcome.record.spec,
+          status: outcome.record.status,
+          snapshot: outcome.record.snapshotPath,
+        },
+      },
     };
   }
 
