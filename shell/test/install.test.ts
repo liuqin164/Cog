@@ -76,6 +76,7 @@ function makeHarness(options: { probeOk: boolean; hooks?: Partial<InstallerHooks
   const stored = { text: '' };
   const dbPath = join(dataDir, 'memory.sqlite');
   const hooks: InstallerHooks = {
+    ensureEmbedding: async () => ({ ok: true, downloaded: false, detail: 'test stub' }),
     probe: async () => (options.probeOk
       ? { ok: true, latencyMs: 12, sample: 'OK' }
       : { ok: false, code: 'model_unreachable', message: '连不上这个端点。', hint: '检查 base URL、端口与进程。' }),
