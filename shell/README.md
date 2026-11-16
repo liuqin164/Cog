@@ -122,9 +122,12 @@ second ledger; the night's start is checkpointed with that counter, so a restart
 rather than refunds the night. A night that reaches the cap records
 `dream_model_budget_exceeded`, the kernel keeps the deterministic candidates and falls back to
 rule-only, and no model candidate is written. The
-memory role is the resident's mg route; the embedding role stays `deterministic_local` and recall
-reports `semanticIndex: false` until a host supplies an embedding provider. `MemoryKernel.reEmbed
-(projectId)` is the bounded migration path for an existing brain once that provider exists.
+memory role is the resident's mg route. The embedding role names `Xenova/bge-base-zh-v1.5`, but
+recall reports `semanticIndex: false` until the local model has loaded; a missing or broken model
+leaves recall lexical and the `/health` payload reports `embedding.state: degraded`. The model lives
+under `<dataDir>/models/`; the installer supplies it, and a resident start downloads it in the
+background on an upgrade. `MemoryKernel.reEmbed(projectId)` is the bounded migration path for an
+existing brain once that provider exists.
 
 ## Self-modification (#236)
 
