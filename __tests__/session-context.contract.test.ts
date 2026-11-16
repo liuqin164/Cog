@@ -16,6 +16,7 @@ import {
   SESSION_RECALL_MODES,
   digestAnchors,
   readSessionTurns,
+  renderBrowseStub,
   sessionTokens,
 } from '../src/session/index.js';
 import { makeTempDir } from './helpers/tmp.js';
@@ -271,6 +272,17 @@ describe('the assembly stays inside the target and explains every cut (#191 prim
     expect(recall.text).toContain('anchorEvent=evt-recall-key');
     expect(recall.text).toContain('sourceLocator=cogmem memory show --event evt-recall-key');
     expect(recall.text).toContain('whyMatched=raw_ledger_text_fallback');
+  });
+
+  test('a downgraded stub renders its browse ids as read mem: keys, bounded to 20 (#276)', () => {
+    const ids = Array.from({ length: 25 }, (_, index) => `evt-${index}`);
+    const stub = renderBrowseStub('recall', ids);
+    expect(stub).toContain('[recall: browse-only, 25 item(s)]');
+    expect(stub.match(/anchorEvent=evt-\d+/g)).toHaveLength(20);
+    expect(stub).toContain('anchorEvent=evt-0');
+    // The digest's entry id names the same ledger row, and a working-set id names none.
+    expect(renderBrowseStub('digest', ['digest:evt-7'])).toContain('anchorEvent=evt-7');
+    expect(renderBrowseStub('working_set', ['working:0'])).toBe('[working_set: browse-only, 1 item(s)]');
   });
 
   test('a downgrade is readable from trace_events, not only from the return value', () => {

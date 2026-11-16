@@ -12,7 +12,7 @@
  * is injected later at `transformContext`, after the loop has appended any tool-loadout declaration
  * to the transcript — replacing messages at `prepareRequest` would drop that declaration.
  */
-import type { AgentRecallItem, KernelAgentMemoryBackend, SessionContextAssembly, SessionContextItem, SessionContextLane } from 'cogmem';
+import { renderBrowseStub, type AgentRecallItem, type KernelAgentMemoryBackend, type SessionContextAssembly, type SessionContextItem, type SessionContextLane } from 'cogmem';
 import type { AgentMessage } from '../state/agent-loop.ts';
 import type { NativePlugin } from './host.ts';
 
@@ -131,7 +131,7 @@ function toContextItem(item: AgentRecallItem): SessionContextItem {
  */
 function requestLaneText(lane: SessionContextLane): string {
   return lane.text || (lane.status === 'downgraded' && lane.browseIds.length > 0
-    ? `[${lane.lane}: browse-only, ${lane.browseIds.length} item(s)]`
+    ? renderBrowseStub(lane.lane, lane.browseIds)
     : '');
 }
 

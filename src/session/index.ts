@@ -33,6 +33,7 @@ export {
   SESSION_CONTEXT_LANE_PRIORITY,
   SESSION_CONTEXT_STABLE_LANES,
   assembleSessionContext,
+  renderBrowseStub,
   sessionTokens,
   type AssembleSessionContextInput,
   type SessionContextAssembly,
