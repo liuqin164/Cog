@@ -105,6 +105,37 @@ describe('the six-lane assembly (#249 A5)', () => {
     }
   }, 30_000);
 
+  test('a downgraded stub carries a key that read mem: resolves to the original text (#276)', async () => {
+    const seed = '部署窗口定在周二凌晨两点。';
+    const provider = new ScriptedProvider([{ text: '收到一。', toolCalls: [] }, { text: '收到二。', toolCalls: [] }]);
+    const shell = makeShell(makeTempDir('lanes-stub-keys-'), provider, { dream: NO_DREAM, contextSweetSpot: 10 });
+    await shell.start();
+    try {
+      const recorded = await shell.backend.rememberTurnWithResult({
+        agentId: shell.config.agentId,
+        projectId: shell.config.projectId,
+        sessionId: shell.config.sessionId,
+        turnId: 'seed-276',
+        userText: seed,
+        assistantText: '记下了。',
+        ingestMode: 'immediate_compile',
+      });
+      const key = recorded.rawEventIds[0]!;
+      await shell.submit('部署窗口是什么时候');
+
+      const recall = shell.currentStatus().contextLanes!.lanes.find((lane) => lane.lane === 'recall')!;
+      expect(recall.status).toBe('downgraded');
+      expect(recall.browseIds).toContain(key);
+      expect(asText(provider.calls.at(-1)!.messages)).toContain(`anchorEvent=${key}`);
+
+      const read = await shell.host.tools.invoke('read', { toolCallId: 'c1', input: { path: `mem:${key}` } }, { runId: 'r' });
+      expect(read.isError).toBe(false);
+      expect(read.output).toBe(seed);
+    } finally {
+      await shell.stop();
+    }
+  }, 30_000);
+
   test('/context and the context_assembled trace report the same composition', async () => {
     const provider = new ScriptedProvider([{ text: '收到一。', toolCalls: [] }, { text: '收到二。', toolCalls: [] }]);
     const shell = makeShell(makeTempDir('lanes-faces-'), provider, { dream: NO_DREAM });

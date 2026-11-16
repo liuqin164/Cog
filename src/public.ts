@@ -252,6 +252,7 @@ export {
   digestAnchors,
   recallSession,
   readSessionTurns,
+  renderBrowseStub,
   sessionTokens,
 } from './session/index.js';
 export type {

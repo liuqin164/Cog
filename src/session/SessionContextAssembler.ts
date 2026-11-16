@@ -181,7 +181,7 @@ export function assembleSessionContext(input: AssembleSessionContextInput, diges
       total = lanes.reduce((sum, entry) => sum + entry.tokens, 0);
       continue;
     }
-    const stub = renderStub(lane.lane, lane.items.length);
+    const stub = renderBrowseStub(lane.lane, lane.items.map((item) => item.id));
     const after = sessionTokens(stub) <= input.targetTokens - (total - before) ? stub : '';
     decisions.push({
       lane: lane.lane,
@@ -329,6 +329,27 @@ function renderRecallLane(items: SessionContextItem[]): string {
   return lines.join('\n');
 }
 
-function renderStub(lane: SessionContextLaneName, count: number): string {
-  return count > 0 ? `[${lane}: browse-only, ${count} item(s)]` : '';
+/**
+ * A downgraded lane's pointer: the item count plus one drill-down key per browse id that resolves
+ * to a ledger event. `read mem:<eventId>` consumes the key directly (#252); an id with no event
+ * behind it prints no key rather than a pointer that goes nowhere. The key list keeps the trace's
+ * existing 20-id bound, and the header keeps the full count.
+ */
+export function renderBrowseStub(lane: SessionContextLaneName, ids: readonly string[]): string {
+  if (ids.length === 0) return '';
+  const keys = ids
+    .map(browseEventId)
+    .filter((id): id is string => id !== undefined)
+    .slice(0, BROWSE_ID_LIMIT);
+  return [
+    `[${lane}: browse-only, ${ids.length} item(s)]`,
+    ...keys.map((id) => '  anchorEvent=' + serializeUntrustedMemory(id, 160)),
+  ].join('\n');
+}
+
+/** The digest's frozen `entryId` is `digest:<eventId>`; both shapes name the same ledger row. */
+function browseEventId(id: string): string | undefined {
+  if (id.startsWith('evt-')) return id;
+  if (id.startsWith('digest:evt-')) return id.slice('digest:'.length);
+  return undefined;
 }

@@ -83,6 +83,11 @@ block, under the `[recall]` header. Each item keeps the kernel's `anchorEvent` (
 `sourceLocator` and `whyMatched` fields, so the model can drill down to the ledger row instead of
 repeating a summary. An item with no resolvable event id prints no key rather than a fabricated one.
 
+A lane downgraded to its browse-only pointer renders the same `evt-…` keys for the ids it left
+behind, one `anchorEvent=` line each, so `read mem:<eventId>` still resolves the text when the lane
+itself no longer fits. The key list is bounded to 20 — the trace's existing limit — and the header
+keeps the lane's full item count.
+
 ## Digest entry fields (frozen)
 
 | Field | Means |
