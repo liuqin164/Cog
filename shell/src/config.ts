@@ -44,6 +44,8 @@ export interface ShellConfig {
   model: { baseUrl: string; apiKey: string; model: string; timeoutMs: number };
   /** The context bandwidth gauge's denominator (spec §6's "甜点带宽"); F14 has no controller yet. */
   contextSweetSpot: number;
+  /** Recent turns kept verbatim in every request's tail lane (#245). */
+  tailTurns: number;
   /** The tight cage: pure autonomous runs (emergence, idle checks, dreams) and the fallback. */
   budgets: RunBudget & { toolWhitelist: string[] | null };
   /**
@@ -90,6 +92,15 @@ export interface ShellConfig {
 function env(name: string): string | undefined {
   const value = process.env[name];
   return value === undefined || value === '' ? undefined : value;
+}
+
+/** `COGMEM_SHELL_TAIL_TURNS` is operator policy; a non-integer is a startup error, not a silent 8. */
+function tailTurnsFromEnv(): number {
+  const raw = env('COGMEM_SHELL_TAIL_TURNS');
+  if (raw === undefined) return 8;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0) throw new Error(`invalid_tail_turns: COGMEM_SHELL_TAIL_TURNS=${raw}`);
+  return value;
 }
 
 /**
@@ -196,13 +207,14 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
       ...autonomous,
       // cage violation. The workflow tools are the same shape: `list_workflows` presents the book,
       // `propose_workflow` offers a draft, and `veto_workflow` records the owner's refusal.
-      toolWhitelist: ['read', 'write', 'edit', 'bash', 'propose_command', 'propose_soul_edit', 'propose_self_change', 'ask_user', 'web_search', 'web_fetch', 'web_recall', 'list_workflows', 'propose_workflow', 'veto_workflow'],
+      toolWhitelist: ['read', 'write', 'edit', 'bash', 'propose_command', 'propose_soul_edit', 'propose_self_change', 'ask_user', 'declare_task', 'web_search', 'web_fetch', 'web_recall', 'list_workflows', 'propose_workflow', 'veto_workflow'],
     },
     workBudget: overrides.workBudget ?? work,
     dailyBudget: overrides.dailyBudget ?? daily,
     nightBudget: overrides.nightBudget ?? night,
     maxIdleTurns,
     contextSweetSpot: overrides.contextSweetSpot ?? 6_000,
+    tailTurns: overrides.tailTurns ?? tailTurnsFromEnv(),
     // The install's rhythm step is what fills these; the literals stay the fallback for a hand-run
     // shell that was never installed.
     dream: overrides.dream ?? {

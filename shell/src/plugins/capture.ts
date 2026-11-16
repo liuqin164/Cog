@@ -8,7 +8,7 @@
  * `metadata.secretFindings` — the same key the kernel's suppression checks read — plus a
  * `metadata.redaction` count.
  */
-import { KernelAgentMemoryBackend, type MemoryEvent } from 'cogmem';
+import { CONVERSATION_CAPTURE_LANE, KernelAgentMemoryBackend, type MemoryEvent } from 'cogmem';
 import type { RunSummary } from '../state/agent-loop.ts';
 import { SecretRedactor } from '../kernel-host.ts';
 import type { TraceLog } from '../trace.ts';
@@ -87,7 +87,9 @@ export class CaptureService {
       userText: user.value,
       assistantText: assistant.value || undefined,
       ingestMode: 'selective_compile',
-      metadata: { sourceAgent: agentId, source: 'companion-shell', kind: 'turn', ...marks },
+      // The lane marker is what makes these rows the session ledger the kernel's digest, recall
+      // and tail read (#245). Without it the shell's own turns were invisible to `assembleSessionContext`.
+      metadata: { sourceAgent: agentId, source: 'companion-shell', kind: 'turn', captureLane: CONVERSATION_CAPTURE_LANE, ...marks },
     });
     const assistantEventId = result.rawEventIds[1];
     const toolCallEventIds: string[] = [];
