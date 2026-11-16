@@ -18,8 +18,8 @@ describe('ordinary remember and recall do not need a CLI (#277)', () => {
     await shell.start();
     try {
       const summary = await shell.submit('记住两件事：去市役所带护照和在留卡；咖啡只喝黑咖啡。');
-      expect(summary.turns).toBe(1);
-      expect(summary.toolCalls).toHaveLength(0);
+      expect(summary!.turns).toBe(1);
+      expect(summary!.toolCalls).toHaveLength(0);
       expect(shell.host.tools.list().map((tool) => tool.name)).not.toContain('cogmem');
       expect(provider.calls[0]!.systemPrompt).toContain('Conversation capture is automatic');
     } finally {
