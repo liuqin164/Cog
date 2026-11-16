@@ -95,6 +95,8 @@ cogmem import openclaw     # or: cogmem import hermes
 
 Transcripts, Markdown, JSON, CSV, and TSV import too, landing in the importing workspace's own scope — which is also the scope `cogmem memory recall` reads when it is not told otherwise. The importer reads those products' files as a source format; Cog does not attach to them or run inside them.
 
+A `SKILL.md` guide is read the same way, by naming the file: `cogmem import openclaw --skill <path/to/SKILL.md>` (the flag is host-agnostic, so `hermes` accepts it too). The row is marked imported and compiles into the procedure book as a low-weight `imported` guide, after the project's own practices. There is no skills directory to mount or scan.
+
 ## Documentation
 
 - Using it — [installing](docs/install.md) · [the memory observatory](docs/observatory.md)

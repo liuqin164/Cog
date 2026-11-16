@@ -1,18 +1,10 @@
 // @ts-nocheck
 import type { IngestInput, Neuron } from '../types/index.js';
 import {
-  ConversationMarkdownAdapter,
-  HermesStateDbAdapter,
   MarkdownSourceLoader,
-  OpenClawDailyMemoryAdapter,
-  OpenClawMemoryIndexAdapter,
-  OpenClawPersonaAdapter,
-  OpenClawSessionAdapter,
-  OpenClawUserProfileAdapter,
-  SoulMarkdownAdapter,
   buildEpisodeEnvelope,
+  createSourceAdapterMap,
   type BatchEpisodeEnvelope,
-  type SourceAdapter,
   type SourceAdapterDiagnostic,
   type SourceDefinition
 } from '../adapters/index.js';
@@ -109,16 +101,7 @@ interface InstalledBatchProcessorDependencies {
 
 export class InstalledBatchProcessor {
   private readonly loader = new MarkdownSourceLoader();
-  private readonly adapters = new Map<string, SourceAdapter>([
-    ['conversation_markdown', new ConversationMarkdownAdapter()],
-    ['hermes_state_db', new HermesStateDbAdapter()],
-    ['soul_markdown', new SoulMarkdownAdapter()],
-    ['openclaw_daily_memory', new OpenClawDailyMemoryAdapter()],
-    ['openclaw_session', new OpenClawSessionAdapter()],
-    ['openclaw_memory_index', new OpenClawMemoryIndexAdapter()],
-    ['openclaw_user_profile', new OpenClawUserProfileAdapter()],
-    ['openclaw_persona', new OpenClawPersonaAdapter()]
-  ]);
+  private readonly adapters = createSourceAdapterMap();
 
   constructor(private readonly deps: InstalledBatchProcessorDependencies) {}
 

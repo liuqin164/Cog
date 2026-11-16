@@ -4,18 +4,11 @@ import { printCliJson } from './CliJson.js';
 
 import {
   buildEpisodeEnvelope,
-  ConversationMarkdownAdapter,
   HermesWorkspaceProfile,
-  HermesStateDbAdapter,
   MarkdownSourceLoader,
-  OpenClawDailyMemoryAdapter,
-  OpenClawMemoryIndexAdapter,
-  OpenClawPersonaAdapter,
-  OpenClawSessionAdapter,
-  OpenClawUserProfileAdapter,
   OpenClawWorkspaceProfile,
-  SoulMarkdownAdapter,
-  type SourceAdapter,
+  createSourceAdapterMap,
+  skillSourceDefinition,
   type SourceAdapterDiagnostic,
   type SourceAdapterKind,
   type SourceDefinition,
@@ -121,6 +114,7 @@ export async function runOpenClawImport(argv: string[]): Promise<void> {
     sessionPaths: listArgs(args, 'session').map((item) => resolve(workspaceRoot, item)),
     optionalMemoryPaths: listArgs(args, 'memory').map((item) => resolve(workspaceRoot, item)),
   });
+  for (const skillPath of listArgs(args, 'skill')) sources.push(skillSourceDefinition(projectId, resolve(workspaceRoot, skillPath)));
 
   await runAgentImport({
     agent: 'openclaw',
@@ -128,7 +122,7 @@ export async function runOpenClawImport(argv: string[]): Promise<void> {
     workspaceRoot,
     projectId,
     sources,
-    usage: 'Usage: cogmem import openclaw [--workspace <dir>] [--project <id>] [--db <memory.db> --timezone <IANA>|--config <config.toml>] [--date YYYY-MM-DD] [--session <file>...] [--memory <file>...] [--reindex-raw] [--dry-run] [--json] [--progress] [--no-progress]',
+    usage: 'Usage: cogmem import openclaw [--workspace <dir>] [--project <id>] [--db <memory.db> --timezone <IANA>|--config <config.toml>] [--date YYYY-MM-DD] [--session <file>...] [--memory <file>...] [--skill <SKILL.md>...] [--reindex-raw] [--dry-run] [--json] [--progress] [--no-progress]',
   });
 }
 
@@ -144,6 +138,7 @@ export async function runHermesImport(argv: string[]): Promise<void> {
     sessionPaths: listArgs(args, 'session').map((item) => resolve(workspaceRoot, item)),
     stateDbPath: stringArg(args, 'state-db') ? resolve(workspaceRoot, stringArg(args, 'state-db') as string) : undefined,
   });
+  for (const skillPath of listArgs(args, 'skill')) sources.push(skillSourceDefinition(projectId, resolve(workspaceRoot, skillPath)));
 
   await runAgentImport({
     agent: 'hermes',
@@ -151,7 +146,7 @@ export async function runHermesImport(argv: string[]): Promise<void> {
     workspaceRoot,
     projectId,
     sources,
-    usage: 'Usage: cogmem import hermes [--workspace <dir>] [--project <id>] [--db <memory.db> --timezone <IANA>|--config <config.toml>] [--state-db <state.db>] [--profile <file>] [--sessions <dir>] [--session <file>...] [--reindex-raw] [--dry-run] [--json] [--progress] [--no-progress]',
+    usage: 'Usage: cogmem import hermes [--workspace <dir>] [--project <id>] [--db <memory.db> --timezone <IANA>|--config <config.toml>] [--state-db <state.db>] [--profile <file>] [--sessions <dir>] [--session <file>...] [--skill <SKILL.md>...] [--reindex-raw] [--dry-run] [--json] [--progress] [--no-progress]',
   });
 }
 
@@ -219,7 +214,7 @@ function previewSources(input: {
   window: AgentImportResult['window'];
 }): AgentImportResult {
   const loader = new MarkdownSourceLoader();
-  const adapters = buildAdapterMap();
+  const adapters = createSourceAdapterMap();
   const diagnostics: SourceAdapterDiagnostic[] = [];
   const sourceResults: AgentImportResult['sourceResults'] = [];
   let recordsParsed = 0;
@@ -356,7 +351,7 @@ async function reindexRawSources(input: {
 }): Promise<AgentImportResult> {
   const opened = openKernel(input.args, input.workspaceRoot);
   const loader = new MarkdownSourceLoader();
-  const adapters = buildAdapterMap();
+  const adapters = createSourceAdapterMap();
   const diagnostics: SourceAdapterDiagnostic[] = [...opened.diagnostics];
   const sourceResults: AgentImportResult['sourceResults'] = [];
   const processedSourceIds: string[] = [];
@@ -604,19 +599,6 @@ function openKernel(args: ParsedArgs, workspaceRoot: string): { kernel: MemoryKe
   }
 
   throw new Error(`Missing cogmem config at ${configResolution.path}. Run cogmem init first or pass --db <memory.db> / --config <config.toml>.`);
-}
-
-function buildAdapterMap(): Map<SourceAdapterKind, SourceAdapter> {
-  return new Map<SourceAdapterKind, SourceAdapter>([
-    ['conversation_markdown', new ConversationMarkdownAdapter()],
-    ['hermes_state_db', new HermesStateDbAdapter()],
-    ['soul_markdown', new SoulMarkdownAdapter()],
-    ['openclaw_daily_memory', new OpenClawDailyMemoryAdapter()],
-    ['openclaw_session', new OpenClawSessionAdapter()],
-    ['openclaw_memory_index', new OpenClawMemoryIndexAdapter()],
-    ['openclaw_user_profile', new OpenClawUserProfileAdapter()],
-    ['openclaw_persona', new OpenClawPersonaAdapter()],
-  ]);
 }
 
 function buildWindow(args: ParsedArgs): AgentImportResult['window'] {

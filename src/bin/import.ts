@@ -8,18 +8,20 @@ import { runHermesImport, runOpenClawImport } from './import-support.js';
 // both shipped as their own `cogmem-import-*` bin.
 const USAGE = [
   'Usage: cogmem import <openclaw|hermes> [--workspace <dir>] [--project <id>]',
-  '                    [--db <memory.db>|--config <config.toml>] [--dry-run] [--since <iso>] [--until <iso>] [--json]',
+  '                    [--db <memory.db>|--config <config.toml>] [--skill <SKILL.md>...]',
+  '                    [--dry-run] [--since <iso>] [--until <iso>] [--json]',
   '',
   'openclaw reads that workspace\'s memory files; hermes reads its profile, sessions, and state',
-  'database. Missing --project is derived from the workspace. The full flag set is the shared',
-  'import surface; `cogmem init` prints the path it wrote.',
+  'database. --skill imports a named SKILL.md guide as an imported, low-weight procedure entry;',
+  'there is no skills directory to scan. Missing --project is derived from the workspace. The full',
+  'flag set is the shared import surface; `cogmem init` prints the path it wrote.',
 ].join('\n');
 
 const HOSTS = { openclaw: runOpenClawImport, hermes: runHermesImport } as const;
 
 assertCliArgs(process.argv.slice(2), {
   usage: USAGE,
-  extraFlags: ['workspace', 'project', 'db', 'state-db', 'timezone', 'config', 'env-path', 'profile', 'date', 'session', 'sessions', 'memory', 'reindex-raw', 'dry-run', 'json', 'progress', 'no-progress', 'since', 'until', 'skip-errors', 'max-errors', 'resume', 'checkpoint-file', 'start-line', 'end-line', 'max-lines', 'seal-batch', 'force-seal', 'chunk-size', 'format', 'file', 'agent', 'source-agent', 'legacy-env', 'no-probe', 'scope', 'vector-dimension'],
+  extraFlags: ['workspace', 'project', 'db', 'state-db', 'timezone', 'config', 'env-path', 'profile', 'date', 'session', 'sessions', 'memory', 'skill', 'reindex-raw', 'dry-run', 'json', 'progress', 'no-progress', 'since', 'until', 'skip-errors', 'max-errors', 'resume', 'checkpoint-file', 'start-line', 'end-line', 'max-lines', 'seal-batch', 'force-seal', 'chunk-size', 'format', 'file', 'agent', 'source-agent', 'legacy-env', 'no-probe', 'scope', 'vector-dimension'],
 });
 
 const [host, ...rest] = process.argv.slice(2);

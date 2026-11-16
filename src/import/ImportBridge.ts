@@ -15,19 +15,12 @@ import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 
 import {
-  ConversationMarkdownAdapter,
-  HermesStateDbAdapter,
   HermesWorkspaceProfile,
   MarkdownSourceLoader,
-  OpenClawDailyMemoryAdapter,
-  OpenClawMemoryIndexAdapter,
-  OpenClawPersonaAdapter,
-  OpenClawSessionAdapter,
-  OpenClawUserProfileAdapter,
   OpenClawWorkspaceProfile,
-  SoulMarkdownAdapter,
   buildEpisodeEnvelope,
-  type SourceAdapter,
+  createSourceAdapterMap,
+  skillSourceDefinition,
   type SourceAdapterDiagnostic,
   type SourceAdapterKind,
   type SourceDefinition,
@@ -48,6 +41,8 @@ export interface ImportBridgeRequest {
   stateDbPath?: string;
   profilePath?: string;
   sessionsDir?: string;
+  /** SKILL.md guides read through the same import act; host-agnostic and explicitly named. */
+  skillPaths?: string[];
   since?: string | number;
   until?: string | number;
   /** Re-anchor every record from the sources instead of running the incremental batch. */
@@ -120,38 +115,27 @@ function buildWindow(request: ImportBridgeRequest): ImportBridgeWindow {
   return { start, end, label: request.date || 'full-history' };
 }
 
-function buildAdapterMap(): Map<SourceAdapterKind, SourceAdapter> {
-  return new Map<SourceAdapterKind, SourceAdapter>([
-    ['conversation_markdown', new ConversationMarkdownAdapter()],
-    ['hermes_state_db', new HermesStateDbAdapter()],
-    ['soul_markdown', new SoulMarkdownAdapter()],
-    ['openclaw_daily_memory', new OpenClawDailyMemoryAdapter()],
-    ['openclaw_session', new OpenClawSessionAdapter()],
-    ['openclaw_memory_index', new OpenClawMemoryIndexAdapter()],
-    ['openclaw_user_profile', new OpenClawUserProfileAdapter()],
-    ['openclaw_persona', new OpenClawPersonaAdapter()],
-  ]);
-}
-
 function buildSources(agent: ImportBridgeAgent, request: ImportBridgeRequest): SourceDefinition[] {
   const { workspaceRoot } = request;
+  const skillSources = (request.skillPaths ?? [])
+    .map((path) => skillSourceDefinition(request.projectId, resolve(workspaceRoot, path)));
   if (agent === 'openclaw') {
     const profile = new OpenClawWorkspaceProfile(workspaceRoot);
-    return profile.buildInstalledBatchSources({
+    return [...profile.buildInstalledBatchSources({
       projectId: request.projectId,
       date: request.date,
       sessionPaths: (request.sessionPaths ?? []).map((item) => resolve(workspaceRoot, item)),
       optionalMemoryPaths: (request.memoryPaths ?? []).map((item) => resolve(workspaceRoot, item)),
-    });
+    }), ...skillSources];
   }
   const profile = new HermesWorkspaceProfile(workspaceRoot);
-  return profile.buildSourceDefinitions({
+  return [...profile.buildSourceDefinitions({
     projectId: request.projectId,
     profilePath: request.profilePath,
     sessionDir: request.sessionsDir,
     sessionPaths: (request.sessionPaths ?? []).map((item) => resolve(workspaceRoot, item)),
     stateDbPath: request.stateDbPath ? resolve(workspaceRoot, request.stateDbPath) : undefined,
-  });
+  }), ...skillSources];
 }
 
 function sourcesOrThrow(agent: ImportBridgeAgent, request: ImportBridgeRequest): SourceDefinition[] {
@@ -168,7 +152,7 @@ export async function previewImport(kernel: MemoryKernel, request: ImportBridgeR
   const window = buildWindow(request);
 
   const loader = new MarkdownSourceLoader();
-  const adapters = buildAdapterMap();
+  const adapters = createSourceAdapterMap();
   const diagnostics: SourceAdapterDiagnostic[] = [];
   const sourceResults: ImportBridgeSourceResult[] = [];
   let recordsParsed = 0;
@@ -299,7 +283,7 @@ async function reindexRawSources(input: {
 }): Promise<ImportBridgeResult> {
   const { request, kernel } = input;
   const loader = new MarkdownSourceLoader();
-  const adapters = buildAdapterMap();
+  const adapters = createSourceAdapterMap();
   const diagnostics: SourceAdapterDiagnostic[] = [];
   const sourceResults: ImportBridgeSourceResult[] = [];
   const processedSourceIds: string[] = [];
