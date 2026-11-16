@@ -8,7 +8,7 @@
  * happens in a scratch directory under `.cogmem/`. The output is the honest state of the migration
  * for a brain written before this shell had an embedding provider.
  */
-import { copyFileSync, cpSync, mkdirSync, mkdtempSync, statSync } from 'node:fs';
+import { copyFileSync, cpSync, mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -29,6 +29,7 @@ const projectId = argument('project') ?? 'companion';
 const probeProject = 'embedding-probe';
 const cacheDir = resolve(argument('cache-dir') ?? join(repo, '.cogmem', 'tmp', 'models'));
 const workRoot = join(repo, '.cogmem', 'live-copy');
+const keepScratch = process.argv.includes('--keep');
 mkdirSync(workRoot, { recursive: true });
 const scratch = mkdtempSync(join(workRoot, 'run-'));
 const dbPath = join(scratch, 'memory.sqlite');
@@ -92,3 +93,4 @@ console.log(JSON.stringify({
 clearInterval(keepAlive);
 provider.dispose();
 kernel.close();
+if (!keepScratch) rmSync(scratch, { recursive: true, force: true });
