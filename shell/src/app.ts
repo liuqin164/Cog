@@ -488,6 +488,7 @@ export class CompanionShell implements ShellControl, AttachShell {
             : null,
         }),
         connectedAgents: () => [this.config.agentId],
+        tracePath: join(this.config.dataDir, 'shell-events.jsonl'),
       });
       this.trace.append('http_face_started', { url: this.http.baseUrl, port: this.http.port });
     }
@@ -1240,13 +1241,20 @@ export class CompanionShell implements ShellControl, AttachShell {
           this.machine.updateRuntime({
             awayQueue: enqueueAway(this.machine.runtime, { id: candidate.id, text: candidate.text, reason: candidate.reason, at }),
           });
-          this.trace.append('emergence_accumulated', { id: candidate.id, reason: candidate.reason, at });
+          this.trace.append('emergence_accumulated', { projectId: this.config.projectId, id: candidate.id, reason: candidate.reason, at });
           return;
         }
         void this.host.bus.emit('companion_emergence', { id: candidate.id, reason: candidate.reason, text: candidate.text });
-        await this.executeRun(candidate.text, 'emergence_due', `emergence:${candidate.id}`);
+        let ok = false;
+        try {
+          const summary = await this.executeRun(candidate.text, 'emergence_due', `emergence:${candidate.id}`);
+          ok = summary.stopReason === 'run_complete';
+        } finally {
+          this.trace.append('emergence_run', { projectId: this.config.projectId, id: candidate.id, ok });
+        }
       } else if (due && !allowed) {
         this.trace.append('emergence_skipped', {
+          projectId: this.config.projectId,
           at,
           reason: this.dailyBudgetExceeded(at) ? 'daily_token_budget' : 'cooldown_or_daily_cap',
         });
@@ -1336,7 +1344,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     const count = prior?.day === day ? prior.count + 1 : 1;
     const consumed = [...(prior?.consumed ?? []).filter((entry) => entry !== key), key].slice(-MAX_EMERGENCE_CONSUMED);
     this.machine.updateRuntime({ emergence: { day, count, lastAt: at, consumed } });
-    this.trace.append('emergence_consumed', { id: candidate.id, key, day, count });
+    this.trace.append('emergence_consumed', { projectId: this.config.projectId, id: candidate.id, key, day, count });
   }
 
   /**

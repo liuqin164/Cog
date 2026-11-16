@@ -237,11 +237,19 @@ close the ticket.
 
 | Endpoint | Method | Writes | Answer |
 |---|---|---|---|
-| `/observatory/health` | `GET`, `HEAD` | no | The last health report, the recent Dream runs, the latest frame and atlas compile instants, the latest context-budget receipt, the anomaly counts, and the latest snapshot's verification. |
+| `/observatory/health` | `GET`, `HEAD` | no | The last health report, the recent Dream runs, the latest frame and atlas compile instants, the latest context-budget receipt, the anomaly counts, the latest snapshot's verification, and the surfacing gate's windowed counts plus its current priors (#239). |
 
 The page reads the read-only connection. It never runs a check, because a check can record a
 transition; the last report is what the shell or `doctor` persisted. A database that has never been
 checked answers `checked: false` rather than inventing a status.
+
+The surfacing block reads two existing records and writes neither: the owner's feedback rows in
+`memory_events`, and the shell's `emergence_decision` / `emergence_consumed` /
+`emergence_accumulated` / `emergence_run` rows in `shell-events.jsonl` and its rotated `.1`
+generation. Trace rows carry the shell's project id, so a project-scoped page never mixes another
+project's feedback with this shell's counts. Candidate, attempted, surfaced and failed counts are
+zero with `trace.readable: false` when the page has no shell trace beside it; the feedback counts
+remain readable from the database.
 
 ## Read-only companion mode (frozen)
 

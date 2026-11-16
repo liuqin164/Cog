@@ -14,6 +14,7 @@
  */
 
 import { Database } from 'bun:sqlite';
+import { dirname, join } from 'node:path';
 
 import { createMemoryKernel, createMemoryKernelFromConfig, type MemoryKernel } from '../factory.js';
 import { ensureUsableTempSpace } from '../utils/SqliteTempDirectory.js';
@@ -28,6 +29,8 @@ export interface ObservatoryRuntime {
   cwd?: string;
   /** The family roster, listed beside the identities the corpus names. */
   connectedAgents?: () => string[];
+  /** The shell's trace file. Defaults to the file beside the memory database, where the resident keeps it. */
+  tracePath?: string;
 }
 
 export interface ObservatoryServerOptions extends ObservatoryRuntime {
@@ -66,6 +69,9 @@ export async function startObservatoryServer(options: ObservatoryServerOptions):
       projectId, includeEvidence: true, evidenceLimit: 8, refresh: false, staleOk: true,
     }),
     connectedAgents: options.connectedAgents ?? (() => []),
+    tracePath: options.tracePath ?? (kernel.databasePath && kernel.databasePath !== ':memory:' && !kernel.databasePath.startsWith('file:')
+      ? join(dirname(kernel.databasePath), 'shell-events.jsonl')
+      : undefined),
   }), kernel.events, kernel.soul);
 
   const httpServer = Bun.serve({

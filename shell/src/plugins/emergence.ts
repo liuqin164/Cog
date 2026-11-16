@@ -141,6 +141,7 @@ export class EmergenceService {
       decidedAt: now,
     };
     this.options.trace?.append('emergence_decision', {
+      projectId: this.options.projectId,
       now,
       channel: decision.channel,
       occasion: decision.occasion,

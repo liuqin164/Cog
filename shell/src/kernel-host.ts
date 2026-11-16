@@ -16,6 +16,7 @@
  * package export covers.
  */
 import { Database } from 'bun:sqlite';
+import { dirname, join } from 'node:path';
 import { redactSecretText } from 'cogmem';
 import { readMemoryUsage } from './memory.ts';
 
@@ -29,6 +30,8 @@ export interface HttpFaceOptions {
   health?: () => Record<string, unknown>;
   /** The companion's own identity, listed in the roster before it has written a ledger row. */
   connectedAgents?: () => string[];
+  /** The shell's trace file; the observatory reads its surfacing counts from it. */
+  tracePath?: string;
 }
 
 export interface HttpFaceHandle {
@@ -48,6 +51,7 @@ async function openObservatory(
   kernel: unknown,
   dbPath: string | undefined,
   connectedAgents?: () => string[],
+  tracePath?: string,
 ): Promise<{ db: Database; handle: (request: Request, remoteAddress?: string) => Promise<Response | null> } | undefined> {
   if (!dbPath || dbPath === ':memory:' || dbPath.startsWith('file:')) return undefined;
   try {
@@ -67,6 +71,7 @@ async function openObservatory(
       db,
       nodeDetail: atlas ? (nodeId: string, projectId: string) => atlas.node(nodeId, { projectId, includeEvidence: true, evidenceLimit: 8, refresh: false, staleOk: true }) : undefined,
       connectedAgents,
+      tracePath: tracePath ?? (dbPath ? join(dirname(dbPath), 'shell-events.jsonl') : undefined),
     });
     return { db, handle: routesModule.createObservatoryRoutes(observatory, events, soul) };
   } catch {
@@ -86,7 +91,7 @@ export async function startKernelHttpFace(kernel: unknown, options: HttpFaceOpti
     }
   };
 
-  const observatory = await openObservatory(kernel, kernelHealth().dbPath as string | undefined, options.connectedAgents);
+  const observatory = await openObservatory(kernel, kernelHealth().dbPath as string | undefined, options.connectedAgents, options.tracePath);
 
   const httpServer = Bun.serve({
     port: options.port,

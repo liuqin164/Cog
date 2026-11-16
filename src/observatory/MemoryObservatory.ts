@@ -16,6 +16,7 @@ import type Database from 'bun:sqlite';
 import { candidateAgentsForEvent, eventsVisibleToAgent, isAgentRawEvent, type ScopedEvent } from '../agent/AgentScopeRules.js';
 import { encodeAtlasNodeId } from '../atlas/AtlasNodeIdCodec.js';
 import type { MemoryAtlasNodeDetail } from '../atlas/MemoryAtlasTypes.js';
+import { readSurfacingObservability, type SurfacingObservability } from '../observability/SurfacingObservability.js';
 import { parseJsonObject } from '../utils/Values.js';
 import { armKeyFor, galaxyLayout } from './GalaxyLayout.js';
 import { readRecall, readRecalls, type ObservatoryRecallDetail, type ObservatoryRecalls } from './RecallTraces.js';
@@ -138,6 +139,8 @@ export interface ObservatoryHealth {
   budget: { intent: string; budgetTokens: number; usedTokens: number; createdAt: number } | null;
   anomalies: { windowMs: number; degradedTransitions: number; failedDreamRuns: number };
   snapshot: { file: string; createdAt: string; ok: boolean; checks: Record<string, boolean>; checkedAt: string } | null;
+  /** The feedback gate's windowed counts and the priors it is applying (#239). */
+  surfacing: SurfacingObservability;
 }
 
 /**
@@ -178,6 +181,8 @@ export interface MemoryObservatoryOptions {
   nodeDetail?: (nodeId: string, projectId: string) => MemoryAtlasNodeDetail | null;
   /** The family roster, listed beside the identities the corpus names. */
   connectedAgents?: () => string[];
+  /** The shell's append-only `shell-events.jsonl`; absent means its surfacing counts are unreadable. */
+  tracePath?: string;
   /**
    * The star map's node budget. Production uses {@link SNAPSHOT_NODE_LIMIT}; the seam exists so a
    * test can reproduce "the agent's node is outside the top N" without inserting 20,001 rows.
@@ -286,6 +291,7 @@ export class MemoryObservatory {
   private readonly nodeDetail?: MemoryObservatoryOptions['nodeDetail'];
   private readonly connectedAgents: () => string[];
   private readonly nodeLimit: number;
+  private readonly tracePath?: string;
   private readonly cache = new Map<string, ProjectAggregate>();
   private readonly agentCache = new Map<string, AgentAggregate>();
   private readonly fullCache = new Map<string, FullVisibility>();
@@ -295,6 +301,7 @@ export class MemoryObservatory {
     this.nodeDetail = options.nodeDetail;
     this.connectedAgents = options.connectedAgents ?? (() => []);
     this.nodeLimit = Math.max(1, Math.floor(options.nodeLimit ?? SNAPSHOT_NODE_LIMIT));
+    this.tracePath = options.tracePath;
   }
 
   private projects(): ObservatoryProject[] {
@@ -856,7 +863,7 @@ export class MemoryObservatory {
    * This is a read. It deliberately does not run `health.check`, because a check can record a
    * transition; the report it shows is the one the shell or `doctor` persisted.
    */
-  health(input: { now?: number } = {}): ObservatoryHealth {
+  health(input: { now?: number; projectId?: string } = {}): ObservatoryHealth {
     const now = input.now ?? Date.now();
     const report = this.metaJson('health_state');
     return {
@@ -884,6 +891,11 @@ export class MemoryObservatory {
         ),
       },
       snapshot: this.lastSnapshot(),
+      surfacing: readSurfacingObservability(this.db, {
+        now,
+        projectId: input.projectId,
+        tracePath: this.tracePath,
+      }),
     };
   }
 
