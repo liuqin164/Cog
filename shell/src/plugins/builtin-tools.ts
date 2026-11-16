@@ -233,10 +233,17 @@ function capBashOutput(fullText: string, workspaceRoot: string): string {
 
 function definitions(
   workspaceRoot: string,
-  sandbox: { dataDir: string; trace?: TraceLog } | undefined,
+  dataDir: string | undefined,
+  sandboxed: boolean,
   ledger: { kernel?: MemoryKernel; trace?: TraceLog; onMemoryRead?: (eventId: string) => void },
   cliConfigPath?: string,
 ): ToolDefinition[] {
+  const sandbox = sandboxed && dataDir !== undefined ? { dataDir, trace: ledger.trace } : undefined;
+  // The shell always has a data dir, so a bare test host without one is not a degradation to
+  // announce; a shell with one and no bwrap is, on every result (#281).
+  const offNote = dataDir !== undefined && !sandboxed
+    ? '[sandbox: off] bwrap is unavailable: this command ran without isolation'
+    : undefined;
   return [
     {
       name: 'read',
@@ -275,14 +282,14 @@ function definitions(
       rehearse({ args }) {
         const requested = asString(args, 'path');
         refuseMemoryWrite(requested, 'write', ledger.trace);
-        const path = writableInside(workspaceRoot, requested, sandbox?.dataDir);
+        const path = writableInside(workspaceRoot, requested, dataDir);
         const content = asString(args, 'content', false);
         return `would write ${Buffer.byteLength(content)} bytes to ${path}`;
       },
       execute({ args }) {
         const requested = asString(args, 'path');
         refuseMemoryWrite(requested, 'write', ledger.trace);
-        const path = writableInside(workspaceRoot, requested, sandbox?.dataDir);
+        const path = writableInside(workspaceRoot, requested, dataDir);
         const content = asString(args, 'content', false);
         mkdirSync(dirname(path), { recursive: true });
         writeFileSync(path, content, 'utf8');
@@ -301,7 +308,7 @@ function definitions(
       rehearse({ args }) {
         const requested = asString(args, 'path');
         refuseMemoryWrite(requested, 'edit', ledger.trace);
-        const path = writableInside(workspaceRoot, requested, sandbox?.dataDir);
+        const path = writableInside(workspaceRoot, requested, dataDir);
         asString(args, 'old_string');
         asString(args, 'new_string', false);
         return `would edit ${path}`;
@@ -309,7 +316,7 @@ function definitions(
       execute({ args }) {
         const requested = asString(args, 'path');
         refuseMemoryWrite(requested, 'edit', ledger.trace);
-        const path = writableInside(workspaceRoot, requested, sandbox?.dataDir);
+        const path = writableInside(workspaceRoot, requested, dataDir);
         const oldString = asString(args, 'old_string');
         const newString = asString(args, 'new_string', false);
         const original = readFileSync(path, 'utf8');
@@ -354,7 +361,10 @@ function definitions(
               });
             }
             const capped = capBashOutput(output, workspaceRoot);
-            resolvePromise({ output: note ? `${capped}\n\n${note}` : capped, isError });
+            const parts = [capped];
+            if (note) parts.push(note);
+            if (offNote) parts.push(offNote);
+            resolvePromise({ output: parts.join('\n\n'), isError });
           };
           timer = setTimeout(() => {
             child.kill('SIGKILL');
@@ -405,9 +415,9 @@ export function builtinToolsPlugin(): NativePlugin {
     provide: ['builtinTools'],
     apply(ctx, config) {
       const { workspaceRoot, dataDir, cliConfigPath, trace, kernel, onMemoryRead } = config as BuiltinToolsConfig;
-      const sandbox = dataDir && bwrapUsable() ? { dataDir, trace } : undefined;
-      if (dataDir && !sandbox) trace?.append('bash_sandbox_unavailable', { dataDir, reason: 'bwrap_not_usable' });
-      for (const definition of definitions(workspaceRoot, sandbox, { kernel, trace, onMemoryRead }, cliConfigPath)) {
+      const sandboxed = dataDir !== undefined && bwrapUsable();
+      if (dataDir !== undefined && !sandboxed) trace?.append('bash_sandbox_unavailable', { dataDir, reason: 'bwrap_not_usable' });
+      for (const definition of definitions(workspaceRoot, dataDir, sandboxed, { kernel, trace, onMemoryRead }, cliConfigPath)) {
         ctx.registerTool(definition, { builtin: true });
       }
       ctx.provide('builtinTools', { names: ['read', 'write', 'edit', 'bash'] });

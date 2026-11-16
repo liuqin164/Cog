@@ -60,9 +60,9 @@ export interface ShellConfig {
    */
   workBudget: RunBudget;
   /**
-   * The day's token ceiling (#233), counted across both tiers on the same Tokyo day as #229's
-   * emergence cap. Reaching it stops autonomous runs; a user who is present is told, and their own
-   * instruction still runs under the per-run cage.
+   * The day's token ceiling (#233), counted across both tiers on the same configured-zone day
+   * (#285) as #229's emergence cap. Reaching it stops autonomous runs; a user who is present is
+   * told, and their own instruction still runs under the per-run cage.
    */
   dailyBudget: DailyBudget;
   /**

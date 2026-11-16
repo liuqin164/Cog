@@ -24,7 +24,7 @@ import { providedModelPlugin } from './plugins/mg-provider.ts';
 import { ModelRouter, modelRouterPlugin, routeLine } from './model/router.ts';
 import { RouteStore, redactUrl } from './model/routes.ts';
 import { cagePlugin, estimateBudgetGrant, RunCage, type CageTier } from './plugins/cage.ts';
-import { builtinToolsPlugin } from './plugins/builtin-tools.ts';
+import { bwrapUsable, builtinToolsPlugin } from './plugins/builtin-tools.ts';
 import { webPlugin } from './plugins/web.ts';
 import { coreCommandFor, availableCoreCommand, unknownCommandReply, type CommandHost, type CommandReply } from './commands.ts';
 import { proposalPlugin } from './plugins/proposal.ts';
@@ -114,7 +114,7 @@ const RESUME_BACKOFF_CAP_MS = 6 * 60 * 60_000;
 
 /**
  * Emergence's stop-bleed (#229). A candidate is spoken or queued at most once, never twice within
- * two minutes, and at most eight times in a Tokyo day. The count is checkpointed, so a restart
+ * two minutes, and at most eight times in a configured-zone day (#285). The count is checkpointed, so a restart
  * cannot reset today's silence. The cooldown stays below #228's 5-minute resume backoff, or a
  * deferred surfacing run could never happen while an assignment is waiting.
  *
@@ -439,7 +439,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   }
 
   private beginDreamModelBudget(at: number): void {
-    const day = tokyoDate(at);
+    const day = this.localDay(at);
     const spent = this.dailySpent(at);
     const persisted = this.machine.runtime.dreamNightDate === day
       ? this.machine.runtime.dreamNightStartTokens
@@ -1781,7 +1781,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     return (this.machine.runtime.emergence?.consumed ?? []).includes(this.emergenceKey(candidate));
   }
 
-  /** Cooldown and the Tokyo day's count; both survive a restart because they live in the checkpoint. */
+  /** Cooldown and the configured day's count; both survive a restart because they live in the checkpoint. */
   private emergenceAllowed(at: number): boolean {
     // #233 and #229 share one day boundary and one hard stop: when the day's tokens are gone,
     // autonomy does not start another run, exactly as the emergence count cap does.
@@ -1789,12 +1789,12 @@ export class CompanionShell implements ShellControl, AttachShell {
     const state = this.machine.runtime.emergence;
     if (!state) return true;
     if (state.lastAt !== undefined && at - state.lastAt < EMERGENCE_COOLDOWN_MS) return false;
-    return state.day !== tokyoDate(at) || state.count < EMERGENCE_DAILY_LIMIT;
+    return state.day !== this.localDay(at) || state.count < EMERGENCE_DAILY_LIMIT;
   }
 
   private consumeEmergence(candidate: { id: string; source?: string; observedAt?: number; sourceRefs?: Array<{ eventId?: string }> }, at: number): void {
     const key = this.emergenceKey(candidate);
-    const day = tokyoDate(at);
+    const day = this.localDay(at);
     const prior = this.machine.runtime.emergence;
     const count = prior?.day === day ? prior.count + 1 : 1;
     const consumed = [...(prior?.consumed ?? []).filter((entry) => entry !== key), key].slice(-MAX_EMERGENCE_CONSUMED);
@@ -1961,7 +1961,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   private chargeCost(tokens: number): void {
     if (tokens <= 0) return;
     try {
-      const today = tokyoDate(this.now());
+      const today = this.localDay(this.now());
       const previous = this.machine.runtime.costDayDate === today ? this.machine.runtime.costDayTokens ?? 0 : 0;
       const spent = previous + tokens;
       this.machine.updateRuntime({ costDayDate: today, costDayTokens: spent });
@@ -1973,9 +1973,9 @@ export class CompanionShell implements ShellControl, AttachShell {
     }
   }
 
-  /** The day's spend under the same Tokyo boundary #229's emergence count uses. */
+  /** The day's spend under the same configured boundary #229's emergence count uses. */
   private dailySpent(at = this.now()): number {
-    return this.machine.runtime.costDayDate === tokyoDate(at) ? this.machine.runtime.costDayTokens ?? 0 : 0;
+    return this.machine.runtime.costDayDate === this.localDay(at) ? this.machine.runtime.costDayTokens ?? 0 : 0;
   }
 
   private dailyBudgetExceeded(at = this.now()): boolean {
@@ -1983,7 +1983,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   }
 
   private dailyBudgetLine(at = this.now()): string {
-    return `已到今日预算上限（${this.dailySpent(at)} / ${this.config.dailyBudget.maxTokensPerDay} token，东京日 ${tokyoDate(at)}）：自主运行今天不再开始；你的指令照常执行，单次运行仍受笼子上限约束。`;
+    return `已到今日预算上限（${this.dailySpent(at)} / ${this.config.dailyBudget.maxTokensPerDay} token，本日 ${this.localDay(at)}（${this.config.timeZone}））：自主运行今天不再开始；你的指令照常执行，单次运行仍受笼子上限约束。`;
   }
 
   /**
@@ -1991,7 +1991,7 @@ export class CompanionShell implements ShellControl, AttachShell {
    * bar. The line still runs — the ticket stops autonomy, not the owner.
    */
   private announceDailyBudget(trigger: string): void {
-    const day = tokyoDate(this.now());
+    const day = this.localDay(this.now());
     if (this.dailyNotifiedDay === day) return;
     this.dailyNotifiedDay = day;
     this.trace.append('daily_budget_exceeded', {
@@ -2026,7 +2026,7 @@ export class CompanionShell implements ShellControl, AttachShell {
 
   currentStatus(): StatusState {
     const next = this.clock?.nextPendingIntent();
-    const today = tokyoDate(this.now());
+    const today = this.localDay(this.now());
     return {
       name: this.config.agentId,
       lifecycle: this.machine.state,
@@ -2043,9 +2043,23 @@ export class CompanionShell implements ShellControl, AttachShell {
       promptCache: this.promptCache ?? null,
       costTokens: this.machine.runtime.costDayDate === today ? this.machine.runtime.costDayTokens ?? 0 : 0,
       timeZone: this.config.timeZone,
+      sandbox: this.sandboxState(),
       capturePaused: this.capturePaused,
       ...(this.machine.state === 'SUSPENDED' && this.machine.runtime.suspension ? { suspended: this.suspendedLine(this.machine.runtime.suspension) } : {}),
     };
+  }
+
+  /** `/status` and the status bar say whether bash is isolated; a silent degradation is the bug (#284). */
+  private sandboxState(): 'on' | 'off' {
+    return bwrapUsable() ? 'on' : 'off';
+  }
+
+  /**
+   * The token budget and the emergence count share this day boundary: the configured project time
+   * zone (#285), which is the installer's `COGMEM_SHELL_TZ`, not a hard-coded Asia/Tokyo.
+   */
+  private localDay(at: number): string {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: this.config.timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(at));
   }
 
   /** The one human line the status bar, the snapshot and `/health` all carry for a pause. */
@@ -2715,7 +2729,7 @@ export class CompanionShell implements ShellControl, AttachShell {
    */
   private readonly commandHost: CommandHost = {
     config: () => this.config,
-    lifecycle: () => ({ state: this.machine.state, seq: this.machine.seq, costDayTokens: this.machine.runtime.costDayTokens ?? 0 }),
+    lifecycle: () => ({ state: this.machine.state, seq: this.machine.seq, costDayTokens: this.machine.runtime.costDayTokens ?? 0, sandbox: this.sandboxState() }),
     contextTokens: () => this.contextTokenEstimate,
     contextLanes: () => (this.lastLaneAssembly ? laneAssemblyView(this.lastLaneAssembly) : undefined),
     contextMetrics: () => this.lastContextMetrics,
@@ -2955,7 +2969,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       this.trace.append('daily_budget_exceeded', {
         trigger: 'assignment_resume',
         assignmentId,
-        day: tokyoDate(this.now()),
+        day: this.localDay(this.now()),
         spent: this.dailySpent(),
         limit: this.config.dailyBudget.maxTokensPerDay,
       });
@@ -3405,15 +3419,5 @@ function compactToolInput(input: unknown): string {
 function exactLinePrefix(text: string, limit: number): string {
   const line = text.split('\n').find((candidate) => candidate.trim() !== '') ?? text;
   return line.length <= limit ? line : `${line.slice(0, limit - 1)}…`;
-}
-
-/** The issue's day boundary is Tokyo's, not the display time zone's. */
-function tokyoDate(at: number): string {
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Tokyo',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(new Date(at));
 }
 

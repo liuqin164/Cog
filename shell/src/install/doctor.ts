@@ -9,6 +9,7 @@
  */
 import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { bwrapUsable } from '../plugins/builtin-tools.ts';
 import { formatBytes } from '../memory.ts';
 import { DEFAULT_SOUL, readSoul } from './soul.ts';
 import { serviceStatus, type Platform, type Runner, type ServiceSpec } from './service.ts';
@@ -44,6 +45,11 @@ export interface DoctorCheck {
   id: string;
   ok: boolean;
   detail: string;
+  /**
+   * Not green, but not a failed install: the shell degrades visibly instead (#284). The check keeps
+   * `ok` true so every consumer that reads `!ok` as a failure does not misname the upgrade gate.
+   */
+  warn?: boolean;
 }
 
 export interface DoctorReport {
@@ -146,5 +152,17 @@ export async function runDoctor(ctx: DoctorContext): Promise<DoctorReport> {
     }
   }
 
-  return { ok: checks.every((check) => check.ok), checks };
+  // 7. bash isolation. A missing bubblewrap is a WARN, not a FAIL: the shell still runs, but every
+  // bash result says `[sandbox: off]` and `/status` reports it, so the degradation is not silent.
+  const sandbox = bwrapUsable();
+  checks.push({
+    id: 'sandbox',
+    ok: true,
+    warn: !sandbox,
+    detail: sandbox
+      ? 'bubblewrap usable: bash runs isolated'
+      : 'bubblewrap unavailable: bash runs unsandboxed and says so; install bubblewrap on Linux to restore isolation',
+  });
+
+  return { ok: checks.every((check) => check.ok || check.warn === true), checks };
 }

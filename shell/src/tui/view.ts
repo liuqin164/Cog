@@ -48,6 +48,8 @@ export interface StatusState {
   promptCache?: { hit: number; miss: number; percent: number } | null;
   costTokens: number;
   timeZone: string;
+  /** `off` means bash runs without bwrap; the status overlay says so instead of hiding it (#284). */
+  sandbox?: 'on' | 'off';
   /** `/pause`: the status bar shows it while it is true, because a silent pause looks like a bug. */
   capturePaused?: boolean;
   /**

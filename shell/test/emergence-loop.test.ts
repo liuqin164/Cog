@@ -3,6 +3,9 @@ import type { CompanionShell } from '../src/app.ts';
 import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
 
 const BASE = Date.UTC(2026, 10, 15, 12, 0, 0);
+/** 2026-01-02 04:00 UTC = Jan 1 23:00 in New York; 05:10 UTC = Jan 2 00:10 there. Tokyo is Jan 2 at both. */
+const NY_LATE = Date.UTC(2026, 0, 2, 4, 0, 0);
+const NY_AFTER = Date.UTC(2026, 0, 2, 5, 10, 0);
 
 function emerge(shell: CompanionShell, id: string): void {
   (shell as unknown as { emergence: unknown }).emergence = {
@@ -119,6 +122,44 @@ describe('emergence does not consume its own query (#229)', () => {
       expect(second.machine.runtime.emergence?.count).toBe(2);
     } finally {
       await second.stop();
+    }
+  }, 30_000);
+});
+
+describe('the emergence day cap follows the configured zone (#285)', () => {
+  test("a full New York day resets after its midnight", async () => {
+    const dir = makeTempDir();
+    const provider = new ScriptedProvider([{ text: 'new day', toolCalls: [] }]);
+    let now = NY_LATE;
+    const shell = makeShell(dir, provider, { timeZone: 'America/New_York' }, { now: () => now });
+    await shell.start();
+    try {
+      emerge(shell, 'evt-new-day');
+      shell.machine.updateRuntime({ emergence: { day: '2026-01-01', count: 8, lastAt: NY_LATE - 10 * 60_000, consumed: [] } });
+      now = NY_AFTER;
+      await shell.tick(NY_AFTER);
+      expect(provider.calls).toHaveLength(1);
+      expect(shell.machine.runtime.emergence?.day).toBe('2026-01-02');
+      expect(shell.machine.runtime.emergence?.count).toBe(1);
+    } finally {
+      await shell.stop();
+    }
+  }, 30_000);
+
+  test('the same instants do not reset a Tokyo day (regression)', async () => {
+    const dir = makeTempDir();
+    const provider = new ScriptedProvider([{ text: 'must not run', toolCalls: [] }]);
+    let now = NY_LATE;
+    const shell = makeShell(dir, provider, { timeZone: 'Asia/Tokyo' }, { now: () => now });
+    await shell.start();
+    try {
+      emerge(shell, 'evt-same-day');
+      shell.machine.updateRuntime({ emergence: { day: '2026-01-02', count: 8, lastAt: NY_LATE - 10 * 60_000, consumed: [] } });
+      now = NY_AFTER;
+      await shell.tick(NY_AFTER);
+      expect(provider.calls).toHaveLength(0);
+    } finally {
+      await shell.stop();
     }
   }, 30_000);
 });
