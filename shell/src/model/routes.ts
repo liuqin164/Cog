@@ -21,8 +21,10 @@ export interface ModelRoute {
   apiKey: string;
   model: string;
   /**
-   * The context sweet spot for this model, in the provider's tokens. C3 (#258) fills the per-model
-   * value; until then the built-in route falls back to the shell's `contextSweetSpot`.
+   * The context sweet spot for this model, in the same `ceil(chars / 4)` unit the session
+   * assembler budgets against. C3 (#258) fills the per-model value; until then the built-in route
+   * falls back to the shell's `contextSweetSpot`, whose 6_000 is a provisional placeholder pending
+   * review of the measured curve.
    */
   targetTokens?: number;
 }

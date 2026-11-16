@@ -45,6 +45,9 @@ export interface ShellConfig {
   /**
    * The built-in route's context sweet spot (spec §6's "甜点带宽"). C3 (#258) fills the per-model
    * value into a route; until then this is the fallback every route without a `targetTokens` uses.
+   * The current 6_000 is provisional, not a validated constant: #258 measured a flat curve through
+   * 48k for `auto/deepseek-v4.1-flash` and is waiting on a second model and a coverage arm. The
+   * unit is the assembler's `ceil(chars / 4)` estimate, not the provider's token count.
    */
   contextSweetSpot: number;
   /** Recent turns kept verbatim in every request's tail lane (#245). */
