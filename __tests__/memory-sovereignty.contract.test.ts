@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync, statSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createMemoryKernel, type MemoryKernel } from '../src/factory.js';
@@ -329,9 +329,14 @@ describe('the whole-library export is readable and respects deletion', () => {
     kernel.profile.compile({ projectId });
     kernel.commitments.compile({ projectId });
 
-    const first = join(scratch, 'archive-first.md');
+    const first = join(scratch, 'nested', 'archive-first.md');
     const firstResult = kernel.sovereignty.exportArchive({ projectId, outputPath: first });
     const body = readFileSync(first, 'utf8');
+    expect(firstResult.path).toBe(first);
+    if (process.platform !== 'win32') {
+      expect(statSync(first).mode & 0o777).toBe(0o600);
+      expect(statSync(dirname(first)).mode & 0o777).toBe(0o700);
+    }
     for (const section of SOVEREIGNTY_EXPORT_SECTIONS) expect(body).toContain(`## ${section}`);
     expect(body).toContain('# Cog Memory Archive');
     expect(body).toContain(`Project: ${projectId}`);

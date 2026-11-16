@@ -18,7 +18,7 @@
  */
 import type Database from 'bun:sqlite';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import type { CommitmentBook } from '../commitment/CommitmentBook.js';
@@ -406,9 +406,11 @@ export class MemorySovereigntyService {
     if (graph.length === 0) lines.push('_No graph nodes remain._', '');
     for (const row of graph) lines.push(`- ${row.node_type}: ${row.label}`);
     lines.push('');
-    mkdirSync(dirname(path), { recursive: true });
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     const body = lines.join('\n');
-    writeFileSync(path, body, 'utf8');
+    writeFileSync(path, body, { encoding: 'utf8', mode: 0o600 });
+    // mode only applies on create: a re-export over an older 0644 file must tighten it too.
+    chmodSync(path, 0o600);
     const counts = Object.fromEntries(SOVEREIGNTY_EXPORT_COUNT_FIELDS.map((field) => [field, 0])) as Record<string, number>;
     Object.assign(counts, { events: events.length, profile: profile.length, procedures: procedures.length, commitments: commitments.length, graph: graph.length });
     const auditId = this.writeAudit('export_archive', scope, { start: exportedAt, end: exportedAt, path, counts });
