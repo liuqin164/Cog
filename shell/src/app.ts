@@ -488,6 +488,7 @@ export class CompanionShell implements ShellControl, AttachShell {
             : null,
         }),
         connectedAgents: () => [this.config.agentId],
+        tracePath: join(this.config.dataDir, 'shell-events.jsonl'),
       });
       this.trace.append('http_face_started', { url: this.http.baseUrl, port: this.http.port });
     }

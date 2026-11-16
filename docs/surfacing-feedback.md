@@ -156,6 +156,16 @@ ignored three times last month still starts at level 1.
 | `lastIgnoredAt` | The instant of the last ignore, or `null`. |
 | `cooldownUntil` | The instant the current cooldown ends, or `null` at level 0. |
 
+## Observability (#239)
+
+The observatory's health page reads the gate without changing it: feedback outcomes come from the
+`SURFACING_FEEDBACK_RECORDED` rows in `memory_events`, while candidate, per-gate withheld, excluded
+and surfaced counts come from the shell's `emergence_decision` / `emergence_consumed` /
+`emergence_accumulated` rows in `shell-events.jsonl`. The same block returns the current priors —
+`SURFACING_FEEDBACK_RULES`, the channel policy and the gate names — so a reader can tell whether
+the gate is still applying fixed rules rather than a learned modulation. The observer writes no
+feedback row, adds no event and does not change the rules above.
+
 ## Trace integration (frozen)
 
 F6's candidate decision trace gains one `modulation` step, appended after `occasion`. Its outcome

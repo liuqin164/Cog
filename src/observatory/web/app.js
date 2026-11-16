@@ -1024,6 +1024,22 @@ function renderHealthPanel(panel) {
   panel.append(el('p', { class: 'hint', text: '健康页只读；自检由 cogmem doctor 或常驻进程写入。' }));
 }
 
+const SURFACING_GATE_LABELS = {
+  keychain: '密钥标记',
+  policy: '通道策略',
+  expired: '过期',
+  modulation: '反馈调制',
+  occasion_private_tier: '私密场合',
+  occasion_third_party: '第三方场合',
+  no_due_instant: '无到期时刻',
+};
+
+function surfacingChannelPolicy(policy) {
+  return Object.entries(policy ?? {})
+    .map(([tier, channels]) => `${tier} ${[channels?.proactive ? 'proactive' : '', channels?.asked ? 'asked' : ''].filter(Boolean).join('+') || 'none'}`)
+    .join(' · ');
+}
+
 function renderHealth() {
   const root = $('view-health');
   root.innerHTML = '';
@@ -1094,6 +1110,53 @@ function renderHealth() {
     el('dt', { text: '做梦部分失败' }), el('dd', { text: num(health.anomalies?.failedDreamRuns) }),
   ]));
 
+  wrap.append(el('h2', { text: '浮现反馈闸门', style: 'margin-top:0.875rem' }));
+  const surfacing = health.surfacing;
+  if (!surfacing) {
+    wrap.append(el('p', { class: 'dim', text: '还没有浮现计数。' }));
+  } else {
+    const windowLabel = `${stamp(surfacing.window?.from)} – ${stamp(surfacing.window?.to)}`;
+    const counts = surfacing.counts ?? {};
+    wrap.append(el('p', { class: 'hint', text: `窗口 ${windowLabel} · ${num((surfacing.window?.windowMs ?? 0) / 86_400_000)} 天；反馈行${surfacing.sources?.feedback?.readable ? '可读' : '不可读'}，浮现轨迹${surfacing.sources?.trace?.readable ? '可读' : '不可读'}。` }));
+    wrap.append(el('dl', { class: 'kv' }, [
+      el('dt', { text: '候选总数' }), el('dd', { text: num(counts.considered) }),
+      el('dt', { text: '可浮现候选' }), el('dd', { text: num(counts.candidates) }),
+      el('dt', { text: '闸门挡下' }), el('dd', { text: num(counts.withheld) }),
+      el('dt', { text: '无到期排除' }), el('dd', { text: num(counts.excluded) }),
+      el('dt', { text: '实际浮现' }), el('dd', { text: num(counts.surfaced) }),
+      el('dt', { text: '按住未发' }), el('dd', { text: num(counts.held) }),
+      el('dt', { text: '被忽略' }), el('dd', { text: num(counts.ignored) }),
+      el('dt', { text: '被接住' }), el('dd', { text: num(counts.engaged) }),
+      el('dt', { text: '被停止' }), el('dd', { text: num(counts.stopped) }),
+      el('dt', { text: '决策次数' }), el('dd', { text: num(counts.decisions) }),
+    ]));
+    if (!surfacing.sources?.trace?.readable) {
+      wrap.append(el('p', { class: 'hint', text: '候选/闸门/浮现计数来自常驻进程的 shell-events.jsonl；轨迹不可读时只显示反馈计数。' }));
+    }
+    const gates = surfacing.gates ?? [];
+    if (gates.length > 0) {
+      const list = el('ul', { class: 'plain' });
+      for (const entry of gates) {
+        list.append(el('li', {}, [
+          el('span', { text: SURFACING_GATE_LABELS[entry.gate] ?? entry.gate }),
+          el('span', { class: 'dim', text: ` ${num(entry.count)}` }),
+        ]));
+      }
+      wrap.append(el('p', { class: 'hint', text: '按闸门分（同一候选可同时被通道与场合挡下）。' }), list);
+    }
+    const priors = surfacing.priors ?? {};
+    const feedback = priors.feedback ?? {};
+    const policy = priors.channelPolicy ?? {};
+    wrap.append(el('p', { class: 'hint', text: '当前生效的先验（尚未从样本学习，按固定规则执行）：' }));
+    wrap.append(el('dl', { class: 'kv' }, [
+      el('dt', { text: '连续忽略阈值' }), el('dd', { text: num(feedback.ignoredThreshold) }),
+      el('dt', { text: '最大等级' }), el('dd', { text: num(feedback.maxLevel) }),
+      el('dt', { text: '基础冷却' }), el('dd', { text: `${num((feedback.baseCooldownMs ?? 0) / 3_600_000)} 小时` }),
+      el('dt', { text: '通道策略' }), el('dd', { text: surfacingChannelPolicy(policy) }),
+      el('dt', { text: '闸门' }), el('dd', { text: (priors.gates ?? []).join('、') }),
+    ]));
+  }
+
   wrap.append(el('h2', { text: '最近快照', style: 'margin-top:0.875rem' }));
   if (!health.snapshot) {
     wrap.append(el('p', { class: 'dim', text: '还没有整脑快照。' }));
@@ -1120,7 +1183,7 @@ async function loadHealth() {
   state.healthError = null;
   renderHealth();
   try {
-    state.health = await api('health');
+    state.health = await api('health', { project: state.projectId });
   } catch (error) {
     state.health = null;
     state.healthError = error.message;

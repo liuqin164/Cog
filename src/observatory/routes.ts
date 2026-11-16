@@ -264,7 +264,7 @@ export function createObservatoryRoutes(
     const agent = url.searchParams.get('agent') ?? undefined;
     try {
       if (url.pathname === '/observatory/health') {
-        return jsonResponse(observatory.health(), 200, acceptEncoding);
+        return jsonResponse(observatory.health({ projectId: project }), 200, acceptEncoding);
       }
       if (url.pathname === '/observatory/snapshot') {
         return jsonResponse(observatory.snapshot({ projectId: project, agent }), 200, acceptEncoding);
