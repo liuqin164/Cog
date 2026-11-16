@@ -150,7 +150,9 @@ export function makeFixture(prefix: string): Fixture {
   const badDoctor = join(root, 'bad-doctor.ts');
   writeFileSync(badDoctor, "console.error('doctor cannot answer in this build');\nprocess.exit(1);\n");
 
-  return { root, install, home, binDir, template, configPath, sessionDir: join(configDir, 'sessions'), npmLog, badDoctor, port: freePort() };
+  const fixture = { root, install, home, binDir, template, configPath, sessionDir: join(configDir, 'sessions'), npmLog, badDoctor, port: freePort() };
+  fixtures.add(fixture);
+  return fixture;
 }
 
 export async function run(cmd: string[], options: { cwd: string; env: Record<string, string | undefined>; stdin?: string }): Promise<RunResult> {
@@ -198,21 +200,86 @@ export function startServer(f: Fixture, extraEnv: Record<string, string | undefi
     stdout: 'ignore',
     stderr: 'ignore',
     env: fixtureEnv(f, extraEnv),
+    // Its own process group, so cleanup can take anything it started with it (#244).
+    detached: true,
   });
   return { proc, url: `http://127.0.0.1:${f.port}/observatory/`, pid: proc.pid };
 }
 
-const tracked = new Set<() => void>();
+const tracked = new Set<ServerHandle>();
+const fixtures = new Set<Fixture>();
 
 /** Remember a service so the file's `afterAll` can kill whatever is still up. */
 export function track(handle: ServerHandle): ServerHandle {
-  tracked.add(() => { try { handle.proc.kill(); } catch { /* already gone */ } });
+  tracked.add(handle);
   return handle;
 }
 
+/**
+ * Stop every server these fixtures caused, not only the ones handed to `track`.
+ *
+ * `update` restarts the resident detached from the test that called it, so the new
+ * pid never passes through `track` — but it does write a session record, and that
+ * record is what makes it findable here (#244).
+ */
 export function killTrackedServers(): void {
-  for (const stop of tracked) stop();
+  for (const handle of tracked) stopProcess(handle.pid);
   tracked.clear();
+  for (const f of fixtures) {
+    for (const { session } of readResidentSessions(f.sessionDir)) {
+      // Only units this suite names: `cogmem-150-<pid>-<random>`. The shim tests
+      // record a made-up `cogmem-observatory.service`, which must never be stopped
+      // on a machine that has a real one.
+      if (session.systemdUnit && /^cogmem-150-\d+-/.test(session.systemdUnit)) stopUnit(session.systemdUnit);
+      stopProcess(session.pid);
+    }
+  }
+  fixtures.clear();
+}
+
+/** SIGTERM the group, then SIGKILL it if it is still there. Synchronous: `exit` cannot await. */
+function stopProcess(pid: number): void {
+  if (!isAlive(pid)) return;
+  signalGroup(pid, 'SIGTERM');
+  for (let attempt = 0; attempt < 20 && isAlive(pid); attempt += 1) Bun.sleepSync(50);
+  if (isAlive(pid)) signalGroup(pid, 'SIGKILL');
+}
+
+function signalGroup(pid: number, signal: NodeJS.Signals): void {
+  try {
+    // `startServer` spawns detached, so the pid is also the process group id.
+    process.kill(-pid, signal);
+  } catch {
+    try { process.kill(pid, signal); } catch { /* already gone */ }
+  }
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function stopUnit(unit: string): void {
+  try {
+    Bun.spawnSync({ cmd: ['systemctl', '--user', 'stop', unit], stdout: 'ignore', stderr: 'ignore' });
+  } catch {
+    // No user manager: the unit never existed here.
+  }
+}
+
+// A normal exit, a failed assertion and an interrupted run all leave the same
+// mess. `afterAll` handles the first two per file; these hooks make the helper
+// itself the backstop, so a file that forgets its `afterAll` still cleans up.
+process.on('exit', killTrackedServers);
+for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]] as const) {
+  process.on(signal, () => {
+    killTrackedServers();
+    process.exit(code);
+  });
 }
 
 export async function waitForSession(f: Fixture, predicate: (session: ResidentSession) => boolean, timeoutMs = 30_000): Promise<ResidentSession> {
