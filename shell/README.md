@@ -91,7 +91,8 @@ once and never overwrites it. Edit a number and restart the service — no sourc
   "autonomous": { "maxTurnsPerRun": 6, "maxTokensPerRun": 20000 },
   "work":       { "maxTurnsPerRun": 32, "maxTokensPerRun": 400000 },
   "maxTokensPerDay": 2000000,
-  "maxTokensPerNight": 200000
+  "maxTokensPerNight": 200000,
+  "maxIdleTurns": 4
 }
 ```
 
@@ -99,6 +100,12 @@ A file that exists but does not parse (or names a non-positive limit) stops star
 `invalid_budgets_config` rather than silently falling back. When the work tier cuts a user
 assignment, the checkpoint keeps the task open with the tool call it stopped on and the next move;
 the next run reads that block from the prompt tail, so it does not restart from the same file read.
+
+`maxIdleTurns` (#241) is the no-progress floor: consecutive turns with no assistant text and no
+tool result that the same call has not already returned. At 4 (default) a repeated read/edit/bash
+loop stops through `run_error` (`no_progress: …`) and says so on the terminal and TUI faces; a long
+task that emits stage text, or whose calls return new output, is not stopped. It is top-level
+because both cages share the same floor.
 
 `maxTokensPerDay` is the aggregate ceiling across both tiers (#233), counted on the same Tokyo day
 as the emergence cap and persisted in the checkpoint's `costDayDate` / `costDayTokens` on every
