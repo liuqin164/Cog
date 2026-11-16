@@ -29,11 +29,13 @@ import { webPlugin } from './plugins/web.ts';
 import { coreCommandFor, availableCoreCommand, unknownCommandReply, type CommandHost, type CommandReply } from './commands.ts';
 import { proposalPlugin } from './plugins/proposal.ts';
 import { askPlugin } from './plugins/ask.ts';
+import { hygienePlugin } from './plugins/hygiene.ts';
 import { WorkflowService, workflowsPlugin } from './plugins/workflows.ts';
 import { CommandProposals, executeProposal, type CommandProposal, type ProposalConfirmation } from './proposals.ts';
 import { capturePlugin } from './plugins/capture.ts';
 import { recallPlugin } from './plugins/recall.ts';
 import { soulEditPlugin } from './plugins/soul-edit.ts';
+import { HygienePipeline } from './hygiene.ts';
 import { dreamPlugin } from './plugins/dream.ts';
 import { emergencePlugin } from './plugins/emergence.ts';
 import { terminalPlugin, TerminalChannel, type ShellControl } from './channels/terminal.ts';
@@ -138,6 +140,8 @@ export class CompanionShell implements ShellControl, AttachShell {
   readonly lock: ProcessLock;
   /** The agent's command offers and the user's answers; the transcript element's source of truth. */
   readonly proposals: CommandProposals;
+  /** The hygiene gate every self-written skill, plugin or rule proposal passes before review (#228). */
+  readonly hygiene: HygienePipeline;
   private runtime?: AgentRuntime;
   private cage?: RunCage;
   private workflows?: WorkflowService;
@@ -204,7 +208,7 @@ export class CompanionShell implements ShellControl, AttachShell {
    * A question the run registered through `ask_user` (#228). It is process-local because the run is
    * still in this process; `settleAssignment` turns it into the checkpointed suspension.
    */
-  private pendingQuestion?: { text: string; contextRef?: string };
+  private pendingQuestion?: { text: string; contextRef?: string; approvalId?: string };
   /** The proposal that offers `/continue` for the current pause; Esc on it is the owner's refusal. */
   private suspensionProposalId?: string;
   /**
@@ -223,6 +227,11 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.config = defaultShellConfig(options.config);
     this.now = options.now ?? Date.now;
     this.trace = new TraceLog(this.config.dataDir);
+    this.hygiene = new HygienePipeline({
+      trace: this.trace,
+      now: this.now,
+      askOwner: (input) => this.askUser(input),
+    });
     this.machine = new StateMachine({
       checkpoint: new CheckpointStore(this.config.dataDir),
       trace: this.trace,
@@ -270,6 +279,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.host.seedService('shell', this);
     this.host.seedService('commands', this.host.commands);
     this.host.seedService('trace', this.trace);
+    this.host.seedService('hygiene', this.hygiene);
     // The proposal registry (spec §7, #165 round 22). Its availability rule is the palette's, asked
     // on the resident's face — the face a confirmed proposal executes on — so the panel and the
     // proposal path cannot disagree about what is runnable.
@@ -594,6 +604,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.host.register(webPlugin({ dataDir: this.config.dataDir }));
     this.host.register(proposalPlugin());
     this.host.register(askPlugin());
+    this.host.register(hygienePlugin());
     this.host.register(capturePlugin({ agentId: this.config.agentId, projectId: this.config.projectId, sessionId: this.config.sessionId, paused: () => this.capturePaused }));
     this.host.register(recallPlugin({ agentId: this.config.agentId, projectId: this.config.projectId, limit: 3 }));
     this.host.register(soulEditPlugin());
@@ -875,6 +886,10 @@ export class CompanionShell implements ShellControl, AttachShell {
     const suspension = this.machine.runtime.suspension;
     this.clock!.markInteraction(text, this.now());
     if (suspension?.kind === 'question') {
+      // The owner's answer to an external-rule proposal is the decision itself (#228 item 5). It
+      // is resolved before the resumed run so the rule cannot take effect just because the model
+      // saw an encouraging word.
+      if (suspension.question?.approvalId) this.hygiene.answer(suspension.question.approvalId, text);
       this.machine.updateRuntime({ suspension: { ...suspension, answeredAt: this.now() } });
       this.trace.append('suspension_answered', { id: suspension.id, assignmentId: suspension.assignmentId, chars: text.trim().length });
       return this.executeRun(text, 'message_received', 'question_answered', 'answer_received');
@@ -2046,7 +2061,7 @@ export class CompanionShell implements ShellControl, AttachShell {
    * to carry on. The question is process-local until the run settles; the checkpointed object is
    * written by `settleAssignment`.
    */
-  askUser(input: { question: string; context?: string }): { ok: boolean; text: string } {
+  askUser(input: { question: string; context?: string; approvalId?: string }): { ok: boolean; text: string } {
     const question = input.question.trim();
     if (question === '') return { ok: false, text: 'invalid_arguments: "question" must be a non-empty string' };
     if (this.runTier !== 'work' || this.machine.state !== 'RUNNING') {
@@ -2054,7 +2069,11 @@ export class CompanionShell implements ShellControl, AttachShell {
       return { ok: false, text: 'ask_user_unavailable: 这次是自主 run，没有人在等你的问题；不要等，直接按现有信息做完或收尾。' };
     }
     const contextRef = input.context?.trim();
-    this.pendingQuestion = { text: question, ...(contextRef ? { contextRef } : {}) };
+    this.pendingQuestion = {
+      text: question,
+      ...(contextRef ? { contextRef } : {}),
+      ...(input.approvalId ? { approvalId: input.approvalId } : {}),
+    };
     this.trace.append('question_registered', { chars: question.length, contextChars: contextRef?.length ?? 0 });
     return { ok: true, text: '已登记问题：这次 run 到此挂起，用户回答后原任务原地续跑。不要再调用工具，也不要假装已经得到回答。' };
   }

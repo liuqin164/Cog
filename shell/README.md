@@ -284,6 +284,11 @@ numbers.
 - `src/proposals.ts` — command proposals (spec §7): the registry the agent's tool records into, and the
   one execution entry `executeProposal`, gated on a user-confirmation event. The shell's `confirmProposal`
   is its only caller, and it dispatches through `runCommand`, never a second dispatcher.
+- `src/hygiene.ts` — the self-written/skill/plugin/rule gate (#228 item 5): size, shape, secret and
+  hidden-character checks, a deterministic score, the #236 small-diff cap, and the rule that an
+  external-sourced rule waits for the owner through the existing question suspension. The
+  `propose_self_change` tool records only; nothing on this path writes a file, installs a plugin or
+  changes a rule.
 - `src/model/routes.ts` / `router.ts` — the named-route store (`0600`), the redaction helpers, and the
   switchable provider the resident's `model` service is.
 - `src/channels/terminal.ts` — the self-owned terminal channel (line mode, for `--no-terminal`-off residents).

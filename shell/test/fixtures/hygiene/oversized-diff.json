@@ -1,0 +1,14 @@
+{
+  "kind": "plugin",
+  "origin": "self",
+  "reason": "一个改动规模超过小步上限的插件提案，不应进入审查。",
+  "files": [
+    {
+      "path": "plugins/large.ts",
+      "content": "export const large = true;\n"
+    }
+  ],
+  "diff": { "added": 380, "removed": 80, "files": 2 },
+  "tests": { "command": "bun test shell/test/hygiene.test.ts", "passed": true },
+  "rollback": "删除 plugins/large.ts"
+}
