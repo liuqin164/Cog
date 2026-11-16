@@ -29,6 +29,8 @@ export interface BuiltinToolsConfig {
    * model rewrite the budgets it is caged by.
    */
   dataDir?: string;
+  /** The companion's own `cogmem` config; exported as `COGMEM_CONFIG` to every bash child (#277). */
+  cliConfigPath?: string;
   trace?: TraceLog;
   /** The kernel's read face: `mem:<eventId>` resolves through it, never through the SQLite file. */
   kernel?: MemoryKernel;
@@ -233,6 +235,7 @@ function definitions(
   workspaceRoot: string,
   sandbox: { dataDir: string; trace?: TraceLog } | undefined,
   ledger: { kernel?: MemoryKernel; trace?: TraceLog; onMemoryRead?: (eventId: string) => void },
+  cliConfigPath?: string,
 ): ToolDefinition[] {
   return [
     {
@@ -329,10 +332,11 @@ function definitions(
       execute({ args, signal }) {
         const command = asString(args, 'command');
         const timeoutMs = resolveBashTimeoutMs(args);
+        const env = cliConfigPath ? { ...process.env, COGMEM_CONFIG: cliConfigPath } : undefined;
         return new Promise<ToolOutcome>((resolvePromise, rejectPromise) => {
           const child = sandbox
-            ? spawn('bwrap', sandboxArgs(workspaceRoot, sandbox.dataDir, command), { cwd: workspaceRoot, signal, stdio: ['ignore', 'pipe', 'pipe'] })
-            : spawn('/bin/bash', ['-lc', command], { cwd: workspaceRoot, signal, stdio: ['ignore', 'pipe', 'pipe'] });
+            ? spawn('bwrap', sandboxArgs(workspaceRoot, sandbox.dataDir, command), { cwd: workspaceRoot, signal, stdio: ['ignore', 'pipe', 'pipe'], ...(env ? { env } : {}) })
+            : spawn('/bin/bash', ['-lc', command], { cwd: workspaceRoot, signal, stdio: ['ignore', 'pipe', 'pipe'], ...(env ? { env } : {}) });
           let output = '';
           let settled = false;
           let timer: ReturnType<typeof setTimeout>;
@@ -400,10 +404,10 @@ export function builtinToolsPlugin(): NativePlugin {
     name: 'builtin-tools',
     provide: ['builtinTools'],
     apply(ctx, config) {
-      const { workspaceRoot, dataDir, trace, kernel, onMemoryRead } = config as BuiltinToolsConfig;
+      const { workspaceRoot, dataDir, cliConfigPath, trace, kernel, onMemoryRead } = config as BuiltinToolsConfig;
       const sandbox = dataDir && bwrapUsable() ? { dataDir, trace } : undefined;
       if (dataDir && !sandbox) trace?.append('bash_sandbox_unavailable', { dataDir, reason: 'bwrap_not_usable' });
-      for (const definition of definitions(workspaceRoot, sandbox, { kernel, trace, onMemoryRead })) {
+      for (const definition of definitions(workspaceRoot, sandbox, { kernel, trace, onMemoryRead }, cliConfigPath)) {
         ctx.registerTool(definition, { builtin: true });
       }
       ctx.provide('builtinTools', { names: ['read', 'write', 'edit', 'bash'] });

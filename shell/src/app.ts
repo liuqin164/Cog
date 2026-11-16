@@ -7,7 +7,7 @@
  * behaviour; the app decides which transition that behaviour is.
  */
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { ChannelContract, createMemoryKernel, digestAnchors, KernelAgentMemoryBackend, readSessionTurns, type ChannelSession, type EmbeddingProvider, type MemoryKernel, type ProcedureWorkflow, type SessionContextAssembly, type SessionContextItem, type SessionDigestEntry, type SessionTurn } from 'cogmem';
@@ -263,6 +263,12 @@ export class CompanionShell implements ShellControl, AttachShell {
    */
   private hideAssignmentContext = false;
   private readonly redactor = new SecretRedactor();
+  /**
+   * The CLI config this process writes for its own bash children. `COGMEM_CONFIG` points at it, so a
+   * `cogmem` invocation inside the companion resolves `<dataDir>/memory.sqlite` rather than the
+   * operator's global config (#277).
+   */
+  private readonly cliConfigPath: string;
   private tickTimer?: ReturnType<typeof setInterval>;
   private started = false;
   private readonly now: () => number;
@@ -276,6 +282,8 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.config = defaultShellConfig(options.config);
     this.now = options.now ?? Date.now;
     this.trace = new TraceLog(this.config.dataDir);
+    this.cliConfigPath = join(this.config.dataDir, 'cogmem-cli.toml');
+    this.writeCliConfig();
     this.hygiene = new HygienePipeline({
       trace: this.trace,
       now: this.now,
@@ -664,6 +672,19 @@ export class CompanionShell implements ShellControl, AttachShell {
     }
   }
 
+  /** Idempotent: rewritten on every start so `--db` and a data-dir move stay in sync. */
+  private writeCliConfig(): void {
+    try {
+      mkdirSync(this.config.dataDir, { recursive: true });
+      writeFileSync(this.cliConfigPath, `[core]\ndb_path = ${JSON.stringify(this.config.dbPath)}\n`, { mode: 0o600 });
+    } catch (error) {
+      this.trace.append('cli_config_write_failed', {
+        path: this.cliConfigPath,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   /**
    * The migration for a brain written before this process had vectors (#231 Route A). The pipeline
    * is idempotent and checkpoints its cursor, so a second run is a no-op and a killed run resumes.
@@ -724,6 +745,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.host.register(builtinToolsPlugin(), {
       workspaceRoot: this.config.workspaceRoot,
       dataDir: this.config.dataDir,
+      cliConfigPath: this.cliConfigPath,
       trace: this.trace,
       kernel: this.kernel,
       onMemoryRead: () => {

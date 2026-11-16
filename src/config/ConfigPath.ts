@@ -76,6 +76,15 @@ export function resolveCogmemConfigPath(options: CogmemConfigResolutionOptions =
     return isFile ? { kind: 'toml', path } : { kind: 'missing', path };
   }
 
+  // A resident companion sets this for its own tool processes: the CLI must resolve the companion's
+  // database, not the operator's global or project config (#277).
+  const fromEnv = env.COGMEM_CONFIG?.trim();
+  if (fromEnv) {
+    const path = resolvePath(fromEnv, cwd, env);
+    const isFile = existsSync(path) && (() => { try { return statSync(path).isFile(); } catch { return false; } })();
+    return isFile ? { kind: 'toml', path } : { kind: 'missing', path };
+  }
+
   const globalConfig = defaultCogmemConfigPath(env);
   // The walk up for a project config stops at every home it could reach:
   // `<home>/.cogmem/config.toml` is that home's *global* config, never a project

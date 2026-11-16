@@ -146,6 +146,29 @@ test('resolveCogmemConfigPath prefers TOML configs and ignores legacy env files'
   expect(emptyResult).toEqual({ kind: 'missing', path: emptyConfig });
 });
 
+test('resolveCogmemConfigPath honours COGMEM_CONFIG before project and global discovery (#277)', () => {
+  const root = makeTempDir('cogmem-env-config-');
+  const home = join(root, 'home');
+  const nested = join(root, 'packages', 'demo');
+  const companionConfig = join(root, 'companion', 'cogmem-cli.toml');
+  mkdirSync(join(nested, '.cogmem'), { recursive: true });
+  mkdirSync(join(home, '.cogmem'), { recursive: true });
+  mkdirSync(join(root, 'companion'), { recursive: true });
+  writeFileSync(join(nested, '.cogmem', 'config.toml'), '[core]\ndb_path = "project.db"\n');
+  writeFileSync(join(home, '.cogmem', 'config.toml'), '[core]\ndb_path = "global.db"\n');
+  writeFileSync(companionConfig, '[core]\ndb_path = "memory.sqlite"\n');
+
+  const env = { HOME: home, COGMEM_CONFIG: companionConfig };
+  expect(resolveCogmemConfigPath({ cwd: nested, env })).toEqual({ kind: 'toml', path: companionConfig });
+  expect(loadCogmemConfig({ cwd: nested, env }).options.dbPath).toBe(join(root, 'companion', 'memory.sqlite'));
+
+  // An env path that is not a file is a named miss, not a silent fall-through to another database.
+  expect(resolveCogmemConfigPath({ cwd: nested, env: { ...env, COGMEM_CONFIG: join(root, 'missing.toml') } })).toEqual({
+    kind: 'missing',
+    path: join(root, 'missing.toml'),
+  });
+});
+
 test('loadCogmemConfig builds model registry directly from TOML', () => {
   const root = makeTempDir('cogmem-model-registry-');
   const configPath = join(root, 'config.toml');
