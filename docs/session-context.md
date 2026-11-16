@@ -119,6 +119,33 @@ in `browseIds`. `SessionContextAssembly.autoExpanded` lists the stub ids that su
 request — the count is its length — and the shell carries it into the `context_assembled` trace
 (#268 reads it).
 
+## Task-exit stubs (#263)
+
+An explicit task end (`declare_task` with `action: "end"`, #246) is the only exit signal. Without
+that declaration the `working_set` lane is unchanged: a new user line still attaches to the open
+assignment by default.
+
+At the end, the task's working-set material leaves the lane and the digest lane gains one **task
+stub**. The stub is a `SessionDigestEntry` built by the caller from the task's own ledger rows and
+passed to `assembleSessionContext` as `digestStubs`; it is never written by a model. Its `text` is
+the first non-empty line of each quoted row, cut to a bounded prefix, joined with fixed labels (the
+task's opening user line, the last conclusion before the end run, and the end run's closing line),
+its `sourceRefs` are those rows, and its `entryId` is `digest:<primary eventId>`. The primary row is
+the conclusion, so `read mem:<eventId>` opens the words that say what was done; the quoted rows are
+the anchor list.
+The digest lane renders the stub's `anchorEvent=<eventId>` line, so the key is visible without
+turning the lane into a browse-only pointer.
+
+The stub is a lane-level exit, not a fold. A fold replaces an item inside a lane with a pointer
+(C2); this removes the task's working-set material and leaves the stub in a different lane. The two
+mechanisms are not substitutes.
+
+Constraints survive the exit (#255). A working-set item the kernel marked `protected` — the open
+assignment's text when the kernel's permanent-importance classifier rates it a prohibition, or any
+item the caller marked — stays in `working_set` verbatim. A stub whose quoted text contains such a
+constraint is itself marked `protected` by the same rule, so budget pressure trims around it rather
+than folding it.
+
 ## Digest entry fields (frozen)
 
 | Field | Means |

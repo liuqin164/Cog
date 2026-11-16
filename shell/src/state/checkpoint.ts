@@ -24,6 +24,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
+import type { SessionDigestEntry } from 'cogmem';
 import { isState, type State, type Trigger } from './table.ts';
 
 export interface TransitionRecord {
@@ -167,6 +168,30 @@ export interface ShellRuntimeState {
     /** The earliest instant an autonomous wake may continue this assignment again. */
     nextResumeAt?: number;
   };
+  /**
+   * A task that `declare_task end` closed (#263), waiting for the run's ledger row so its digest
+   * stub can be built deterministically. The shell clears this as soon as the stub is written; a
+   * restart between the declaration and the write retries it on the next assembly.
+   */
+  lastEndedTask?: {
+    assignmentId: string;
+    startedAt: number;
+    endedAt: number;
+    runId?: string;
+    /** The turn the end declaration arrived in; `<runId>:0` when the tool supplied one. */
+    turnId?: string;
+  };
+  /**
+   * The digest stubs finished tasks left behind (#263). Each is a `SessionDigest` entry built from
+   * ledger rows, never a model summary; the newest are kept, and the list is bounded so a long
+   * resident does not grow its checkpoint without limit.
+   */
+  taskStubs?: SessionDigestEntry[];
+  /**
+   * Working-set items the kernel marked `protected` at task end (#255). A constraint is not task
+   * material, so it stays in the lane verbatim even though the rest of the working set exits.
+   */
+  retainedConstraints?: Array<{ id: string; text: string }>;
   /** The one paused run, present exactly while the lifecycle state is SUSPENDED. */
   suspension?: Suspension;
   /**
