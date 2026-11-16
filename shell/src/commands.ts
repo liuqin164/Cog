@@ -80,8 +80,14 @@ export interface CommandHost {
   forgetConfirm(): CommandReply;
   /** `/export`: F9's archive to `path`, or a timestamped file under the data dir. */
   exportMemory(path: string | undefined): CommandReply;
-  /** `/correct`: one owner correction of a current profile entry, through the profile face. */
+  /**
+   * `/correct`: one owner correction of a current profile entry, through the profile face. With no
+   * profile match the key may name a practice: that path only proposes, and
+   * `confirmProcedureCorrection` is what writes the mark (#264).
+   */
   correctProfile(key: string, value: string): Promise<CommandReply>;
+  /** `/correct confirm`: apply the pending practice proposal, if any. */
+  confirmProcedureCorrection(): CommandReply | Promise<CommandReply>;
   sessionModel(): string;
   modelRoutes(): string[];
   modelRouter(): { active: string; lines: string[]; storeError?: string } | undefined;
@@ -170,14 +176,15 @@ export const CORE_COMMANDS: readonly CoreCommand[] = [
   },
   {
     name: 'correct',
-    description: '纠正一条画像/偏好（下一次召回起全局按新值）',
-    argumentHint: '<键> <新值>',
+    description: '纠正一条画像/偏好，或提议纠正一条做法（确认后生效）',
+    argumentHint: '<键> <新值> | confirm',
     surfaces: ['palette', 'resident', 'tui'],
     run(host, args) {
       const trimmed = args.trim();
+      if (trimmed.toLowerCase() === 'confirm') return host.confirmProcedureCorrection();
       const split = trimmed.search(/\s/u);
       if (split <= 0 || trimmed.slice(split).trim() === '') {
-        return { text: '用法：/correct <键> <新值>。键和当前值可用 /export 的 Profile 段或画像册查看。', receipt: true };
+        return { text: '用法：/correct <键> <新值>，或 /correct confirm。键和当前值可用 /export 的 Profile 段或画像册查看。', receipt: true };
       }
       return host.correctProfile(trimmed.slice(0, split), trimmed.slice(split).trim());
     },
