@@ -14,7 +14,7 @@
 
 export type SelfChangeKind = 'skill' | 'plugin' | 'rule';
 export type HygieneOrigin = 'self' | 'web' | 'email' | 'message';
-export type HygieneStatus = 'discarded' | 'rejected' | 'awaiting_owner' | 'pending_review' | 'active';
+export type HygieneStatus = 'discarded' | 'rejected' | 'awaiting_owner' | 'pending_review' | 'approved' | 'active';
 
 export interface SelfChangeFile {
   path: string;
@@ -252,7 +252,9 @@ export class HygienePipeline {
       score: 0,
       findings: [],
       createdAt: at,
-      requiresOwnerApproval: input.kind === 'rule' && input.origin !== 'self',
+      // Installing code is an owner decision even when the companion wrote it itself. The existing
+      // question pause is the one approval surface; a rule from outside uses the same one.
+      requiresOwnerApproval: input.kind === 'plugin' || (input.kind === 'rule' && input.origin !== 'self'),
     };
     this.byId.set(id, proposal);
     this.options.trace.append('hygiene_proposal_received', {
@@ -295,7 +297,9 @@ export class HygienePipeline {
 
     if (proposal.requiresOwnerApproval) {
       const excerpt = input.files.map((file) => file.content.trim()).join('\n').slice(0, 300);
-      const question = `外部来源（${input.origin}）的规矩提案：${excerpt}\n批准后才会生效。回复「批准」或「拒绝」。`;
+      const question = input.kind === 'plugin'
+        ? `自我变更提案（${input.origin}）要安装插件 ${input.files.map((file) => file.path).join(', ')}（提案 ${id}）。批准后才会写入插件目录、登记并重启加载。回复「批准」或「拒绝」。`
+        : `外部来源（${input.origin}）的规矩提案：${excerpt}\n批准后才会生效。回复「批准」或「拒绝」。`;
       const asked = this.options.askOwner({ question, context: id, approvalId: id });
       proposal.ownerQuestion = question;
       if (!asked.ok) {
@@ -322,7 +326,9 @@ export class HygienePipeline {
       return undefined;
     }
     if (isAffirmative(text)) {
-      proposal.status = 'active';
+      // A rule becomes effective on approval; a plugin is only approved to be applied, and the
+      // applier is still the only path that writes it (and refuses if this record is missing).
+      proposal.status = proposal.kind === 'rule' ? 'active' : 'approved';
       this.options.trace.append('hygiene_owner_approved', { id, answerChars: text.trim().length }, this.options.now());
     } else {
       proposal.status = 'discarded';

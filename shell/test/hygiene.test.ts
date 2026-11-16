@@ -39,16 +39,17 @@ function findingCodes(outcome: HygieneOutcome): string[] {
 }
 
 describe('the hygiene gate checks a proposal before anyone reviews it', () => {
-  test('a normal small self-written plugin passes checks, scoring and enters pending review', () => {
+  test('a normal small self-written plugin passes checks and waits for the owner', () => {
     const { pipeline, records, asked } = gate();
     const outcome = pipeline.submit(fixture('small-plugin.json'));
 
-    expect(outcome.proposal.status).toBe('pending_review');
+    expect(outcome.proposal.status).toBe('awaiting_owner');
     expect(outcome.toxic).toBe(false);
-    expect(outcome.proposal.requiresOwnerApproval).toBe(false);
+    expect(outcome.proposal.requiresOwnerApproval).toBe(true);
     expect(findingCodes(outcome)).toEqual([]);
     expect(outcome.proposal.score).toBeGreaterThanOrEqual(HYGIENE_MIN_SCORE);
-    expect(asked).toHaveLength(0);
+    expect(asked).toHaveLength(1);
+    expect(asked[0].approvalId).toBe(outcome.proposal.id);
     expect(pipeline.isEffective(outcome.proposal.id)).toBe(false);
 
     // The audit carries the source, check verdict, score and disposition as separate records.
@@ -56,12 +57,18 @@ describe('the hygiene gate checks a proposal before anyone reviews it', () => {
       'hygiene_proposal_received',
       'hygiene_checked',
       'hygiene_scored',
+      'hygiene_owner_asked',
       'hygiene_disposition',
     ]);
     expect(records[0]).toMatchObject({ kind: 'hygiene_proposal_received', origin: 'self', proposalKind: 'plugin' });
     expect(records[1]).toMatchObject({ kind: 'hygiene_checked', passed: true });
     expect(records[2]).toMatchObject({ kind: 'hygiene_scored', threshold: HYGIENE_MIN_SCORE });
-    expect(records[3]).toMatchObject({ kind: 'hygiene_disposition', status: 'pending_review', origin: 'self' });
+    expect(records[4]).toMatchObject({ kind: 'hygiene_disposition', status: 'awaiting_owner', origin: 'self' });
+
+    // Approval is what the applier will look for; it still changes nothing by itself.
+    pipeline.answer(outcome.proposal.id, '批准');
+    expect(pipeline.get(outcome.proposal.id)?.status).toBe('approved');
+    expect(pipeline.isEffective(outcome.proposal.id)).toBe(false);
   });
 
   test('a secret discards the whole proposal and the trace never copies the secret', () => {
@@ -177,17 +184,24 @@ describe('the shell exposes the gate through one recording tool', () => {
     return String(record?.id);
   }
 
-  test('a normal plugin proposal goes all the way through and changes nothing', async () => {
+  test('a normal plugin proposal pauses for the owner and still changes nothing', async () => {
     const provider = recording(fixture('small-plugin.json') as unknown as Record<string, unknown>);
     const shell = makeShell(makeTempDir(), provider);
     await shell.start();
     try {
       await shell.submit('给自己加一个小插件');
-      expect(toolOutput(provider)).toContain('proposal_hygiene_passed');
+      expect(toolOutput(provider)).toContain('proposal_awaiting_owner');
+      expect(shell.state).toBe('SUSPENDED');
       const id = proposalId(shell);
-      expect(shell.hygiene.get(id)?.status).toBe('pending_review');
+      expect(shell.hygiene.get(id)?.status).toBe('awaiting_owner');
       expect(shell.hygiene.isEffective(id)).toBe(false);
       expect(shell.host.tools.has('propose_self_change')).toBe(true);
+      expect(shell.host.tools.has('apply_self_change')).toBe(true);
+
+      await shell.submit('批准');
+      expect(shell.hygiene.get(id)?.status).toBe('approved');
+      expect(shell.hygiene.isEffective(id)).toBe(false);
+      expect(shell.trace.read().some((record) => record.kind === 'hygiene_owner_approved')).toBe(true);
     } finally {
       await shell.stop();
     }

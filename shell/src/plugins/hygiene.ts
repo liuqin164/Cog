@@ -1,10 +1,11 @@
 /**
- * The agent's channel for submitting a self-written or self-learned draft: one tool,
- * `propose_self_change`.
+ * The agent's two channels for self-change: `propose_self_change` records, `apply_self_change`
+ * installs what the owner approved.
  *
- * The tool only records a proposal. It writes no file, installs no plugin and changes no rule. A
- * toxic draft is discarded before it can be shown to anyone; a rule learned from the web, email or
- * another person is held behind the existing `ask_user` pause until the owner approves it.
+ * Recording still writes no file and installs nothing. A toxic draft is discarded before it can be
+ * shown to anyone; a plugin proposal and a rule learned from the web, email or another person are
+ * held behind the existing `ask_user` pause until the owner approves. Applying is a separate call
+ * after that approval, and it is the applier (`self-change.ts`) that writes and can roll back.
  */
 import type { HygieneOutcome, HygieneOrigin, HygienePipeline, SelfChangeKind } from '../hygiene.ts';
 import type { NativePlugin, ToolOutcome } from './host.ts';
@@ -19,6 +20,10 @@ interface HygieneHost {
     tests?: { command: string; passed: boolean };
     rollback: string;
   }): HygieneOutcome;
+}
+
+interface SelfChangeApplyHost {
+  applySelfChange(proposalId: string): { ok: boolean; text: string };
 }
 
 function field(args: unknown, key: string): unknown {
@@ -79,8 +84,12 @@ function outputFor(outcome: HygieneOutcome): ToolOutcome {
     return { output: `proposal_rejected: 未进入审查（${outcome.summary}）；检查结论已留痕。`, isError: true };
   }
   if (proposal.status === 'awaiting_owner') {
+    const why = proposal.kind === 'plugin'
+      ? '安装插件会执行代码，必须等你批准后才会写入并加载'
+      : '它来自外部内容，必须等用户批准后才生效';
+    const next = proposal.kind === 'plugin' ? '用户批准后用 apply_self_change 应用；被拒绝则不要重试。' : '不要假装它已经生效。';
     return {
-      output: `proposal_awaiting_owner: 已记录（${proposal.id}，评分 ${proposal.score}）；它来自外部内容，必须等用户批准后才生效。这次 run 会在问题回答处暂停，不要假装它已经生效。`,
+      output: `proposal_awaiting_owner: 已记录（${proposal.id}，评分 ${proposal.score}）；${why}。这次 run 会在问题回答处暂停；${next}`,
       isError: false,
     };
   }
@@ -93,7 +102,7 @@ function outputFor(outcome: HygieneOutcome): ToolOutcome {
 export function hygienePlugin(): NativePlugin {
   return {
     name: 'self-change-hygiene',
-    inject: ['hygiene'],
+    inject: ['hygiene', 'shell'],
     apply(ctx) {
       const hygiene = ctx.getService<HygienePipeline>('hygiene');
       ctx.registerTool({
@@ -148,6 +157,27 @@ export function hygienePlugin(): NativePlugin {
             ...(tests ? { tests } : {}),
             rollback: requireText(args, 'rollback'),
           }));
+        },
+      });
+      const shell = ctx.getService<SelfChangeApplyHost>('shell');
+      ctx.registerTool({
+        name: 'apply_self_change',
+        description:
+          'Apply one plugin proposal the owner approved through the question pause. This is the only path that writes self-written code: it snapshots plugins.json and the target files, writes the plugin into the data directory, registers it, and restarts the resident so the next boot can prove the load and roll back on failure. A proposal without an owner approval record is refused; so is anything that is not a plugin. Never call it before the owner has answered.',
+        // Applying writes files and triggers a restart; a replay must not install twice.
+        replay: 'never',
+        parameters: {
+          type: 'object',
+          properties: {
+            proposal_id: { type: 'string', description: 'The proposal id returned by propose_self_change, after the owner approved it' },
+          },
+          required: ['proposal_id'],
+        },
+        execute({ args }): ToolOutcome {
+          const id = text(args, 'proposal_id').trim();
+          if (id === '') throw new Error('invalid_arguments: "proposal_id" must be a non-empty string');
+          const result = shell.applySelfChange(id);
+          return { output: result.text, isError: !result.ok };
         },
       });
     },
