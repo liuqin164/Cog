@@ -1171,6 +1171,7 @@ export class MemoryKernel {
             id: `wake:${intention.intentionId}`,
             text: intention.reason,
             sourceRefs: intention.sourceRefs.map((ref) => ref.eventId).filter((id): id is string => Boolean(id)),
+            protected: true,
           });
         }
         // The agent's own plans, separate from the promises it owes: active intentions re-enter
@@ -1180,6 +1181,7 @@ export class MemoryKernel {
             id: `intention:${intention.intentionId}`,
             text: `意图：${intention.content}`,
             sourceRefs: intention.sourceRefs.map((ref) => ref.eventId).filter((id): id is string => Boolean(id)),
+            protected: true,
           });
         }
         // The agent's own promises, symmetric with the owner's: an arrived one enters its wake
@@ -1190,6 +1192,7 @@ export class MemoryKernel {
             id: `commitment:${commitment.commitmentId}`,
             text: `承诺：${commitment.content}`,
             sourceRefs: commitment.sourceRefs.map((ref) => ref.eventId).filter((id): id is string => Boolean(id)),
+            protected: true,
           });
         }
         try {
@@ -1200,6 +1203,7 @@ export class MemoryKernel {
               id: candidate.candidateId,
               text: candidate.content,
               sourceRefs: candidate.sourceRefs.map((ref) => ref.eventId).filter((id): id is string => Boolean(id)),
+              protected: true,
             });
           }
         } catch {

@@ -69,9 +69,56 @@ export class SessionContextService {
     const read = readSessionTurns(this.db, { projectId, agentId, sessionId });
     const digest = buildSessionDigest(read.turns, { sessionId, tailTurns: input.tailTurns, truncated: read.truncated });
     const openLoops = [...(input.openLoops ?? []), ...this.openLoops({ projectId, agentId, sessionId })];
-    const assembly = assembleSessionContext({ ...input, projectId, agentId, sessionId, openLoops }, digest);
+    const protectedIds = [
+      ...this.protectedEventIds(projectId, sessionId),
+      ...(input.protectedIds ?? []),
+    ];
+    const assembly = assembleSessionContext({ ...input, projectId, agentId, sessionId, openLoops, protectedIds }, digest);
     if (assembly.decisionTrace.length > 0) this.recordTrace(assembly);
     return assembly;
+  }
+
+  /**
+   * The kernel's own "never fold" markers (#255), read from the books and the episode index:
+   * a promise said out loud (`COMMITMENT_OPENED`), a plan (`INTENTION_OPENED`), a profile
+   * correction, and a turn the episode classifier called a correction. The assembler adds the
+   * permanent-importance half (a prohibition) from the same kernel classifier ingestion uses.
+   *
+   * A failing read is not a turn failure: the permanent half still protects the obvious
+   * constraints, and the caller's own `protectedIds` are still honoured.
+   */
+  private protectedEventIds(projectId: string, sessionId: string): string[] {
+    const ids = new Set<string>();
+    try {
+      const rows = this.db.query(`
+        SELECT event_type, payload_json FROM memory_events
+        WHERE COALESCE(project_id, '') = ?
+          AND event_type IN ('COMMITMENT_OPENED', 'INTENTION_OPENED', 'PROFILE_ENTRY_CORRECTED')
+      `).all(projectId) as Array<{ event_type: string; payload_json: string }>;
+      for (const row of rows) {
+        let payload: Record<string, unknown>;
+        try {
+          payload = JSON.parse(row.payload_json) as Record<string, unknown>;
+        } catch {
+          continue;
+        }
+        if (row.event_type === 'PROFILE_ENTRY_CORRECTED') {
+          if (typeof payload.correctionEventId === 'string') ids.add(payload.correctionEventId);
+          continue;
+        }
+        for (const eventId of sourceRefEventIds(payload.sourceRefs)) ids.add(eventId);
+      }
+      const corrections = this.db.query(`
+        SELECT l.event_id FROM memory_episode_events l
+        JOIN memory_events e ON e.event_id = l.event_id
+        WHERE COALESCE(e.project_id, '') = ? AND COALESCE(e.session_id, '') = ?
+          AND l.relation IN ('corrects_previous', 'rejects_assistant_proposal')
+      `).all(projectId, sessionId) as Array<{ event_id: string }>;
+      for (const row of corrections) ids.add(row.event_id);
+    } catch {
+      return [...ids];
+    }
+    return [...ids];
   }
 
   private openLoops(input: { projectId: string; agentId: string; sessionId: string }): SessionContextItem[] {
@@ -118,6 +165,15 @@ function requireScope(input: { projectId: string; agentId: string; sessionId: st
     agentId: requireSessionText(input.agentId, 'agent_id_required'),
     sessionId: requireSessionText(input.sessionId, 'session_id_required'),
   };
+}
+
+function sourceRefEventIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((ref) => (ref && typeof ref === 'object' && typeof (ref as { eventId?: unknown }).eventId === 'string'
+      ? (ref as { eventId: string }).eventId
+      : ''))
+    .filter(Boolean);
 }
 
 export type { SessionTurn };

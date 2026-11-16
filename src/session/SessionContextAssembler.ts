@@ -10,12 +10,19 @@
  * downgrade is written to `decisionTrace`. Lanes above the cut are rendered byte-for-byte the same
  * as before, which is what keeps the provider's prefix cache intact.
  *
+ * Constraints never fold (#255). An item marked `protected` — a correction, a promise, an
+ * intention or a prohibition — is never downgraded, trimmed or paraphrased. A lane that carries
+ * one is trimmed to its protected items instead of becoming a stub, and the rest of the lane's
+ * ids stay browsable. If the protected items alone exceed the target, they still stay: the target
+ * is a bandwidth goal, not a licence to drop a constraint.
+ *
  * The order the lanes are *rendered* in is frozen (`SESSION_CONTEXT_LANES`); the order they are
  * *filled* in is the separate priority table. They are deliberately not the same list: the tail is
  * rendered last because new turns append there, but it outranks the digest and the recall lane when
  * the budget is tight.
  */
 
+import { ImportanceSignalDetector } from '../engine/ImportanceSignalDetector.js';
 import type { SessionDigest } from './SessionDigest.js';
 import { sessionError } from './SessionErrors.js';
 
@@ -55,6 +62,11 @@ export interface SessionContextItem {
   id: string;
   text: string;
   sourceRefs?: string[];
+  /**
+   * A constraint: a correction, a promise, an intention or a prohibition. The assembly never
+   * downgrades, trims or folds it; it stays in the lane verbatim.
+   */
+  protected?: boolean;
 }
 
 export interface AssembleSessionContextInput {
@@ -73,6 +85,8 @@ export interface AssembleSessionContextInput {
   openLoops?: SessionContextItem[];
   /** This turn's recall. */
   recall?: SessionContextItem[];
+  /** Item ids that must survive verbatim, whatever lane they are in. */
+  protectedIds?: readonly string[];
   /** How many recent turns stay verbatim. Defaults to `SESSION_DIGEST_TAIL_TURNS`. */
   tailTurns?: number;
 }
@@ -132,14 +146,35 @@ export function assembleSessionContext(input: AssembleSessionContextInput, diges
   let total = lanes.reduce((sum, lane) => sum + lane.tokens, 0);
 
   // Downgrade from the lowest priority up. A downgraded lane keeps its ids and loses its text.
+  // A lane that carries a protected item is trimmed to that item instead: a constraint is never
+  // replaced by a pointer.
   while (total > input.targetTokens) {
     // The stable lanes are trimmed, never stubbed: their bytes are the cache prefix, and a stub
     // would change them for every later turn.
     const lane = lanes
-      .filter((candidate) => candidate.status === 'included' && !candidate.stable)
+      .filter((candidate) => candidate.status === 'included' && !candidate.stable && hasFoldableItems(candidate))
       .sort((left, right) => left.priority - right.priority || SESSION_CONTEXT_LANES.indexOf(left.lane) - SESSION_CONTEXT_LANES.indexOf(right.lane))[0];
     if (!lane) break;
     const before = lane.tokens;
+    const kept = lane.items.filter((item) => item.protected === true);
+    if (kept.length > 0) {
+      const omitted = lane.items.filter((item) => item.protected !== true);
+      lane.items = kept;
+      lane.text = renderLane(lane.lane, kept);
+      lane.tokens = sessionTokens(lane.text);
+      lane.browseIds = omitted.map((item) => item.id);
+      decisions.push({
+        lane: lane.lane,
+        action: 'trimmed',
+        reason: 'budget_exceeded',
+        tokensBefore: before,
+        tokensAfter: lane.tokens,
+        omittedItems: omitted.length,
+        browseIds: omitted.slice(0, BROWSE_ID_LIMIT).map((item) => item.id),
+      });
+      total = lanes.reduce((sum, entry) => sum + entry.tokens, 0);
+      continue;
+    }
     const stub = renderStub(lane.lane, lane.items.length);
     const after = sessionTokens(stub) <= input.targetTokens - (total - before) ? stub : '';
     decisions.push({
@@ -163,11 +198,13 @@ export function assembleSessionContext(input: AssembleSessionContextInput, diges
   // item's text: a verbatim lane that cannot fit is browsed, not paraphrased.
   while (total > input.targetTokens) {
     const lane = lanes
-      .filter((candidate) => candidate.status === 'included' && candidate.items.length > 0)
+      .filter((candidate) => candidate.status === 'included' && hasFoldableItems(candidate))
       .sort((left, right) => left.priority - right.priority || SESSION_CONTEXT_LANES.indexOf(left.lane) - SESSION_CONTEXT_LANES.indexOf(right.lane))[0];
     if (!lane) break;
     const before = lane.tokens;
-    const dropped = lane.items.pop()!;
+    const index = lastFoldableIndex(lane.items);
+    if (index < 0) break;
+    const [dropped] = lane.items.splice(index, 1);
     lane.text = renderLane(lane.lane, lane.items);
     lane.tokens = sessionTokens(lane.text);
     if (lane.items.length === 0) lane.status = lane.text ? 'included' : 'empty';
@@ -178,7 +215,7 @@ export function assembleSessionContext(input: AssembleSessionContextInput, diges
       tokensBefore: before,
       tokensAfter: lane.tokens,
       omittedItems: 1,
-      browseIds: [dropped.id],
+      browseIds: [dropped!.id],
     });
     total = lanes.reduce((sum, entry) => sum + entry.tokens, 0);
   }
@@ -203,6 +240,7 @@ export function assembleSessionContext(input: AssembleSessionContextInput, diges
 }
 
 function buildLanes(input: AssembleSessionContextInput, digest: SessionDigest): SessionContextLane[] {
+  const protectedIds = new Set(input.protectedIds ?? []);
   const working: SessionContextItem[] = [
     ...(input.workingSet ?? []).map((text, index) => ({ id: `working:${index}`, text })),
     ...(input.openLoops ?? []),
@@ -214,11 +252,11 @@ function buildLanes(input: AssembleSessionContextInput, digest: SessionDigest): 
     profile: (input.profile ?? []).map((text, index) => ({ id: `profile:${index}`, text })),
     digest: digest.entries.map((entry) => ({ id: entry.entryId, text: entry.text, sourceRefs: entry.sourceRefs })),
     working_set: workingItems,
-    recall: input.recall ?? [],
+    recall: [...(input.recall ?? [])],
     tail: digest.tail.map((turn) => ({ id: turn.eventId, text: turn.text, sourceRefs: [turn.eventId] })),
   };
   return SESSION_CONTEXT_LANES.map((lane) => {
-    const items = itemsByLane[lane];
+    const items = itemsByLane[lane].map((item) => isProtected(item, protectedIds) ? { ...item, protected: true } : item);
     const text = renderLane(lane, items);
     return {
       lane,
@@ -231,6 +269,29 @@ function buildLanes(input: AssembleSessionContextInput, digest: SessionDigest): 
       text,
     };
   });
+}
+
+/**
+ * The kernel's existing markers, not a new word list: an item the caller marked, an item whose id
+ * a compiled book or correction named, or a turn the kernel's importance classifier rates
+ * `permanent` (a prohibition such as 「绝对不能」).
+ */
+function isProtected(item: SessionContextItem, ids: ReadonlySet<string>): boolean {
+  return item.protected === true
+    || ids.has(item.id)
+    || (item.sourceRefs ?? []).some((ref) => ids.has(ref))
+    || ImportanceSignalDetector.detect(item.text) === 'permanent';
+}
+
+function hasFoldableItems(lane: SessionContextLane): boolean {
+  return lane.items.some((item) => item.protected !== true);
+}
+
+function lastFoldableIndex(items: readonly SessionContextItem[]): number {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (items[index]!.protected !== true) return index;
+  }
+  return -1;
 }
 
 function renderLane(lane: SessionContextLaneName, items: SessionContextItem[]): string {
