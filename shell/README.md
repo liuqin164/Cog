@@ -90,7 +90,8 @@ once and never overwrites it. Edit a number and restart the service — no sourc
 {
   "autonomous": { "maxTurnsPerRun": 6, "maxTokensPerRun": 20000 },
   "work":       { "maxTurnsPerRun": 32, "maxTokensPerRun": 400000 },
-  "maxTokensPerDay": 2000000
+  "maxTokensPerDay": 2000000,
+  "maxTokensPerNight": 200000
 }
 ```
 
@@ -107,6 +108,14 @@ while a runaway loop crosses it after roughly a hundred tight runs. When the day
 autonomous runs are not started (`emergence_skipped` with `reason: "daily_token_budget"` and the
 restart-resume path records `daily_budget_exceeded`); a user line still runs, and the stop is said
 out loud once. Raise the number in this file and restart to continue.
+
+`maxTokensPerNight` (#231 route A) caps the Dream memory model's calls, which do not run through
+the agent loop. It is charged to the same `costDayTokens` counter as `maxTokensPerDay`, not a
+second ledger. A night that reaches the cap records `dream_model_budget_exceeded`, the kernel keeps
+the deterministic candidates and falls back to rule-only, and no model candidate is written. The
+memory role is the resident's mg route; the embedding role stays `deterministic_local` and recall
+reports `semanticIndex: false` until a host supplies an embedding provider. `MemoryKernel.reEmbed
+(projectId)` is the bounded migration path for an existing brain once that provider exists.
 
 ## `install`: the F21 bootstrap (#203)
 
