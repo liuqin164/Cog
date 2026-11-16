@@ -25,6 +25,7 @@ export const TUI_EVENTS = [
   'companion_transition',
   'companion_status',
   'companion_work',
+  'companion_notice',
   'companion_emergence',
   'companion_steering',
   'companion_degraded',

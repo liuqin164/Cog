@@ -15,16 +15,18 @@ import {
 const policy: RetryPolicy = { enabled: true, maxRetries: 3, baseDelayMs: 1_000, maxDelayMs: 60_000 };
 
 describe('the failure ladder classification', () => {
-  test('overflow first, then account limits, then the transient table', () => {
-    expect(classifyProviderError('mg_gateway_error: 503 The service is temporarily unavailable')).toBe('retryable');
-    expect(classifyProviderError('mg_gateway_error: 429 Too Many Requests')).toBe('retryable');
+  test('overflow first, then account limits, then timeout, then the connection table', () => {
+    expect(classifyProviderError('mg_gateway_error: 503 The service is temporarily unavailable')).toBe('fatal');
+    expect(classifyProviderError('mg_gateway_error: 429 Too Many Requests')).toBe('fatal');
+    expect(classifyProviderError('Unable to connect. Is the computer able to access the url?')).toBe('retryable');
+    expect(classifyProviderError('fetch failed')).toBe('retryable');
     expect(classifyProviderError('insufficient_quota: you exceeded your current quota')).toBe('fatal');
     expect(classifyProviderError('mg_gateway_error: 400 billing hard limit reached')).toBe('fatal');
     expect(classifyProviderError('Your input exceeds the context window of this model')).toBe('overflow');
     expect(classifyProviderError('prompt is too long: 213462 tokens > 200000 maximum')).toBe('overflow');
     expect(classifyProviderError('tool_name_conflict: nope')).toBe('fatal');
     expect(classifyProviderError('')).toBe('fatal');
-    // Matches both tables (a 429 and a quota word): the account limit wins, so it is not retried.
+    // The account limit and the rate limit both fail fast now; neither retries.
     expect(classifyProviderError('mg_gateway_error: 429 quota exceeded')).toBe('fatal');
   });
 
@@ -51,6 +53,16 @@ describe('the failure ladder classification', () => {
     expect(planFailure({ message: 'insufficient_quota', attempt: 0, policy, overflowRecoveryUsed: false }).action).toBe('fail');
   });
 
+  test('a whole-turn timeout is not retryable, and the failure names the timeout', () => {
+    const message = 'TimeoutError: The operation timed out.';
+    expect(classifyProviderError(message)).toBe('timeout');
+    expect(planFailure({ message, attempt: 0, policy, overflowRecoveryUsed: false })).toEqual({
+      action: 'fail',
+      kind: 'timeout',
+      reason: `model_timeout: ${message}`,
+    });
+  });
+
   test('an abort during the backoff sleep ends the wait', async () => {
     const controller = new AbortController();
     const waiting = sleepAbortable(60_000, controller.signal);
@@ -64,10 +76,10 @@ describe('the endpoint failure classes (named for diagnosis, decided by the ladd
     { message: 'mg_gateway_error: 401 unauthorized', kind: 'auth', ladder: 'fatal', action: 'fail' },
     { message: 'mg_gateway_error: 403 forbidden', kind: 'auth', ladder: 'fatal', action: 'fail' },
     { message: 'mg_gateway_error: 404 {"error":{"message":"model not found"}}', kind: 'model_not_found', ladder: 'fatal', action: 'fail' },
-    { message: 'mg_gateway_error: 429 rate limit exceeded', kind: 'rate_limit', ladder: 'retryable', action: 'retry' },
+    { message: 'mg_gateway_error: 429 rate limit exceeded', kind: 'rate_limit', ladder: 'fatal', action: 'fail' },
     { message: 'Unable to connect. Is the computer able to access the url?', kind: 'unreachable', ladder: 'retryable', action: 'retry' },
-    { message: 'TimeoutError: The operation was aborted due to timeout', kind: 'timeout', ladder: 'retryable', action: 'retry' },
-    { message: 'mg_gateway_error: 500 internal server error', kind: 'http', ladder: 'retryable', action: 'retry' },
+    { message: 'TimeoutError: The operation was aborted due to timeout', kind: 'timeout', ladder: 'timeout', action: 'fail' },
+    { message: 'mg_gateway_error: 500 internal server error', kind: 'http', ladder: 'fatal', action: 'fail' },
   ];
 
   test('each class is named, and the ladder owns the retry decision', () => {
@@ -154,7 +166,7 @@ describe('the failure ladder inside the run', () => {
   const fast: RetryPolicy = { enabled: true, maxRetries: 2, baseDelayMs: 7, maxDelayMs: 60_000 };
 
   test('a transient failure retries without charging the turn budget', async () => {
-    const provider = new FlakyProvider(['mg_gateway_error: 503 temporarily unavailable', { text: 'recovered', toolCalls: [] }]);
+    const provider = new FlakyProvider(['fetch failed', { text: 'recovered', toolCalls: [] }]);
     const delays: number[] = [];
     // Budget of exactly one turn: if the retry charged the cage, the run would die as budget_exceeded.
     const cage = new RunCage({ maxTurnsPerRun: 1, maxTokensPerRun: 10_000, toolWhitelist: null });
@@ -166,6 +178,25 @@ describe('the failure ladder inside the run', () => {
     expect(summary.assistantText).toContain('recovered');
   });
 
+  test('a timeout fails once and never enters the backoff wait', async () => {
+    const provider = new FlakyProvider(['TimeoutError: The operation timed out.']);
+    const delays: number[] = [];
+    const summary = await ladderRuntime(new EventBus(), provider, fast, new RunCage({ maxTurnsPerRun: 10, maxTokensPerRun: 10_000, toolWhitelist: null }), delays).run({ runId: 'r', sessionId: 's', userText: 'go' });
+    expect(provider.calls).toBe(1);
+    expect(delays).toEqual([]);
+    expect(summary.stopReason).toBe('run_error');
+    expect(summary.error).toContain('model_timeout');
+  });
+
+  test('a connection failure still retries and can succeed', async () => {
+    const provider = new FlakyProvider(['fetch failed', { text: 'recovered', toolCalls: [] }]);
+    const delays: number[] = [];
+    const summary = await ladderRuntime(new EventBus(), provider, fast, new RunCage({ maxTurnsPerRun: 10, maxTokensPerRun: 10_000, toolWhitelist: null }), delays).run({ runId: 'r', sessionId: 's', userText: 'go' });
+    expect(provider.calls).toBe(2);
+    expect(delays).toEqual([7]);
+    expect(summary.stopReason).toBe('run_complete');
+  });
+
   test('an account limit is not retried, and retries are bounded', async () => {
     const limitProvider = new FlakyProvider(['insufficient_quota: out of credits']);
     const limitSummary = await ladderRuntime(new EventBus(), limitProvider, fast, new RunCage({ maxTurnsPerRun: 10, maxTokensPerRun: 10_000, toolWhitelist: null }), []).run({ runId: 'r', sessionId: 's', userText: 'go' });
@@ -173,7 +204,7 @@ describe('the failure ladder inside the run', () => {
     expect(limitSummary.stopReason).toBe('run_error');
     expect(limitSummary.error).toContain('insufficient_quota');
 
-    const flaky = new FlakyProvider(['503 upstream unavailable']);
+    const flaky = new FlakyProvider(['ECONNRESET']);
     const delays: number[] = [];
     const bounded = await ladderRuntime(new EventBus(), flaky, fast, new RunCage({ maxTurnsPerRun: 10, maxTokensPerRun: 10_000, toolWhitelist: null }), delays).run({ runId: 'r', sessionId: 's', userText: 'go' });
     expect(flaky.calls).toBe(3); // the first call plus two retries

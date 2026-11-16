@@ -86,7 +86,7 @@ class RecordingProvider implements ModelProvider {
 describe('omission on the retry path', () => {
   test('a failed attempt is edited out of the retry request but stays in the log', async () => {
     const provider = new RecordingProvider([
-      { text: 'failed attempt', toolCalls: [], stopReason: 'error', error: '503 upstream unavailable' },
+      { text: 'failed attempt', toolCalls: [], stopReason: 'error', error: 'fetch failed' },
       { text: 'recovered', toolCalls: [] },
     ]);
     const records: Array<{ kind: string; record?: Record<string, unknown> }> = [];

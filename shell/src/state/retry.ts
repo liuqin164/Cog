@@ -1,7 +1,11 @@
 /**
- * The failure ladder, in Pi's fixed order: context overflow first, then retryability (account limits
- * are non-retryable and take priority over the transient patterns), then a bounded retry with
- * exponential backoff.
+ * The failure ladder: context overflow first, then account limits, then a whole-turn timeout, then
+ * retryability (transport failures only — a connection that failed, not a server that answered), then
+ * a bounded retry with exponential backoff.
+ *
+ * The timeout rung is the one deviation from Pi's order (#240). `timeoutMs` is a whole-turn cap
+ * covering connect, prefill and every streamed token, so a timeout is not a transient connection
+ * failure; retrying it multiplied one silent wait into up to ~8 minutes before `run_error`.
  *
  * The pattern tables are ported from the pinned `@earendil-works/pi-ai@1.5.0`:
  * `dist/utils/retry.js` (`isRetryableAssistantError`, `retryDelayMs`) and `dist/utils/overflow.js`
@@ -28,7 +32,7 @@ export const DEFAULT_RETRY_POLICY: RetryPolicy = {
 };
 
 /** What a failed provider call is, decided before anything is retried. */
-export type FailureKind = 'overflow' | 'retryable' | 'fatal';
+export type FailureKind = 'overflow' | 'timeout' | 'retryable' | 'fatal';
 
 /**
  * The named class of an endpoint failure, for diagnosis only — the ladder above still decides what
@@ -102,20 +106,20 @@ const NON_RETRYABLE_LIMIT_PATTERNS = [
   /"code"\s*:\s*"?1308(?![0-9])/i,
 ];
 
-const RETRYABLE_PATTERNS = [
-  /overloaded/i,
-  /server_busy/i,
-  /servers are currently busy/i,
-  /currently experiencing high demand/i,
-  /model is at capacity/i,
-  /rate.?limit/i,
-  /too many requests/i,
-  // Status codes must not be part of a longer word or number (a request id or byte count).
-  /(?<![a-z0-9])(?:429|500|502|503|504|520|524)(?![a-z0-9])/i,
-  /service.?(?:is.?)?(?:temporarily.?)?unavailable/i,
-  /server.?error/i,
-  /internal.?error/i,
-  /provider.?returned.?(?:an.?)?error/i,
+/**
+ * The whole-turn cap firing. Bun's `AbortSignal.timeout` throws `TimeoutError: The operation timed
+ * out.`; other runtimes say "aborted due to timeout". It is deliberately not in the table below: a
+ * retry re-arms the same cap, so one slow turn becomes minutes of silence (#240).
+ */
+const TIMEOUT_PATTERNS = [/\bTimeoutError\b/i, /timed? ?out/i, /\btimeout\b/i];
+
+/**
+ * Transport failures only (#240). Server-capacity and rate-limit answers are not here: a retry
+ * inside the 1/2/4 s backoff cannot clear a 429 or a 503, and the ticket reserves retries for a
+ * connection that actually failed. `unable to forward upstream` / `upstream request failed` are the
+ * gateway's own transport hop to the model, so they stay.
+ */
+const CONNECTION_FAILURE_PATTERNS = [
   /unable to forward upstream/i,
   /upstream.?request.?failed/i,
   /upstream_stream_read_error/i,
@@ -134,12 +138,11 @@ const RETRYABLE_PATTERNS = [
   /getaddrinfo/i,
   /ENOTFOUND/i,
   /EAI_AGAIN/i,
+  /ECONNREFUSED|ECONNRESET|EPIPE|EHOSTUNREACH|ENETUNREACH/i,
   /upstream.?connect/i,
   /reset before headers/i,
   /socket hang up/i,
   /socket connection was closed/i,
-  /timed? out/i,
-  /timeout/i,
   /terminated/i,
   /websocket.?closed/i,
   /websocket.?error/i,
@@ -148,23 +151,17 @@ const RETRYABLE_PATTERNS = [
   /http2 request did not get a response/i,
   /stream disconnected before completion/i,
   /pending stream has been canceled/i,
-  /retry delay/i,
-  /you can retry your request/i,
-  /try your request again/i,
-  /please retry your request/i,
-  /ResourceExhausted/i,
-  /subscription_sharing_usage_unavailable/i,
-  /subscription_sharing_user_unavailable/i,
 ];
 
-/** Overflow first, then account limits (non-retryable), then the transient table. */
+/** Overflow first, then account limits (non-retryable), then timeout, then the connection table. */
 export function classifyProviderError(message: string): FailureKind {
   if (!message) return 'fatal';
   if (!NON_OVERFLOW_PATTERNS.some((pattern) => pattern.test(message)) && OVERFLOW_PATTERNS.some((pattern) => pattern.test(message))) {
     return 'overflow';
   }
   if (NON_RETRYABLE_LIMIT_PATTERNS.some((pattern) => pattern.test(message))) return 'fatal';
-  if (RETRYABLE_PATTERNS.some((pattern) => pattern.test(message))) return 'retryable';
+  if (TIMEOUT_PATTERNS.some((pattern) => pattern.test(message))) return 'timeout';
+  if (CONNECTION_FAILURE_PATTERNS.some((pattern) => pattern.test(message))) return 'retryable';
   return 'fatal';
 }
 
@@ -179,6 +176,7 @@ export function planFailure(input: { message: string; attempt: number; policy: R
     if (input.overflowRecoveryUsed) return { action: 'fail', kind: 'overflow', reason: `overflow_recovery_exhausted: ${input.message}` };
     return { action: 'recover_overflow', attempt: input.attempt, delayMs: 0, kind: 'overflow' };
   }
+  if (kind === 'timeout') return { action: 'fail', kind: 'timeout', reason: `model_timeout: ${input.message}` };
   if (kind === 'retryable' && input.policy.enabled && input.attempt < input.policy.maxRetries) {
     const attempt = input.attempt + 1;
     return { action: 'retry', attempt, delayMs: retryDelayMs(input.policy, attempt), kind: 'retryable' };

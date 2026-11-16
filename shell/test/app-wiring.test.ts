@@ -65,6 +65,35 @@ describe('shell wiring', () => {
     }
   });
 
+  test('a model timeout calls the provider once and says so on both faces', async () => {
+    const dir = makeTempDir();
+    const provider = new ScriptedProvider([
+      () => {
+        throw new Error('TimeoutError: The operation timed out.');
+      },
+    ]);
+    const shell = makeShell(dir, provider);
+    const notices: string[] = [];
+    const printed: string[] = [];
+    shell.host.bus.on('companion_notice', (event: { text?: string }) => notices.push(String(event.text)));
+    shell.host.bus.on('terminal_print', (event: { text?: string }) => printed.push(String(event.text)));
+    await shell.start();
+    try {
+      const summary = await shell.submit('hello');
+      expect(provider.calls).toHaveLength(1);
+      expect(summary!.stopReason).toBe('run_error');
+      expect(summary!.error).toContain('model_timeout');
+      expect(notices).toHaveLength(1);
+      expect(notices[0]).toContain('模型超时');
+      expect(notices[0]).toContain('120 秒');
+      expect(notices[0]).toContain('The operation timed out.');
+      expect(printed).toEqual([`${notices[0]}\n`]);
+      expect(shell.state).toBe('IDLE');
+    } finally {
+      await shell.stop();
+    }
+  });
+
   test('a restart keeps the day and the last topic, and the next turn recalls the earlier one', async () => {
     const dir = makeTempDir();
     const first = makeShell(dir, new ScriptedProvider([{ text: '记下了。', toolCalls: [] }]));

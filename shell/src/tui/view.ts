@@ -242,6 +242,14 @@ export class TuiView {
       case 'companion_work':
         this.work = { ...this.work, ...(event.payload as Partial<WorkState>) };
         break;
+      case 'companion_notice':
+        this.push({
+          kind: 'notice',
+          id: this.id(),
+          text: String(event.payload?.text ?? ''),
+          tone: event.payload?.tone === 'warn' ? 'warn' : 'info',
+        });
+        break;
       case 'companion_emergence':
         this.pendingEmergence = { reason: String(event.payload?.reason ?? '浮现') };
         break;

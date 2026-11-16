@@ -239,14 +239,13 @@ describe('custom endpoint failures land in the existing ladder', () => {
     }
   });
 
-  test('429 keeps the existing rate-limit handling: retry with the same capped backoff', async () => {
+  test('429 is named, and fails fast: a rate limit does not clear inside the backoff', async () => {
     const endpoint = startFake(429, { error: { message: 'rate limit exceeded, slow down' } });
     try {
       const message = await failureOf(providerFor(endpoint));
       expect(classifyEndpointFailure(message)).toBe('rate_limit');
-      expect(classifyProviderError(message)).toBe('retryable');
-      const plan = planFailure({ message, attempt: 0, policy: POLICY, overflowRecoveryUsed: false });
-      expect(plan).toMatchObject({ action: 'retry', attempt: 1, delayMs: 1_000 });
+      expect(classifyProviderError(message)).toBe('fatal');
+      expect(planFailure({ message, attempt: 0, policy: POLICY, overflowRecoveryUsed: false })).toMatchObject({ action: 'fail' });
     } finally {
       endpoint.stop();
     }
@@ -264,14 +263,14 @@ describe('custom endpoint failures land in the existing ladder', () => {
     expect(planFailure({ message, attempt: 2, policy: POLICY, overflowRecoveryUsed: false })).toMatchObject({ action: 'retry', delayMs: 4_000 });
   });
 
-  test('a timeout is retryable, and the timeout itself is the diagnosis', async () => {
+  test('a timeout is the diagnosis, and it is not retried', async () => {
     const endpoint = startFake(200, { choices: [{ message: { content: 'too late' } }] }, { delayMs: 300 });
     const provider = new MgModelProvider({ baseUrl: endpoint.baseUrl, apiKey: 'sk-test', model: 'test-model', timeoutMs: 60 }, 'custom');
     try {
       const message = await failureOf(provider, 60);
       expect(classifyEndpointFailure(message)).toBe('timeout');
-      expect(classifyProviderError(message)).toBe('retryable');
-      expect(planFailure({ message, attempt: 0, policy: POLICY, overflowRecoveryUsed: false })).toMatchObject({ action: 'retry' });
+      expect(classifyProviderError(message)).toBe('timeout');
+      expect(planFailure({ message, attempt: 0, policy: POLICY, overflowRecoveryUsed: false })).toMatchObject({ action: 'fail', kind: 'timeout' });
     } finally {
       endpoint.stop();
     }

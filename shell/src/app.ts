@@ -850,6 +850,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       this.hideAssignmentContext = false;
     }
     const outcome = this.settleAssignment(summary, tier, trigger);
+    if (summary.stopReason === 'run_error' && summary.error?.startsWith('model_timeout:')) this.announceModelTimeout(summary);
     await this.machine.dispatch(outcome, { reason: summary.error ?? reason, runId });
     if (this.machine.state === 'SUSPENDED' && this.machine.runtime.suspension?.kind === 'budget') {
       this.offerResume(this.machine.runtime.suspension.id);
@@ -906,6 +907,18 @@ export class CompanionShell implements ShellControl, AttachShell {
         startedAt: this.now(),
       },
     });
+  }
+
+  /**
+   * A whole-turn timeout stops the run instead of retrying (#240), so the transcript says why and
+   * with which cap; otherwise a stopped turn leaves only the idle status behind.
+   */
+  private announceModelTimeout(summary: RunSummary): void {
+    const seconds = Math.round(this.config.model.timeoutMs / 1_000);
+    const reason = (summary.error ?? '').replace(/^model_timeout:\s*/u, '');
+    const text = `模型超时（整轮上限 ${seconds} 秒），已停止本轮、不再重试${reason ? `：${reason}` : ''}`;
+    void this.host.bus.emit('terminal_print', { text: `${text}\n` });
+    void this.host.bus.emit('companion_notice', { text, tone: 'warn' });
   }
 
   /**
