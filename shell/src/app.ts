@@ -34,6 +34,7 @@ import { WorkflowService, workflowsPlugin } from './plugins/workflows.ts';
 import { CommandProposals, executeProposal, type CommandProposal, type ProposalConfirmation } from './proposals.ts';
 import { capturePlugin } from './plugins/capture.ts';
 import { sessionContextPlugin } from './plugins/session-context.ts';
+import { assignmentPlugin } from './plugins/assignment.ts';
 import { recallPlugin } from './plugins/recall.ts';
 import { soulEditPlugin } from './plugins/soul-edit.ts';
 import { HygienePipeline } from './hygiene.ts';
@@ -605,6 +606,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.host.register(webPlugin({ dataDir: this.config.dataDir }));
     this.host.register(proposalPlugin());
     this.host.register(askPlugin());
+    this.host.register(assignmentPlugin());
     this.host.register(hygienePlugin());
     this.host.register(capturePlugin({ agentId: this.config.agentId, projectId: this.config.projectId, sessionId: this.config.sessionId, paused: () => this.capturePaused }));
     // Before recall: the tail sits before the newest user line, the recall block after it, so the
@@ -785,6 +787,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       'You are present at all hours; when nothing needs you, you are quiet rather than chatty.',
       'You have four basic tools (read, write, edit, bash). Use them when the moment needs real work; otherwise just talk.',
       'To hand the user a shell command, call `propose_command` with the command and a one-line reason. It is only an offer: the command runs when the user confirms it, never before, so never say it already ran.',
+      'A new user line continues the open task by default. Call `declare_task` with action "start" only when the newest line begins a different task, and with "end" when the open task is finished. Judge by meaning, never by a word.',
       'Never invent a memory. If recall is empty, say so plainly.',
     ].filter(Boolean);
     const tail = [this.clock ? this.clock.timeContextBlock(this.now()) : '', this.openAssignmentBlock(), this.suspensionBlock()].filter(Boolean);
@@ -1046,11 +1049,21 @@ export class CompanionShell implements ShellControl, AttachShell {
   private beginUserAssignment(text: string): void {
     const trimmed = text.trim();
     if (!trimmed) return;
+    const open = this.machine.runtime.openAssignment;
+    if (open) {
+      // A new message continues the open task by default (#246 A2): the budget stop's place and the
+      // confirmed findings are the handoff, and a follow-up like "继续" must not erase them. The
+      // model says "this is a different task" through `declare_task`, not the shell guessing.
+      this.machine.updateRuntime({ openAssignment: { ...open, latestUserText: trimmed.slice(0, 500) } });
+      this.trace.append('assignment_attached', { assignmentId: open.id, chars: trimmed.length });
+      return;
+    }
     this.machine.updateRuntime({
       openAssignment: {
         id: `assignment-${this.now().toString(36)}-${randomUUID().slice(0, 8)}`,
         origin: 'user_message',
         text: trimmed.slice(0, 500),
+        latestUserText: trimmed.slice(0, 500),
         startedAt: this.now(),
       },
     });
@@ -2050,7 +2063,11 @@ export class CompanionShell implements ShellControl, AttachShell {
     );
   }
 
-  /** A new instruction while a budget pause waits: the paused task is closed, and the trace says how. */
+  /**
+   * A new instruction while a budget pause waits: the pause is closed and the trace says how. The
+   * assignment stays open (#246 A2): the new line attaches to it in `beginUserAssignment`, so the
+   * stop's place and findings are still in the next prompt.
+   */
   private supersedeSuspension(reason: string): void {
     const suspension = this.machine.runtime.suspension;
     if (!suspension) return;
@@ -2062,7 +2079,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       reason,
       closedAs: 'budget_exceeded',
     });
-    this.machine.updateRuntime({ suspension: undefined, openAssignment: undefined });
+    this.machine.updateRuntime({ suspension: undefined });
   }
 
   /**
@@ -2086,6 +2103,56 @@ export class CompanionShell implements ShellControl, AttachShell {
     };
     this.trace.append('question_registered', { chars: question.length, contextChars: contextRef?.length ?? 0 });
     return { ok: true, text: '已登记问题：这次 run 到此挂起，用户回答后原任务原地续跑。不要再调用工具，也不要假装已经得到回答。' };
+  }
+
+  /**
+   * `declare_task`'s one entry (#246 A2). Whether a line starts a different task is a semantic
+   * judgement, so the shell does not read keywords: the front model says so through this explicit
+   * declaration, and the shell settles the old assignment the way a completed run does. The trace
+   * record is the auditable shape C5/D3 will consume.
+   */
+  declareTask(input: { action?: string; runId?: string }): { ok: boolean; text: string } {
+    const action = input.action;
+    if (action !== 'start' && action !== 'end') {
+      return { ok: false, text: 'invalid_arguments: "action" must be "start" or "end"' };
+    }
+    if (this.runTier !== 'work' || this.machine.state !== 'RUNNING') {
+      this.trace.append('assignment_declaration_refused', { action, runId: input.runId, reason: `tier:${this.runTier}`, state: this.machine.state });
+      return { ok: false, text: 'declare_task_unavailable: 只有用户在场的 work run 才能声明任务边界；自主 run 不要调用。' };
+    }
+    const previous = this.machine.runtime.openAssignment;
+    if (!previous) {
+      this.trace.append('assignment_declaration_refused', { action, runId: input.runId, reason: 'no_open_assignment' });
+      return { ok: false, text: 'declare_task_refused: 现在没有 open assignment，无需声明边界。' };
+    }
+    if (action === 'end') {
+      this.machine.updateRuntime({ openAssignment: undefined });
+      this.trace.append('assignment_declared', {
+        action,
+        runId: input.runId,
+        previousAssignmentId: previous.id,
+        assignmentId: null,
+        textChars: previous.text.length,
+      });
+      return { ok: true, text: '已声明任务结束：open assignment 已收束，本 run 剩余部分不再把它当待办。' };
+    }
+    const brief = (previous.latestUserText ?? previous.text).trim().slice(0, 500);
+    const assignment = {
+      id: `assignment-${this.now().toString(36)}-${randomUUID().slice(0, 8)}`,
+      origin: 'user_message' as const,
+      text: brief,
+      latestUserText: brief,
+      startedAt: this.now(),
+    };
+    this.machine.updateRuntime({ openAssignment: assignment });
+    this.trace.append('assignment_declared', {
+      action,
+      runId: input.runId,
+      previousAssignmentId: previous.id,
+      assignmentId: assignment.id,
+      textChars: brief.length,
+    });
+    return { ok: true, text: '已声明新任务：旧 assignment 已收束，新任务以最新用户消息为简报；后续只围绕它继续。' };
   }
 
   /**

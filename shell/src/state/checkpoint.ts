@@ -140,6 +140,8 @@ export interface ShellRuntimeState {
     id: string;
     origin: 'user_message';
     text: string;
+    /** The newest user line attached to this task; `text` stays the task's original brief. */
+    latestUserText?: string;
     startedAt: number;
     lastRunId?: string;
     stoppedAt?: number;

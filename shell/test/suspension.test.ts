@@ -258,7 +258,10 @@ describe('autonomous continuation backoff (#228)', () => {
 
       await shell.submit('do something else');
       const assignment = shell.machine.runtime.openAssignment!;
-      expect(assignment.id).not.toBe(firstId);
+      // #246 A2: the owner's new line attaches to the open task; the run being present resets the
+      // autonomous attempt count without inventing a second assignment.
+      expect(assignment.id).toBe(firstId);
+      expect(assignment.latestUserText).toBe('do something else');
       expect(assignment.attempts).toBe(0);
       expect(assignment.nextResumeAt).toBeUndefined();
     } finally {

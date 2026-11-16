@@ -1,9 +1,11 @@
 /**
- * Context continuity (#245 A1, #247 A3).
+ * Context continuity (#245 A1, #247 A3, #246 A2).
  *
  * A1: a new run's request carries the recent verbatim turns of the session (the kernel's `tail`
  * lane), so a follow-up like "继续" can still see what the previous run was about.
  * A3: the recall block is part of every provider call of the run, not only the first one.
+ * A2: a new message attaches to the open assignment unless the model explicitly declares a task
+ * boundary.
  */
 import { describe, expect, test } from 'bun:test';
 import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
@@ -84,6 +86,96 @@ describe('context continuity', () => {
       expect(asText(provider.calls[0].messages)).toContain('周五绝对不能部署');
       expect(asText(provider.calls[1].messages)).toContain('<recall-context>');
       expect(asText(provider.calls[1].messages)).toContain('周五绝对不能部署');
+    } finally {
+      await shell.stop();
+    }
+  }, 30_000);
+
+  test('A2: a new message attaches to the open assignment and keeps its handoff', async () => {
+    const provider = new ScriptedProvider([
+      { text: '结论：迁移脚本从 step 3 开始改。', toolCalls: [{ toolCallId: 'c1', toolName: 'read', input: { path: 'missing.txt' } }], usage: { input: 25_000, output: 1 } },
+      { text: '继续处理。', toolCalls: [{ toolCallId: 'c2', toolName: 'read', input: { path: 'missing.txt' } }], usage: { input: 25_000, output: 1 } },
+    ]);
+    const shell = makeShell(makeTempDir('continuity-a2-'), provider, {
+      dream: NO_DREAM,
+      budgets: { maxTurnsPerRun: 6, maxTokensPerRun: 20_000, toolWhitelist: null },
+      workBudget: { maxTurnsPerRun: 4, maxTokensPerRun: 1_000 },
+    });
+    await shell.start();
+    try {
+      await shell.submit('迁移脚本改到 step 3');
+      expect(shell.state).toBe('SUSPENDED');
+      const before = shell.machine.runtime.openAssignment!;
+      expect(before.stoppedStep).toBeDefined();
+      expect(before.findings).toContain('step 3');
+      await shell.submit('继续');
+      expect(shell.state).toBe('SUSPENDED');
+      const prompt = provider.calls[1].systemPrompt;
+      expect(prompt).toContain('user-assigned task: 迁移脚本改到 step 3');
+      expect(prompt).toContain('stopped at:');
+      expect(prompt).toContain('confirmed findings: 结论：迁移脚本从 step 3 开始改。');
+      const after = shell.machine.runtime.openAssignment!;
+      expect(after.id).toBe(before.id);
+      expect(after.text).toBe('迁移脚本改到 step 3');
+      expect(after.latestUserText).toBe('继续');
+    } finally {
+      await shell.stop();
+    }
+  }, 30_000);
+
+  test('A2: declare_task start settles the old assignment and does not carry its findings', async () => {
+    const provider = new ScriptedProvider([
+      { text: '结论：迁移脚本从 step 3 开始改。', toolCalls: [{ toolCallId: 'c1', toolName: 'read', input: { path: 'missing.txt' } }], usage: { input: 25_000, output: 1 } },
+      { text: '开始处理发布清单。', toolCalls: [{ toolCallId: 'c2', toolName: 'declare_task', input: { action: 'start' } }] },
+      { text: 'B 结论：发布清单已整理。', toolCalls: [{ toolCallId: 'c3', toolName: 'read', input: { path: 'missing.txt' } }], usage: { input: 25_000, output: 1 } },
+    ]);
+    const shell = makeShell(makeTempDir('continuity-a2-start-'), provider, {
+      dream: NO_DREAM,
+      budgets: { maxTurnsPerRun: 6, maxTokensPerRun: 20_000, toolWhitelist: null },
+      workBudget: { maxTurnsPerRun: 4, maxTokensPerRun: 1_000 },
+    });
+    await shell.start();
+    try {
+      await shell.submit('迁移脚本改到 step 3');
+      const before = shell.machine.runtime.openAssignment!;
+      await shell.submit('换成任务 B：整理发布清单');
+      expect(shell.state).toBe('SUSPENDED');
+      const thirdPrompt = provider.calls[2].systemPrompt;
+      expect(thirdPrompt).toContain('user-assigned task: 换成任务 B：整理发布清单');
+      expect(thirdPrompt).not.toContain('迁移脚本改到 step 3');
+      expect(thirdPrompt).not.toContain('结论：迁移脚本从 step 3 开始改。');
+      const after = shell.machine.runtime.openAssignment!;
+      expect(after.id).not.toBe(before.id);
+      expect(after.text).toBe('换成任务 B：整理发布清单');
+      expect(after.findings).toBe('B 结论：发布清单已整理。');
+      const declared = shell.trace.read().find((record) => record.kind === 'assignment_declared' && record.action === 'start');
+      expect(declared?.previousAssignmentId).toBe(before.id);
+      expect(declared?.assignmentId).toBe(after.id);
+    } finally {
+      await shell.stop();
+    }
+  }, 30_000);
+
+  test('A2: declare_task end closes the assignment before the run ends', async () => {
+    const provider = new ScriptedProvider([
+      { text: '结论：迁移脚本从 step 3 开始改。', toolCalls: [{ toolCallId: 'c1', toolName: 'read', input: { path: 'missing.txt' } }], usage: { input: 25_000, output: 1 } },
+      { text: '做完了。', toolCalls: [{ toolCallId: 'c2', toolName: 'declare_task', input: { action: 'end' } }] },
+      { text: '收尾。', toolCalls: [] },
+    ]);
+    const shell = makeShell(makeTempDir('continuity-a2-end-'), provider, {
+      dream: NO_DREAM,
+      budgets: { maxTurnsPerRun: 6, maxTokensPerRun: 20_000, toolWhitelist: null },
+      workBudget: { maxTurnsPerRun: 4, maxTokensPerRun: 1_000 },
+    });
+    await shell.start();
+    try {
+      await shell.submit('迁移脚本改到 step 3');
+      await shell.submit('继续');
+      expect(shell.state).toBe('IDLE');
+      expect(provider.calls[1].systemPrompt).toContain('<open-assignment>');
+      expect(provider.calls[2].systemPrompt).not.toContain('<open-assignment>');
+      expect(shell.machine.runtime.openAssignment).toBeUndefined();
+      expect(shell.trace.read().some((record) => record.kind === 'assignment_declared' && record.action === 'end')).toBe(true);
     } finally {
       await shell.stop();
     }
