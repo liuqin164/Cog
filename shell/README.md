@@ -126,6 +126,37 @@ memory role is the resident's mg route; the embedding role stays `deterministic_
 reports `semanticIndex: false` until a host supplies an embedding provider. `MemoryKernel.reEmbed
 (projectId)` is the bounded migration path for an existing brain once that provider exists.
 
+## Self-modification (#236)
+
+When the companion writes or installs its own plugin, it is changing the thing that runs it. The
+shape is fixed before the pipeline (#228 item 5) exists: **one self-change is one small diff that
+`git revert` can undo, with its own test gate and its own acceptance point.** A long session is not
+the unit of self-modification; a commit is.
+
+The measurement behind this is on #236. Across 94 completed T3/Codex turns (51 sessions, 2026-11-14
+to 11-16, one model), 46 (48.9%) ended without a clean visible final answer: 18 conversation recaps
+emitted as the final message, 23 thinking-only endings, 4 raw tool-text endings, 1 empty. The rate
+did **not** rise with context length (median peak 154k tokens for abnormal vs 178k for clean;
+r = -0.12), and it was highest in turns under five minutes. What did predict it was the previous
+turn: after an abnormal ending the next turn in the same thread was abnormal 57.6% of the time,
+against 10.0% after a clean one. None of the 18 recaps was a real `compacted` event; the model
+emitted the recap itself.
+
+So the rule is about the thread, not the token count:
+
+- **Small** — one change, one commit, one reason; a diff a reviewer can hold in one pass.
+- **Revertible** — `git revert <sha>` returns to the last accepted tree; no migration or data rewrite
+  rides along.
+- **Gated** — a named test or command passes before the next change starts. A failure stops the
+  series; it is not fixed forward in the same session.
+- **Independently accepted** — each change has its own acceptance observation (test count, trace row,
+  user-visible effect), not one acceptance at the end of a batch.
+- **Fresh thread after an abnormal ending** — a recap or thinking-only ending is a signal to start a
+  new thread with the todo list, not to continue the one that produced it.
+
+External-content rules still wait for the user's approval (#228 item 5); this section fixes only the
+shape of the change.
+
 ## `install`: the F21 bootstrap (#203)
 
 `bin/install` is the install guide for a self-owned companion — six steps, text in / text out, no TUI
