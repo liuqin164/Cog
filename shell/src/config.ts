@@ -7,6 +7,9 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { readPluginRegistry } from './plugins/registry.ts';
+import { DEFAULT_MAX_IDLE_TURNS } from './state/agent-loop.ts';
+
+export { DEFAULT_MAX_IDLE_TURNS };
 
 export interface RunBudget {
   maxTurnsPerRun: number;
@@ -60,6 +63,11 @@ export interface ShellConfig {
    * `costDayTokens` like every other token the resident spends.
    */
   nightBudget: NightBudget;
+  /**
+   * Consecutive turns without user-visible text or a new tool result before the run stops (#241).
+   * Top-level because it is a progress floor, not a per-tier allowance.
+   */
+  maxIdleTurns: number;
   dream: { windowStartHour: number; windowEndHour: number; runKernelNight: boolean; maxEpisodes: number };
   idleWakeIntervalMs: number;
   /** Tick interval for due intents/dream/emergence. Deterministic; tests drive ticks directly. */
@@ -90,7 +98,7 @@ function env(name: string): string | undefined {
  * be understood is a startup error, not a silent fallback — a user who edited a number must not be
  * left believing it applied.
  */
-function readBudgetConfig(dataDir: string): { work?: Partial<RunBudget>; autonomous?: Partial<RunBudget>; daily?: Partial<DailyBudget>; night?: Partial<NightBudget> } {
+function readBudgetConfig(dataDir: string): { work?: Partial<RunBudget>; autonomous?: Partial<RunBudget>; daily?: Partial<DailyBudget>; night?: Partial<NightBudget>; maxIdleTurns?: number } {
   const path = join(dataDir, 'budgets.json');
   if (!existsSync(path)) return {};
   let parsed: unknown;
@@ -106,21 +114,23 @@ function readBudgetConfig(dataDir: string): { work?: Partial<RunBudget>; autonom
     ...(record.autonomous === undefined ? {} : { autonomous: budgetTier(record.autonomous, path, 'autonomous') }),
     ...(record.maxTokensPerDay === undefined ? {} : { daily: dailyBudget(record.maxTokensPerDay, path) }),
     ...(record.maxTokensPerNight === undefined ? {} : { night: nightBudget(record.maxTokensPerNight, path) }),
+    ...(record.maxIdleTurns === undefined ? {} : { maxIdleTurns: positiveInteger(record.maxIdleTurns, path, 'maxIdleTurns') }),
   };
 }
 
-function dailyBudget(value: unknown, path: string): Partial<DailyBudget> {
+function positiveInteger(value: unknown, path: string, name: string): number {
   if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
-    throw new Error(`invalid_budgets_config: ${path}: maxTokensPerDay must be a positive integer`);
+    throw new Error(`invalid_budgets_config: ${path}: ${name} must be a positive integer`);
   }
-  return { maxTokensPerDay: value };
+  return value;
+}
+
+function dailyBudget(value: unknown, path: string): Partial<DailyBudget> {
+  return { maxTokensPerDay: positiveInteger(value, path, 'maxTokensPerDay') };
 }
 
 function nightBudget(value: unknown, path: string): Partial<NightBudget> {
-  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
-    throw new Error(`invalid_budgets_config: ${path}: maxTokensPerNight must be a positive integer`);
-  }
-  return { maxTokensPerNight: value };
+  return { maxTokensPerNight: positiveInteger(value, path, 'maxTokensPerNight') };
 }
 
 function budgetTier(value: unknown, path: string, name: string): Partial<RunBudget> {
@@ -160,6 +170,7 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
   const work: RunBudget = { ...DEFAULT_WORK_BUDGET, ...operating.work };
   const daily: DailyBudget = { ...DEFAULT_DAILY_BUDGET, ...operating.daily };
   const night: NightBudget = { ...DEFAULT_NIGHT_BUDGET, ...operating.night };
+  const maxIdleTurns = overrides.maxIdleTurns ?? operating.maxIdleTurns ?? DEFAULT_MAX_IDLE_TURNS;
   // The registry is read here, once, so a plugin registered by `/plugins add` reaches the next
   // process and nothing re-reads the file mid-run. A corrupt file is a startup error (see registry).
   const registryPlugins = readPluginRegistry(dataDir);
@@ -190,6 +201,7 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
     workBudget: overrides.workBudget ?? work,
     dailyBudget: overrides.dailyBudget ?? daily,
     nightBudget: overrides.nightBudget ?? night,
+    maxIdleTurns,
     contextSweetSpot: overrides.contextSweetSpot ?? 6_000,
     // The install's rhythm step is what fills these; the literals stay the fallback for a hand-run
     // shell that was never installed.

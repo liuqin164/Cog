@@ -17,7 +17,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { createMemoryKernel } from 'cogmem';
-import { DEFAULT_AUTONOMOUS_BUDGET, DEFAULT_DAILY_BUDGET, DEFAULT_NIGHT_BUDGET, DEFAULT_WORK_BUDGET } from '../config.ts';
+import { DEFAULT_AUTONOMOUS_BUDGET, DEFAULT_DAILY_BUDGET, DEFAULT_MAX_IDLE_TURNS, DEFAULT_NIGHT_BUDGET, DEFAULT_WORK_BUDGET } from '../config.ts';
 import { DEFAULT_SOUL, readSoul, writeDefaultSoul } from './soul.ts';
 import { MG_DEFAULT_BASE_URL, MG_DEFAULT_MODEL, MODEL_PRESETS, modelEnv, probeModel, type ModelChoice, type ModelProviderKind } from './model.ts';
 import { RouteStore, safeRouteName, type ModelRoute } from '../model/routes.ts';
@@ -431,10 +431,10 @@ export class Installer {
     if (!existsSync(budgetsPath)) {
       writeFileSync(
         budgetsPath,
-        `${JSON.stringify({ autonomous: DEFAULT_AUTONOMOUS_BUDGET, work: DEFAULT_WORK_BUDGET, maxTokensPerDay: DEFAULT_DAILY_BUDGET.maxTokensPerDay, maxTokensPerNight: DEFAULT_NIGHT_BUDGET.maxTokensPerNight }, null, 2)}\n`,
+        `${JSON.stringify({ autonomous: DEFAULT_AUTONOMOUS_BUDGET, work: DEFAULT_WORK_BUDGET, maxTokensPerDay: DEFAULT_DAILY_BUDGET.maxTokensPerDay, maxTokensPerNight: DEFAULT_NIGHT_BUDGET.maxTokensPerNight, maxIdleTurns: DEFAULT_MAX_IDLE_TURNS }, null, 2)}\n`,
         { mode: 0o600 },
       );
-      this.io.say(`预算：紧笼 ${DEFAULT_AUTONOMOUS_BUDGET.maxTurnsPerRun} 回合 / ${DEFAULT_AUTONOMOUS_BUDGET.maxTokensPerRun} token；工作档 ${DEFAULT_WORK_BUDGET.maxTurnsPerRun} 回合 / ${DEFAULT_WORK_BUDGET.maxTokensPerRun} token；日限 ${DEFAULT_DAILY_BUDGET.maxTokensPerDay} token；夜间模型 ${DEFAULT_NIGHT_BUDGET.maxTokensPerNight} token（${budgetsPath}）`);
+      this.io.say(`预算：紧笼 ${DEFAULT_AUTONOMOUS_BUDGET.maxTurnsPerRun} 回合 / ${DEFAULT_AUTONOMOUS_BUDGET.maxTokensPerRun} token；工作档 ${DEFAULT_WORK_BUDGET.maxTurnsPerRun} 回合 / ${DEFAULT_WORK_BUDGET.maxTokensPerRun} token；日限 ${DEFAULT_DAILY_BUDGET.maxTokensPerDay} token；夜间模型 ${DEFAULT_NIGHT_BUDGET.maxTokensPerNight} token；无进展 ${DEFAULT_MAX_IDLE_TURNS} 回合（${budgetsPath}）`);
     }
     // The native plugin registry: empty on first install, never overwritten on a re-run. A re-run must
     // not unregister what `/plugins add` wrote; the file is the resident's operating copy.

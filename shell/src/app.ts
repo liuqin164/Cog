@@ -648,6 +648,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       tools: this.host.tools,
       provider: model,
       budget: this.cage,
+      maxIdleTurns: this.config.maxIdleTurns,
       systemPrompt: () => this.systemPrompt(),
       trace: this.trace,
       clock: this.now,
@@ -970,6 +971,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     }
     const outcome = this.settleAssignment(summary, tier, trigger);
     if (summary.stopReason === 'run_error' && summary.error?.startsWith('model_timeout:')) this.announceModelTimeout(summary);
+    if (summary.stopReason === 'run_error' && summary.error?.startsWith('no_progress:')) this.announceNoProgress(summary);
     await this.machine.dispatch(outcome, { reason: summary.error ?? reason, runId });
     if (this.machine.state === 'SUSPENDED' && this.machine.runtime.suspension?.kind === 'budget') {
       this.offerResume(this.machine.runtime.suspension.id);
@@ -1041,6 +1043,20 @@ export class CompanionShell implements ShellControl, AttachShell {
   }
 
   /**
+   * The no-progress stop (#241): name the turn it stopped on and the tool call it was repeating, so
+   * the stop is not mistaken for the cage's budget or a provider failure.
+   */
+  private announceNoProgress(summary: RunSummary): void {
+    const lastCall = summary.toolCalls.at(-1);
+    const where = lastCall
+      ? `${lastCall.toolName} ${truncate(JSON.stringify(lastCall.input ?? {}), 120)}`
+      : `turn ${summary.turns}`;
+    const text = `连续 ${this.config.maxIdleTurns} 回合无用户可见产出，已停止本轮（无进展判据 maxIdleTurns=${this.config.maxIdleTurns}）；停在 ${where}`;
+    void this.host.bus.emit('terminal_print', { text: `${text}\n` });
+    void this.host.bus.emit('companion_notice', { text, tone: 'warn' });
+  }
+
+  /**
    * A completed run closes the assignment; a budget stop keeps it open and writes the place and the
    * next move. A run error or abort keeps it open too: the work is unfinished, and the next wake
    * must not mistake it for a fresh autonomous idea.
@@ -1088,10 +1104,31 @@ export class CompanionShell implements ShellControl, AttachShell {
     const attempts = trigger === 'emergence_due' && !progressed ? (assignment.attempts ?? 0) + 1 : 0;
     const nextResumeAt = attempts > 0 ? this.now() + Math.min(RESUME_BACKOFF_BASE_MS * 2 ** (attempts - 1), RESUME_BACKOFF_CAP_MS) : undefined;
     if (summary.stopReason !== 'budget_exceeded') {
+      // A no-progress stop is unfinished work like a budget stop, but it ends through the existing
+      // run_error edge. It writes the same handoff fields so the next run knows where it stalled.
+      const noProgress = summary.error?.startsWith('no_progress:') === true;
+      const lastCall = summary.toolCalls.at(-1);
+      const stoppedStep = noProgress
+        ? lastCall
+          ? `${lastCall.toolName} ${truncate(JSON.stringify(lastCall.input ?? {}), 240)}`
+          : `after turn ${summary.turns}`
+        : undefined;
+      const nextStep = noProgress
+        ? `continue the open task, but report user-visible progress before repeating the same tool call (the previous run stopped after ${summary.turns} turns with no output)`
+        : undefined;
       this.machine.updateRuntime({
         suspension: undefined,
-        openAssignment: { ...assignment, lastRunId: summary.runId, grant: undefined, attempts, nextResumeAt, ...(findings ? { findings } : {}) },
+        openAssignment: {
+          ...assignment,
+          lastRunId: summary.runId,
+          grant: undefined,
+          attempts,
+          nextResumeAt,
+          ...(findings ? { findings } : {}),
+          ...(stoppedStep ? { stoppedStep, nextStep } : {}),
+        },
       });
+      if (noProgress) this.trace.append('assignment_stopped', { runId: summary.runId, assignmentId: assignment.id, stoppedStep, nextStep, findingsChars: findings?.length ?? 0 });
       if (attempts > 0) this.trace.append('assignment_backoff', { assignmentId: assignment.id, attempts, nextResumeAt });
       return summary.stopReason;
     }

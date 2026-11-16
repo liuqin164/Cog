@@ -129,6 +129,13 @@ export interface ExecutedToolCall {
 
 const MAX_NESTED_TOOL_DEPTH = 8;
 
+/**
+ * Consecutive turns without user-visible text or a new tool result before the run is declared idle
+ * (#241). Four is longer than the usual silent stretch of a real task (read, edit, test, fix) and,
+ * on the 32-turn work cage, still stops a runaway at five turns instead of burning the budget.
+ */
+export const DEFAULT_MAX_IDLE_TURNS = 4;
+
 async function emitToolStart(context: ToolCallPipelineContext, call: ToolCall): Promise<void> {
   await context.bus.emit('tool_execution_start', { type: 'tool_execution_start', toolCallId: call.toolCallId, toolName: call.toolName, input: call.input }, { runId: context.runId });
 }
@@ -308,6 +315,12 @@ export interface AgentRuntimeOptions {
    * The trace keeps the breakdown, so a later compaction can be read against what it replaced.
    */
   onContextAssembled?: (account: ContextAccount) => void;
+  /**
+   * Consecutive no-progress turns before the loop stops the run (#241). A turn progresses when it
+   * writes user-visible text or a tool call returns output not seen for that same call before.
+   * Omitted means `DEFAULT_MAX_IDLE_TURNS`.
+   */
+  maxIdleTurns?: number;
 }
 
 export class AgentRuntime {
@@ -403,6 +416,10 @@ export class AgentRuntime {
     const context = new ContextProjection();
     const allToolCalls: ToolCall[] = [];
     const allToolResults: ToolResult[] = [];
+    /** Last output per (tool name, arguments), so a repeated call with no new answer is not progress. */
+    const seenToolOutputs = new Map<string, string>();
+    const maxIdleTurns = this.options.maxIdleTurns ?? DEFAULT_MAX_IDLE_TURNS;
+    let idleTurns = 0;
     let turns = 0;
     let tokens = 0;
     let stopReason: RunSummary['stopReason'] = 'run_complete';
@@ -671,8 +688,31 @@ export class AgentRuntime {
           }
         }
 
+        // Progress is what the user can see or what the tools newly told the model: text in the
+        // assistant message, or a call whose output differs from that same call's last output. A
+        // run that repeats identical tool calls with identical results and writes nothing is idle,
+        // even though every turn was a real provider call (#241).
+        let newToolInformation = false;
+        turn.toolCalls.forEach((call, index) => {
+          const key = `${call.toolName}\u0000${JSON.stringify(call.input ?? null)}`;
+          const output = toolResults[index]?.output ?? '';
+          if (!seenToolOutputs.has(key) || seenToolOutputs.get(key) !== output) newToolInformation = true;
+          seenToolOutputs.set(key, output);
+        });
+        if (assistantDraft.content.trim() !== '' || newToolInformation) {
+          idleTurns = 0;
+        } else {
+          idleTurns += 1;
+        }
+
         if (terminateRequested || decision?.action === 'end') {
           stopReason = 'run_complete';
+          break;
+        }
+        if (idleTurns >= maxIdleTurns) {
+          stopReason = 'run_error';
+          error = `no_progress: ${idleTurns} consecutive turns with no user-visible output and no new tool result (maxIdleTurns=${maxIdleTurns})`;
+          this.options.trace?.append('no_progress_stopped', { runId: input.runId, turnIndex, idleTurns, maxIdleTurns }, this.clock());
           break;
         }
 
