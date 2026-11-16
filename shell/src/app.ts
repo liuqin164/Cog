@@ -10,7 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { ChannelContract, createMemoryKernel, KernelAgentMemoryBackend, type ChannelSession, type EmbeddingProvider, type MemoryKernel, type ProcedureWorkflow, type SessionContextAssembly, type SessionContextItem } from 'cogmem';
+import { ChannelContract, createMemoryKernel, digestAnchors, KernelAgentMemoryBackend, readSessionTurns, type ChannelSession, type EmbeddingProvider, type MemoryKernel, type ProcedureWorkflow, type SessionContextAssembly, type SessionContextItem, type SessionDigestEntry, type SessionTurn } from 'cogmem';
 import { ModelRegistry, TraceStore, type ModelRoleConfig, type ModelRoleName, type ModelTextUsage } from 'cogmem/internal';
 import { defaultShellConfig, type ShellConfig } from './config.ts';
 import { StateMachine } from './state/machine.ts';
@@ -91,6 +91,16 @@ const PLUGIN_RESTART_GRACE_MS = 300;
 
 /** The findings handoff is a prompt line, not a transcript: one bounded paragraph. */
 const MAX_ASSIGNMENT_FINDINGS = 600;
+
+/**
+ * A task-exit stub (#263) quotes each source ledger row as an exact prefix; the full row stays one
+ * `read mem:<eventId>` away. The list is bounded because a resident may finish tasks forever.
+ */
+const MAX_TASK_STUB_QUOTE_CHARS = 240;
+const MAX_TASK_STUBS = 20;
+const MAX_RETAINED_CONSTRAINTS = 8;
+/** If the run's ledger row never arrives (capture paused), stop retrying the stub after an hour. */
+const TASK_STUB_RETRY_MS = 60 * 60_000;
 
 /**
  * Autonomous continuation backoff (#228): 5 min × 2^n, capped at 6 h. The base is the shortest wait
@@ -743,6 +753,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       pinned: () => this.lanePinned(),
       profile: () => this.laneProfile(),
       openLoops: () => this.laneOpenLoops(),
+      digestStubs: () => this.laneDigestStubs(),
       variablePrompt: () => this.systemPromptSections().tail,
       onAssembly: (assembly) => {
         this.lastLaneAssembly = assembly;
@@ -1006,6 +1017,12 @@ export class CompanionShell implements ShellControl, AttachShell {
     if (assignment && assignmentText) {
       items.push({ id: `assignment:${assignment.id}`, text: assignmentText });
     }
+    // A constraint the task-end exit retained is not task material (#255, #263). It was already
+    // classified by the kernel's own markers during the last assembly; the shell only keeps the
+    // text and re-marks it, so the next assembly's protection rule is unchanged.
+    for (const constraint of this.machine.runtime.retainedConstraints ?? []) {
+      items.push({ id: constraint.id, text: constraint.text, protected: true });
+    }
     for (const intent of this.machine.wakeIntents) {
       if (intent.consumedAt) continue;
       items.push({
@@ -1015,6 +1032,69 @@ export class CompanionShell implements ShellControl, AttachShell {
       });
     }
     return items;
+  }
+
+  /**
+   * The digest stubs finished tasks left behind (#263). The stub is built from ledger rows, so it
+   * is written after the run's turn is captured; a restart between the declaration and the write
+   * retries here on the next assembly.
+   */
+  private laneDigestStubs(): SessionDigestEntry[] {
+    this.materializeTaskEndStub();
+    return [...(this.machine.runtime.taskStubs ?? [])];
+  }
+
+  /**
+   * Build the one stub a declared task end leaves in the digest lane. `turnId` is the end
+   * declaration's run when the caller has the summary; without it the checkpointed turn id is used.
+   */
+  private materializeTaskEndStub(turnId?: string, runId?: string): void {
+    const pending = this.machine.runtime.lastEndedTask;
+    if (!pending) return;
+    const resolvedTurnId = pending.turnId
+      ?? (pending.runId !== undefined && pending.runId === runId ? turnId : undefined);
+    if (!resolvedTurnId) {
+      if (this.now() - pending.endedAt > TASK_STUB_RETRY_MS) {
+        this.machine.updateRuntime({ lastEndedTask: undefined });
+        this.trace.append('task_stub_skipped', { assignmentId: pending.assignmentId, reason: 'no_turn_id' });
+      }
+      return;
+    }
+    let turns: SessionTurn[];
+    try {
+      turns = readSessionTurns(this.kernel.factStore.getDatabase(), {
+        projectId: this.config.projectId,
+        agentId: this.config.agentId,
+        sessionId: this.config.sessionId,
+      }).turns;
+    } catch (error) {
+      this.trace.append('task_stub_failed', {
+        assignmentId: pending.assignmentId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+    const stub = buildTaskStub(turns, {
+      startedAt: pending.startedAt,
+      turnId: resolvedTurnId,
+    });
+    if (!stub) {
+      if (this.now() - pending.endedAt > TASK_STUB_RETRY_MS) {
+        this.machine.updateRuntime({ lastEndedTask: undefined });
+        this.trace.append('task_stub_skipped', { assignmentId: pending.assignmentId, reason: 'no_ledger_turn' });
+      }
+      return;
+    }
+    const byId = new Map<string, SessionDigestEntry>();
+    for (const entry of [...(this.machine.runtime.taskStubs ?? []), stub]) byId.set(entry.entryId, entry);
+    const taskStubs = [...byId.values()].slice(-MAX_TASK_STUBS);
+    this.machine.updateRuntime({ taskStubs, lastEndedTask: undefined });
+    this.trace.append('task_stub_written', {
+      assignmentId: pending.assignmentId,
+      entryId: stub.entryId,
+      sourceRefs: stub.sourceRefs,
+      chars: stub.text.length,
+    });
   }
 
   /**
@@ -1182,6 +1262,9 @@ export class CompanionShell implements ShellControl, AttachShell {
       this.hideAssignmentContext = false;
     }
     const outcome = this.settleAssignment(summary, tier, trigger);
+    // `agent_end` capture has written this run's rows by the time `run()` returns, so the declared
+    // task end's stub can quote them here instead of waiting for the next request (#263).
+    this.materializeTaskEndStub(summary.turnId, summary.runId);
     if (summary.stopReason === 'run_error' && summary.error?.startsWith('model_timeout:')) this.announceModelTimeout(summary);
     if (summary.stopReason === 'run_error' && summary.error?.startsWith('no_progress:')) this.announceNoProgress(summary);
     await this.machine.dispatch(outcome, { reason: summary.error ?? reason, runId });
@@ -2410,13 +2493,34 @@ export class CompanionShell implements ShellControl, AttachShell {
       return { ok: false, text: 'declare_task_refused: 现在没有 open assignment，无需声明边界。' };
     }
     if (action === 'end') {
-      this.machine.updateRuntime({ openAssignment: undefined });
+      // #263: the working set exits as a lane, not item by item. The assignment is the shell's
+      // working-set material; a protected item inside it is a constraint and stays (#255). The
+      // stub is written once the run's ledger row exists (at settle, or the next assembly after a
+      // restart), so it quotes the row rather than the model's memory of it.
+      const workingItem = this.lastLaneAssembly
+        ?.lanes.find((lane) => lane.lane === 'working_set')
+        ?.items.find((item) => item.id === `assignment:${previous.id}`);
+      const retained = workingItem?.protected === true
+        ? [...(this.machine.runtime.retainedConstraints ?? []), { id: `constraint:${previous.id}`, text: workingItem.text }]
+            .slice(-MAX_RETAINED_CONSTRAINTS)
+        : this.machine.runtime.retainedConstraints;
+      this.machine.updateRuntime({
+        openAssignment: undefined,
+        lastEndedTask: {
+          assignmentId: previous.id,
+          startedAt: previous.startedAt,
+          endedAt: this.now(),
+          ...(input.runId ? { runId: input.runId, turnId: `${input.runId}:0` } : {}),
+        },
+        ...(retained === undefined ? {} : { retainedConstraints: retained }),
+      });
       this.trace.append('assignment_declared', {
         action,
         runId: input.runId,
         previousAssignmentId: previous.id,
         assignmentId: null,
         textChars: previous.text.length,
+        protectedRetained: workingItem?.protected === true,
       });
       return { ok: true, text: '已声明任务结束：open assignment 已收束，本 run 剩余部分不再把它当待办。' };
     }
@@ -3051,6 +3155,60 @@ function promptCacheAccount(usage: TurnUsage | undefined): { hit: number; miss: 
 
 function truncate(text: string, limit: number): string {
   return text.length <= limit ? text : `${text.slice(0, limit)}…`;
+}
+
+/**
+ * The one digest stub a declared task end leaves (#263). Every fragment is an exact prefix of a
+ * ledger row — the task's opening user line, the last conclusion before the end run, and the end
+ * run's own closing line — never a model-written summary. The primary row is the conclusion, so
+ * `read mem:<entryId's event>` opens the words that say what was done; the other rows are the
+ * stub's `sourceRefs`. `turnId` names the end declaration's run; the ledger row for it is written
+ * by capture before `settleAssignment` runs.
+ */
+function buildTaskStub(
+  turns: readonly SessionTurn[],
+  input: { startedAt: number; turnId: string },
+): SessionDigestEntry | undefined {
+  const taskTurns = turns.filter((turn) => turn.occurredAt >= input.startedAt);
+  if (taskTurns.length === 0) return undefined;
+  const currentUser = taskTurns.find((turn) => turn.turnId === input.turnId && turn.role === 'user');
+  // The end declaration runs inside its own turn, but capture writes that turn's rows only at
+  // `agent_end`. A later turn of the same run can assemble before that, so without this gate the
+  // stub would quote the previous task's rows and clear `lastEndedTask` too early.
+  if (!currentUser) return undefined;
+  const currentAssistant = [...taskTurns].reverse().find((turn) => turn.turnId === input.turnId && turn.role === 'assistant');
+  const priorAssistant = [...taskTurns.slice(0, taskTurns.indexOf(currentUser))].reverse().find((turn) => turn.role === 'assistant');
+  const opening = taskTurns.find((turn) => turn.role === 'user') ?? taskTurns[0]!;
+  const closing = priorAssistant ?? currentAssistant ?? opening;
+  const quotes: Array<{ label: string; turn: SessionTurn }> = [];
+  const seen = new Set<string>();
+  const add = (label: string, turn: SessionTurn | undefined): void => {
+    if (!turn || seen.has(turn.eventId)) return;
+    seen.add(turn.eventId);
+    quotes.push({ label, turn });
+  };
+  add('任务', opening);
+  add('做了什么', priorAssistant);
+  add(priorAssistant ? '收束' : '做了什么', currentAssistant);
+  const text = quotes
+    .map((quote) => `${quote.label}：${exactLinePrefix(quote.turn.text, MAX_TASK_STUB_QUOTE_CHARS)}`)
+    .join(' · ');
+  return {
+    entryId: `digest:${closing.eventId}`,
+    kind: 'turn',
+    sessionId: closing.sessionId,
+    occurredAt: closing.occurredAt,
+    speaker: closing.speaker,
+    text,
+    sourceRefs: [...new Set([closing.eventId, ...quotes.map((quote) => quote.turn.eventId)])],
+    anchor: digestAnchors(text).length > 0,
+  };
+}
+
+/** The first non-empty line, cut to `limit`; the kept part is an exact prefix of the ledger row. */
+function exactLinePrefix(text: string, limit: number): string {
+  const line = text.split('\n').find((candidate) => candidate.trim() !== '') ?? text;
+  return line.length <= limit ? line : `${line.slice(0, limit - 1)}…`;
 }
 
 /** The issue's day boundary is Tokyo's, not the display time zone's. */

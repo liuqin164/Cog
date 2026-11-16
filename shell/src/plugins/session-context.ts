@@ -12,7 +12,7 @@
  * is injected later at `transformContext`, after the loop has appended any tool-loadout declaration
  * to the transcript — replacing messages at `prepareRequest` would drop that declaration.
  */
-import { renderBrowseStub, type AgentRecallItem, type KernelAgentMemoryBackend, type SessionContextAssembly, type SessionContextItem, type SessionContextLane } from 'cogmem';
+import { renderBrowseStub, type AgentRecallItem, type KernelAgentMemoryBackend, type SessionContextAssembly, type SessionContextItem, type SessionContextLane, type SessionDigestEntry } from 'cogmem';
 import type { AgentMessage } from '../state/agent-loop.ts';
 import type { NativePlugin } from './host.ts';
 
@@ -31,6 +31,8 @@ export interface SessionContextPluginConfig {
   openLoops?: () => SessionContextItem[];
   /** The per-turn part of the system prompt: time context and a pending question. */
   variablePrompt: () => string;
+  /** Finished tasks' digest stubs (#263), built from ledger rows and kept across restarts. */
+  digestStubs?: () => readonly SessionDigestEntry[];
   onAssembly?: (assembly: SessionContextAssembly) => void;
   recallLimit?: number;
 }
@@ -70,6 +72,7 @@ export function sessionContextPlugin(config: SessionContextPluginConfig): Native
             workingSet: config.workingSet?.() ?? [],
             openLoops: config.openLoops?.() ?? [],
             recall,
+            digestStubs: config.digestStubs?.() ?? [],
             recentText: recentText(messages),
           });
           config.onAssembly?.(assembly);

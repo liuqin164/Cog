@@ -20,6 +20,8 @@ export interface SessionTurn {
   projectId: string;
   sessionId: string;
   threadId: string;
+  /** The named turn this row belongs to (`<runId>:0` for the shell's runs). */
+  turnId: string;
   agentId: string;
   speaker: ConversationSpeaker;
   role: MemoryEventRole;
@@ -48,6 +50,7 @@ interface TurnRow {
   project_id: string | null;
   session_id: string | null;
   thread_id: string | null;
+  turn_id: string | null;
   role: string | null;
   occurred_at: number;
   global_seq: number | null;
@@ -56,7 +59,7 @@ interface TurnRow {
 }
 
 const TURN_COLUMNS = `
-  event_id, project_id, session_id, thread_id, role, occurred_at, global_seq,
+  event_id, project_id, session_id, thread_id, turn_id, role, occurred_at, global_seq,
   json_extract(payload_json, '$.text') AS text, payload_json
 `;
 
@@ -105,6 +108,7 @@ function mapTurn(row: TurnRow): SessionTurn {
     projectId: row.project_id ?? '',
     sessionId: row.session_id ?? '',
     threadId: row.thread_id ?? '',
+    turnId: row.turn_id ?? '',
     agentId: typeof metadata.sourceAgent === 'string' ? metadata.sourceAgent : '',
     // The old turn writer marks the lane but has no per-event speaker (its metadata is shared by
     // the user and assistant rows); the ledger's own role is the unambiguous fallback.

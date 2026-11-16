@@ -23,7 +23,7 @@
  */
 
 import { ImportanceSignalDetector } from '../engine/ImportanceSignalDetector.js';
-import { digestAnchors, type SessionDigest } from './SessionDigest.js';
+import { digestAnchors, type SessionDigest, type SessionDigestEntry } from './SessionDigest.js';
 import { sessionError } from './SessionErrors.js';
 import { serializeUntrustedMemory } from '../agent/UntrustedMemorySerializer.js';
 
@@ -107,6 +107,13 @@ export interface AssembleSessionContextInput {
    * (#253). A stub whose key or own entity words occur here is expanded before the request.
    */
   recentText?: readonly string[];
+  /**
+   * Task-exit stubs (#263). Each is a `SessionDigestEntry` built from the task's own ledger rows;
+   * the assembler places it in the digest lane and renders its key so `read mem:<eventId>` can
+   * drill back to the quoted row. This is a lane-level exit, not a fold: the working-set material
+   * is supplied by the caller and is not part of this input.
+   */
+  digestStubs?: readonly SessionDigestEntry[];
 }
 
 export type SessionContextLaneStatus = 'included' | 'downgraded' | 'empty';
@@ -161,7 +168,8 @@ export function assembleSessionContext(input: AssembleSessionContextInput, diges
   if (!Number.isInteger(input.targetTokens) || input.targetTokens <= 0) {
     throw sessionError('invalid_target_tokens');
   }
-  const lanes = buildLanes(input, digest);
+  const mergedDigest = mergeTaskStubs(digest, input.digestStubs ?? []);
+  const lanes = buildLanes(input, mergedDigest);
   const decisions: SessionContextDecision[] = [];
   let total = lanes.reduce((sum, lane) => sum + lane.tokens, 0);
 
@@ -281,13 +289,14 @@ export function assembleSessionContext(input: AssembleSessionContextInput, diges
       .filter(Boolean)
       .join('\n'),
     text: ordered.map((lane) => lane.text).filter(Boolean).join('\n'),
-    digest,
+    digest: mergedDigest,
     autoExpanded,
   };
 }
 
 function buildLanes(input: AssembleSessionContextInput, digest: SessionDigest): SessionContextLane[] {
   const protectedIds = new Set(input.protectedIds ?? []);
+  const stubIds = new Set((input.digestStubs ?? []).map((stub) => stub.entryId));
   const working: SessionContextItem[] = [
     ...(input.workingSet ?? []).map((text, index) => ({ id: `working:${index}`, text })),
     ...(input.openLoops ?? []),
@@ -297,7 +306,15 @@ function buildLanes(input: AssembleSessionContextInput, digest: SessionDigest): 
   const itemsByLane: Record<SessionContextLaneName, SessionContextItem[]> = {
     pinned: (input.pinned ?? []).map((text, index) => ({ id: `pinned:${index}`, text })),
     profile: (input.profile ?? []).map((text, index) => ({ id: `profile:${index}`, text })),
-    digest: digest.entries.map((entry) => ({ id: entry.entryId, text: entry.text, sourceRefs: entry.sourceRefs })),
+    digest: digest.entries.map((entry) => ({
+      id: entry.entryId,
+      text: entry.text,
+      sourceRefs: entry.sourceRefs,
+      // Only a task-exit stub carries its key into the lane (#263). An ordinary digest entry's
+      // `sourceRefs[0]` is still the row it quotes; the stub is the one that must stay drillable
+      // after the task's working set is gone.
+      ...(stubIds.has(entry.entryId) ? { anchorEvent: entry.sourceRefs[0] } : {}),
+    })),
     working_set: workingItems,
     recall: [...(input.recall ?? [])],
     tail: digest.tail.map((turn) => ({ id: turn.eventId, text: turn.text, sourceRefs: [turn.eventId] })),
@@ -405,7 +422,31 @@ function lastFoldableIndex(items: readonly SessionContextItem[]): number {
 function renderLane(lane: SessionContextLaneName, items: SessionContextItem[]): string {
   if (items.length === 0) return '';
   if (lane === 'recall') return renderRecallLane(items);
+  if (lane === 'digest') return renderDigestLane(items);
   return [`[${lane}]`, ...items.map((item) => `- ${item.text}`)].join('\n');
+}
+
+/**
+ * The digest lane's task-exit stub carries its key on a second line (#263). An ordinary digest
+ * entry prints no key line: it is the row itself, and `browseIds`/`sourceRefs` still name it.
+ */
+function renderDigestLane(items: SessionContextItem[]): string {
+  const lines = ['[digest]'];
+  for (const item of items) {
+    lines.push(`- ${item.text.replace(/\n/gu, '\n  ')}`);
+    if (item.anchorEvent) lines.push('  anchorEvent=' + serializeUntrustedMemory(item.anchorEvent, 160));
+  }
+  return lines.join('\n');
+}
+
+/**
+ * A task-exit stub replaces an ordinary digest entry with the same `entryId` instead of duplicating
+ * it. The stub is the same ledger row, plus the key the exit needs to keep visible.
+ */
+function mergeTaskStubs(digest: SessionDigest, stubs: readonly SessionDigestEntry[]): SessionDigest {
+  if (stubs.length === 0) return digest;
+  const stubIds = new Set(stubs.map((stub) => stub.entryId));
+  return { ...digest, entries: [...digest.entries.filter((entry) => !stubIds.has(entry.entryId)), ...stubs] };
 }
 
 /**
