@@ -2287,7 +2287,23 @@ export class MemoryKernel {
    * and the misses are the ones whose words are not in the fact).
    */
   semanticIndexEnabled(): boolean {
-    return this.modelRegistry.getRoleConfig('memory').provider !== 'rule_only';
+    // A memory model makes the curator mark events `shouldEmbed`, but that alone does not build an
+    // index: recall reads `neuronEmbeddingStore` through `embeddingProvider`, and the embedder's
+    // role decides whether vectors are real. Claiming a semantic index with either half missing is
+    // the label lie #231 exists to stop.
+    return this.modelRegistry.getRoleConfig('memory').provider !== 'rule_only'
+      && this.modelRegistry.getRoleConfig('embedding').provider !== 'deterministic_local'
+      && this.embeddingProvider !== undefined;
+  }
+
+  /**
+   * The host's migration path after an embedding role changes: re-embed this project's stale
+   * neurons in bounded batches. A new install never needs it; an existing brain does, and the
+   * pipeline's own progress row makes a restart resume instead of starting over.
+   */
+  async reEmbed(projectId: string): Promise<{ processed: number; remaining: number }> {
+    if (!this.reEmbeddingPipeline) throw new Error('re_embedding_unavailable: no embedding provider configured');
+    return this.reEmbeddingPipeline.run(projectId);
   }
 
   getDreamBacklogStatus(projectId?: string): DreamBacklogStatus {

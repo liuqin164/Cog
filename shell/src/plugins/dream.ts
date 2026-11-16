@@ -21,6 +21,9 @@ export interface DreamServiceOptions {
   runKernelNight: boolean;
   maxEpisodes: number;
   trace?: TraceLog;
+  /** The host's model budget seam, around the kernel Night that may call the memory model. */
+  beforeKernelNight?: (now: number) => void;
+  afterKernelNight?: (now: number) => void;
 }
 
 export interface DreamPluginConfig extends Omit<DreamServiceOptions, 'kernel' | 'backend' | 'trace'> {}
@@ -48,13 +51,25 @@ export class DreamService {
     let kernelNightRan = false;
     let kernelNightSkippedReason: string | undefined;
     if (this.options.runKernelNight) {
+      this.options.beforeKernelNight?.(now);
       try {
         const night = await kernel.runNight({ projectId, maxEpisodes: this.options.maxEpisodes, now });
         kernelNightRan = true;
         kernelNightSkippedReason = night.dream.skipped ? night.dream.reason : undefined;
+        if (night.dream.semanticProcessorReason) {
+          this.options.trace?.append('dream_model_degraded', {
+            localDate,
+            reason: night.dream.semanticProcessorReason,
+            error: night.dream.semanticProcessorError,
+          });
+        } else if (night.dream.semanticProcessorAvailable) {
+          this.options.trace?.append('dream_model_used', { localDate });
+        }
       } catch (error) {
         kernelNightSkippedReason = error instanceof Error ? error.message : String(error);
         this.options.trace?.append('dream_kernel_night_failed', { localDate, message: kernelNightSkippedReason });
+      } finally {
+        this.options.afterKernelNight?.(now);
       }
     } else {
       kernelNightSkippedReason = 'disabled_by_config';

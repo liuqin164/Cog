@@ -10,8 +10,8 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { ChannelContract, createMemoryKernel, KernelAgentMemoryBackend, type ChannelSession, type MemoryKernel, type ProcedureWorkflow } from 'cogmem';
-import { TraceStore } from 'cogmem/internal';
+import { ChannelContract, createMemoryKernel, KernelAgentMemoryBackend, type ChannelSession, type EmbeddingProvider, type MemoryKernel, type ProcedureWorkflow } from 'cogmem';
+import { ModelRegistry, TraceStore, type ModelTextUsage } from 'cogmem/internal';
 import { defaultShellConfig, type ShellConfig } from './config.ts';
 import { StateMachine } from './state/machine.ts';
 import { CheckpointStore, type InFlightToolCall, type Suspension } from './state/checkpoint.ts';
@@ -112,6 +112,10 @@ export interface CompanionShellOptions {
   config?: Partial<ShellConfig>;
   /** Tests inject a deterministic provider; production uses the mg plugin. */
   modelProvider?: ModelProvider;
+  /** Tests and an embedding host may supply the kernel's model registry; production builds it below. */
+  modelRegistry?: ModelRegistry;
+  /** The re-embed migration path for a brain written before an embedding role existed. */
+  embeddingProvider?: EmbeddingProvider;
   now?: () => number;
   tick?: boolean;
   /** Called when a checkpoint write fails; the CLI turns it into a non-zero exit. */
@@ -185,6 +189,11 @@ export class CompanionShell implements ShellControl, AttachShell {
   private memoryWarned = false;
   /** The day whose daily-budget stop was already spoken to the user (#233). */
   private dailyNotifiedDay?: string;
+  /** The Dream model's spend for the current night, charged to the same day counter (#231). */
+  private nightSpent = 0;
+  private nightCap = 0;
+  private nightDay?: string;
+  private dreamModelActive = false;
   /**
    * The window `/forget` previewed and `/forget confirm` may execute. Process-local: a restart
    * asks for a fresh preview rather than resuming a confirmation the owner can no longer see.
@@ -229,6 +238,8 @@ export class CompanionShell implements ShellControl, AttachShell {
       dbPath: this.config.dbPath,
       projectTimeZone: this.config.timeZone,
       snapshotsDir: join(this.config.dataDir, 'snapshots'),
+      modelRegistry: options.modelRegistry ?? this.buildModelRegistry(),
+      ...(options.embeddingProvider ? { embeddingProvider: options.embeddingProvider } : {}),
     });
     // The WAL is mmap'd and counts against RSS. The 4 MB default lets it grow to the threshold on a
     // busy turn stream; 256 pages (~1 MB) keeps the native footprint bounded without a shell timer.
@@ -311,6 +322,96 @@ export class CompanionShell implements ShellControl, AttachShell {
   /** The loopback HTTP face's address (status + star map), when this process started one. */
   get httpUrl(): string | undefined {
     return this.http?.baseUrl;
+  }
+
+  /**
+   * The shell's memory role is the mg route it already uses for its own turns. Embedding stays
+   * deterministic until an embedding provider is supplied: the kernel then reports
+   * `semanticIndex: false` rather than claiming an index it does not have (#231).
+   */
+  private buildModelRegistry(): ModelRegistry {
+    const model = this.config.model;
+    return new ModelRegistry({
+      memory: {
+        role: 'memory',
+        provider: 'openai_compatible',
+        baseUrl: model.baseUrl,
+        apiKey: model.apiKey,
+        modelName: model.model,
+        timeoutMs: model.timeoutMs,
+        maxTokens: 16_384,
+        fallback: 'rule_only',
+      },
+      reasoning: {
+        role: 'reasoning',
+        provider: 'rule_only',
+        modelName: 'rule_only',
+        timeoutMs: 60_000,
+        fallback: 'memory',
+      },
+      embedding: {
+        role: 'embedding',
+        provider: 'deterministic_local',
+        modelName: 'deterministic_local',
+        timeoutMs: 30_000,
+      },
+    }, {
+      beforeGenerate: () => this.beforeDreamModelCall(),
+      onUsage: (_role, usage) => this.chargeDreamModelUsage(usage),
+    });
+  }
+
+  private beginDreamModelBudget(at: number): void {
+    const dailyRemaining = Math.max(0, this.config.dailyBudget.maxTokensPerDay - this.dailySpent(at));
+    this.nightDay = tokyoDate(at);
+    this.nightSpent = 0;
+    this.nightCap = Math.min(this.config.nightBudget.maxTokensPerNight, dailyRemaining);
+    this.dreamModelActive = true;
+    this.trace.append('dream_model_budget', {
+      day: this.nightDay,
+      cap: this.nightCap,
+      nightLimit: this.config.nightBudget.maxTokensPerNight,
+      dailyRemaining,
+    });
+  }
+
+  private endDreamModelBudget(): void {
+    if (!this.dreamModelActive) return;
+    this.dreamModelActive = false;
+    this.trace.append('dream_model_spent', { day: this.nightDay, spent: this.nightSpent, cap: this.nightCap });
+  }
+
+  private beforeDreamModelCall(): void {
+    if (!this.dreamModelActive) return;
+    if (this.dailyBudgetExceeded()) {
+      this.trace.append('dream_model_budget_exceeded', {
+        day: this.nightDay, spent: this.nightSpent, cap: this.nightCap, reason: 'daily_token_budget',
+      });
+      throw new Error('dream_model_budget_exceeded: daily_token_budget');
+    }
+    if (this.nightSpent >= this.nightCap) {
+      this.trace.append('dream_model_budget_exceeded', {
+        day: this.nightDay, spent: this.nightSpent, cap: this.nightCap, reason: 'night_token_budget',
+      });
+      throw new Error(`dream_model_budget_exceeded: ${this.nightSpent} >= ${this.nightCap}`);
+    }
+  }
+
+  private chargeDreamModelUsage(usage: ModelTextUsage): void {
+    if (!this.dreamModelActive) return;
+    const tokens = (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0);
+    if (tokens <= 0) return;
+    this.nightSpent += tokens;
+    // One counter for the day (#233). The night cap limits this run; it is not a second ledger.
+    this.chargeCost(tokens);
+    this.trace.append('dream_model_usage', {
+      day: this.nightDay,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      estimated: usage.estimated === true,
+      spent: this.nightSpent,
+      cap: this.nightCap,
+    });
   }
 
   async start(): Promise<void> {
@@ -485,7 +586,15 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.host.register(capturePlugin({ agentId: this.config.agentId, projectId: this.config.projectId, sessionId: this.config.sessionId, paused: () => this.capturePaused }));
     this.host.register(recallPlugin({ agentId: this.config.agentId, projectId: this.config.projectId, limit: 3 }));
     this.host.register(soulEditPlugin());
-    this.host.register(dreamPlugin({ agentId: this.config.agentId, projectId: this.config.projectId, sessionId: this.config.sessionId, runKernelNight: this.config.dream.runKernelNight, maxEpisodes: this.config.dream.maxEpisodes }));
+    this.host.register(dreamPlugin({
+      agentId: this.config.agentId,
+      projectId: this.config.projectId,
+      sessionId: this.config.sessionId,
+      runKernelNight: this.config.dream.runKernelNight,
+      maxEpisodes: this.config.dream.maxEpisodes,
+      beforeKernelNight: (now) => this.beginDreamModelBudget(now),
+      afterKernelNight: () => this.endDreamModelBudget(),
+    }));
     this.host.register(emergencePlugin({ agentId: this.config.agentId, projectId: this.config.projectId }));
     if (this.config.terminalEnabled) {
       this.host.register(terminalPlugin({

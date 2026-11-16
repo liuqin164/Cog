@@ -869,8 +869,9 @@ test('recall says whether a semantic index was available (#135)', async () => {
     plain.close();
   }
 
-  // A configured memory provider is what turns the semantic half on; the role config is
-  // read, never called, so no server is needed to assert this.
+  // A memory provider alone is not a semantic index: recall reads vectors through
+  // `embeddingProvider`, and the embedding role still says deterministic_local. Claiming
+  // otherwise is the label lie #231 stopped.
   const configured = createMemoryKernel({
     dbPath: join(dir, 'configured.db'),
     vectorBackend: 'sqlite-vec',
@@ -879,10 +880,33 @@ test('recall says whether a semantic index was available (#135)', async () => {
     } as never),
   });
   try {
-    expect(configured.semanticIndexEnabled()).toBe(true);
-    expect(new KernelAgentMemoryBackend(configured).recall({ query: 'anything', projectId: 'p', agentId: 'a', limit: 3 }).semanticIndex).toBe(true);
+    expect(configured.semanticIndexEnabled()).toBe(false);
+    expect(new KernelAgentMemoryBackend(configured).recall({ query: 'anything', projectId: 'p', agentId: 'a', limit: 3 }).semanticIndex).toBe(false);
   } finally {
     configured.close();
+  }
+
+  // Both halves configured is what makes the claim true. The provider is a stub: the role
+  // config and the presence of a provider are read, no embedding call is made here.
+  const semantic = createMemoryKernel({
+    dbPath: join(dir, 'semantic.db'),
+    vectorBackend: 'sqlite-vec',
+    modelRegistry: new ModelRegistry({
+      memory: { role: 'memory', provider: 'openai_compatible', modelName: 'm', baseUrl: 'http://127.0.0.1:1' },
+      embedding: { role: 'embedding', provider: 'openai_compatible', modelName: 'e', baseUrl: 'http://127.0.0.1:1' },
+    } as never),
+    embeddingProvider: {
+      dimensions: 3,
+      modelId: 'test/embedding',
+      embedBatch: async (texts: string[]) => texts.map(() => new Float32Array([1, 0, 0])),
+      embed: async () => new Float32Array([1, 0, 0]),
+    },
+  });
+  try {
+    expect(semantic.semanticIndexEnabled()).toBe(true);
+    expect(new KernelAgentMemoryBackend(semantic).recall({ query: 'anything', projectId: 'p', agentId: 'a', limit: 3 }).semanticIndex).toBe(true);
+  } finally {
+    semantic.close();
   }
 });
 
