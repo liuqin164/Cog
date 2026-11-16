@@ -12,6 +12,12 @@ interface OpenAIChatCompleteParams {
   jsonMode?: boolean;
 }
 
+interface ChatUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  estimated?: boolean;
+}
+
 interface OpenAIEmbedParams {
   model: string;
   input: string;
@@ -27,7 +33,7 @@ function normalizeBaseUrl(baseUrl: string): string {
 export class OpenAICompatibleClient {
   constructor(private options: OpenAICompatibleClientOptions) {}
 
-  async chatComplete(params: OpenAIChatCompleteParams): Promise<string> {
+  async chatComplete(params: OpenAIChatCompleteParams, onUsage?: (usage: ChatUsage) => void): Promise<string> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.options.timeoutMs ?? 30000);
 
@@ -55,12 +61,27 @@ export class OpenAICompatibleClient {
 
       const payload = await response.json() as {
         choices?: Array<{ message?: { content?: string; reasoning_content?: string } }>;
+        usage?: { prompt_tokens?: unknown; completion_tokens?: unknown };
       };
       const message = payload.choices?.[0]?.message;
       // Some OpenAI-compatible providers put the answer in `reasoning_content`
       // and leave `content` empty; returning '' there reads downstream as
       // `provider_invalid_output` with an empty detail. Measured on the box.
-      return message?.content?.trim() ? message.content : (message?.reasoning_content ?? '');
+      const text = message?.content?.trim() ? message.content : (message?.reasoning_content ?? '');
+      const inputTokens = numberOrUndefined(payload.usage?.prompt_tokens);
+      const outputTokens = numberOrUndefined(payload.usage?.completion_tokens);
+      if (inputTokens !== undefined || outputTokens !== undefined) {
+        onUsage?.({ inputTokens, outputTokens });
+      } else {
+        // An endpoint that sends no usage block still costs something. A character estimate is
+        // coarse, but a night cap that never fires because the provider omitted usage is worse.
+        onUsage?.({
+          inputTokens: Math.ceil((params.systemPrompt.length + params.userPrompt.length) / 4),
+          outputTokens: Math.ceil(text.length / 4),
+          estimated: true
+        });
+      }
+      return text;
     } catch (error) {
       // A bare exception object here cost a box investigation: a model call that had timed out
       // printed `DOMException { line: 0, column: 0, ... }` and nothing else. Name the cause.
@@ -113,4 +134,8 @@ export class OpenAICompatibleClient {
           'Content-Type': 'application/json'
         };
   }
+}
+
+function numberOrUndefined(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }

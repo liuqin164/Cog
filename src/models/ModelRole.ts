@@ -31,3 +31,20 @@ export interface ModelRegistryConfig {
 
 export type TextGenerateFn = (system: string, user: string) => Promise<string>;
 export type EmbedFn = (text: string) => Promise<number[]>;
+
+/** What a text call cost, as the provider reported it or as a character estimate. */
+export interface ModelTextUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  /** True when the provider sent no usage block and the numbers are a character estimate. */
+  estimated?: boolean;
+}
+
+/**
+ * The host's accounting seam. A shell that pays for model calls reads usage here and can stop
+ * before the next call; the registry itself never decides a budget.
+ */
+export interface ModelUsageHooks {
+  beforeGenerate?: (role: 'memory' | 'reasoning') => void;
+  onUsage?: (role: 'memory' | 'reasoning', usage: ModelTextUsage) => void;
+}

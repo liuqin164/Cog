@@ -18,6 +18,11 @@ export interface DailyBudget {
   maxTokensPerDay: number;
 }
 
+/** The night's model-call ceiling. It is charged to the same day counter, not a second ledger. */
+export interface NightBudget {
+  maxTokensPerNight: number;
+}
+
 export interface ShellConfig {
   /** Working directory the read/write/edit/bash tools are caged to. */
   workspaceRoot: string;
@@ -49,6 +54,12 @@ export interface ShellConfig {
    * instruction still runs under the per-run cage.
    */
   dailyBudget: DailyBudget;
+  /**
+   * The Dream model's nightly ceiling (#231 route A). Dream is not a caged run: its calls never pass
+   * through the agent loop, so this cap is checked at the model-call seam and charged to
+   * `costDayTokens` like every other token the resident spends.
+   */
+  nightBudget: NightBudget;
   dream: { windowStartHour: number; windowEndHour: number; runKernelNight: boolean; maxEpisodes: number };
   idleWakeIntervalMs: number;
   /** Tick interval for due intents/dream/emergence. Deterministic; tests drive ticks directly. */
@@ -79,7 +90,7 @@ function env(name: string): string | undefined {
  * be understood is a startup error, not a silent fallback — a user who edited a number must not be
  * left believing it applied.
  */
-function readBudgetConfig(dataDir: string): { work?: Partial<RunBudget>; autonomous?: Partial<RunBudget>; daily?: Partial<DailyBudget> } {
+function readBudgetConfig(dataDir: string): { work?: Partial<RunBudget>; autonomous?: Partial<RunBudget>; daily?: Partial<DailyBudget>; night?: Partial<NightBudget> } {
   const path = join(dataDir, 'budgets.json');
   if (!existsSync(path)) return {};
   let parsed: unknown;
@@ -94,6 +105,7 @@ function readBudgetConfig(dataDir: string): { work?: Partial<RunBudget>; autonom
     ...(record.work === undefined ? {} : { work: budgetTier(record.work, path, 'work') }),
     ...(record.autonomous === undefined ? {} : { autonomous: budgetTier(record.autonomous, path, 'autonomous') }),
     ...(record.maxTokensPerDay === undefined ? {} : { daily: dailyBudget(record.maxTokensPerDay, path) }),
+    ...(record.maxTokensPerNight === undefined ? {} : { night: nightBudget(record.maxTokensPerNight, path) }),
   };
 }
 
@@ -102,6 +114,13 @@ function dailyBudget(value: unknown, path: string): Partial<DailyBudget> {
     throw new Error(`invalid_budgets_config: ${path}: maxTokensPerDay must be a positive integer`);
   }
   return { maxTokensPerDay: value };
+}
+
+function nightBudget(value: unknown, path: string): Partial<NightBudget> {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+    throw new Error(`invalid_budgets_config: ${path}: maxTokensPerNight must be a positive integer`);
+  }
+  return { maxTokensPerNight: value };
 }
 
 function budgetTier(value: unknown, path: string, name: string): Partial<RunBudget> {
@@ -127,6 +146,11 @@ export const DEFAULT_WORK_BUDGET: RunBudget = { maxTurnsPerRun: 32, maxTokensPer
  * instead of burning the month.
  */
 export const DEFAULT_DAILY_BUDGET: DailyBudget = { maxTokensPerDay: 2_000_000 };
+/**
+ * A night is 25 episodes at the default cap, each paying for a frame and a candidate pass. The
+ * 200k ceiling leaves room for that while keeping one bad night from spending a fifth of the day.
+ */
+export const DEFAULT_NIGHT_BUDGET: NightBudget = { maxTokensPerNight: 200_000 };
 
 export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellConfig {
   const workspaceRoot = overrides.workspaceRoot ?? env('COGMEM_SHELL_WORKSPACE') ?? process.cwd();
@@ -135,6 +159,7 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
   const autonomous: RunBudget = { ...DEFAULT_AUTONOMOUS_BUDGET, ...operating.autonomous };
   const work: RunBudget = { ...DEFAULT_WORK_BUDGET, ...operating.work };
   const daily: DailyBudget = { ...DEFAULT_DAILY_BUDGET, ...operating.daily };
+  const night: NightBudget = { ...DEFAULT_NIGHT_BUDGET, ...operating.night };
   // The registry is read here, once, so a plugin registered by `/plugins add` reaches the next
   // process and nothing re-reads the file mid-run. A corrupt file is a startup error (see registry).
   const registryPlugins = readPluginRegistry(dataDir);
@@ -164,6 +189,7 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
     },
     workBudget: overrides.workBudget ?? work,
     dailyBudget: overrides.dailyBudget ?? daily,
+    nightBudget: overrides.nightBudget ?? night,
     contextSweetSpot: overrides.contextSweetSpot ?? 6_000,
     // The install's rhythm step is what fills these; the literals stay the fallback for a hand-run
     // shell that was never installed.

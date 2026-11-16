@@ -29,6 +29,16 @@ describe('the daily budget (#233)', () => {
     expect(() => defaultShellConfig({ dataDir: dir, workspaceRoot: join(dir, 'ws') })).toThrow(/maxTokensPerDay must be a positive integer/);
   });
 
+  test('budgets.json reads maxTokensPerNight on the same token unit and refuses a non-positive one', () => {
+    const dir = makeTempDir();
+    writeFileSync(join(dir, 'budgets.json'), JSON.stringify({ maxTokensPerDay: 12_345, maxTokensPerNight: 6_789 }));
+    const config = defaultShellConfig({ dataDir: dir, workspaceRoot: join(dir, 'ws') });
+    expect(config.nightBudget.maxTokensPerNight).toBe(6_789);
+
+    writeFileSync(join(dir, 'budgets.json'), JSON.stringify({ maxTokensPerNight: 0 }));
+    expect(() => defaultShellConfig({ dataDir: dir, workspaceRoot: join(dir, 'ws') })).toThrow(/maxTokensPerNight must be a positive integer/);
+  });
+
   test('an autonomous run is not started once the checkpointed day is at the limit, and the count survives a restart', async () => {
     const dir = makeTempDir();
     const limit = 1_000;

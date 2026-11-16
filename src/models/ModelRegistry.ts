@@ -1,9 +1,11 @@
 // @ts-nocheck
 import type {
   EmbedFn,
+  ModelTextUsage,
   ModelRegistryConfig,
   ModelRoleConfig,
   ModelRoleName,
+  ModelUsageHooks,
   ProviderType,
   TextGenerateFn
 } from './ModelRole.js';
@@ -11,7 +13,7 @@ import { AnthropicClient } from './providers/AnthropicClient.js';
 import { OpenAICompatibleClient } from './providers/OpenAICompatibleClient.js';
 
 export class ModelRegistry {
-  constructor(private config: ModelRegistryConfig) {}
+  constructor(private config: ModelRegistryConfig, private readonly hooks: ModelUsageHooks = {}) {}
 
   static defaultConfig(): ModelRegistryConfig {
     return {
@@ -92,6 +94,7 @@ export class ModelRegistry {
   ): Promise<string> {
     if (visited.has(roleName)) return '';
     visited.add(roleName);
+    this.hooks.beforeGenerate?.(roleName);
 
     const role = this.config[roleName];
     if (role.provider === 'openai_compatible') {
@@ -106,6 +109,8 @@ export class ModelRegistry {
         userPrompt: user,
         maxTokens: role.maxTokens,
         jsonMode: role.jsonMode
+      }, (usage) => {
+        this.hooks.onUsage?.(roleName, usage);
       });
       if (result.trim()) return result;
       return this.runFallback(role.fallback, system, user, visited);
@@ -124,6 +129,7 @@ export class ModelRegistry {
         systemPrompt: system,
         userPrompt: user
       });
+      this.hooks.onUsage?.(roleName, estimateUsage(system, user, result));
       if (result.trim()) return result;
       return this.runFallback(role.fallback, system, user, visited);
     }
@@ -159,4 +165,12 @@ export class ModelRegistry {
     if (role.provider === 'deterministic_local') return 'rule_only';
     return role.provider;
   }
+}
+
+function estimateUsage(system: string, user: string, result: string): ModelTextUsage {
+  return {
+    inputTokens: Math.ceil((system.length + user.length) / 4),
+    outputTokens: Math.ceil(result.length / 4),
+    estimated: true
+  };
 }
