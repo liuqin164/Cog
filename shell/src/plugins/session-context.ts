@@ -113,25 +113,26 @@ function newestUserText(messages: readonly AgentMessage[]): string | undefined {
 
 function toContextItem(item: AgentRecallItem): SessionContextItem {
   const eventId = item.sourceAnchor?.eventId;
+  const sourceLocator = item.sourceContext?.locator?.command;
   return {
     id: eventId ?? item.id,
     text: item.text,
-    ...(eventId === undefined ? {} : { sourceRefs: [eventId] }),
+    ...(eventId === undefined ? {} : { sourceRefs: [eventId], anchorEvent: eventId }),
+    ...(sourceLocator === undefined ? {} : { sourceLocator }),
+    ...(item.whyMatched === undefined ? {} : { whyMatched: item.whyMatched }),
   };
 }
 
 /**
  * The lane's bytes for the request. The kernel drops a downgraded lane's stub when the rest of the
  * assembly already exceeds the budget; the pointer is still the whole point of the downgrade, so the
- * shell restores it from `browseIds`. The recall lane keeps the legacy data envelope the provider
- * and the A3 repro read.
+ * shell restores it from `browseIds`. The recall lane already carries the kernel's
+ * `COGMEM_RECALL_CONTEXT` map, so the shell adds no second envelope.
  */
 function requestLaneText(lane: SessionContextLane): string {
-  const text = lane.text || (lane.status === 'downgraded' && lane.browseIds.length > 0
+  return lane.text || (lane.status === 'downgraded' && lane.browseIds.length > 0
     ? `[${lane.lane}: browse-only, ${lane.browseIds.length} item(s)]`
     : '');
-  if (!text) return '';
-  return lane.lane === 'recall' ? `<recall-context>\n${text}\n</recall-context>` : text;
 }
 
 /**

@@ -61,7 +61,7 @@ describe('emergence does not consume its own query (#229)', () => {
       // The recalled candidate entered the run as data, not as a user message.
       const prompt = provider.calls[0].messages;
       expect(prompt.some((message) => message.role === 'user')).toBe(false);
-      expect(prompt.some((message) => message.role === 'system' && message.content.includes('<recall-context>'))).toBe(true);
+      expect(prompt.some((message) => message.role === 'system' && message.content.includes('<COGMEM_RECALL_CONTEXT'))).toBe(true);
     } finally {
       await shell.stop();
     }

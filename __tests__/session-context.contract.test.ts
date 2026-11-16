@@ -251,6 +251,28 @@ describe('the assembly stays inside the target and explains every cut (#191 prim
     expect(stable.every((lane) => lane.status === 'included')).toBe(true);
   });
 
+  test('the recall lane carries the kernel drill-down keys, not only item text', () => {
+    const assembly = backend.assembleSessionContext({
+      projectId: PROJECT,
+      agentId: AGENT,
+      sessionId: SESSION,
+      targetTokens: 2000,
+      recall: [{
+        id: 'evt-recall-key',
+        text: 'a recalled turn',
+        anchorEvent: 'evt-recall-key',
+        sourceLocator: 'cogmem memory show --event evt-recall-key --before 2 --after 2 --json',
+        whyMatched: 'raw_ledger_text_fallback',
+      }],
+      tailTurns: 8,
+    });
+    const recall = assembly.lanes.find((lane) => lane.lane === 'recall')!;
+    expect(recall.text).toContain('<COGMEM_RECALL_CONTEXT');
+    expect(recall.text).toContain('anchorEvent=evt-recall-key');
+    expect(recall.text).toContain('sourceLocator=cogmem memory show --event evt-recall-key');
+    expect(recall.text).toContain('whyMatched=raw_ledger_text_fallback');
+  });
+
   test('a downgrade is readable from trace_events, not only from the return value', () => {
     backend.assembleSessionContext({
       projectId: PROJECT,

@@ -99,9 +99,9 @@ describe('context continuity', () => {
       });
       await shell.submit('帮我看看部署窗口是什么时候');
       expect(provider.calls.length).toBeGreaterThanOrEqual(2);
-      expect(asText(provider.calls[0].messages)).toContain('<recall-context>');
+      expect(asText(provider.calls[0].messages)).toContain('<COGMEM_RECALL_CONTEXT');
       expect(asText(provider.calls[0].messages)).toContain('周五绝对不能部署');
-      expect(asText(provider.calls[1].messages)).toContain('<recall-context>');
+      expect(asText(provider.calls[1].messages)).toContain('<COGMEM_RECALL_CONTEXT');
       expect(asText(provider.calls[1].messages)).toContain('周五绝对不能部署');
     } finally {
       await shell.stop();
