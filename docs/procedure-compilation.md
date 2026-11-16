@@ -26,6 +26,14 @@ when code and contract disagree. Version: `PROCEDURE_CONTRACT_VERSION = 2`.
 - **No rewrite of the evidence.** Steps are quoted as recorded. A correction is quoted as the owner
   wrote it; the compiler never paraphrases a step.
 
+## Importing a SKILL.md (#266)
+
+A `SKILL.md` is how that imported guide usually arrives. `cogmem import <openclaw|hermes> --skill
+<path>` reads the file, not a directory: frontmatter `name` becomes the key (`key` and `domain`
+override it), `description` the title (`>` and `|` scalars included), `allowed-tools` the tools,
+and the body's list items — or its paragraphs when it has none — the quoted steps. The import path
+writes `metadata.imported: true`; nothing is mounted, scanned, or installed.
+
 ## Evidence (frozen)
 
 One descriptor shape serves an own attempt and an imported guide. A row without a `domain` and a

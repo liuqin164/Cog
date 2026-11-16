@@ -5,6 +5,7 @@ import type { FileEvidence } from '../assets/index.js';
 import type { SkillCandidateLike } from './ExtensionPoints.js';
 import type { MemoryAtlasSlice } from '../atlas/MemoryAtlasTypes.js';
 import type { MemoryQueryFrameV1 } from '../semantic/MemoryFrameTypes.js';
+import type { SourceAdapterKind } from '../adapters/types.js';
 
 export interface BrainRecallResult {
   query: string;
@@ -27,15 +28,7 @@ export interface BrainRecallResult {
     sourcePath: string;
     text: string;
     timestamp: number;
-    sourceType:
-      | 'conversation_markdown'
-      | 'soul_markdown'
-      | 'hermes_state_db'
-      | 'openclaw_daily_memory'
-      | 'openclaw_session'
-      | 'openclaw_memory_index'
-      | 'openclaw_user_profile'
-      | 'openclaw_persona';
+    sourceType: SourceAdapterKind;
   }>;
   profileSignals: Array<{
     neuronId: string;

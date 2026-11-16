@@ -4,6 +4,7 @@ import type { IngestInput, MemorySourceRef, SourceType } from '../types/index.js
 
 export type SourceAdapterKind =
   | 'conversation_markdown'
+  | 'skill_markdown'
   | 'soul_markdown'
   | 'hermes_state_db'
   | 'openclaw_daily_memory'

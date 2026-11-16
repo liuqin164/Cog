@@ -371,6 +371,12 @@ const PROCEDURE_CONFIDENCE: Readonly<Record<ProcedureEntry['grade'], number>> = 
   established: 0.85,
   tentative: 0.65,
 };
+/** Imported guides share the procedure source rank, so a small penalty keeps them after own practice. */
+const PROCEDURE_ORIGIN_PENALTY: Readonly<Record<ProcedureEntry['origin'], number>> = {
+  imported: 0.05,
+  experience: 0,
+  correction: 0,
+};
 
 interface RawCandidate {
   source: SurfacingSource;
@@ -845,7 +851,7 @@ export class SurfacingCandidates {
       sourceRefs: entry.sourceRefs,
       observedAt: entry.recordedAt,
       expiresAt: null,
-      confidence: PROCEDURE_CONFIDENCE[entry.grade],
+      confidence: PROCEDURE_CONFIDENCE[entry.grade] - PROCEDURE_ORIGIN_PENALTY[entry.origin],
     }));
   }
 
