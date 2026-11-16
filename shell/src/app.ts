@@ -33,6 +33,7 @@ import { hygienePlugin } from './plugins/hygiene.ts';
 import { WorkflowService, workflowsPlugin } from './plugins/workflows.ts';
 import { CommandProposals, executeProposal, type CommandProposal, type ProposalConfirmation } from './proposals.ts';
 import { capturePlugin } from './plugins/capture.ts';
+import { sessionContextPlugin } from './plugins/session-context.ts';
 import { recallPlugin } from './plugins/recall.ts';
 import { soulEditPlugin } from './plugins/soul-edit.ts';
 import { HygienePipeline } from './hygiene.ts';
@@ -606,6 +607,15 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.host.register(askPlugin());
     this.host.register(hygienePlugin());
     this.host.register(capturePlugin({ agentId: this.config.agentId, projectId: this.config.projectId, sessionId: this.config.sessionId, paused: () => this.capturePaused }));
+    // Before recall: the tail sits before the newest user line, the recall block after it, so the
+    // two lanes stay independently placeable (#245 A1 / #247 A3).
+    this.host.register(sessionContextPlugin({
+      agentId: this.config.agentId,
+      projectId: this.config.projectId,
+      sessionId: this.config.sessionId,
+      targetTokens: this.config.contextSweetSpot,
+      tailTurns: this.config.tailTurns,
+    }));
     this.host.register(recallPlugin({ agentId: this.config.agentId, projectId: this.config.projectId, limit: 3 }));
     this.host.register(soulEditPlugin());
     this.host.register(dreamPlugin({
