@@ -166,22 +166,28 @@ shape of the change.
 framework. It is *not* wired into the main tree's `cogmem` bin; that integration is a post-4.2 step.
 
 ```sh
-bun run bin/install                 # interactive
-bun run bin/install --yes           # defaults: mg gateway, system TZ, dream 2:00–5:00
+bun run bin/install                 # interactive; asks the model route first
+bun run bin/install --yes --provider openai_compatible --base-url https://api.example.com/v1 --model your-model
+bun run bin/install --yes --provider mg --base-url http://127.0.0.1:3425/v1 --model auto/deepseek-v4.1-flash
 bun run bin/install --uninstall     # stop the service, remove the unit, keep the memory
 ```
+
+`--yes` has no default route: `--provider`, `--base-url` and `--model` are required, and a missing one
+stops the install before the probe, naming it. The key for `openai_compatible` comes from
+`MG_API_KEY` or `COGMEM_MODEL_KEY`, never from an argv flag. mg stays available as an explicit
+choice for a machine that runs that local gateway; it is not the fallback.
 
 0. **预检** — OS (macOS/Linux only; Windows is refused, its service story is not this round), bun,
    free disk, and whether the loopback HTTP port is free. No old-install branch: every version so far
    has no users, so there is one path and no migration.
 1. **落位** — install the package deps, create the data directory (`0700`) and `snapshots/` (`0700`),
    initialize an empty kernel through `createMemoryKernel`, and write the default soul.
-2. **模型** — pick mg or an OpenAI-compatible endpoint, take the key through a masked prompt, and make
+2. **模型** — pick mg or an OpenAI-compatible endpoint (no default), take the key through a masked prompt, and make
    **one real call** right there. A failure stops the install at this step with a named diagnosis
    (`model_unreachable`, `model_unauthorized`, `model_not_found`, `model_rate_limited`, `model_timeout`,
    …) instead of surfacing after "success". A custom endpoint is saved as a **named route** (name,
    baseUrl, key, model) in `<dataDir>/routes.json` (`0600`) and becomes the active one; mg remains the
-   built-in default and is not rewritten.
+   one explicit choice and is not rewritten.
 3. **节律** — time zone, dream window, do-not-disturb window. TZ and the dream window go to the
    resident's env file; the quiet window is recorded (the shell has no silence gate yet — that is F16).
 4. **常驻** — register a **user-level** service (`systemd --user` on Linux, launchd agent on macOS; no

@@ -105,7 +105,17 @@ function makeHarness(options: { probeOk: boolean; hooks?: Partial<InstallerHooks
   const buildInstaller = () => new Installer({
     io,
     run: runner,
-    flags: { yes: true, skipService: true, dataDir, workspace, httpPort: 0, ...options.flags },
+    flags: {
+      yes: true,
+      skipService: true,
+      dataDir,
+      workspace,
+      httpPort: 0,
+      provider: 'mg',
+      baseUrl: 'http://127.0.0.1:3425/v1',
+      model: 'auto/deepseek-v4.1-flash',
+      ...options.flags,
+    },
     shellDir: SHELL_DIR,
     bunPath: '/usr/local/bin/bun',
     cwd: workspace,
@@ -370,7 +380,16 @@ describe('the six-step install', () => {
     const build = (probeOk: boolean) => new Installer({
       io,
       run: fakeRunner().runner,
-      flags: { yes: true, skipService: true, dataDir, workspace, httpPort: 0 },
+      flags: {
+        yes: true,
+        skipService: true,
+        dataDir,
+        workspace,
+        httpPort: 0,
+        provider: 'mg',
+        baseUrl: 'http://127.0.0.1:3425/v1',
+        model: 'auto/deepseek-v4.1-flash',
+      },
       shellDir: SHELL_DIR,
       bunPath: '/usr/local/bin/bun',
       cwd: workspace,
@@ -414,6 +433,29 @@ describe('the six-step install', () => {
     expect(flags.httpPort).toBe(17338);
     expect(flags.platform).toBe('darwin');
   });
+
+  test('--yes without a model route fails before the probe and names every missing flag', async () => {
+    let probed = false;
+    const harness = makeHarness({
+      probeOk: true,
+      flags: { provider: undefined, baseUrl: undefined, model: undefined },
+      hooks: {
+        probe: async () => {
+          probed = true;
+          return { ok: true, latencyMs: 1, sample: 'OK' };
+        },
+      },
+    });
+
+    expect(await harness.installer.run()).toBe(1);
+    expect(probed).toBe(false);
+    const state = JSON.parse(readFileSync(join(harness.dataDir, 'install.json'), 'utf8')) as { done: string[]; failedAt: string };
+    expect(state.done).toEqual(['preflight', 'place']);
+    expect(state.failedAt).toBe('model');
+    const output = harness.io.lines.join('\n');
+    expect(output).toContain('--yes 缺少模型路线参数：--provider、--base-url、--model');
+    expect(output).not.toContain('探活：');
+  });
 });
 
 describe('the model step: a custom OpenAI-protocol route', () => {
@@ -445,6 +487,8 @@ describe('the model step: a custom OpenAI-protocol route', () => {
 
     expect(await harness.installer.run()).toBe(0);
     expect(probed).toEqual([{ provider: 'openai_compatible', baseUrl: 'http://127.0.0.1:9/v1', model: 'my-model' }]);
+    // The route is the first question the installer asks; nothing has a provider default.
+    expect(io.lines.find((line) => line.includes(' -> '))).toContain('模型路线');
 
     const routesPath = join(harness.dataDir, 'routes.json');
     expect(statSync(routesPath).mode & 0o777).toBe(0o600);
