@@ -23,7 +23,9 @@ below and fails when code and contract disagree. Version: `SESSION_CONTEXT_CONTR
 3. **Assembly.** One turn's context, fitted to `targetTokens` (the caller reads that number from the
    model configuration; it is not a kernel constant). Lanes are rendered in a fixed order; over
    budget, the lowest-priority lane becomes a pointer to text the caller can still browse. Every
-   downgrade is recorded.
+   downgrade is recorded. The unit is the assembler's own `ceil(chars / 4)` estimate, not the
+   provider's token count; #258 measured about 2.2 provider tokens per unit on a Chinese corpus.
+   The built-in route's 6,000 is provisional pending that curve's review.
 
 ## What this face does not do
 
