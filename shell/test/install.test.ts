@@ -10,7 +10,7 @@ import { DEFAULT_SOUL, readSoul, writeDefaultSoul } from '../src/install/soul.ts
 import { probeModel } from '../src/install/model.ts';
 import { renderLaunchdPlist, renderSystemdUnit, launchdLabel, type Runner, type ServiceSpec } from '../src/install/service.ts';
 import { createScriptedIO } from '../src/install/io.ts';
-import { Installer, parseInstallFlags, type InstallerHooks, type InstallFlags } from '../src/install/installer.ts';
+import { Installer, parseEnvFile, parseInstallFlags, type InstallerHooks, type InstallFlags } from '../src/install/installer.ts';
 import { makeTempDir } from './helpers.ts';
 
 const SHELL_DIR = fileURLToPath(new URL('..', import.meta.url));
@@ -58,6 +58,7 @@ function serviceSpec(homeDir: string): ServiceSpec {
 
 interface Harness {
   installer: Installer;
+  buildInstaller: () => Installer;
   dataDir: string;
   workspace: string;
   io: ReturnType<typeof createScriptedIO>;
@@ -100,7 +101,7 @@ function makeHarness(options: { probeOk: boolean; hooks?: Partial<InstallerHooks
     },
     ...options.hooks,
   };
-  const installer = new Installer({
+  const buildInstaller = () => new Installer({
     io,
     run: runner,
     flags: { yes: true, skipService: true, dataDir, workspace, httpPort: 0, ...options.flags },
@@ -111,7 +112,8 @@ function makeHarness(options: { probeOk: boolean; hooks?: Partial<InstallerHooks
     homeDir: dir,
     hooks,
   });
-  return { installer, dataDir, workspace, io, calls, stored };
+  const installer = buildInstaller();
+  return { installer, buildInstaller, dataDir, workspace, io, calls, stored };
 }
 
 describe('default soul: verbatim write and read-back', () => {
@@ -300,6 +302,36 @@ describe('the six-step install', () => {
     expect(JSON.parse(readFileSync(pluginsPath, 'utf8'))).toEqual(['./plugins/hello.ts']);
   });
 
+  test('a fresh install persists a stable session id; a re-run with the state file gone keeps it', async () => {
+    const first = makeHarness({ probeOk: true });
+    expect(await first.installer.run()).toBe(0);
+    const envPath = join(first.dataDir, 'env');
+    const original = parseEnvFile(envPath).COGMEM_SHELL_SESSION;
+    expect(original).toMatch(/^session-[0-9a-f-]{36}$/u);
+
+    // A second fresh install is a different identity, not a copied constant.
+    const other = makeHarness({ probeOk: true });
+    expect(await other.installer.run()).toBe(0);
+    expect(parseEnvFile(join(other.dataDir, 'env')).COGMEM_SHELL_SESSION).not.toBe(original);
+
+    // Losing install.json makes the place step run again; the value already on disk must survive.
+    rmSync(join(first.dataDir, 'install.json'), { force: true });
+    expect(await first.buildInstaller().run()).toBe(0);
+    expect(parseEnvFile(envPath).COGMEM_SHELL_SESSION).toBe(original);
+    expect(first.io.lines.join('\n')).toContain('沿用已有');
+  });
+
+  test('an install that predates the session id gets one without losing the rest of its env file', async () => {
+    const harness = makeHarness({ probeOk: true });
+    mkdirSync(harness.dataDir, { recursive: true });
+    writeFileSync(join(harness.dataDir, 'env'), 'MG_API_KEY=keep-me\n', { mode: 0o600 });
+
+    expect(await harness.installer.run()).toBe(0);
+    const env = parseEnvFile(join(harness.dataDir, 'env'));
+    expect(env.MG_API_KEY).toBe('keep-me');
+    expect(env.COGMEM_SHELL_SESSION).toMatch(/^session-[0-9a-f-]{36}$/u);
+  });
+
   test('a failed model probe stops cleanly at step 2 and names the reason', async () => {
     const harness = makeHarness({ probeOk: false });
     const code = await harness.installer.run();
@@ -308,8 +340,10 @@ describe('the six-step install', () => {
     const state = JSON.parse(readFileSync(join(harness.dataDir, 'install.json'), 'utf8')) as { done: string[]; failedAt: string };
     expect(state.done).toEqual(['preflight', 'place']);
     expect(state.failedAt).toBe('model');
-    // Nothing from the model step onward ran: no env file, no service, no memory probe.
-    expect(existsSync(join(harness.dataDir, 'env'))).toBe(false);
+    // Nothing from the model step onward ran: the env file holds only the session id, no model key,
+    // no service and no memory probe.
+    expect(readFileSync(join(harness.dataDir, 'env'), 'utf8')).toMatch(/^COGMEM_SHELL_SESSION=session-/u);
+    expect(readFileSync(join(harness.dataDir, 'env'), 'utf8')).not.toContain('MG_API_KEY');
     expect(existsSync(join(harness.dataDir, 'attach.sock'))).toBe(false);
 
     const output = harness.io.lines.join('\n');

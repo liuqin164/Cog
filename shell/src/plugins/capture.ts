@@ -88,7 +88,7 @@ export class CaptureService {
       assistantText: assistant.value || undefined,
       ingestMode: 'selective_compile',
       // The lane marker is what makes these rows the session ledger the kernel's digest, recall
-      // and tail read (#245). Without it the shell's own turns were invisible to `assembleSessionContext`.
+      // and tail read (#245, #248). Without it the shell's own turns were invisible to `assembleSessionContext`.
       metadata: { sourceAgent: agentId, source: 'companion-shell', kind: 'turn', captureLane: CONVERSATION_CAPTURE_LANE, ...marks },
     });
     const assistantEventId = result.rawEventIds[1];
