@@ -34,10 +34,12 @@ import { createHash } from 'node:crypto';
 import { profileCues } from '../profile/ProfileCompiler.js';
 import { correctionAffects, profileCorrectionSignals } from '../profile/CorrectionSignal.js';
 import { sessionTokens } from '../session/SessionContextAssembler.js';
+import type { EmbeddingProvider } from '../embedding/EmbeddingProvider.js';
+import type { SyncEmbeddingProvider } from '../embedding/vectorRecall.js';
 import type { EventStore } from '../store/EventStore.js';
 import type { MemoryEvent, MemorySourceRef } from '../types/index.js';
 
-export const PROCEDURE_CONTRACT_VERSION = 1;
+export const PROCEDURE_CONTRACT_VERSION = 2;
 
 /** The two confidence grades. Frozen; support count decides. */
 export const PROCEDURE_GRADES = ['tentative', 'established'] as const;
@@ -104,6 +106,12 @@ export type ProcedureErrorCode = (typeof PROCEDURE_ERROR_CODES)[number];
 export const PROCEDURE_ESTABLISHED_SUCCESSES = 2;
 export const PROCEDURE_RECALL_LIMIT = 3;
 export const PROCEDURE_RECALL_MAX = 10;
+/**
+ * The synchronous query hook embeds one entry per call, so the semantic pool is
+ * bounded. Every cue-matched entry is still a candidate; only the vector-only
+ * side is capped, newest evidence first.
+ */
+export const PROCEDURE_SEMANTIC_POOL = 100;
 /** How old evidence may get before half its recall weight is gone. Frozen. */
 export const PROCEDURE_DECAY_HALF_LIFE_MS = 90 * 24 * 60 * 60 * 1000;
 /** Origin weights in the recall score, derived from the frozen origin order. */
@@ -219,6 +227,11 @@ export interface PreferenceForTask {
 export interface ProcedureCompilerPorts {
   events: EventStore;
   preferences: (input: { projectId: string; query: string; now: number; limit: number }) => PreferenceForTask[];
+  /**
+   * The same query embedding lane memory recall uses. Optional: without it the
+   * book is the deterministic, cue-matched recall it always was.
+   */
+  embedding?: () => EmbeddingProvider | undefined;
 }
 
 interface Descriptor {
@@ -392,10 +405,13 @@ function sameValue(left: ProcedureEntry, right: Candidate['entry'], stale: boole
 export class ProcedureCompiler {
   private readonly events: EventStore;
   private readonly preferences: ProcedureCompilerPorts['preferences'];
+  private readonly embedding?: ProcedureCompilerPorts['embedding'];
+  private readonly entryVectors = new Map<string, Float32Array>();
 
   constructor(ports: ProcedureCompilerPorts) {
     this.events = ports.events;
     this.preferences = ports.preferences;
+    this.embedding = ports.embedding;
   }
 
   /**
@@ -440,12 +456,28 @@ export class ProcedureCompiler {
     if (!Number.isInteger(limit) || limit <= 0) throw procedureError('invalid_limit', String(input.limit));
     const now = input.now ?? Date.now();
     const cues = profileCues(task);
-    const scored = this.currentEntries(projectId)
-      .filter((entry) => entry.status === 'current')
-      .filter((entry) => cues.length === 0 || cues.some((cue) => this.searchText(entry).includes(cue)))
+    const provider = this.embedding?.();
+    const embedSync = provider ? (provider as SyncEmbeddingProvider).embedSync : undefined;
+    const queryVector = provider && embedSync ? embedSync.call(provider, task) : undefined;
+    const semantic = Boolean(queryVector && queryVector.length > 0);
+    const current = this.currentEntries(projectId).filter((entry) => entry.status === 'current');
+    const cueMatched = cues.length === 0
+      ? current
+      : current.filter((entry) => cues.some((cue) => this.searchText(entry).includes(cue)));
+    // Offline recall stays cue-matched. With vectors a paraphrase shares no cue,
+    // so the newest entries are added as semantic candidates too.
+    const semanticPool = [...current]
+      .sort((a, b) => b.recordedAt - a.recordedAt)
+      .slice(0, PROCEDURE_SEMANTIC_POOL);
+    const candidates = semantic
+      ? [...new Map([...semanticPool, ...cueMatched].map((entry) => [entry.entryId, entry])).values()]
+      : cueMatched;
+    const scored = candidates
       .map((entry) => ({
         ...entry,
-        score: procedureScore(entry, now),
+        score: semantic
+          ? cosine(queryVector!, this.entryVector(provider!, entry))
+          : procedureScore(entry, now),
         mandatory: entry.delivery === 'checklist' && domainHit(task, entry.domain, cues),
       }))
       .sort(compareRecall);
@@ -542,6 +574,19 @@ export class ProcedureCompiler {
 
   private searchText(entry: ProcedureEntry): string {
     return `${entry.domain} ${entry.key} ${entry.title} ${entry.steps.join(' ')} ${entry.tools.join(' ')}`.toLowerCase();
+  }
+
+  /** Entry vectors are a pure function of the entry version; cache by (model, id, version). */
+  private entryVector(provider: EmbeddingProvider, entry: ProcedureEntry): Float32Array {
+    const sync = provider as SyncEmbeddingProvider;
+    const embedDocument = sync.embedSyncDocument ?? sync.embedSync;
+    if (!embedDocument) return new Float32Array(0);
+    const key = `${provider.modelId}\u0000${entry.entryId}\u0000${entry.version}`;
+    const cached = this.entryVectors.get(key);
+    if (cached) return cached;
+    const vector = embedDocument.call(provider, this.searchText(entry));
+    if (vector.length > 0) this.entryVectors.set(key, vector);
+    return vector;
   }
 
   /** Every descriptor and correction in the project, folded into one candidate per (domain, key, class). */
@@ -795,6 +840,20 @@ function compareRecall(a: ProcedureRecallEntry, b: ProcedureRecallEntry): number
     || b.score - a.score
     || a.domain.localeCompare(b.domain)
     || a.entryId.localeCompare(b.entryId);
+}
+
+function cosine(a: Float32Array, b: Float32Array): number {
+  if (a.length === 0 || a.length !== b.length) return 0;
+  let dot = 0;
+  let magA = 0;
+  let magB = 0;
+  for (let index = 0; index < a.length; index += 1) {
+    dot += a[index] * b[index];
+    magA += a[index] * a[index];
+    magB += b[index] * b[index];
+  }
+  if (magA === 0 || magB === 0) return 0;
+  return Math.max(0, Math.min(1, dot / (Math.sqrt(magA) * Math.sqrt(magB))));
 }
 
 /** The frozen procedure score: origin × grade × support, halved every half-life of evidence age. */

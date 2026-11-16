@@ -123,15 +123,24 @@ export class XenovaEmbeddingProvider implements EmbeddingProvider {
    * so a prototype method would lose `this` on the first query.
    */
   readonly embedSync = (text: string): Float32Array => {
+    return this.embedSyncWith(text, true);
+  };
+
+  /** The document side of the same lane: no query instruction prefix. */
+  readonly embedSyncDocument = (text: string): Float32Array => {
+    return this.embedSyncWith(text, false);
+  };
+
+  private embedSyncWith(text: string, prefix: boolean): Float32Array {
     if (this.state !== 'active' || !this.worker) return EMPTY;
     const sab = new SharedArrayBuffer(4 + this.dimensions * 4);
     const flag = new Int32Array(sab, 0, 1);
     const out = new Float32Array(sab, 4);
-    this.worker.postMessage({ type: 'embedSync', text, sab });
+    this.worker.postMessage({ type: 'embedSync', text, sab, prefix });
     const waited = Atomics.wait(flag, 0, 0, this.syncTimeoutMs);
     if (waited !== 'ok' || Atomics.load(flag, 0) !== 1) return EMPTY;
     return out.slice();
-  };
+  }
 
   dispose(): void {
     this.disposed = true;

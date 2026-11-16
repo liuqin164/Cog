@@ -98,28 +98,87 @@ export class NeuronEmbeddingStore {
   }
 
   hasStaleVectors(currentModelId: string): boolean {
-    const row = this.db.prepare(`
+    if (this.hasTable('neurons')) {
+      const missing = this.db.prepare(`
+        SELECT 1 FROM neurons n
+        WHERE n.is_deleted = 0
+          AND n.content <> ''
+          AND NOT EXISTS (
+            SELECT 1 FROM neuron_embeddings e
+            WHERE e.neuron_id = n.id AND e.model_id = ?
+          )
+        LIMIT 1
+      `).get(currentModelId) as { 1: number } | undefined;
+      const orphan = this.db.prepare(`
+        SELECT 1 FROM neuron_embeddings e
+        WHERE e.model_id <> ?
+          AND NOT EXISTS (SELECT 1 FROM neurons n WHERE n.id = e.neuron_id AND n.is_deleted = 0)
+        LIMIT 1
+      `).get(currentModelId) as { 1: number } | undefined;
+      return Boolean(missing ?? orphan);
+    }
+    return Boolean(this.db.prepare(`
       SELECT 1 FROM neuron_embeddings
       WHERE model_id <> ?
       LIMIT 1
-    `).get(currentModelId) as { 1: number } | undefined;
-    return Boolean(row);
+    `).get(currentModelId));
   }
 
   countStaleVectors(currentModelId: string, projectId?: string): number {
-    const row = projectId !== undefined
-      ? this.db.prepare(`
-          SELECT COUNT(*) AS count FROM neuron_embeddings
-          WHERE COALESCE(project_id,'') = ? AND model_id <> ?
-        `).get(projectId, currentModelId)
-      : this.db.prepare(`
-          SELECT COUNT(*) AS count FROM neuron_embeddings
-          WHERE model_id <> ?
-        `).get(currentModelId) as { count: number } | undefined;
+    if (!this.hasTable('neurons')) {
+      const row = projectId !== undefined
+        ? this.db.prepare(`
+            SELECT COUNT(*) AS count FROM neuron_embeddings
+            WHERE COALESCE(project_id,'') = ? AND model_id <> ?
+          `).get(projectId, currentModelId)
+        : this.db.prepare(`
+            SELECT COUNT(*) AS count FROM neuron_embeddings
+            WHERE model_id <> ?
+          `).get(currentModelId);
+      return Number((row as { count: number } | undefined)?.count || 0);
+    }
+    const neuronScope = projectId !== undefined ? `AND COALESCE(n.project_id,'') = ?` : '';
+    const embeddingScope = projectId !== undefined ? `AND COALESCE(e.project_id,'') = ?` : '';
+    const row = this.db.prepare(`
+      SELECT COUNT(*) AS count FROM (
+        SELECT n.id AS neuron_id FROM neurons n
+        WHERE n.is_deleted = 0 ${neuronScope}
+          AND n.content <> ''
+          AND NOT EXISTS (
+            SELECT 1 FROM neuron_embeddings e
+            WHERE e.neuron_id = n.id AND e.model_id = ?
+          )
+        UNION
+        SELECT e.neuron_id FROM neuron_embeddings e
+        WHERE e.model_id <> ? ${embeddingScope}
+          AND NOT EXISTS (SELECT 1 FROM neurons n WHERE n.id = e.neuron_id AND n.is_deleted = 0)
+      )
+    `).get(...(projectId !== undefined
+      ? [projectId, currentModelId, currentModelId, projectId]
+      : [currentModelId, currentModelId]));
     return Number((row as { count: number } | undefined)?.count || 0);
   }
 
   listStaleNeuronIds(currentModelId: string, projectId: string, afterNeuronId: string, limit: number): string[] {
+    if (this.hasTable('neurons')) {
+      const rows = this.db.prepare(`
+        SELECT neuron_id FROM (
+          SELECT n.id AS neuron_id FROM neurons n
+          WHERE COALESCE(n.project_id,'') = ? AND n.is_deleted = 0 AND n.content <> '' AND n.id > ?
+            AND NOT EXISTS (
+              SELECT 1 FROM neuron_embeddings e
+              WHERE e.neuron_id = n.id AND e.model_id = ?
+            )
+          UNION
+          SELECT e.neuron_id FROM neuron_embeddings e
+          WHERE COALESCE(e.project_id,'') = ? AND e.model_id <> ? AND e.neuron_id > ?
+            AND NOT EXISTS (SELECT 1 FROM neurons n WHERE n.id = e.neuron_id AND n.is_deleted = 0)
+        )
+        ORDER BY neuron_id ASC
+        LIMIT ?
+      `).all(projectId, afterNeuronId, currentModelId, projectId, currentModelId, afterNeuronId, limit) as Array<{ neuron_id: string }>;
+      return rows.map((row) => row.neuron_id);
+    }
     const rows = this.db.prepare(`
       SELECT neuron_id FROM neuron_embeddings
       WHERE project_id = ?

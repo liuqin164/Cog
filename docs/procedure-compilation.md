@@ -9,15 +9,17 @@ scene, this book compiles the craft.
 The code is `src/procedure/ProcedureCompiler.ts`, reached as `MemoryKernel.procedures` and through
 `KernelAgentMemoryBackend.assembleTaskProcedures`. It is held to this document by
 `__tests__/procedure-compilation.contract.test.ts`, which reads the frozen tables below and fails
-when code and contract disagree. Version: `PROCEDURE_CONTRACT_VERSION = 1`.
+when code and contract disagree. Version: `PROCEDURE_CONTRACT_VERSION = 2`.
 
 ## What this face does not do
 
 - **No skill catalogue and no skill injection.** Recall is by task text. A capability's code is
   installed by its own installer and is not memory; only the written guide enters here, through the
   #143 import channel's `imported` marker.
-- **No model on the hot path.** The compiler is deterministic: it reads structured descriptors,
-  never free text. A model may have produced the evidence offline.
+- **No model is required on the hot path.** Compilation is deterministic: it reads structured
+  descriptors, never free text. When the host attaches an embedding provider, `recall` may use its
+  synchronous query hook to rank entries by meaning; without one, recall is the cue-matched lexical
+  read it always was.
 - **No new storage.** Every version of an entry is a `memory_events` row on
   `procedure-entry:<entryId>`; a recompile leaves a `PROCEDURE_BOOK_RECOMPILED` receipt. No table,
   no column, no migration.
@@ -79,7 +81,7 @@ release checklist or a safety procedure is marked `checklist: true` in its descr
 |---|---|---|
 | `compile` | entry versions + a book receipt | Derive entries from the evidence and append a version per changed entry. Idempotent. |
 | `entries` | — | The newest version per entry, one per (domain, key, origin class); `stale` rows are included for review. |
-| `recall` | — | Entries cue-matched against the task description, ranked by the frozen score; checklist entries whose domain is hit are always returned. |
+| `recall` | — | Entries matched against the task description and ranked by the frozen score (or by query similarity when an embedding provider is attached); checklist entries whose domain is hit are always returned. |
 | `assembleTask` | — | The start-of-work projection: procedures by task plus the owner's preferences on the same task, fitted to `targetTokens` unless a checklist entry says otherwise. |
 | `audit` | — | Every procedure row for the project, oldest first. |
 
@@ -104,6 +106,19 @@ Adding a method is an additive change and does not bump the constant. Removing o
 | `compiledAt` | When this version was written. |
 | `version` | 1 for the first version, +1 per later one. |
 | `status` | `current`, `superseded`, `stale` when the claim it was derived from was corrected, or `retired` when a recompile no longer derives the key. |
+
+## Recall ranking
+
+Without an embedding provider, `recall` keeps the v1 rule: an entry is a candidate when its task
+text shares a cue with `domain key title steps tools` (or when the task has no cues), and entries
+are ordered by the frozen score above. `PROCEDURE_CONTRACT_VERSION = 2` adds one optional lane:
+
+When the host attaches an embedding provider that exposes a synchronous query hook, `recall`
+embeds the task and the newest `PROCEDURE_SEMANTIC_POOL` (100) current entries' `domain key title
+steps tools` text, plus every cue-matched entry, ranks by cosine similarity, and still puts
+mandatory checklist entries first. The frozen score is then the offline ranking, not the online
+one. A provider without the synchronous hook falls back to the v1 rule, and a failed embedding
+never removes an entry from the lexical path.
 
 ## Book events (frozen)
 

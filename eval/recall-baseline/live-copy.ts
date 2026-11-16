@@ -55,21 +55,29 @@ await provider.warm();
 };
 
 const started = performance.now();
-const first = await kernel.reEmbed(projectId);
+const runs: Array<{ processed: number; remaining: number }> = [];
+for (let pass = 0; pass < 20; pass += 1) {
+  const result = await kernel.reEmbed(projectId);
+  runs.push(result);
+  if (result.remaining === 0) break;
+}
 const firstMs = Math.round(performance.now() - started);
-const second = await kernel.reEmbed(projectId);
+const first = runs[0]!;
+const second = runs[1] ?? { processed: 0, remaining: 0 };
+const settled = await kernel.reEmbed(projectId);
 const rowsAfter = kernel.neuronEmbeddingStore.getProgress();
 
 // A brain that never had vectors has no rows to migrate. Prove that the forward path works: one
 // new turn through the real write path gets a vector, without touching any pre-existing neuron.
 const backend = new KernelAgentMemoryBackend(kernel, { agentId: 'owner' });
+const rowsBeforeProbe = kernel.neuronEmbeddingStore.getProgress().total;
 const turn = await backend.rememberTurnWithResult({
   agentId: 'owner',
   projectId: probeProject,
   sessionId: `re-embed-probe-${Date.now()}`,
   userText: `重嵌入探针 ${randomUUID()}：这是一条用于验证新写入会带向量的临时记忆。`,
 });
-for (let i = 0; i < 50; i += 1) { if (kernel.neuronEmbeddingStore.getProgress().total > 0) break; await new Promise((resolvePromise) => setTimeout(resolvePromise, 100)); }
+for (let i = 0; i < 50; i += 1) { if (kernel.neuronEmbeddingStore.getProgress().total > rowsBeforeProbe) break; await new Promise((resolvePromise) => setTimeout(resolvePromise, 100)); }
 const rowsAfterProbe = kernel.neuronEmbeddingStore.getProgress();
 
 console.log(JSON.stringify({
@@ -80,7 +88,7 @@ console.log(JSON.stringify({
   projectId,
   neurons: before,
   embeddingRowsBefore: rowsBefore,
-  reEmbed: { first, firstMs, second },
+  reEmbed: { first, second, runs, settled, firstMs },
   embeddingRowsAfter: rowsAfter,
   probe: {
     projectId: probeProject,
