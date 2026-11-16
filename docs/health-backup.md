@@ -245,9 +245,11 @@ checked answers `checked: false` rather than inventing a status.
 
 The surfacing block reads two existing records and writes neither: the owner's feedback rows in
 `memory_events`, and the shell's `emergence_decision` / `emergence_consumed` /
-`emergence_accumulated` rows in `shell-events.jsonl`. Candidate, withheld, excluded and surfaced
-counts are therefore zero with `trace.readable: false` when the page has no shell trace beside it;
-the feedback counts remain readable from the database.
+`emergence_accumulated` / `emergence_run` rows in `shell-events.jsonl` and its rotated `.1`
+generation. Trace rows carry the shell's project id, so a project-scoped page never mixes another
+project's feedback with this shell's counts. Candidate, attempted, surfaced and failed counts are
+zero with `trace.readable: false` when the page has no shell trace beside it; the feedback counts
+remain readable from the database.
 
 ## Read-only companion mode (frozen)
 

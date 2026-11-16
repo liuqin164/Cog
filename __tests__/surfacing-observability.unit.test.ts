@@ -44,6 +44,7 @@ describe('surfacing observability', () => {
 
     writeFileSync(tracePath, [
       traceRecord(now - 2_000, 'emergence_decision', {
+        projectId: 'p',
         candidates: [{ id: 'surfacing:commitment:c1' }],
         withheld: [
           { id: 'k', steps: [{ rule: 'channel', outcome: 'withheld', detail: { hardWithhold: true } }] },
@@ -54,11 +55,18 @@ describe('surfacing observability', () => {
         ],
         excluded: [{ id: 'x', source: 'profile', reason: 'no_due_instant' }],
       }),
-      traceRecord(now - 1_500, 'emergence_consumed', { id: 'surfacing:commitment:c1' }),
-      traceRecord(now - 1_000, 'emergence_consumed', { id: 'surfacing:commitment:c2' }),
-      traceRecord(now - 1_000, 'emergence_accumulated', { id: 'surfacing:commitment:c2' }),
-      traceRecord(now - SURFACING_OBSERVABILITY_WINDOW_MS - 2 * DAY_MS, 'emergence_decision', { candidates: [{ id: 'old' }] }),
+      traceRecord(now - 1_500, 'emergence_consumed', { projectId: 'p', id: 'surfacing:commitment:c1' }),
+      traceRecord(now - 1_400, 'emergence_run', { projectId: 'p', id: 'surfacing:commitment:c1', ok: true }),
+      traceRecord(now - 1_000, 'emergence_consumed', { projectId: 'p', id: 'surfacing:commitment:c2' }),
+      traceRecord(now - 1_000, 'emergence_accumulated', { projectId: 'p', id: 'surfacing:commitment:c2' }),
+      traceRecord(now - 900, 'emergence_run', { projectId: 'p', id: 'surfacing:commitment:c2', ok: false }),
+      traceRecord(now - 800, 'emergence_decision', { projectId: 'other', candidates: [{ id: 'other' }] }),
+      traceRecord(now - SURFACING_OBSERVABILITY_WINDOW_MS - 2 * DAY_MS, 'emergence_decision', { projectId: 'p', candidates: [{ id: 'old' }] }),
     ].map((entry) => JSON.stringify(entry)).join('\n'), 'utf8');
+    writeFileSync(`${tracePath}.1`, `${JSON.stringify(traceRecord(now - 3_000, 'emergence_decision', {
+      projectId: 'p',
+      candidates: [{ id: 'rotated' }],
+    }))}\n`, 'utf8');
 
     const db = new Database(dbPath, { readonly: true });
     try {
@@ -66,12 +74,14 @@ describe('surfacing observability', () => {
       const surfacing = health.surfacing;
       expect(surfacing.window).toEqual({ from: now - SURFACING_OBSERVABILITY_WINDOW_MS, to: now, windowMs: SURFACING_OBSERVABILITY_WINDOW_MS });
       expect(surfacing.counts).toEqual({
-        decisions: 1,
-        considered: 7,
-        candidates: 1,
+        decisions: 2,
+        considered: 8,
+        candidates: 2,
         withheld: 5,
         excluded: 1,
+        attempted: 1,
         surfaced: 1,
+        runFailed: 1,
         held: 1,
         engaged: 1,
         ignored: 2,

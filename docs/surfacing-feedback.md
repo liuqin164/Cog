@@ -159,12 +159,15 @@ ignored three times last month still starts at level 1.
 ## Observability (#239)
 
 The observatory's health page reads the gate without changing it: feedback outcomes come from the
-`SURFACING_FEEDBACK_RECORDED` rows in `memory_events`, while candidate, per-gate withheld, excluded
-and surfaced counts come from the shell's `emergence_decision` / `emergence_consumed` /
-`emergence_accumulated` rows in `shell-events.jsonl`. The same block returns the current priors —
-`SURFACING_FEEDBACK_RULES`, the channel policy and the gate names — so a reader can tell whether
-the gate is still applying fixed rules rather than a learned modulation. The observer writes no
-feedback row, adds no event and does not change the rules above.
+`SURFACING_FEEDBACK_RECORDED` rows in `memory_events`, while candidate, per-gate withheld, excluded,
+attempted, surfaced and failed counts come from the shell's `emergence_decision` /
+`emergence_consumed` / `emergence_accumulated` / `emergence_run` rows in `shell-events.jsonl` and
+its rotated `.1` generation. Trace rows carry the shell's project id. `surfaced` counts only runs
+whose summary ended in `run_complete`; a consumed candidate whose run errored is `runFailed`, not a
+delivered surface. The same block returns the current priors — `SURFACING_FEEDBACK_RULES`, the
+channel policy and the gate names — so a reader can tell whether the gate is still applying fixed
+rules rather than a learned modulation. The observer writes no feedback row, adds no event and does
+not change the rules above.
 
 ## Trace integration (frozen)
 

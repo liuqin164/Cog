@@ -3,13 +3,16 @@
  *
  * The kernel's surfacing query returns candidates and withheld entries but persists neither. So this
  * face reads the two records that already exist: the owner's reactions in `memory_events`, and the
- * shell's `emergence_decision` / `emergence_consumed` rows in `shell-events.jsonl`. It writes
- * nothing, adds no event and leaves `SurfacingCandidates` / `SurfacingFeedback` untouched.
+ * shell's `emergence_decision` / `emergence_consumed` / `emergence_run` rows in
+ * `shell-events.jsonl` and its rotated `.1` generation. It writes nothing, adds no event and
+ * leaves `SurfacingCandidates` / `SurfacingFeedback` untouched.
  *
- * `surfaced` is consumed minus held for absence: the shell consumes a candidate before deciding
+ * `attempted` is consumed minus held for absence: the shell consumes a candidate before deciding
  * whether anyone is there, and the `emergence_accumulated` row is the one it put in the away queue
- * instead of speaking. A gate count can exceed the withheld total because one entry may fail both
- * the channel and occasion gates; that overlap is the point of counting by gate.
+ * instead of speaking. A `run_error` after consumption is not a surfaced reply, so `surfaced`
+ * counts only the run rows the shell marked successful. A gate count can exceed the withheld total
+ * because one entry may fail both the channel and occasion gates; that overlap is the point of
+ * counting by gate.
  */
 import { readFileSync } from 'node:fs';
 
@@ -51,8 +54,12 @@ export interface SurfacingObservability {
     candidates: number;
     withheld: number;
     excluded: number;
-    /** Consumed and actually spoken. */
+    /** Consumed and not held for absence. */
+    attempted: number;
+    /** Attempted and ended in a successful run. */
     surfaced: number;
+    /** Attempted but the run errored, aborted or hit budget. */
+    runFailed: number;
     /** Consumed while the owner was away, so queued rather than spoken. */
     held: number;
     engaged: number;
@@ -80,9 +87,11 @@ interface TraceStep {
 interface TraceEntry {
   kind?: unknown;
   at?: unknown;
+  projectId?: unknown;
   candidates?: unknown;
   withheld?: unknown;
   excluded?: unknown;
+  ok?: unknown;
 }
 
 function isOutcome(value: unknown): value is SurfacingFeedbackOutcome {
@@ -111,8 +120,8 @@ function gatesOf(entry: Record<string, unknown>): SurfacingObservabilityGate[] {
   return gates;
 }
 
-function readTrace(tracePath: string | undefined, from: number, to: number): {
-  counts: Pick<SurfacingObservability['counts'], 'decisions' | 'considered' | 'candidates' | 'withheld' | 'excluded' | 'surfaced' | 'held'>;
+function readTrace(tracePath: string | undefined, projectId: string | undefined, from: number, to: number): {
+  counts: Pick<SurfacingObservability['counts'], 'decisions' | 'considered' | 'candidates' | 'withheld' | 'excluded' | 'attempted' | 'surfaced' | 'held' | 'runFailed'>;
   gates: SurfacingGateCount[];
   readable: boolean;
 } {
@@ -122,53 +131,63 @@ function readTrace(tracePath: string | undefined, from: number, to: number): {
     candidates: 0,
     withheld: 0,
     excluded: 0,
+    attempted: 0,
     surfaced: 0,
     held: 0,
+    runFailed: 0,
   };
   const gates = new Map<SurfacingObservabilityGate, number>();
   if (!tracePath) return { counts, gates: [], readable: false };
 
-  let raw: string;
-  try {
-    raw = readFileSync(tracePath, 'utf8');
-  } catch {
-    return { counts, gates: [], readable: false };
-  }
-
-  for (const line of raw.split('\n')) {
-    if (!line) continue;
-    let entry: TraceEntry;
+  let readable = false;
+  // The shell rotates one generation to `.1`, so a seven-day window can span two files.
+  for (const path of [`${tracePath}.1`, tracePath]) {
+    let raw: string;
     try {
-      entry = JSON.parse(line) as TraceEntry;
+      raw = readFileSync(path, 'utf8');
     } catch {
-      // The shell's trace is damage-tolerant; one torn line must not hide the rest.
       continue;
     }
-    if (typeof entry.at !== 'number' || entry.at < from || entry.at > to) continue;
-    if (entry.kind === 'emergence_decision') {
-      counts.decisions += 1;
-      const candidates = Array.isArray(entry.candidates) ? entry.candidates.length : 0;
-      const withheld = Array.isArray(entry.withheld) ? entry.withheld as Array<Record<string, unknown>> : [];
-      const excluded = Array.isArray(entry.excluded) ? entry.excluded as Array<Record<string, unknown>> : [];
-      counts.candidates += candidates;
-      counts.withheld += withheld.length;
-      counts.excluded += excluded.length;
-      counts.considered += candidates + withheld.length + excluded.length;
-      for (const item of withheld) {
-        for (const gate of gatesOf(item)) gates.set(gate, (gates.get(gate) ?? 0) + 1);
+    readable = true;
+    for (const line of raw.split('\n')) {
+      if (!line) continue;
+      let entry: TraceEntry;
+      try {
+        entry = JSON.parse(line) as TraceEntry;
+      } catch {
+        // The shell's trace is damage-tolerant; one torn line must not hide the rest.
+        continue;
       }
-      for (const item of excluded) {
-        if (item.reason === 'no_due_instant') gates.set('no_due_instant', (gates.get('no_due_instant') ?? 0) + 1);
+      if (typeof entry.at !== 'number' || entry.at < from || entry.at > to) continue;
+      if (projectId && entry.projectId !== projectId) continue;
+      if (entry.kind === 'emergence_decision') {
+        counts.decisions += 1;
+        const candidates = Array.isArray(entry.candidates) ? entry.candidates.length : 0;
+        const withheld = Array.isArray(entry.withheld) ? entry.withheld as Array<Record<string, unknown>> : [];
+        const excluded = Array.isArray(entry.excluded) ? entry.excluded as Array<Record<string, unknown>> : [];
+        counts.candidates += candidates;
+        counts.withheld += withheld.length;
+        counts.excluded += excluded.length;
+        counts.considered += candidates + withheld.length + excluded.length;
+        for (const item of withheld) {
+          for (const gate of gatesOf(item)) gates.set(gate, (gates.get(gate) ?? 0) + 1);
+        }
+        for (const item of excluded) {
+          if (item.reason === 'no_due_instant') gates.set('no_due_instant', (gates.get('no_due_instant') ?? 0) + 1);
+        }
+      } else if (entry.kind === 'emergence_consumed') {
+        counts.attempted += 1;
+      } else if (entry.kind === 'emergence_accumulated') {
+        counts.held += 1;
+      } else if (entry.kind === 'emergence_run') {
+        if (entry.ok === true) counts.surfaced += 1;
+        else counts.runFailed += 1;
       }
-    } else if (entry.kind === 'emergence_consumed') {
-      counts.surfaced += 1;
-    } else if (entry.kind === 'emergence_accumulated') {
-      counts.held += 1;
     }
   }
 
   return {
-    counts: { ...counts, surfaced: Math.max(0, counts.surfaced - counts.held) },
+    counts: { ...counts, attempted: Math.max(0, counts.attempted - counts.held), runFailed: counts.runFailed },
     gates: SURFACING_OBSERVABILITY_GATES
       .map((gate) => ({ gate, count: gates.get(gate) ?? 0 }))
       .filter((entry) => entry.count > 0),
@@ -208,8 +227,9 @@ export function readSurfacingObservability(
   const now = options.now ?? Date.now();
   const windowMs = options.windowMs ?? SURFACING_OBSERVABILITY_WINDOW_MS;
   const from = now - windowMs;
-  const trace = readTrace(options.tracePath, from, now);
-  const feedback = readFeedback(db, options.projectId?.trim() || undefined, from, now);
+  const projectId = options.projectId?.trim() || undefined;
+  const trace = readTrace(options.tracePath, projectId, from, now);
+  const feedback = readFeedback(db, projectId, from, now);
   return {
     source: 'live',
     generatedAt: now,
