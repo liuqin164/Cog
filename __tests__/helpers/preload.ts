@@ -10,6 +10,7 @@
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { sweepOrphanServers, sweepOrphanUnits } from '../../scripts/leak-scan.js';
 import { clearProjectTempRoot, sweepStaleRunRoots } from './tmp.js';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -20,6 +21,18 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 // `COGMEM_UPDATE_CHECK=1` and points `COGMEM_UPDATE_REGISTRY` at a local server,
 // which is also why the switch is honoured per-process rather than hard-coded.
 process.env.COGMEM_UPDATE_CHECK ??= '0';
+
+// #244: a run killed before its cleanup could run leaves servers and transient
+// units behind. Their run root names the dead pid, so they are unambiguous; a
+// live run root belongs to a suite that is still running and is left alone.
+const sweptServers = sweepOrphanServers();
+if (sweptServers > 0) {
+  console.error(`[cogmem tests] killed ${sweptServers} observatory process(es) left by an earlier run`);
+}
+const sweptUnits = sweepOrphanUnits();
+if (sweptUnits > 0) {
+  console.error(`[cogmem tests] stopped ${sweptUnits} transient systemd unit(s) left by an earlier run`);
+}
 
 // Requirement 2 of #70: the test entry starts from a clean root, so growth cannot
 // accumulate across runs even while files are still being migrated to the helper.

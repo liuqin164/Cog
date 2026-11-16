@@ -35,7 +35,20 @@ import {
  * writable from here.
  */
 
-afterAll(killTrackedServers);
+/** Units this file started, so a failed assertion stops them as well as the happy path. */
+const transientUnits = new Set<string>();
+
+function stopTransientUnits(): void {
+  for (const unit of transientUnits) {
+    try { systemctl(['stop', unit]); } catch { /* the unit may already be gone */ }
+  }
+  transientUnits.clear();
+}
+
+afterAll(() => {
+  stopTransientUnits();
+  killTrackedServers();
+});
 
 const MEMORY = '归档保留期定成七年。';
 
@@ -65,9 +78,12 @@ describe('#150 a real systemd-managed service (transient unit)', () => {
       expect(proc.stdout.toString().trim()).toBe('active');
     };
     const launch = (): { exitCode: number | null; stderr: string } => {
+      transientUnits.add(unit);
       const proc = Bun.spawnSync({
         cmd: [
-          'systemd-run', '--user', `--unit=${unit}`, '--quiet',
+          // `--collect` removes the unit when it stops; `RuntimeMaxSec` is the
+          // backstop for a worker killed before its `finally` can run (#244).
+          'systemd-run', '--user', `--unit=${unit}`, '--collect', '--property=RuntimeMaxSec=600', '--quiet',
           '--setenv=COGMEM_UPDATE_CHECK=0',
           BUN, join(f.install, 'node_modules', 'cogmem', 'src', 'bin', 'observatory.ts'),
           '--port', String(f.port), '--config', f.configPath,
@@ -121,6 +137,7 @@ describe('#150 a real systemd-managed service (transient unit)', () => {
       expect(await recallViaCli(f, MEMORY.slice(0, 6))).toContain('归档保留期');
     } finally {
       systemctl(['stop', unit]);
+      transientUnits.delete(unit);
     }
   }, 300_000);
 });

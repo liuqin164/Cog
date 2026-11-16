@@ -28,10 +28,11 @@
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "node scripts/build.mjs",
     "prepare": "node scripts/build.mjs",
-    "prepublishOnly": "bun run typecheck && bun run build && bun test __tests__ && npm pack --dry-run --json",
+    "prepublishOnly": "bun run typecheck && bun run build && bun test __tests__ && bun run leak:check && npm pack --dry-run --json",
     "type": "tsc -p tsconfig.json --noEmit",
     "test": "bun test __tests__",
     "ci:status": "bun scripts/ci-status.ts",
+    "leak:check": "bun scripts/leak-check.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "scorecard": "bun scripts/scorecard.ts",
     "ledger:check": "bun scripts/check-ledger.ts"
