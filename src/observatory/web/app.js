@@ -98,20 +98,28 @@ function api(path, params = {}) {
   }
   return fetch(url, { headers: { accept: 'application/json' } }).then(async (response) => {
     const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+    if (!response.ok) throw new Error(body.message || body.error || `HTTP ${response.status}`);
     return body;
   });
 }
 
+let writeToken = null;
+
 async function postJson(path, body) {
   const url = new URL(`./${path.replace(/^\//, '')}`, location.href);
+  // The installer-minted token, read from the page's own origin. Kept for the tab's lifetime.
+  if (writeToken === null) writeToken = (await api('token')).token;
   const response = await fetch(url, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', accept: 'application/json' },
+    headers: {
+      'content-type': 'application/json',
+      accept: 'application/json',
+      'x-observatory-token': writeToken,
+    },
     body: JSON.stringify(body),
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+  if (!response.ok) throw new Error(data.message || data.error || `HTTP ${response.status}`);
   return data;
 }
 

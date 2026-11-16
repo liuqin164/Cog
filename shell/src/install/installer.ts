@@ -15,7 +15,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, statfsSync, writeFileSy
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { createMemoryKernel } from 'cogmem';
 import { DEFAULT_AUTONOMOUS_BUDGET, DEFAULT_DAILY_BUDGET, DEFAULT_MAX_IDLE_TURNS, DEFAULT_NIGHT_BUDGET, DEFAULT_WORK_BUDGET } from '../config.ts';
 import { DEFAULT_SOUL, readSoul, writeDefaultSoul } from './soul.ts';
@@ -268,6 +268,18 @@ export class Installer {
     writeFileSync(this.statePath, `${JSON.stringify(this.state, null, 2)}\n`, { mode: 0o600 });
   }
 
+  /** The observatory's soul-write token, minted once at 0600. A re-run keeps the existing value. */
+  private ensureObservatoryToken(): void {
+    const path = join(this.choices.dataDir, 'observatory-token');
+    if (existsSync(path)) return;
+    try {
+      writeFileSync(path, `${randomBytes(32).toString('hex')}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+      this.io.say(`观测台写令牌：新装生成（${path}，0600；重跑 / 升级不覆盖）`);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    }
+  }
+
   /** The env file is the one place the model key lives. Mode 0600, merged, never printed. */
   private writeEnvFile(patch: Record<string, string>): void {
     const merged = { ...parseEnvFile(this.envPath), ...patch };
@@ -287,6 +299,9 @@ export class Installer {
     this.io.say('安全口径：所有服务面仅回环（127.0.0.1）；快照/数据目录 0700；模型钥匙只经安全输入进 0600 配置文件，不打印、不进日志。');
     this.io.say('全新安装：无旧安装分流、无记忆继承、无迁移分支。');
     mkdirSync(this.choices.dataDir, { recursive: true, mode: 0o700 });
+    // Minted here, not inside `place`: a re-run resumes past completed steps, and an install that
+    // predates #283 still needs the observatory's write token.
+    this.ensureObservatoryToken();
 
     const steps: Record<InstallStepId, () => Promise<StepResult>> = {
       preflight: () => this.stepPreflight(),

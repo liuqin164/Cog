@@ -20,6 +20,7 @@ import { createMemoryKernel, createMemoryKernelFromConfig, type MemoryKernel } f
 import { ensureUsableTempSpace } from '../utils/SqliteTempDirectory.js';
 import { MemoryObservatory } from './MemoryObservatory.js';
 import { createObservatoryRoutes, OBSERVATORY_PREFIX } from './routes.js';
+import { readObservatoryToken } from './token.js';
 
 export interface ObservatoryRuntime {
   /** An already-open kernel. When absent one is opened from `dbPath`, else from the config walk. */
@@ -72,7 +73,11 @@ export async function startObservatoryServer(options: ObservatoryServerOptions):
     tracePath: options.tracePath ?? (kernel.databasePath && kernel.databasePath !== ':memory:' && !kernel.databasePath.startsWith('file:')
       ? join(dirname(kernel.databasePath), 'shell-events.jsonl')
       : undefined),
-  }), kernel.events, kernel.soul);
+  }), kernel.events, kernel.soul, {
+    token: kernel.databasePath && kernel.databasePath !== ':memory:' && !kernel.databasePath.startsWith('file:')
+      ? readObservatoryToken(dirname(kernel.databasePath))
+      : undefined,
+  });
 
   const httpServer = Bun.serve({
     port: options.port,

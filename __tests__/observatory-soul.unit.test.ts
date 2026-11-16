@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import { createMemoryKernel, type MemoryKernel } from '../src/factory.js';
 import { startObservatoryServer, type ObservatoryServerHandle } from '../src/observatory/HttpServer.js';
+import { OBSERVATORY_TOKEN_HEADER, ensureObservatoryToken } from '../src/observatory/token.js';
 import { makeTempDir } from './helpers/tmp.js';
 
 /**
@@ -21,8 +22,10 @@ const scratch = makeTempDir('cogmem-observatory-soul-');
 const dbPath = join(scratch, 'memory.db');
 let kernel: MemoryKernel;
 let handle: ObservatoryServerHandle;
+let token: string;
 
 beforeAll(async () => {
+  token = ensureObservatoryToken(scratch);
   kernel = createMemoryKernel({ dbPath, projectTimeZone: 'UTC' });
   kernel.soul.ensureDefault('agent-a', 'A soul v0\n', 1_000);
   kernel.soul.ensureDefault('agent-b', 'B soul v0\n', 1_000);
@@ -45,6 +48,14 @@ function fingerprint(): string {
 
 function base(): string {
   return handle.url.replace(/\/$/u, '');
+}
+
+function soulPost(path: string, body: string): Promise<Response> {
+  return fetch(`${base()}${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', [OBSERVATORY_TOKEN_HEADER]: token },
+    body,
+  });
 }
 
 describe('the revised zero-write rule (#194 discriminator 5)', () => {
@@ -99,11 +110,7 @@ describe('the soul endpoints', () => {
   });
 
   test('POST saves a new version, and the next GET sees it', async () => {
-    const saved = await fetch(`${base()}/soul`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ agentId: 'agent-a', content: 'A soul v1\n', reason: 'editor' }),
-    });
+    const saved = await soulPost('/soul', JSON.stringify({ agentId: 'agent-a', content: 'A soul v1\n', reason: 'editor' }));
     expect(saved.status).toBe(200);
     const body = await saved.json() as { version: number; content: string };
     expect(body.version).toBe(1);
@@ -119,11 +126,7 @@ describe('the soul endpoints', () => {
   });
 
   test('POST rollback copies an older version into a new version and is audited', async () => {
-    const rolled = await fetch(`${base()}/soul/rollback`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ agentId: 'agent-a', version: 0, reason: 'undo' }),
-    });
+    const rolled = await soulPost('/soul/rollback', JSON.stringify({ agentId: 'agent-a', version: 0, reason: 'undo' }));
     expect(rolled.status).toBe(200);
     const body = await rolled.json() as { version: number; content: string; supersedes: number };
     expect(body.version).toBe(2);
@@ -141,11 +144,7 @@ describe('the soul endpoints', () => {
   });
 
   test('a malformed body is a typed 400, not a crash', async () => {
-    const bad = await fetch(`${base()}/soul`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: '{not json',
-    });
+    const bad = await soulPost('/soul', '{not json');
     expect(bad.status).toBe(400);
     expect((await bad.json() as { error: string }).error).toBe('invalid_json');
   });

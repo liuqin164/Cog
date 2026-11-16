@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { KernelEventStreamError, type KernelEvent, type KernelEventType, type KernelEventStream } from '../events/index.js';
 import { SoulError, type SoulSnapshot, type SoulVersion } from '../soul/index.js';
 import type { MemoryObservatory } from './MemoryObservatory.js';
+import { OBSERVATORY_TOKEN_HEADER, observatoryTokensMatch } from './token.js';
 
 export const OBSERVATORY_PREFIX = '/observatory';
 
@@ -31,6 +32,14 @@ export interface ObservatorySoulFace {
   snapshot(agentId: string): SoulSnapshot;
   save(input: { agentId: string; content: string; actor: 'user'; reason?: string }): SoulVersion;
   rollback(input: { agentId: string; version: number; actor: 'user'; reason?: string }): SoulVersion;
+}
+
+export interface ObservatoryRouteOptions {
+  /**
+   * The installer-minted soul-write token. Absent means an install that predates #283: writes are
+   * refused with `observatory_write_token_unavailable` rather than silently allowed.
+   */
+  token?: string;
 }
 
 /** Everything the page loads, by exact path: no directory walk, so no traversal to defend against. */
@@ -57,6 +66,32 @@ function isLoopbackAddress(address: string | undefined): boolean {
     || normalized === '::1'
     || normalized === 'localhost'
     || normalized.startsWith('127.');
+}
+
+/** The host names a loopback page may legitimately carry in `Host` and `Origin`. */
+const LOCAL_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '::1']);
+
+function hostnameFrom(authority: string | null | undefined): string | undefined {
+  if (!authority) return undefined;
+  if (authority.includes('@')) return undefined;
+  try {
+    return new URL(`http://${authority}`).hostname.replace(/^\[|\]$/gu, '');
+  } catch {
+    return undefined;
+  }
+}
+
+function isLocalAuthority(authority: string | null | undefined): boolean {
+  const hostname = hostnameFrom(authority);
+  return hostname !== undefined && LOCAL_HOSTNAMES.has(hostname);
+}
+
+function isLocalOrigin(origin: string): boolean {
+  try {
+    return LOCAL_HOSTNAMES.has(new URL(origin).hostname.replace(/^\[|\]$/gu, ''));
+  } catch {
+    return false;
+  }
 }
 
 function jsonResponse(body: unknown, status = 200, acceptEncoding?: string | null): Response {
@@ -92,6 +127,32 @@ async function readJsonBody(request: Request): Promise<Record<string, unknown> |
   } catch {
     return null;
   }
+}
+
+/**
+ * The three write-only locks (#283): a JSON body forces a CORS preflight, a same-page Origin
+ * cannot be forged by another site, and the token is the credential a hostile page cannot read.
+ * Returns the refusal, or null when the write may proceed.
+ */
+function refuseSoulWrite(request: Request, token: string | undefined, acceptEncoding?: string | null): Response | null {
+  const contentType = (request.headers.get('content-type') ?? '').split(';')[0]!.trim().toLowerCase();
+  if (contentType !== 'application/json') {
+    return jsonResponse({ error: 'unsupported_media_type', message: 'content-type must be application/json' }, 415, acceptEncoding);
+  }
+  const origin = request.headers.get('origin');
+  if (origin !== null && !isLocalOrigin(origin)) {
+    return jsonResponse({ error: 'cross_origin_write_refused' }, 403, acceptEncoding);
+  }
+  if (!token) {
+    return jsonResponse({
+      error: 'observatory_write_token_unavailable',
+      message: 'no observatory write token: rerun the installer (or create <dataDir>/observatory-token) to enable the soul editor',
+    }, 403, acceptEncoding);
+  }
+  if (!observatoryTokensMatch(token, request.headers.get(OBSERVATORY_TOKEN_HEADER))) {
+    return jsonResponse({ error: 'invalid_observatory_token' }, 403, acceptEncoding);
+  }
+  return null;
 }
 
 /**
@@ -188,6 +249,7 @@ export function createObservatoryRoutes(
   observatory: MemoryObservatory,
   events: KernelEventStream,
   soul?: ObservatorySoulFace,
+  options: ObservatoryRouteOptions = {},
 ) {
   // The page always ships beside this module: `bun run build` copies `src/observatory/web` into `dist`.
   const webRoot = defaultWebRoot();
@@ -198,6 +260,11 @@ export function createObservatoryRoutes(
 
     if (!isLoopbackAddress(remoteAddress)) {
       return new Response('forbidden: the observatory answers on loopback only', { status: 403 });
+    }
+    // Every route, read included: a DNS-rebinding page reaches the socket with its own Host name,
+    // and no route should answer it even with the corpus alone.
+    if (!isLocalAuthority(request.headers.get('host') ?? url.host)) {
+      return new Response('forbidden: unexpected Host (loopback only)', { status: 403 });
     }
 
     const acceptEncoding = request.headers.get('accept-encoding');
@@ -211,6 +278,10 @@ export function createObservatoryRoutes(
     }
     if (soulRead || soulRollback) {
       if (!soul) return jsonResponse({ error: 'soul_editor_unavailable' }, 404, acceptEncoding);
+      if (request.method === 'POST') {
+        const refused = refuseSoulWrite(request, options.token, acceptEncoding);
+        if (refused) return refused;
+      }
       try {
         if (soulRollback) {
           const body = await readJsonBody(request);
@@ -241,6 +312,21 @@ export function createObservatoryRoutes(
         }
         return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 500, acceptEncoding);
       }
+    }
+
+    // The page reads the write token from its own origin; a cross-site fetch cannot see this body,
+    // and the Host check above refuses the rebinding page that would make it same-origin.
+    if (url.pathname === '/observatory/token') {
+      if (request.method !== 'GET' && request.method !== 'HEAD') {
+        return new Response('method_not_allowed', { status: 405, headers: { allow: 'GET, HEAD' } });
+      }
+      if (!options.token) {
+        return jsonResponse({
+          error: 'observatory_write_token_unavailable',
+          message: 'no observatory write token: rerun the installer (or create <dataDir>/observatory-token) to enable the soul editor',
+        }, 403, acceptEncoding);
+      }
+      return jsonResponse({ token: options.token }, 200, acceptEncoding);
     }
 
     if (request.method !== 'GET' && request.method !== 'HEAD') {
@@ -302,7 +388,7 @@ export function createObservatoryRoutes(
 
     return jsonResponse({
       error: 'not_found',
-      endpoints: ['/snapshot', '/node/:id', '/timeline', '/workflows', '/workflows.json', '/recalls', '/recalls/:recallId', '/health', '/events', '/soul', '/soul/rollback'],
+      endpoints: ['/snapshot', '/node/:id', '/timeline', '/workflows', '/workflows.json', '/recalls', '/recalls/:recallId', '/health', '/events', '/soul', '/soul/rollback', '/token'],
     }, 404, acceptEncoding);
   };
 }
