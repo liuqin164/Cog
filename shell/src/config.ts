@@ -33,7 +33,7 @@ export interface ShellConfig {
   projectId: string;
   /** The companion's own agent identity, used as `metadata.sourceAgent` on every write. */
   agentId: string;
-  /** Session id for this process; a restart gets a new one (the day thread is the durable one). */
+  /** Session id for this install; stable across restarts so the session lane survives a kill. */
   sessionId: string;
   /** Cogmem database file. `:memory:` is supported for tests. */
   dbPath: string;
@@ -178,7 +178,9 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
     workspaceRoot,
     projectId: overrides.projectId ?? env('COGMEM_SHELL_PROJECT') ?? 'companion',
     agentId: overrides.agentId ?? env('COGMEM_SHELL_AGENT') ?? 'cogmem-companion',
-    sessionId: overrides.sessionId ?? env('COGMEM_SHELL_SESSION') ?? `session-${Date.now().toString(36)}`,
+    // The installer writes this once per install and never overwrites it. A hand-run shell that was
+    // never installed keeps one fixed id instead of minting a new lane each process start.
+    sessionId: overrides.sessionId ?? env('COGMEM_SHELL_SESSION') ?? 'session-default',
     dbPath: overrides.dbPath ?? env('COGMEM_SHELL_DB') ?? `${dataDir}/memory.sqlite`,
     dataDir,
     timeZone: overrides.timeZone ?? env('COGMEM_SHELL_TZ') ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC',

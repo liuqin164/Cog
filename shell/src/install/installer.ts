@@ -425,6 +425,16 @@ export class Installer {
     mkdirSync(snapshots, { recursive: true, mode: 0o700 });
     chmodSync(snapshots, 0o700);
     this.io.say(`数据目录：${this.choices.dataDir}（0700，快照目录 ${snapshots}）`);
+    // One stable session identity per install (#248). A re-run or an upgrade reuses the value
+    // already in the env file; only an install that has none mints one.
+    const existingSession = parseEnvFile(this.envPath).COGMEM_SHELL_SESSION;
+    if (existingSession) {
+      this.io.say(`会话身份：沿用已有 ${existingSession}（重跑 / 升级不覆盖）`);
+    } else {
+      const sessionId = `session-${randomUUID()}`;
+      this.writeEnvFile({ COGMEM_SHELL_SESSION: sessionId });
+      this.io.say(`会话身份：新装生成 ${sessionId}（${this.envPath}，0600；重跑 / 升级不覆盖）`);
+    }
     // The operating copy of the two cages. Never overwritten: a re-run must not undo an edited
     // number. The resident falls back to the source defaults when the file is absent.
     const budgetsPath = join(this.choices.dataDir, 'budgets.json');

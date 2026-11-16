@@ -87,7 +87,9 @@ export class CaptureService {
       userText: user.value,
       assistantText: assistant.value || undefined,
       ingestMode: 'selective_compile',
-      metadata: { sourceAgent: agentId, source: 'companion-shell', kind: 'turn', ...marks },
+      // The session-context lane reads only rows carrying this marker (#248). The old turn writer
+      // does not add it, so the shell writes the lane key itself.
+      metadata: { sourceAgent: agentId, source: 'companion-shell', kind: 'turn', captureLane: 'conversation', ...marks },
     });
     const assistantEventId = result.rawEventIds[1];
     const toolCallEventIds: string[] = [];

@@ -99,14 +99,18 @@ export function readSessionTurns(db: Database, input: SessionTurnReadInput): Ses
 function mapTurn(row: TurnRow): SessionTurn {
   const payload = JSON.parse(row.payload_json) as { metadata?: Record<string, unknown> };
   const metadata = payload.metadata ?? {};
+  const role = (row.role ?? 'user') as MemoryEventRole;
   return {
     eventId: row.event_id,
     projectId: row.project_id ?? '',
     sessionId: row.session_id ?? '',
     threadId: row.thread_id ?? '',
     agentId: typeof metadata.sourceAgent === 'string' ? metadata.sourceAgent : '',
-    speaker: metadata.speaker as ConversationSpeaker,
-    role: (row.role ?? 'user') as MemoryEventRole,
+    // The old turn writer marks the lane but has no per-event speaker (its metadata is shared by
+    // the user and assistant rows); the ledger's own role is the unambiguous fallback.
+    speaker: (metadata.speaker as ConversationSpeaker | undefined)
+      ?? (role === 'assistant' ? 'agent' : role === 'other' ? 'other' : 'owner'),
+    role,
     channel: typeof metadata.channel === 'string' ? metadata.channel : '',
     text: row.text ?? '',
     occurredAt: Number(row.occurred_at ?? 0),
