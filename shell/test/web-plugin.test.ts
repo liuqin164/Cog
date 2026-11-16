@@ -8,7 +8,7 @@ import { readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { defaultShellConfig } from '../src/config.ts';
 import { PluginHost } from '../src/plugins/host.ts';
-import { webPlugin, type WebPluginOptions } from '../src/plugins/web.ts';
+import { fetchPinned, webPlugin, type LookupAddress, type WebPluginOptions } from '../src/plugins/web.ts';
 import { makeTempDir } from './helpers.ts';
 
 const ARTICLE_HTML = `<!doctype html><html><head><title>Fixture Article</title></head><body>
@@ -46,6 +46,7 @@ beforeAll(() => {
       }
       if (path === '/redirect-article') return new Response(null, { status: 302, headers: { location: '/article' } });
       if (path === '/redirect-private') return new Response(null, { status: 302, headers: { location: 'http://169.254.169.254/latest/meta-data' } });
+      if (path === '/host') return new Response(request.headers.get('host') ?? '', { headers: { 'content-type': 'text/plain' } });
       return new Response('not found', { status: 404, headers: { 'content-type': 'text/plain' } });
     },
   });
@@ -174,6 +175,47 @@ describe('web_fetch trust boundary', () => {
     expect(result.isError).toBe(true);
     expect(result.output).toContain('ssrf_blocked');
     expect(result.output).toContain('10.0.0.7');
+  });
+
+  test('pins the first validated address; a second DNS answer cannot redirect the connection (#289)', async () => {
+    const dir = makeTempDir();
+    let lookups = 0;
+    const lookup = async (): Promise<LookupAddress[]> => {
+      lookups += 1;
+      return [{ address: lookups === 1 ? '93.184.216.34' : '127.0.0.1', family: 4 }];
+    };
+    const pins: Array<LookupAddress | undefined> = [];
+    const stub: WebPluginOptions['fetch'] = async (_input, _init, pin) => {
+      pins.push(pin);
+      return new Response(ARTICLE_HTML, { headers: { 'content-type': 'text/html' } });
+    };
+    const host = await start({ dataDir: dir, lookup, fetch: stub });
+    const result = await call(host, 'web_fetch', { url: 'http://rebind.example/article' });
+    expect(result.isError).toBe(false);
+    // The second answer (loopback) is never consulted: validation and the connection use one result.
+    expect(lookups).toBe(1);
+    expect(pins).toEqual([{ address: '93.184.216.34', family: 4 }]);
+  });
+
+  test('fetchPinned connects to the approved address and keeps the original Host header (#289)', async () => {
+    const response = await fetchPinned(new URL(`http://rebind.test:${server.port}/host`), undefined, {
+      address: '127.0.0.1',
+      family: 4,
+    });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe(`rebind.test:${server.port}`);
+  });
+
+  test('a pinned connection failure is a named error, not a hostname retry (#289)', async () => {
+    const dir = makeTempDir();
+    const stub: WebPluginOptions['fetch'] = async () => {
+      throw new Error('connect ECONNREFUSED (pinned)');
+    };
+    const host = await start({ dataDir: dir, lookup: async () => [{ address: '93.184.216.34', family: 4 }], fetch: stub });
+    const result = await call(host, 'web_fetch', { url: 'http://rebind.example/article' });
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain('fetch_failed');
+    expect(result.output).toContain('ECONNREFUSED');
   });
 
   test('re-validates every redirect hop: loopback→loopback is allowed for the fixture, loopback→link-local is refused', async () => {
