@@ -27,7 +27,7 @@ export interface CommandReply {
 /** Everything a handler may ask of the shell; `CompanionShell` provides it as `commandHost`. */
 export interface CommandHost {
   config(): { dbPath: string; agentId: string; contextSweetSpot: number };
-  lifecycle(): { state: string; seq: number; costDayTokens: number };
+  lifecycle(): { state: string; seq: number; costDayTokens: number; sandbox: 'on' | 'off' };
   contextTokens(): number;
   /** The newest six-lane assembly; `undefined` before the first request of the process. */
   contextLanes(): LaneAssemblyView | undefined;
@@ -232,8 +232,9 @@ export const CORE_COMMANDS: readonly CoreCommand[] = [
     description: '健康状态页',
     surfaces: ['palette', 'resident', 'tui'],
     run(host) {
-      const { state, seq, costDayTokens } = host.lifecycle();
-      return { text: `生命周期 ${state}，checkpoint seq ${seq}，本日 ${costDayTokens} token。` };
+      const { state, seq, costDayTokens, sandbox } = host.lifecycle();
+      const sandboxLine = sandbox === 'on' ? '沙箱 开（bwrap）' : '沙箱 关（bwrap 不可用，bash 无隔离）';
+      return { text: `生命周期 ${state}，checkpoint seq ${seq}，本日 ${costDayTokens} token，${sandboxLine}。` };
     },
   },
   {

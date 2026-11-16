@@ -1,10 +1,14 @@
 import { describe, expect, test } from 'bun:test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { CORE_COMMANDS, type CommandHost } from '../src/commands.ts';
 import { PluginHost } from '../src/plugins/host.ts';
 import { bwrapUsable, builtinToolsPlugin } from '../src/plugins/builtin-tools.ts';
 import { readSoul, writeDefaultSoul } from '../src/install/soul.ts';
 import { TraceLog } from '../src/trace.ts';
+import { overlayRows } from '../src/tui/commands.ts';
+import { defaultRenderEnv } from '../src/tui/frame.ts';
+import { TuiView } from '../src/tui/view.ts';
 import { makeTempDir } from './helpers.ts';
 
 const sandboxed = bwrapUsable();
@@ -87,20 +91,74 @@ describe('the bash sandbox (#233)', () => {
     });
   });
 
+  test.skipIf(sandboxed)('bash says when it ran without isolation (#281)', async () => {
+    const { workspace, data, trace } = layout();
+    await withHost(data, workspace, trace, async (host) => {
+      const result = await host.tools.invoke(
+        'bash',
+        { toolCallId: 'c1', input: { command: 'echo still-runs' } },
+        { runId: 'r' },
+      );
+      expect(result.output).toContain('still-runs');
+      expect(result.output).toContain('[sandbox: off]');
+    });
+  });
+
+  test.skipIf(!sandboxed)('a sandboxed bash result carries no degradation note', async () => {
+    const { workspace, data, trace } = layout();
+    await withHost(data, workspace, trace, async (host) => {
+      const result = await host.tools.invoke(
+        'bash',
+        { toolCallId: 'c1', input: { command: 'echo isolated' } },
+        { runId: 'r' },
+      );
+      expect(result.output).not.toContain('[sandbox: off]');
+    });
+  });
+
   test('write and edit refuse a path inside the data dir even when it sits under the workspace', async () => {
     const dir = makeTempDir();
     const workspace = join(dir, 'ws');
     const data = join(workspace, '.cogmem-shell');
     mkdirSync(data, { recursive: true });
+    writeFileSync(join(data, 'budgets.json'), '{"maxTokensPerDay":2000000}\n');
     const trace = new TraceLog(data);
     await withHost(data, workspace, trace, async (host) => {
-      const result = await host.tools.invoke(
+      const write = await host.tools.invoke(
         'write',
         { toolCallId: 'c1', input: { path: '.cogmem-shell/budgets.json', content: '{"maxTokensPerDay":1}' } },
         { runId: 'r' },
       );
-      expect(result.isError).toBe(true);
-      expect(result.output).toContain('path_in_data_dir');
+      expect(write.isError).toBe(true);
+      expect(write.output).toContain('path_in_data_dir');
+      const edit = await host.tools.invoke(
+        'edit',
+        { toolCallId: 'c2', input: { path: '.cogmem-shell/budgets.json', old_string: '2000000', new_string: '1' } },
+        { runId: 'r' },
+      );
+      expect(edit.isError).toBe(true);
+      expect(edit.output).toContain('path_in_data_dir');
+      expect(readFileSync(join(data, 'budgets.json'), 'utf8')).toBe('{"maxTokensPerDay":2000000}\n');
     });
+  });
+});
+
+describe('the sandbox state is visible (#284)', () => {
+  const sandbox = bwrapUsable() ? 'on' : 'off';
+
+  test('/status carries the sandbox state', async () => {
+    const reply = await CORE_COMMANDS.find((command) => command.name === 'status')!.run(
+      { lifecycle: () => ({ state: 'IDLE', seq: 0, costDayTokens: 0, sandbox }) } as unknown as CommandHost,
+      '',
+    );
+    expect(reply.text).toContain(sandbox === 'on' ? '沙箱 开' : '沙箱 关');
+  });
+
+  test('the status overlay draws the sandbox state', () => {
+    const view = new TuiView();
+    view.status.sandbox = sandbox;
+    view.overlay = { kind: 'status' };
+    const text = overlayRows(view, 100, defaultRenderEnv({})).map((row) => row.map((cell) => cell.text).join('')).join('\n');
+    expect(text).toContain(sandbox === 'on' ? '沙箱：开' : '沙箱：关');
   });
 });

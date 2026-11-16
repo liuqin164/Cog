@@ -24,7 +24,7 @@ import { providedModelPlugin } from './plugins/mg-provider.ts';
 import { ModelRouter, modelRouterPlugin, routeLine } from './model/router.ts';
 import { RouteStore, redactUrl } from './model/routes.ts';
 import { cagePlugin, estimateBudgetGrant, RunCage, type CageTier } from './plugins/cage.ts';
-import { builtinToolsPlugin } from './plugins/builtin-tools.ts';
+import { bwrapUsable, builtinToolsPlugin } from './plugins/builtin-tools.ts';
 import { webPlugin } from './plugins/web.ts';
 import { coreCommandFor, availableCoreCommand, unknownCommandReply, type CommandHost, type CommandReply } from './commands.ts';
 import { proposalPlugin } from './plugins/proposal.ts';
@@ -2043,9 +2043,15 @@ export class CompanionShell implements ShellControl, AttachShell {
       promptCache: this.promptCache ?? null,
       costTokens: this.machine.runtime.costDayDate === today ? this.machine.runtime.costDayTokens ?? 0 : 0,
       timeZone: this.config.timeZone,
+      sandbox: this.sandboxState(),
       capturePaused: this.capturePaused,
       ...(this.machine.state === 'SUSPENDED' && this.machine.runtime.suspension ? { suspended: this.suspendedLine(this.machine.runtime.suspension) } : {}),
     };
+  }
+
+  /** `/status` and the status bar say whether bash is isolated; a silent degradation is the bug (#284). */
+  private sandboxState(): 'on' | 'off' {
+    return bwrapUsable() ? 'on' : 'off';
   }
 
   /** The one human line the status bar, the snapshot and `/health` all carry for a pause. */
@@ -2715,7 +2721,7 @@ export class CompanionShell implements ShellControl, AttachShell {
    */
   private readonly commandHost: CommandHost = {
     config: () => this.config,
-    lifecycle: () => ({ state: this.machine.state, seq: this.machine.seq, costDayTokens: this.machine.runtime.costDayTokens ?? 0 }),
+    lifecycle: () => ({ state: this.machine.state, seq: this.machine.seq, costDayTokens: this.machine.runtime.costDayTokens ?? 0, sandbox: this.sandboxState() }),
     contextTokens: () => this.contextTokenEstimate,
     contextLanes: () => (this.lastLaneAssembly ? laneAssemblyView(this.lastLaneAssembly) : undefined),
     contextMetrics: () => this.lastContextMetrics,

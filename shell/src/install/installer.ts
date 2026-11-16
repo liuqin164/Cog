@@ -353,6 +353,16 @@ export class Installer {
     }
     this.io.say(`系统：${uname.stdout.trim()}`);
 
+    // #284: bash isolation needs bubblewrap on Linux. Its absence is not an install blocker — the
+    // shell runs visibly unsandboxed — but the user must learn it here, not from a trace line.
+    const sandbox = await this.runner('bwrap', ['--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--', '/bin/true'], { timeoutMs: 2_000 });
+    if (sandbox.code === 0) {
+      this.io.say('沙箱：bubblewrap 可用（bash 在隔离中运行）');
+    } else {
+      this.io.say('沙箱：bubblewrap 不可用——bash 将以无隔离方式运行，结果标注 [sandbox: off]，/status 显示为关。');
+      if (this.choices.platform === 'linux') this.io.say('  Linux 上装 bubblewrap 即恢复隔离（如 sudo apt install bubblewrap）。');
+    }
+
     const bunVersion = await this.runner(this.bunPath, ['--version']);
     const version = bunVersion.stdout.trim();
     const major = Number(version.split('.')[0]);
@@ -648,7 +658,7 @@ export class Installer {
 
     this.io.say('doctor 全检：');
     const report = await this.doctor();
-    for (const check of report.checks) this.io.say(`  ${check.ok ? 'OK  ' : 'FAIL'} ${check.id}：${check.detail}`);
+    for (const check of report.checks) this.io.say(`  ${check.warn ? 'WARN' : check.ok ? 'OK  ' : 'FAIL'} ${check.id}：${check.detail}`);
     if (!report.ok) {
       return { ok: false, message: 'doctor 没有全绿', hint: `先看上面 FAIL 的项；日志 ${this.logPath}` };
     }
