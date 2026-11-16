@@ -192,16 +192,24 @@ export class AttachServer {
 
   private async dispatch(socket: Socket, message: AttachClientMessage): Promise<void> {
     switch (message.t) {
-      case 'submit':
+      case 'submit': {
+        // A slash line is a command on every face, including a raw attach client that sends it as
+        // `submit` instead of the TUI's `command` message (#277). It must never become a model turn.
+        const text = message.text.trim();
+        if (text.startsWith('/')) {
+          const [name = '', ...rest] = text.slice(1).split(/\s+/u);
+          const result = await this.options.shell.runCommand(name, rest.join(' '));
+          this.sendCommandReply(socket, name, result);
+          this.pushSteering();
+          break;
+        }
         await this.options.shell.submit(message.text);
         this.pushSteering();
         break;
+      }
       case 'command': {
         const result = await this.options.shell.runCommand(message.name, message.args ?? '');
-        this.send(socket, { t: 'event', name: 'companion_command_result', payload: { name: message.name, text: result.text, receipt: result.receipt === true } });
-        if (result.data) {
-          for (const [name, payload] of Object.entries(result.data)) this.send(socket, { t: 'event', name, payload });
-        }
+        this.sendCommandReply(socket, message.name, result);
         break;
       }
       case 'command-confirm': {
@@ -242,6 +250,13 @@ export class AttachServer {
         break;
       default:
         break;
+    }
+  }
+
+  private sendCommandReply(socket: Socket, name: string, result: CommandReply): void {
+    this.send(socket, { t: 'event', name: 'companion_command_result', payload: { name, text: result.text, receipt: result.receipt === true } });
+    if (result.data) {
+      for (const [eventName, payload] of Object.entries(result.data)) this.send(socket, { t: 'event', name: eventName, payload });
     }
   }
 

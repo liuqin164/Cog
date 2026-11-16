@@ -180,6 +180,36 @@ describe('TUI crash isolation (spec §9)', () => {
   });
 });
 
+describe('slash commands over the attach submit path (#277)', () => {
+  test('/candidates, /context and /why answer as commands and never reach the model', async () => {
+    const dir = makeTempDir();
+    const provider = new ScriptedProvider([{ text: '模型不该看到这一行。', toolCalls: [] }]);
+    const shell = attachShell(dir, provider);
+    await shell.start();
+    try {
+      const socketPath = socketPathOf(dir);
+      for (const name of ['candidates', 'context', 'why']) {
+        const events: AttachServerMessage[] = [];
+        const { client } = await connect(socketPath, events);
+        client.send({ t: 'submit', text: `/${name}` });
+        await waitFor(() => events.some((message) => message.t === 'event'
+          && message.name === 'companion_command_result'
+          && message.payload.name === name));
+        const result = events.find((message) => message.t === 'event'
+          && message.name === 'companion_command_result'
+          && message.payload.name === name);
+        expect(String((result as { payload: { text: unknown } }).payload.text).length).toBeGreaterThan(0);
+        client.close();
+        await waitFor(() => shell.attachedClients === 0);
+      }
+      expect(provider.calls).toHaveLength(0);
+      expect(shell.state).toBe('IDLE');
+    } finally {
+      await shell.stop();
+    }
+  }, 30_000);
+});
+
 describe('steering over the wire (spec §10.2)', () => {
   test('a line sent during RUNNING queues, is visible, withdraws on Esc, and never reaches the model', async () => {
     const dir = makeTempDir();
