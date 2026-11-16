@@ -42,7 +42,7 @@ import { dreamPlugin } from './plugins/dream.ts';
 import { emergencePlugin } from './plugins/emergence.ts';
 import { terminalPlugin, TerminalChannel, type ShellControl } from './channels/terminal.ts';
 import { AgentRuntime, type AgentMessage, type ModelProvider, type RunSummary, type TurnUsage } from './state/agent-loop.ts';
-import { laneAssemblyView } from './state/session-lanes.ts';
+import { laneAssemblyView, type ContextMetrics } from './state/session-lanes.ts';
 import { SecretRedactor, startKernelHttpFace, type HttpFaceHandle } from './kernel-host.ts';
 import { formatBytes, memoryPressureAction, readMemoryUsage } from './memory.ts';
 import { rotateLogFile, SERVICE_LOG_MAX_BYTES } from './log-rotation.ts';
@@ -191,6 +191,10 @@ export class CompanionShell implements ShellControl, AttachShell {
   private contextTokenEstimate = 0;
   /** The newest six-lane assembly; `/context` and the TUI read this, not a second accounting. */
   private lastLaneAssembly?: SessionContextAssembly;
+  /** The projection actions that produced it (#268); reset when the next assembly is recorded. */
+  private lastContextMetrics?: ContextMetrics;
+  /** `mem:` reads since the previous assembly; the next trace reports and clears it. */
+  private drillsSinceAssembly = 0;
   /** The latest project event the compiled books were last brought up to. */
   private compiledThroughEventId?: string;
   /** Whether a soul-read failure has been traced; the read itself is retried on the next turn. */
@@ -712,6 +716,9 @@ export class CompanionShell implements ShellControl, AttachShell {
       dataDir: this.config.dataDir,
       trace: this.trace,
       kernel: this.kernel,
+      onMemoryRead: () => {
+        this.drillsSinceAssembly += 1;
+      },
     });
     this.host.register(workflowsPlugin({
       agentId: this.config.agentId,
@@ -739,6 +746,14 @@ export class CompanionShell implements ShellControl, AttachShell {
       variablePrompt: () => this.systemPromptSections().tail,
       onAssembly: (assembly) => {
         this.lastLaneAssembly = assembly;
+        this.lastContextMetrics = {
+          folds: assembly.decisionTrace.length,
+          drills: this.drillsSinceAssembly,
+          // shortcut: #253 owns deterministic auto-expansion and its trace field; this is a real
+          // zero until that lands, not a missing field. Read its count here when it merges.
+          autoExpands: 0,
+        };
+        this.drillsSinceAssembly = 0;
         this.emitStatus();
       },
       recallLimit: 3,
@@ -819,6 +834,7 @@ export class CompanionShell implements ShellControl, AttachShell {
         this.emitStatus();
       },
       contextLanes: () => (this.lastLaneAssembly ? laneAssemblyView(this.lastLaneAssembly) : undefined),
+      contextMetrics: () => this.lastContextMetrics,
     });
     this.modelLabel = `${this.host.getService<ModelProvider>('model').name}/${model.model}`;
     this.attachWorkListeners();
@@ -1789,6 +1805,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       contextTokens: this.contextTokenEstimate,
       contextSweetSpot: this.targetTokens(),
       contextLanes: this.lastLaneAssembly ? laneAssemblyView(this.lastLaneAssembly) : null,
+      contextMetrics: this.lastContextMetrics ?? null,
       promptCache: this.promptCache ?? null,
       costTokens: this.machine.runtime.costDayDate === today ? this.machine.runtime.costDayTokens ?? 0 : 0,
       timeZone: this.config.timeZone,
@@ -2432,6 +2449,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     lifecycle: () => ({ state: this.machine.state, seq: this.machine.seq, costDayTokens: this.machine.runtime.costDayTokens ?? 0 }),
     contextTokens: () => this.contextTokenEstimate,
     contextLanes: () => (this.lastLaneAssembly ? laneAssemblyView(this.lastLaneAssembly) : undefined),
+    contextMetrics: () => this.lastContextMetrics,
     promptCache: () => this.promptCache,
     lastDream: () => this.lastDreamProduct(),
     commitments: () => this.commitments(),

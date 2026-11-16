@@ -320,6 +320,11 @@ export interface AgentRuntimeOptions {
    */
   contextLanes?: () => unknown;
   /**
+   * The projection-action counts behind this request (#268): folds, drills and auto-expands. Read
+   * beside `contextLanes` so a trace names both what the lanes were and what moved them.
+   */
+  contextMetrics?: () => unknown;
+  /**
    * Consecutive no-progress turns before the loop stops the run (#241). A turn progresses when it
    * writes user-visible text or a tool call returns output not seen for that same call before.
    * Omitted means `DEFAULT_MAX_IDLE_TURNS`.
@@ -538,6 +543,7 @@ export class AgentRuntime {
             estimatedTokens: estimated.totalTokens,
             calibrationFactor: this.calibrator.factor(request.model),
             ...(this.options.contextLanes ? { lanes: this.options.contextLanes() } : {}),
+            ...(this.options.contextMetrics ? { metrics: this.options.contextMetrics() } : {}),
           }, this.clock());
           await this.options.bus.emit('message_start', { type: 'message_start', message: draft }, { runId: input.runId });
           try {

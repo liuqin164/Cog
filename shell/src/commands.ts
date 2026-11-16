@@ -13,7 +13,7 @@
  * One table is the fix this codebase keeps.
  */
 import { readSoul } from './install/soul.ts';
-import { laneReportLines, type LaneAssemblyView } from './state/session-lanes.ts';
+import { contextMetricsLine, laneReportLines, type ContextMetrics, type LaneAssemblyView } from './state/session-lanes.ts';
 
 export type CommandSurface = 'palette' | 'resident' | 'tui';
 
@@ -31,6 +31,8 @@ export interface CommandHost {
   contextTokens(): number;
   /** The newest six-lane assembly; `undefined` before the first request of the process. */
   contextLanes(): LaneAssemblyView | undefined;
+  /** The projection counts behind that assembly (#268); `undefined` with no assembly. */
+  contextMetrics(): ContextMetrics | undefined;
   /**
    * The provider-reported prompt-cache account for the run in flight (#165 round 21); `undefined`
    * when no provider reported a cache field. Never filled from round 17's estimate: the estimate is
@@ -243,6 +245,8 @@ export const CORE_COMMANDS: readonly CoreCommand[] = [
       const lines = lanes
         ? laneReportLines(lanes, host.contextTokens())
         : [`目标带宽 ${host.config().contextSweetSpot} token，尚无车道组装记录：发一条消息后再看。`];
+      const metrics = host.contextMetrics();
+      if (lanes && metrics) lines.push(contextMetricsLine(metrics));
       const cache = host.promptCache();
       // Only a provider-reported account earns a line. With nothing reported there is none, because
       // "0%" is a claim the provider never made.

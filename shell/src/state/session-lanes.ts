@@ -36,6 +36,18 @@ export interface LaneAssemblyView {
   decisionTrace: LaneDecisionView[];
 }
 
+/**
+ * The three projection actions the context trace counts (#268). They are per assembly: a fold is a
+ * downgrade/trim decision in this assembly, a drill is a `mem:` read since the previous one, and an
+ * auto-expand is a deterministic expansion into the working set (#253). A zero is a measurement,
+ * not a missing field.
+ */
+export interface ContextMetrics {
+  folds: number;
+  drills: number;
+  autoExpands: number;
+}
+
 export const LANE_LABELS: Record<SessionContextLaneName, string> = {
   pinned: '钉死',
   profile: '画像',
@@ -95,4 +107,9 @@ export function laneReportLines(view: LaneAssemblyView, requestTokens?: number):
     }
   }
   return lines;
+}
+
+/** The `/context` metrics line; both faces read it so the numbers are never restated. */
+export function contextMetricsLine(metrics: ContextMetrics): string {
+  return `本轮折叠 ${metrics.folds} 次 · 下钻 ${metrics.drills} 次 · 自动展开 ${metrics.autoExpands} 次`;
 }
