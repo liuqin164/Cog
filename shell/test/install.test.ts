@@ -552,6 +552,7 @@ describe('the model step: a custom OpenAI-protocol route', () => {
       'my-model',
       'myroute',
       'sk-custom-secret',
+      '', // embedding provider -> default local
       '', // time zone -> default
       '', // dream start -> default
       '', // dream end -> default
@@ -611,6 +612,72 @@ describe('the model step: a custom OpenAI-protocol route', () => {
     expect(state.done).toEqual(['preflight', 'place']);
     expect(state.failedAt).toBe('model');
     expect(io.lines.join('\n')).not.toContain('sk-dead');
+  });
+});
+
+describe('the vector provider step (#313)', () => {
+  test('a remote provider is probed and its config lands in the 0600 env file, never the key in output', async () => {
+    const previous = process.env.COGMEM_EMBEDDING_API_KEY;
+    process.env.COGMEM_EMBEDDING_API_KEY = 'sk-vector-secret';
+    try {
+      const harness = makeHarness({
+        probeOk: true,
+        flags: {
+          embeddingProvider: 'openai',
+          embeddingBaseUrl: 'http://127.0.0.1:9/v1',
+          embeddingModel: 'text-embedding-v3',
+          embeddingDimensions: '1024',
+        },
+        hooks: {
+          probeEmbedding: async (config, key) => {
+            expect(config.provider).toBe('openai');
+            expect(key).toBe('sk-vector-secret');
+            return { ok: true, dimensions: 1024, detail: 'fixture' };
+          },
+        },
+      });
+
+      expect(await harness.installer.run()).toBe(0);
+      const env = readFileSync(join(harness.dataDir, 'env'), 'utf8');
+      expect(env).toContain('COGMEM_EMBEDDING_PROVIDER=openai');
+      expect(env).toContain('COGMEM_EMBEDDING_BASE_URL=http://127.0.0.1:9/v1');
+      expect(env).toContain('COGMEM_EMBEDDING_MODEL=text-embedding-v3');
+      expect(env).toContain('COGMEM_EMBEDDING_DIMENSIONS=1024');
+      expect(env).toContain('COGMEM_EMBEDDING_API_KEY=sk-vector-secret');
+      expect(harness.io.lines.join('\n')).not.toContain('sk-vector-secret');
+
+      const state = JSON.parse(readFileSync(join(harness.dataDir, 'install.json'), 'utf8')) as { choices: { embedding: unknown } };
+      expect(state.choices.embedding).toEqual({
+        provider: 'openai',
+        baseUrl: 'http://127.0.0.1:9/v1',
+        model: 'text-embedding-v3',
+        dimensions: 1024,
+      });
+      expect(JSON.stringify(state)).not.toContain('sk-vector-secret');
+    } finally {
+      if (previous === undefined) delete process.env.COGMEM_EMBEDDING_API_KEY;
+      else process.env.COGMEM_EMBEDDING_API_KEY = previous;
+    }
+  });
+
+  test('a failed vector probe stops the install at the model step', async () => {
+    const harness = makeHarness({
+      probeOk: true,
+      flags: {
+        embeddingProvider: 'ollama',
+        embeddingBaseUrl: 'http://127.0.0.1:9',
+        embeddingModel: 'qwen3-embedding:0.6b',
+      },
+      hooks: {
+        probeEmbedding: async () => ({ ok: false, detail: '端点没有返回向量' }),
+      },
+    });
+
+    expect(await harness.installer.run()).toBe(1);
+    expect(harness.io.lines.join('\n')).toContain('向量探针失败');
+    const state = JSON.parse(readFileSync(join(harness.dataDir, 'install.json'), 'utf8')) as { done: string[]; failedAt: string };
+    expect(state.done).toEqual(['preflight', 'place']);
+    expect(state.failedAt).toBe('model');
   });
 });
 

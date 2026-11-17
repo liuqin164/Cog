@@ -40,6 +40,7 @@ export * from './core/Neuron.js';
 export * from './embedding/EmbeddingProvider.js';
 export * from './embedding/NeuronEmbeddingStore.js';
 export * from './embedding/OllamaEmbeddingProvider.js';
+export * from './embedding/QwenAPIEmbeddingProvider.js';
 export * from './embedding/ReEmbeddingPipeline.js';
 export * from './engine/ConsolidationPipeline.js';
 export * from './engine/DeepWriteConfig.js';

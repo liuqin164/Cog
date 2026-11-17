@@ -23,12 +23,14 @@ interface Extract {
 let extract: Extract | undefined;
 let failure: string | undefined;
 let queue: Promise<void> = Promise.resolve();
+let queryPrefix = EMBEDDING_QUERY_PREFIX;
 
 function enqueue(work: () => Promise<void>): void {
   queue = queue.then(work, work);
 }
 
-async function init(modelsRoot: string, allowRemoteModels: boolean): Promise<void> {
+async function init(modelsRoot: string, allowRemoteModels: boolean, prefix: string): Promise<void> {
+  queryPrefix = prefix;
   env.localModelPath = modelsRoot;
   env.cacheDir = modelsRoot;
   env.allowLocalModels = true;
@@ -78,7 +80,7 @@ async function embedMany(texts: string[]): Promise<Float32Array[]> {
 
 parentPort?.on('message', (message: Record<string, unknown>) => {
   if (message.type === 'init') {
-    enqueue(() => init(String(message.modelsRoot), message.allowRemoteModels !== false));
+    enqueue(() => init(String(message.modelsRoot), message.allowRemoteModels !== false, String(message.queryPrefix ?? EMBEDDING_QUERY_PREFIX)));
     return;
   }
   if (message.type === 'embed') {
@@ -102,7 +104,7 @@ parentPort?.on('message', (message: Record<string, unknown>) => {
     enqueue(async () => {
       try {
         const text = String(message.text);
-        const [vector] = await embedMany([prefix ? EMBEDDING_QUERY_PREFIX + text : text]);
+        const [vector] = await embedMany([prefix ? queryPrefix + text : text]);
         if (vector && vector.length === out.length) out.set(vector);
         Atomics.store(flag, 0, vector && vector.length === out.length ? 1 : -1);
       } catch {

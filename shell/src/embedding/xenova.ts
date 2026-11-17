@@ -17,17 +17,11 @@ import {
   EMBEDDING_MODEL,
   EMBEDDING_QUERY_PREFIX,
   embeddingModelsRoot,
+  type EmbeddingState,
+  type EmbeddingStatus,
 } from './model.ts';
 
-export type EmbeddingState = 'idle' | 'loading' | 'active' | 'degraded';
-
-export interface EmbeddingStatus {
-  state: EmbeddingState;
-  modelId: string;
-  dimensions: number;
-  detail?: string;
-  loadMs?: number;
-}
+export type { EmbeddingState, EmbeddingStatus } from './model.ts';
 
 type Pending = { resolve: (vectors: Float32Array[]) => void; reject: (error: Error) => void };
 
@@ -63,6 +57,8 @@ export class XenovaEmbeddingProvider implements EmbeddingProvider {
     private readonly syncTimeoutMs = 15_000,
     /** Tests load from disk only; production may download a missing model on an upgrade. */
     private readonly allowRemoteModels = true,
+    /** The bge-zh instruction by default; empty for a deployment that changed it. */
+    private readonly queryPrefix = EMBEDDING_QUERY_PREFIX,
   ) {}
 
   status(): EmbeddingStatus {
@@ -102,12 +98,13 @@ export class XenovaEmbeddingProvider implements EmbeddingProvider {
       type: 'init',
       modelsRoot: embeddingModelsRoot(this.dataDir),
       allowRemoteModels: this.allowRemoteModels,
+      queryPrefix: this.queryPrefix,
     });
     return this.ready;
   }
 
   async embed(text: string): Promise<Float32Array> {
-    const [vector] = await this.embedBatch([EMBEDDING_QUERY_PREFIX + text]);
+    const [vector] = await this.embedBatch([this.queryPrefix + text]);
     if (!vector) throw new Error('embedding returned no vector');
     return vector;
   }

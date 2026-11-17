@@ -9,6 +9,13 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readPluginRegistry } from './plugins/registry.ts';
 import { DEFAULT_MAX_IDLE_TURNS } from './state/agent-loop.ts';
+import {
+  EMBEDDING_DIMENSIONS,
+  EMBEDDING_MODEL,
+  EMBEDDING_QUERY_PREFIX,
+  REMOTE_EMBEDDING_DEFAULTS,
+  type EmbeddingConfig,
+} from './embedding/model.ts';
 
 export { DEFAULT_MAX_IDLE_TURNS };
 
@@ -90,6 +97,11 @@ export interface ShellConfig {
   plugins: string[];
   terminalEnabled: boolean;
   /**
+   * The vector provider (#313). The default is the local bge model and its bge-zh query prefix;
+   * remote providers default to an empty prefix because that instruction is model-specific.
+   */
+  embedding: EmbeddingConfig;
+  /**
    * The control socket the `cog` TUI attaches to. Off by default (a plain `start` is still the
    * line-mode resident); `cog` starts the resident with `--attach`, and tests opt in explicitly.
    */
@@ -101,12 +113,58 @@ function env(name: string): string | undefined {
   return value === undefined || value === '' ? undefined : value;
 }
 
+/** The query prefix is the one value where an explicit empty string means "none". */
+function envAllowEmpty(name: string): string | undefined {
+  return process.env[name];
+}
+
 /** `COGMEM_SHELL_TAIL_TURNS` is operator policy; a non-integer is a startup error, not a silent 8. */
 function tailTurnsFromEnv(): number {
   const raw = env('COGMEM_SHELL_TAIL_TURNS');
   if (raw === undefined) return 8;
   const value = Number(raw);
   if (!Number.isInteger(value) || value < 0) throw new Error(`invalid_tail_turns: COGMEM_SHELL_TAIL_TURNS=${raw}`);
+  return value;
+}
+
+/**
+ * The installer writes these to the 0600 env file; the service's EnvironmentFile supplies them.
+ * An unknown provider or a missing remote model is a startup error, not a silent local fallback.
+ */
+function embeddingFromEnv(): EmbeddingConfig {
+  const raw = env('COGMEM_EMBEDDING_PROVIDER');
+  if (raw === undefined || raw === 'local') {
+    return {
+      provider: 'local',
+      baseUrl: '',
+      model: EMBEDDING_MODEL,
+      dimensions: EMBEDDING_DIMENSIONS,
+      queryPrefix: envAllowEmpty('COGMEM_EMBEDDING_QUERY_PREFIX') ?? EMBEDDING_QUERY_PREFIX,
+    };
+  }
+  if (raw !== 'ollama' && raw !== 'openai') {
+    throw new Error(`invalid_embedding_provider: COGMEM_EMBEDDING_PROVIDER=${raw}; expected local, ollama or openai`);
+  }
+  const defaults = REMOTE_EMBEDDING_DEFAULTS[raw];
+  const model = env('COGMEM_EMBEDDING_MODEL');
+  if (model === undefined) throw new Error('invalid_embedding_config: COGMEM_EMBEDDING_MODEL is required for a remote provider');
+  const dimensions = embeddingDimensionsFromEnv();
+  return {
+    provider: raw,
+    baseUrl: env('COGMEM_EMBEDDING_BASE_URL') ?? defaults.baseUrl,
+    model,
+    ...(dimensions === undefined ? {} : { dimensions }),
+    queryPrefix: envAllowEmpty('COGMEM_EMBEDDING_QUERY_PREFIX') ?? '',
+  };
+}
+
+function embeddingDimensionsFromEnv(): number | undefined {
+  const raw = env('COGMEM_EMBEDDING_DIMENSIONS');
+  if (raw === undefined) return undefined;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`invalid_embedding_dimensions: COGMEM_EMBEDDING_DIMENSIONS=${raw}`);
+  }
   return value;
 }
 
@@ -255,6 +313,7 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
     },
     plugins: overrides.plugins ?? registryPlugins,
     terminalEnabled: overrides.terminalEnabled ?? env('COGMEM_SHELL_TERMINAL') !== 'off',
+    embedding: overrides.embedding ?? embeddingFromEnv(),
     attach: overrides.attach ?? {
       enabled: env('COGMEM_SHELL_ATTACH') === 'on',
       socketPath: env('COGMEM_SHELL_ATTACH_SOCKET'),
