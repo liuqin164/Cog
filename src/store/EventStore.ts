@@ -893,6 +893,30 @@ export class EventStore {
     };
   }
 
+  /**
+   * Stream one project's ledger in chronological order (#307). `queryEvents` pages with OFFSET,
+   * which re-scans the prefix for every page; a decade-size forget or export should read once.
+   */
+  *iterateProjectEvents(projectId: string, startTime?: number, endTime?: number): IterableIterator<MemoryEvent> {
+    const conditions = [`COALESCE(project_id, '') = ?`];
+    const params: Array<string | number> = [projectId];
+    if (startTime !== undefined) {
+      conditions.push('occurred_at >= ?');
+      params.push(startTime);
+    }
+    if (endTime !== undefined) {
+      conditions.push('occurred_at < ?');
+      params.push(endTime);
+    }
+    const rows = this.db.prepare(`
+      SELECT ${MEMORY_EVENT_COLUMNS}
+      FROM memory_events
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY COALESCE(global_seq, 0) ASC, occurred_at ASC, event_id ASC
+    `).iterate(...params) as IterableIterator<any>;
+    for (const row of rows) yield this.mapRow(row);
+  }
+
   getEvent(eventId: string): MemoryEvent | null {
     const row = this.db.prepare(`
       SELECT ${MEMORY_EVENT_COLUMNS}

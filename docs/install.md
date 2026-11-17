@@ -247,6 +247,14 @@ stays usable and reports the fact: `/status` and `doctor` show `sandbox: off`, a
 `bash_sandbox_unavailable` to the trace. On Linux the installer probes bwrap; when it is missing,
 the same report appears and the hint names the package to install.
 
+The Linux unit runs with `ProtectSystem=strict` and `ProtectHome=read-only`; the workspace and the
+data directory are the only writable paths, carved out with `ReadWritePaths` because both may live
+under `$HOME`. `NoNewPrivileges`, `PrivateTmp`, `RestrictSUIDSGID`, `LockPersonality` and an
+address-family allowlist (`AF_UNIX` for the attach socket, `AF_INET`/`AF_INET6` for the loopback
+HTTP face, `AF_NETLINK` for interface discovery) complete the sandbox. The unit restarts a crashed
+resident, but `StartLimitIntervalSec=300` / `StartLimitBurst=5` stop a deterministic crash loop so
+the last log survives; `doctor` reports a unit that stopped that way instead of calling it healthy.
+
 ## 7. Old databases, snapshots and encryption
 
 A database created before 4.0 cannot be opened by this release. It is identified and refused with
@@ -261,4 +269,7 @@ The nightly snapshot and the weekly archive are complete copies of the SQLite da
 plaintext. They live under `<data dir>/snapshots` with mode 0700, but mode 0700 is not encryption:
 anyone who can read the disk, or a copy of it, can read every remembered turn. Use full-disk or
 volume encryption (LUKS, FileVault, an encrypted directory) when the machine may be lost, shared
-or backed up off-device. See [SECURITY.md](../SECURITY.md).
+or backed up off-device. A range deletion removes the local snapshots, archives and exports that
+were created after the earliest deleted row (see
+[memory-sovereignty.md](memory-sovereignty.md)); copies exported outside the data directory and
+backups already moved to another machine are not reached. See [SECURITY.md](../SECURITY.md).

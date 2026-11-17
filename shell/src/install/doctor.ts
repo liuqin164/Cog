@@ -147,6 +147,29 @@ export async function runDoctor(ctx: DoctorContext): Promise<DoctorReport> {
     try {
       const status = await serviceStatus(ctx.run, ctx.spec, ctx.platform);
       checks.push({ id: 'service', ok: status === 'active' || status === 'loaded', detail: status });
+      if (ctx.platform === 'linux') {
+        const shown = await ctx.run('systemctl', [
+          '--user', 'show', `${ctx.spec.serviceName}.service`,
+          '--property=ActiveState,SubState,Result,NRestarts,StartLimitBurst',
+        ]);
+        const fields = Object.fromEntries(shown.stdout
+          .split('\n')
+          .filter((line) => line.includes('='))
+          .map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]));
+        const restarts = Number(fields.NRestarts ?? '0');
+        const burst = Number(fields.StartLimitBurst ?? '5');
+        // systemd 255 keeps `Result=exit-code` when the start limit trips; the distinguishable
+        // state is "failed after at least a full burst of restarts". Newer versions also name it.
+        const stopped = fields.Result === 'start-limit-hit'
+          || (fields.ActiveState === 'failed' && restarts > 0 && restarts >= burst);
+        checks.push({
+          id: 'start-limit',
+          ok: !stopped,
+          detail: stopped
+            ? `stopped by StartLimit (Result=${fields.Result ?? '?'}, NRestarts=${fields.NRestarts ?? '?'}): inspect ${ctx.spec.logFile}`
+            : `ActiveState=${fields.ActiveState ?? '?'} Result=${fields.Result ?? '?'} NRestarts=${fields.NRestarts ?? '?'}`,
+        });
+      }
     } catch (error) {
       checks.push({ id: 'service', ok: false, detail: error instanceof Error ? error.message : String(error) });
     }

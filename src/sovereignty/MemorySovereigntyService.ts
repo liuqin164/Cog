@@ -18,7 +18,7 @@
  */
 import type Database from 'bun:sqlite';
 import { createHash, randomUUID } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import type { CommitmentBook } from '../commitment/CommitmentBook.js';
@@ -285,14 +285,28 @@ export class MemorySovereigntyService {
     if (!Number.isFinite(input.start) || !Number.isFinite(input.end) || input.start >= input.end) {
       throw error('invalid_sovereignty_range');
     }
-    const all = this.readAllEvents(scope);
-    const range = all.filter((event) => event.occurredAt >= input.start && event.occurredAt < input.end);
-    const rangeIds = new Set(range.map((event) => event.eventId));
-    const derived = all.filter((event) => !rangeIds.has(event.eventId) && refsOf(event.payload).some((id) => rangeIds.has(id)));
+    // Range ids, not range events: a decade-size window is 200k rows, and holding every parsed
+    // payload to delete them is what took the resident toward MemoryMax. The scan stays paged.
+    const rangeIds = new Set<string>();
+    let earliestRecordedAt = input.start;
+    this.eachEvent(scope, (event) => {
+      if (event.occurredAt < input.start || event.occurredAt >= input.end) return;
+      rangeIds.add(event.eventId);
+      earliestRecordedAt = Math.min(earliestRecordedAt, event.createdAt ?? event.occurredAt);
+    }, { startTime: input.start, endTime: input.end });
+    const derived: MemoryEvent[] = [];
+    this.eachEvent(scope, (event) => {
+      if (!rangeIds.has(event.eventId) && refsOf(event.payload).some((id) => rangeIds.has(id))) derived.push(event);
+    });
     const entryStreams = new Set(derived.map((event) => event.streamId).filter((streamId) => (
       streamId.startsWith('profile-entry:') || streamId.startsWith('procedure-entry:') || streamId.startsWith('commitment:')
     )));
-    const streamRows = all.filter((event) => entryStreams.has(event.streamId));
+    const streamRows: MemoryEvent[] = [];
+    if (entryStreams.size > 0) {
+      this.eachEvent(scope, (event) => {
+        if (entryStreams.has(event.streamId)) streamRows.push(event);
+      });
+    }
     const deleteIds = new Set([...rangeIds, ...derived.map((event) => event.eventId), ...streamRows.map((event) => event.eventId)]);
     const deleted = Object.fromEntries(SOVEREIGNTY_DELETE_COUNT_FIELDS.map((field) => [field, 0])) as Record<string, number>;
     deleted.events = rangeIds.size;
@@ -306,66 +320,86 @@ export class MemorySovereigntyService {
       exportsScanned: 0,
       notCovered: ['数据目录之外的导出文件', '已复制到其他机器的备份'],
     };
-    let earliestRecordedAt = input.start;
-    for (const event of range) earliestRecordedAt = Math.min(earliestRecordedAt, event.createdAt ?? event.occurredAt);
     if (deleteIds.size === 0) {
       const auditId = this.writeAudit('delete_range', scope, { start: input.start, end: input.end, counts: deleted, artifacts }, input.reason);
       return { ...input, projectId: scope, auditId, deleted, artifacts };
-    }
-
-    const episodeRows = this.episodesInRange(scope, input.start, input.end, rangeIds);
-    const episodeIds = new Set(episodeRows.map((row) => row.episodeId));
-    const neuronIds = this.neuronsForEvents(scope, [...rangeIds]);
-    if (neuronIds.length === 0) {
-      deleted.facts = 0;
-      deleted.synapses = 0;
-      deleted.entityMentions = 0;
-    }
-    if (episodeIds.size === 0) {
-      deleted.episodes = 0;
-      deleted.frames = 0;
     }
 
     // The live database is rewritten, not only logically emptied: without secure_delete the
     // deleted text stays in freelist pages, and without VACUUM it stays in pages that the table
     // b-trees no longer reference. This is the same filesystem contract as `forgetUser`.
     this.ports.db.exec(`PRAGMA secure_delete = ON`);
-    this.ports.db.transaction(() => {
-      const placeholders = [...deleteIds].map(() => '?').join(', ');
-      const ids = [...deleteIds];
-      this.deleteIfTable('memory_events_fts', `DELETE FROM memory_events_fts WHERE event_id IN (${placeholders})`, ids);
+    // Temporary id sets keep every statement in this deletion below SQLite's variable limit. A
+    // 200k-row window would otherwise need a 200k-parameter `IN (...)`, which is both slow and
+    // above the limit on some builds.
+    this.ports.db.exec(`
+      CREATE TEMP TABLE IF NOT EXISTS _sovereignty_event_ids (id TEXT PRIMARY KEY);
+      CREATE TEMP TABLE IF NOT EXISTS _sovereignty_neuron_ids (id TEXT PRIMARY KEY);
+      CREATE TEMP TABLE IF NOT EXISTS _sovereignty_episode_ids (id TEXT PRIMARY KEY);
+    `);
+    let neuronIds: string[] = [];
+    try {
+      const insertEventId = this.ports.db.prepare(`INSERT OR IGNORE INTO _sovereignty_event_ids (id) VALUES (?)`);
+      this.ports.db.transaction(() => {
+        for (const id of deleteIds) insertEventId.run(id);
+      })();
+      const episodeRows = this.episodesInRange(scope, input.start, input.end);
+      const episodeIds = new Set(episodeRows.map((row) => row.episodeId));
+      neuronIds = this.neuronsForEvents(scope);
+      const insertNeuronId = this.ports.db.prepare(`INSERT OR IGNORE INTO _sovereignty_neuron_ids (id) VALUES (?)`);
+      const insertEpisodeId = this.ports.db.prepare(`INSERT OR IGNORE INTO _sovereignty_episode_ids (id) VALUES (?)`);
+      this.ports.db.transaction(() => {
+        for (const id of neuronIds) insertNeuronId.run(id);
+        for (const id of episodeIds) insertEpisodeId.run(id);
+      })();
+      if (neuronIds.length === 0) {
+        deleted.facts = 0;
+        deleted.synapses = 0;
+        deleted.entityMentions = 0;
+      }
+      if (episodeIds.size === 0) {
+        deleted.episodes = 0;
+        deleted.frames = 0;
+      }
+
+      this.ports.db.transaction(() => {
+      this.deleteIfTable('memory_events_fts', `DELETE FROM memory_events_fts WHERE event_id IN (SELECT id FROM _sovereignty_event_ids)`, []);
       deleted.neurons = neuronIds.length;
       if (neuronIds.length > 0) {
-        const p = neuronIds.map(() => '?').join(', ');
-        deleted.facts = this.runDelete(`DELETE FROM facts WHERE neuron_id IN (${p})`, neuronIds);
-        deleted.synapses = this.runDelete(`DELETE FROM synapses WHERE source_id IN (${p}) OR target_id IN (${p})`, [...neuronIds, ...neuronIds]);
-        deleted.beliefs = this.runDelete(`DELETE FROM beliefs WHERE source_event_id IN (${placeholders}) OR source_neuron_id IN (${p})`, [...ids, ...neuronIds]);
-        deleted.entityMentions = this.runDelete(`DELETE FROM entity_mentions WHERE neuron_id IN (${p})`, neuronIds);
-        this.deleteIfTable('neuron_embeddings', `DELETE FROM neuron_embeddings WHERE neuron_id IN (${p})`, neuronIds);
-        this.deleteIfTable('vector_index', `DELETE FROM vector_index WHERE neuron_id IN (${p})`, neuronIds);
-        this.deleteIfTable('neurons_fts', `DELETE FROM neurons_fts WHERE id IN (${p})`, neuronIds);
-        deleted.neurons = this.runDelete(`DELETE FROM neurons WHERE id IN (${p})`, neuronIds);
+        deleted.facts = this.runDelete(`DELETE FROM facts WHERE neuron_id IN (SELECT id FROM _sovereignty_neuron_ids)`, []);
+        deleted.synapses = this.runDelete(`DELETE FROM synapses WHERE source_id IN (SELECT id FROM _sovereignty_neuron_ids) OR target_id IN (SELECT id FROM _sovereignty_neuron_ids)`, []);
+        deleted.beliefs = this.runDelete(`DELETE FROM beliefs WHERE source_event_id IN (SELECT id FROM _sovereignty_event_ids) OR source_neuron_id IN (SELECT id FROM _sovereignty_neuron_ids)`, []);
+        deleted.entityMentions = this.runDelete(`DELETE FROM entity_mentions WHERE neuron_id IN (SELECT id FROM _sovereignty_neuron_ids)`, []);
+        this.deleteIfTable('neuron_embeddings', `DELETE FROM neuron_embeddings WHERE neuron_id IN (SELECT id FROM _sovereignty_neuron_ids)`, []);
+        this.deleteIfTable('vector_index', `DELETE FROM vector_index WHERE neuron_id IN (SELECT id FROM _sovereignty_neuron_ids)`, []);
+        this.deleteIfTable('neurons_fts', `DELETE FROM neurons_fts WHERE id IN (SELECT id FROM _sovereignty_neuron_ids)`, []);
+        deleted.neurons = this.runDelete(`DELETE FROM neurons WHERE id IN (SELECT id FROM _sovereignty_neuron_ids)`, []);
       } else {
-        deleted.beliefs = this.runDelete(`DELETE FROM beliefs WHERE source_event_id IN (${placeholders})`, ids);
+        deleted.beliefs = this.runDelete(`DELETE FROM beliefs WHERE source_event_id IN (SELECT id FROM _sovereignty_event_ids)`, []);
       }
       if (episodeIds.size > 0) {
-        const e = [...episodeIds].map(() => '?').join(', ');
-        const episodeParams = [...episodeIds];
-        this.runDelete(`DELETE FROM memory_episode_events WHERE episode_id IN (${e}) OR event_id IN (${placeholders})`, [...episodeParams, ...ids]);
-        this.deleteIfTable('memory_frame_reviews', `DELETE FROM memory_frame_reviews WHERE frame_id IN (SELECT frame_id FROM memory_frames WHERE episode_id IN (${e}))`, episodeParams);
-        this.deleteIfTable('memory_frame_relations', `DELETE FROM memory_frame_relations WHERE frame_id IN (SELECT frame_id FROM memory_frames WHERE episode_id IN (${e}))`, episodeParams);
-        this.deleteIfTable('memory_frame_nodes', `DELETE FROM memory_frame_nodes WHERE frame_id IN (SELECT frame_id FROM memory_frames WHERE episode_id IN (${e}))`, episodeParams);
-        deleted.frames = this.deleteIfTable('memory_frames', `DELETE FROM memory_frames WHERE episode_id IN (${e})`, episodeParams);
-        deleted.episodes = this.runDelete(`DELETE FROM memory_episodes WHERE episode_id IN (${e})`, episodeParams);
+        this.runDelete(`DELETE FROM memory_episode_events WHERE episode_id IN (SELECT id FROM _sovereignty_episode_ids) OR event_id IN (SELECT id FROM _sovereignty_event_ids)`, []);
+        this.deleteIfTable('memory_frame_reviews', `DELETE FROM memory_frame_reviews WHERE frame_id IN (SELECT frame_id FROM memory_frames WHERE episode_id IN (SELECT id FROM _sovereignty_episode_ids))`, []);
+        this.deleteIfTable('memory_frame_relations', `DELETE FROM memory_frame_relations WHERE frame_id IN (SELECT frame_id FROM memory_frames WHERE episode_id IN (SELECT id FROM _sovereignty_episode_ids))`, []);
+        this.deleteIfTable('memory_frame_nodes', `DELETE FROM memory_frame_nodes WHERE frame_id IN (SELECT frame_id FROM memory_frames WHERE episode_id IN (SELECT id FROM _sovereignty_episode_ids))`, []);
+        deleted.frames = this.deleteIfTable('memory_frames', `DELETE FROM memory_frames WHERE episode_id IN (SELECT id FROM _sovereignty_episode_ids)`, []);
+        deleted.episodes = this.runDelete(`DELETE FROM memory_episodes WHERE episode_id IN (SELECT id FROM _sovereignty_episode_ids)`, []);
       }
       this.deleteIfTable('memory_atlas_documents',
         `DELETE FROM memory_atlas_documents WHERE project_id=? AND (
-           source_id IN (${placeholders})
-           OR EXISTS (SELECT 1 FROM json_each(evidence_event_ids_json) WHERE value IN (${placeholders}))
+           source_id IN (SELECT id FROM _sovereignty_event_ids)
+           OR EXISTS (SELECT 1 FROM json_each(evidence_event_ids_json) WHERE value IN (SELECT id FROM _sovereignty_event_ids))
          )`,
-        [scope, ...ids, ...ids]);
-      this.runDelete(`DELETE FROM memory_events WHERE event_id IN (${placeholders})`, ids);
-    })();
+        [scope]);
+      this.runDelete(`DELETE FROM memory_events WHERE event_id IN (SELECT id FROM _sovereignty_event_ids)`, []);
+      })();
+    } finally {
+      this.ports.db.exec(`
+        DROP TABLE IF EXISTS _sovereignty_event_ids;
+        DROP TABLE IF EXISTS _sovereignty_neuron_ids;
+        DROP TABLE IF EXISTS _sovereignty_episode_ids;
+      `);
+    }
     this.eraseFreedPages();
 
     if (neuronIds.length > 0) this.ports.afterNeuronsDeleted?.(neuronIds, scope);
@@ -393,65 +427,93 @@ export class MemorySovereigntyService {
     const scope = requiredProject(input.projectId);
     const path = typeof input.outputPath === 'string' ? input.outputPath.trim() : '';
     if (!path) throw error('invalid_sovereignty_path');
-    const events = this.readAllEvents(scope).filter((event) => eventText(event).trim().length > 0);
+    // Count first, write second: both passes are paged, so a decade ledger never sits in memory as
+    // one array of parsed events plus one array of rendered lines.
+    let eventCount = 0;
+    this.eachEvent(scope, (event) => {
+      if (eventText(event).trim()) eventCount += 1;
+    });
     const profile = scope ? this.ports.profile.entries({ projectId: scope }) : [];
     const procedures = scope ? this.ports.procedures.entries({ projectId: scope }) : [];
     const commitments = scope ? this.ports.commitments.list({ projectId: scope, limit: 1000, now: this.now() }) : [];
     const graph = this.graphRows(scope);
     const exportedAt = this.now();
-    const lines: string[] = [
+    let buffer: string[] = [
       '# Cog Memory Archive',
       '',
       `Project: ${scope || '(projectless)'}`,
       `Exported: ${iso(exportedAt)}`,
       '',
-      `This is a human-readable archive, not a database dump. It contains ${events.length} conversation turns, ${profile.length} profile entries, ${procedures.length} procedures, ${commitments.length} commitments and ${graph.length} graph nodes.`,
+      `This is a human-readable archive, not a database dump. It contains ${eventCount} conversation turns, ${profile.length} profile entries, ${procedures.length} procedures, ${commitments.length} commitments and ${graph.length} graph nodes.`,
       '',
       '## Conversations',
       '',
     ];
-    if (events.length === 0) lines.push('_No conversation turns remain._', '');
-    for (const event of events) {
-      const label = sensitivityLabel(event);
-      lines.push(`### ${iso(event.occurredAt)} · ${event.role ?? 'unknown'} · ${event.eventId}`, '');
-      if (label) lines.push(`Sensitivity: ${label}`, '');
-      lines.push(eventText(event).trim(), '');
-    }
-    lines.push('## Profile', '');
-    this.renderEntries(lines, 'Facts', profile.filter((entry) => entry.ledger === 'facts'), this.ports.events);
-    this.renderEntries(lines, 'Preferences', profile.filter((entry) => entry.ledger === 'preferences'), this.ports.events);
-    this.renderEntries(lines, 'Relations', profile.filter((entry) => entry.ledger === 'relations'), this.ports.events);
-    this.renderEntries(lines, 'Ongoing', profile.filter((entry) => entry.ledger === 'ongoing'), this.ports.events);
-    lines.push('## Procedures', '');
-    if (procedures.length === 0) lines.push('_No procedures remain._', '');
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    const fd = openSync(path, 'w', 0o600);
+    let bytes = 0;
+    let firstChunk = true;
+    const write = () => {
+      if (buffer.length === 0) return;
+      // A newline belongs *between* chunks, not after the last line; otherwise every flush
+      // (and the final one) adds a blank line the reader did not ask for.
+      const body = `${firstChunk ? '' : '\n'}${buffer.join('\n')}`;
+      writeSync(fd, body);
+      bytes += Buffer.byteLength(body, 'utf8');
+      buffer = [];
+      firstChunk = false;
+    };
+    try {
+      if (eventCount === 0) buffer.push('_No conversation turns remain._', '');
+      this.eachEvent(scope, (event) => {
+        const text = eventText(event).trim();
+        if (!text) return;
+        const label = sensitivityLabel(event);
+        buffer.push(`### ${iso(event.occurredAt)} · ${event.role ?? 'unknown'} · ${event.eventId}`, '');
+        if (label) buffer.push(`Sensitivity: ${label}`, '');
+        buffer.push(text, '');
+        if (buffer.length >= 400) write();
+      });
+    buffer.push('## Profile', '');
+    this.renderEntries(buffer, 'Facts', profile.filter((entry) => entry.ledger === 'facts'), this.ports.events);
+    this.renderEntries(buffer, 'Preferences', profile.filter((entry) => entry.ledger === 'preferences'), this.ports.events);
+    this.renderEntries(buffer, 'Relations', profile.filter((entry) => entry.ledger === 'relations'), this.ports.events);
+    this.renderEntries(buffer, 'Ongoing', profile.filter((entry) => entry.ledger === 'ongoing'), this.ports.events);
+    buffer.push('## Procedures', '');
+    if (procedures.length === 0) buffer.push('_No procedures remain._', '');
     for (const entry of procedures) {
       const label = entrySensitivity(entry.sourceRefs, this.ports.events);
       const source = sourceLabel(entry.sourceRefs);
-      lines.push(`### ${entry.title}`, '', `Domain: ${entry.domain} · ${entry.grade} · ${entry.origin}${source ? ` · source ${source}` : ''}`, '');
-      if (label) lines.push(`Sensitivity: ${label}`, '');
-      lines.push(...entry.steps.map((step, index) => `${index + 1}. ${step}`), '');
+      buffer.push(`### ${entry.title}`, '', `Domain: ${entry.domain} · ${entry.grade} · ${entry.origin}${source ? ` · source ${source}` : ''}`, '');
+      if (label) buffer.push(`Sensitivity: ${label}`, '');
+      buffer.push(...entry.steps.map((step, index) => `${index + 1}. ${step}`), '');
     }
-    lines.push('## Commitments', '');
-    if (commitments.length === 0) lines.push('_No commitments remain._', '');
+    buffer.push('## Commitments', '');
+    if (commitments.length === 0) buffer.push('_No commitments remain._', '');
     for (const entry of commitments) {
       const label = entrySensitivity(entry.sourceRefs, this.ports.events);
       const source = sourceLabel(entry.sourceRefs);
-      lines.push(`- ${entry.content} — ${entry.status}${entry.dueAt ? ` · due ${iso(entry.dueAt)}` : ''}${source ? ` · source ${source}` : ''}`);
-      if (label) lines.push(`  Sensitivity: ${label}`);
+      buffer.push(`- ${entry.content} — ${entry.status}${entry.dueAt ? ` · due ${iso(entry.dueAt)}` : ''}${source ? ` · source ${source}` : ''}`);
+      if (label) buffer.push(`  Sensitivity: ${label}`);
     }
-    lines.push('', '## Memory graph', '');
-    if (graph.length === 0) lines.push('_No graph nodes remain._', '');
-    for (const row of graph) lines.push(`- ${row.node_type}: ${row.label}`);
-    lines.push('');
-    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    const body = lines.join('\n');
-    writeFileSync(path, body, { encoding: 'utf8', mode: 0o600 });
+    buffer.push('', '## Memory graph', '');
+    if (graph.length === 0) buffer.push('_No graph nodes remain._', '');
+    for (const row of graph) buffer.push(`- ${row.node_type}: ${row.label}`);
+    buffer.push('');
+    write();
+    } catch (error) {
+      // A failed export must not leave half an archive that looks complete.
+      closeSync(fd);
+      rmSync(path, { force: true });
+      throw error;
+    }
+    closeSync(fd);
     // mode only applies on create: a re-export over an older 0644 file must tighten it too.
     chmodSync(path, 0o600);
     const counts = Object.fromEntries(SOVEREIGNTY_EXPORT_COUNT_FIELDS.map((field) => [field, 0])) as Record<string, number>;
-    Object.assign(counts, { events: events.length, profile: profile.length, procedures: procedures.length, commitments: commitments.length, graph: graph.length });
+    Object.assign(counts, { events: eventCount, profile: profile.length, procedures: procedures.length, commitments: commitments.length, graph: graph.length });
     const auditId = this.writeAudit('export_archive', scope, { start: exportedAt, end: exportedAt, path, counts });
-    return { projectId: scope, path, counts, bytes: Buffer.byteLength(body, 'utf8'), auditId };
+    return { projectId: scope, path, counts, bytes, auditId };
   }
 
   /** The owner's read: what was paused, deleted and exported, with range, counts and time. */
@@ -500,36 +562,31 @@ export class MemorySovereigntyService {
     lines.push('');
   }
 
-  private readAllEvents(scope: string): MemoryEvent[] {
-    const out: MemoryEvent[] = [];
-    const pageSize = 1000;
-    for (let page = 1; ; page += 1) {
-      const result = this.ports.events.queryEvents(page, pageSize, { projectId: [scope], order: 'asc' });
-      out.push(...result.records);
-      if (result.records.length < pageSize || out.length >= result.total) break;
-    }
-    return out;
+  /** Stream the project ledger once; the caller accumulates only what it must keep. */
+  private eachEvent(
+    scope: string,
+    visit: (event: MemoryEvent) => void,
+    filters: { startTime?: number; endTime?: number } = {},
+  ): void {
+    for (const event of this.ports.events.iterateProjectEvents(scope, filters.startTime, filters.endTime)) visit(event);
   }
 
-  private episodesInRange(scope: string, start: number, end: number, rangeIds: Set<string>): Array<{ episodeId: string }> {
-    const placeholders = [...rangeIds].map(() => '?').join(', ');
-    const ids = [...rangeIds];
+  private episodesInRange(scope: string, start: number, end: number): Array<{ episodeId: string }> {
     const rows = this.ports.db.prepare(`
       SELECT DISTINCT episode_id FROM memory_episodes
       WHERE project_id=? AND (
         (started_at < ? AND COALESCE(sealed_at, updated_at) >= ?)
-        ${ids.length ? `OR start_event_id IN (${placeholders}) OR end_event_id IN (${placeholders})` : ''}
+        OR start_event_id IN (SELECT id FROM _sovereignty_event_ids)
+        OR end_event_id IN (SELECT id FROM _sovereignty_event_ids)
       )
-    `).all(scope, end, start, ...ids, ...ids) as Array<{ episode_id: string }>;
+    `).all(scope, end, start) as Array<{ episode_id: string }>;
     return rows.map((row) => ({ episodeId: row.episode_id }));
   }
 
-  private neuronsForEvents(scope: string, eventIds: string[]): string[] {
-    if (eventIds.length === 0) return [];
-    const placeholders = eventIds.map(() => '?').join(', ');
+  private neuronsForEvents(scope: string): string[] {
     const rows = this.ports.db.prepare(`
-      SELECT id FROM neurons WHERE COALESCE(project_id, '')=? AND source_event_id IN (${placeholders})
-    `).all(scope, ...eventIds) as Array<{ id: string }>;
+      SELECT id FROM neurons WHERE COALESCE(project_id, '')=? AND source_event_id IN (SELECT id FROM _sovereignty_event_ids)
+    `).all(scope) as Array<{ id: string }>;
     return rows.map((row) => row.id);
   }
 
