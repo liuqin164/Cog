@@ -25,8 +25,11 @@ describe('embedding provider without a model', () => {
   test('warm fails cleanly and embedSync returns an empty vector instead of throwing', async () => {
     const dataDir = makeTempDir();
     const provider = new XenovaEmbeddingProvider(dataDir, undefined, 2_000, false);
-    await expect(provider.warm()).rejects.toThrow(/embedding_unavailable/);
+    // A model that is absent is a model-load failure, not a worker that never started: the two
+    // read differently in an install log (#312).
+    await expect(provider.warm()).rejects.toThrow(/embedding_unavailable: model_load_failed/);
     expect(provider.status().state).toBe('degraded');
+    expect(provider.status().detail?.startsWith('model_load_failed')).toBe(true);
     const extracted = provider.embedSync;
     expect(extracted('查一下会议时间').length).toBe(0);
     expect(provider.embedSync('x').length).toBe(0);

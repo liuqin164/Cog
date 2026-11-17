@@ -1,5 +1,4 @@
 import { mkdirSync, mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
@@ -9,21 +8,23 @@ import { CheckpointStore, emptyCheckpoint, type CheckpointState } from '../src/s
 import { StateMachine } from '../src/state/machine.ts';
 import { TraceLog } from '../src/trace.ts';
 import type { ModelCompletionInput, ModelProvider, ModelTurn } from '../src/state/agent-loop.ts';
+import { runRoot } from './temp-root.ts';
 
 /**
- * A temp directory under the run's `TMPDIR`; `test/preload.ts` sweeps the whole family at the start
- * of the next run.
+ * A temp directory under this run's root (`temp-root.ts`); the next run sweeps roots whose process
+ * is gone, and leaves a concurrent run's root alone.
  *
  * AGENTS.md's rule is that new tests use a managed temp dir rather than a bare `mkdtempSync`; the
  * shell is a separate package and cannot import the root helper, so this is that helper's shell-side
  * twin. There used to be a `process.on('exit')` hook here to remove them at the end of the run, but
  * bun's test runner does not fire it — measured: the directory is still on disk after the run — so
- * the preload's sweep is the mechanism, and the exit of a run leaves one directory per test case
- * behind until the next run. The prefix list in the preload has to keep up with the prefixes used
- * here, which is why it is one array next to this comment's twin.
+ * the preload's sweep is the mechanism. One run root per process keeps a concurrent run's
+ * directories out of that sweep.
  */
 export function makeTempDir(prefix = 'companion-shell-test-'): string {
-  return mkdtempSync(join(tmpdir(), prefix));
+  const root = runRoot();
+  mkdirSync(root, { recursive: true });
+  return mkdtempSync(join(root, prefix));
 }
 
 /** Poll a condition a deferred run settles asynchronously (a command returns before its run ends). */
