@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
 import { assertCliArgs } from './CliArgs.js';
+import { emitRefusalDocument } from './RefusalDocument.js';
 import { buildDailyReport, localDateString, renderDailyReport } from '../daily/DailyReport.js';
 
 function usage(): string {
@@ -15,6 +16,7 @@ function usage(): string {
     '  --date <date>   local day YYYY-MM-DD (default: today)',
     '  --project <id>  restrict trace counts to one project',
     '  --out <path>    report path (default: <data>/daily/<date>.md)',
+    '  --json          emit the shared JSON refusal document when the ledger is refused',
     'The report reads the ledger and trace only; it calls no model.',
   ].join('\n');
 }
@@ -57,6 +59,7 @@ function main(): void {
 try {
   main();
 } catch (error) {
+  emitRefusalDocument(error, 'daily');
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
 }

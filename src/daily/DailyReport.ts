@@ -16,6 +16,7 @@ import {
   SURFACING_OBSERVABILITY_GATES,
   type SurfacingObservabilityGate,
 } from '../observability/SurfacingObservability.js';
+import { assertSupportedDatabase } from '../migrations/v3_7_4/FinalSchema.js';
 
 export const DAILY_TOKEN_LEGACY_NOTE = 'trace predates the route field; attributed to the installed route';
 
@@ -333,6 +334,9 @@ export function buildDailyReport(options: DailyReportOptions): DailyReport {
   const { records, readable } = readTrace(tracePath, window.from, window.to);
   const db = new Database(dbPath, { readonly: true });
   try {
+    // The report reads raw tables, so a foreign or pre-4.0 file would otherwise
+    // produce a convincing all-zero report instead of the shared refusal.
+    assertSupportedDatabase(db);
     const surfacing = readSurfacingObservability(db, {
       now: window.to,
       windowMs: window.to - window.from,

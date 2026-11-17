@@ -14,6 +14,8 @@ function seed(dir: string): void {
   db.exec(`
     CREATE TABLE memory_events (event_type TEXT, occurred_at INTEGER, project_id TEXT, payload_json TEXT);
     CREATE TABLE episode_dream_runs (run_id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, status TEXT NOT NULL, candidate_ids_json TEXT NOT NULL, error TEXT);
+    CREATE TABLE _meta (key TEXT PRIMARY KEY, value TEXT);
+    INSERT INTO _meta VALUES ('schema_version', '32');
   `);
   const insertFeedback = db.prepare('INSERT INTO memory_events (event_type, occurred_at, project_id, payload_json) VALUES (?, ?, ?, ?)');
   insertFeedback.run('SURFACING_FEEDBACK_RECORDED', NOON, 'companion', JSON.stringify({ outcome: 'ignored' }));
@@ -108,4 +110,27 @@ test('the daily CLI writes the report beside the data directory', async () => {
   const out = join(dir, 'daily', `${DATE}.md`);
   expect(existsSync(out)).toBe(true);
   expect(readFileSync(out, 'utf8')).toContain('## 浮现与门控');
+});
+
+test('daily refuses a foreign or pre-4.0 ledger with the shared document', async () => {
+  const dir = makeTempDir('cogmem-daily-refusal-');
+  const foreign = join(dir, 'foreign.db');
+  const old3x = join(dir, 'old3x.db');
+  const create = (file: string, sql: string): void => {
+    const db = new Database(file);
+    db.exec(sql);
+    db.close();
+  };
+  create(foreign, 'CREATE TABLE notes (id integer primary key, body text);');
+  create(old3x, 'CREATE TABLE _schema_migrations (id integer primary key, version integer); INSERT INTO _schema_migrations VALUES (1, 31); CREATE TABLE _meta (key text primary key, value text); INSERT INTO _meta VALUES (\'schema_version\', \'31\');');
+
+  const entry = join(import.meta.dir, '..', 'src', 'bin', 'daily.ts');
+  for (const [file, reason] of [[foreign, 'unsupported_database_identity'], [old3x, 'no_upgrade_path']] as const) {
+    const proc = Bun.spawn({ cmd: ['bun', entry, '--db', file, '--date', DATE, '--json'], stdout: 'pipe', stderr: 'pipe' });
+    const [stdout, , exitCode] = await Promise.all([
+      new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited,
+    ]);
+    expect(exitCode).not.toBe(0);
+    expect(JSON.parse(stdout)).toMatchObject({ status: 'refused', reason, command: 'daily' });
+  }
 });
