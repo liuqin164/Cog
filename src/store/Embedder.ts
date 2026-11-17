@@ -1,5 +1,5 @@
 // ============================================
-// 嵌入模型 - @xenova/transformers 实现
+// 嵌入模型 - @huggingface/transformers 实现
 // ============================================
 
 import type { EmbeddingConfig } from '../types/index.js';
@@ -12,7 +12,8 @@ interface EmbeddingPipeline {
 interface TransformersModule {
   pipeline: (
     task: 'feature-extraction',
-    model: string
+    model: string,
+    options?: { dtype?: 'q8' | 'fp32' }
   ) => Promise<EmbeddingPipeline>;
   env: {
     allowLocalModels: boolean;
@@ -23,7 +24,7 @@ interface TransformersModule {
 }
 
 async function loadTransformers(): Promise<TransformersModule> {
-  return await import('@xenova/transformers') as TransformersModule;
+  return await import('@huggingface/transformers') as TransformersModule;
 }
 
 function configureEnv(transformers: TransformersModule, config: EmbeddingConfig): void {
@@ -52,7 +53,9 @@ export class Embedder {
     if (this.isWarmedUp) return;
     const transformers = await loadTransformers();
     configureEnv(transformers, this.config);
-    this.model = await transformers.pipeline('feature-extraction', this.config.model) as EmbeddingPipeline;
+    this.model = await transformers.pipeline('feature-extraction', this.config.model, {
+      dtype: this.config.quantized ? 'q8' : 'fp32'
+    }) as EmbeddingPipeline;
     this.isWarmedUp = true;
     this.isLoaded = true;
   }

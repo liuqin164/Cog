@@ -41,3 +41,15 @@ only, and there is no credential to present or compare.
 ## Reporting
 
 Report vulnerabilities privately through the repository security advisory flow. Do not open public issues for exploitable security bugs.
+
+## Dependency sourcing
+
+- `xlsx` is installed from the SheetJS official CDN tarball
+  (`https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`), not npm: 0.18.5 is the last npm
+  release and carries two unfixed advisories, while 0.20.3 is the maintained distribution. The
+  lockfile pins its integrity hash, so install resolves the same bytes.
+- `protobufjs` is overridden to `^7.6.6` because `onnxruntime-web` still declares `^7.2.4`, which
+  can resolve to versions affected by the DoS and code-generation advisories fixed after 7.5.5.
+- `@xmldom/xmldom` is overridden to `0.8.15` because `mammoth` declares `^0.8.6`; 0.8.15 is the
+  first 0.8.x without the parser injection and quadratic-parsing advisories. Remove both overrides
+  once the direct consumers raise their own floors.

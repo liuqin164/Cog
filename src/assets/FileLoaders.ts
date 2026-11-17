@@ -203,6 +203,8 @@ export class XlsxLoader implements FileLoader {
 
   async load(input: FileLoadInput): Promise<LoadedFile> {
     const XLSX = await import('xlsx') as any;
+    // SheetJS 0.20's ESM build no longer imports node:fs itself; readFile needs the fs binding.
+    XLSX.set_fs(await import('node:fs'));
     const workbook = XLSX.readFile(input.filePath);
     const blocks: LoadedFileBlock[] = [];
     for (const sheetName of workbook.SheetNames || []) {

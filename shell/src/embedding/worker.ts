@@ -10,7 +10,7 @@
  * pipeline's batch size stays small (see `XenovaEmbeddingProvider`).
  */
 import { parentPort } from 'node:worker_threads';
-import { env, pipeline } from '@xenova/transformers';
+import { env, pipeline } from '@huggingface/transformers';
 import { EMBEDDING_DIMENSIONS, EMBEDDING_MODEL, EMBEDDING_QUERY_PREFIX } from './model.ts';
 
 interface Extract {
@@ -36,8 +36,8 @@ async function init(modelsRoot: string, allowRemoteModels: boolean): Promise<voi
   // the shell's start and health face are never held behind it.
   env.allowRemoteModels = allowRemoteModels;
   env.useBrowserCache = false;
-  // Bun worker threads cannot reliably load the native CPU binding, so @xenova falls back to the
-  // wasm backend. Its default proxy worker imports a blob URL and panics under Bun; running wasm
+  // Bun worker threads cannot reliably load the native CPU binding, so the pipeline falls back to
+  // the wasm backend. Its default proxy worker imports a blob URL and panics under Bun; running wasm
   // in this thread (no proxy, one thread) keeps the failure out of the process.
   if (env.backends.onnx.wasm) {
     env.backends.onnx.wasm.numThreads = 1;
@@ -46,7 +46,7 @@ async function init(modelsRoot: string, allowRemoteModels: boolean): Promise<voi
   const startedAt = performance.now();
   try {
     const loaded = await pipeline('feature-extraction', EMBEDDING_MODEL, {
-      quantized: true,
+      dtype: 'q8',
       progress_callback: (progress: { status?: string; file?: string; progress?: number }) => {
         parentPort?.postMessage({ type: 'progress', ...progress });
       },
