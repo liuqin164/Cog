@@ -282,6 +282,8 @@ export class CompanionShell implements ShellControl, AttachShell {
   /** This process's native plugin load outcomes; `/plugins` and `/health` read it. */
   readonly pluginResults: PluginLoadResult[] = [];
   private readonly embedding?: XenovaEmbeddingProvider;
+  /** Any host-supplied embedder, so the install's semantic probe is not limited to the local one. */
+  private readonly embeddingProvider?: EmbeddingProvider;
   private readonly shellRegistry?: ShellModelRegistry;
   private reEmbedRunning = false;
 
@@ -313,6 +315,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.shellRegistry = registry instanceof ShellModelRegistry ? registry : undefined;
     const embeddingProvider = options.embeddingProvider
       ?? (options.embedding ? new XenovaEmbeddingProvider(this.config.dataDir) : undefined);
+    this.embeddingProvider = embeddingProvider;
     this.embedding = embeddingProvider instanceof XenovaEmbeddingProvider ? embeddingProvider : undefined;
     this.kernel = createMemoryKernel({
       dbPath: this.config.dbPath,
@@ -673,10 +676,14 @@ export class CompanionShell implements ShellControl, AttachShell {
     } catch (error) {
       // A missing model, a failed download or a broken ONNX file all land here. The companion keeps
       // answering with lexical recall; health and this trace record why.
+      const message = error instanceof Error ? error.message : String(error);
       this.trace.append('embedding_unavailable', {
         modelId: EMBEDDING_MODEL,
-        message: error instanceof Error ? error.message : String(error),
+        message,
       });
+      // The service log is inherited stdout/stderr; the trace is the durable record. Say it on both
+      // faces so a worker that never starts is not only a `/health` line nobody reads (#280).
+      console.error(`[companion-shell] embedding degraded: ${message}`);
     }
   }
 
@@ -2190,6 +2197,21 @@ export class CompanionShell implements ShellControl, AttachShell {
     try {
       const result = this.backend.recall({ agentId: this.config.agentId, projectId: this.config.projectId, query, limit: 5 });
       return { ok: true, text: result.items.map((item) => item.text).join('\n') };
+    } catch (error) {
+      return { ok: false, text: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  /**
+   * The install's semantic probe (#280): run one real embedding and report its dimension. A lexical
+   * recall cannot stand in for this, because the whole failure mode is recall silently falling back
+   * to lexical while the self-check still looks green.
+   */
+  async probeEmbed(text: string): Promise<{ ok: boolean; text: string; dimensions?: number }> {
+    if (!this.embeddingProvider) return { ok: false, text: 'embedding host not enabled for this process' };
+    try {
+      const vector = await this.embeddingProvider.embed(text);
+      return { ok: true, text: `dimensions=${vector.length}`, dimensions: vector.length };
     } catch (error) {
       return { ok: false, text: error instanceof Error ? error.message : String(error) };
     }

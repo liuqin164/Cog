@@ -10,6 +10,7 @@
  * queries stay in the measured configuration; revisit if the interface ever gains the distinction.
  */
 import { Worker } from 'node:worker_threads';
+import { fileURLToPath } from 'node:url';
 import type { EmbeddingProvider } from 'cogmem';
 import {
   EMBEDDING_DIMENSIONS,
@@ -31,6 +32,14 @@ export interface EmbeddingStatus {
 type Pending = { resolve: (vectors: Float32Array[]) => void; reject: (error: Error) => void };
 
 const EMPTY = new Float32Array(0);
+
+/**
+ * The worker entry as a filesystem path (#280). Bun 1.4 rejects a `file://` URL *string* for a
+ * worker; an absolute path is what both the old and new worker-thread validation accept.
+ */
+export function embeddingWorkerScript(): string {
+  return fileURLToPath(new URL('./worker.ts', import.meta.url));
+}
 
 export class XenovaEmbeddingProvider implements EmbeddingProvider {
   readonly dimensions = EMBEDDING_DIMENSIONS;
@@ -75,7 +84,7 @@ export class XenovaEmbeddingProvider implements EmbeddingProvider {
     });
     this.setState('loading');
     try {
-      this.worker = new Worker(new URL('./worker.ts', import.meta.url).href);
+      this.worker = new Worker(embeddingWorkerScript());
     } catch (error) {
       this.fail(error);
       return this.ready;

@@ -187,8 +187,11 @@ bun run bin/install --uninstall     # stop the service, remove the unit, keep th
 4. **常驻** — register a **user-level** service (`systemd --user` on Linux, launchd agent on macOS; no
    sudo), start it, run the shell-side doctor, and print the star-sea and health addresses.
 5. **自检式首醒** — write a probe memory through the resident's own control socket (its in-process
-   kernel keeps the single writer), restart the process, and recall it. Only then does the installer
-   print success; the endpoint is a first `cog` attach.
+   kernel keeps the single writer), restart the process, and recall it. Then run one **real
+   embedding** through the resident's embedder and check its 768 dimensions (#280): lexical recall
+   can pass the write/recall probe while the embedding worker is broken, and the install must say so
+   rather than look green. Only then does the installer print success; the endpoint is a first `cog`
+   attach.
 
 Each step is idempotent and its completion is written to `<dataDir>/install.json` only after it fully
 succeeded, so a re-run resumes at the first unfinished step.

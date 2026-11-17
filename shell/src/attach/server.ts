@@ -65,12 +65,15 @@ export type AttachClientMessage =
   // file is the two-writer case CONCURRENT_ACCESS.md forbids. `turnId` is the probe's token, so a
   // replay of the same attempt is a replay instead of a second row.
   | { t: 'probe-remember'; text: string; turnId?: string }
-  | { t: 'probe-recall'; query: string };
+  | { t: 'probe-recall'; query: string }
+  // The install's semantic probe (#280): a real vector through the resident's embedder, so a
+  // degraded worker cannot pass the self-check on lexical recall alone.
+  | { t: 'probe-embed'; text: string };
 
 export type AttachServerMessage =
   | ({ t: 'snapshot' } & AttachSnapshot)
   | { t: 'event'; name: string; payload: any; ctx?: { runId?: string } }
-  | { t: 'probe'; op: 'remember' | 'recall'; ok: boolean; text: string }
+  | { t: 'probe'; op: 'remember' | 'recall' | 'embed'; ok: boolean; text: string; dimensions?: number }
   | { t: 'bye'; reason: string };
 
 /** What the server needs from the shell; `CompanionShell` implements it. */
@@ -96,6 +99,7 @@ export interface AttachShell {
   attachChanged(count: number): void;
   probeRemember(text: string, turnId?: string): Promise<{ ok: boolean; text: string }>;
   probeRecall(query: string): Promise<{ ok: boolean; text: string }>;
+  probeEmbed(text: string): Promise<{ ok: boolean; text: string; dimensions?: number }>;
 }
 
 export interface AttachServerOptions {
@@ -242,6 +246,11 @@ export class AttachServer {
       case 'probe-recall': {
         const result = await this.options.shell.probeRecall(message.query);
         this.send(socket, { t: 'probe', op: 'recall', ok: result.ok, text: result.text });
+        break;
+      }
+      case 'probe-embed': {
+        const result = await this.options.shell.probeEmbed(message.text);
+        this.send(socket, { t: 'probe', op: 'embed', ok: result.ok, text: result.text, dimensions: result.dimensions });
         break;
       }
       case 'detach':

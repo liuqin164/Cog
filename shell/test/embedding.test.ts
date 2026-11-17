@@ -6,15 +6,22 @@
  * `eval/recall-baseline/run-wired.ts`.
  */
 import { describe, expect, test } from 'bun:test';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { createMemoryKernel } from 'cogmem';
 import { ModelRegistry } from 'cogmem/internal';
 import { CompanionShell } from '../src/app.ts';
-import { XenovaEmbeddingProvider } from '../src/embedding/xenova.ts';
+import { embeddingWorkerScript, XenovaEmbeddingProvider } from '../src/embedding/xenova.ts';
 import { EMBEDDING_MODEL } from '../src/embedding/model.ts';
 import { makeTempDir } from './helpers.ts';
 
 describe('embedding provider without a model', () => {
+  test('the worker entry is an absolute filesystem path, never a file:// URL (#280)', () => {
+    const script = embeddingWorkerScript();
+    expect(isAbsolute(script)).toBe(true);
+    expect(script.startsWith('file:')).toBe(false);
+    expect(script.endsWith('worker.ts')).toBe(true);
+  });
+
   test('warm fails cleanly and embedSync returns an empty vector instead of throwing', async () => {
     const dataDir = makeTempDir();
     const provider = new XenovaEmbeddingProvider(dataDir, undefined, 2_000, false);

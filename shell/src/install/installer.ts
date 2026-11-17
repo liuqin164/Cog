@@ -32,10 +32,11 @@ import {
   type ServiceSpec,
 } from './service.ts';
 import { runDoctor, type DoctorReport, type HealthPayload } from './doctor.ts';
-import { openProbeSession, type ProbeSession } from './attach.ts';
+import { openProbeSession, type ProbeReply, type ProbeSession } from './attach.ts';
 import { createTerminalIO, type InstallIO, type TerminalStreams } from './io.ts';
 import { pluginsConfigPath, writePluginRegistry } from '../plugins/registry.ts';
 import { ensureEmbeddingModel, type EmbeddingEnsureResult, type EmbeddingProgress } from '../embedding/ensure.ts';
+import { EMBEDDING_DIMENSIONS } from '../embedding/model.ts';
 
 export const INSTALL_STEPS = ['preflight', 'place', 'model', 'rhythm', 'resident', 'awake'] as const;
 export type InstallStepId = (typeof INSTALL_STEPS)[number];
@@ -124,7 +125,8 @@ export interface InstallerOptions {
   hooks?: InstallerHooks;
 }
 
-type StepResult = { ok: true } | { ok: false; message: string; hint?: string };
+/** A step that completed with a degradation: not green, but not a reason to stop the install (#280). */
+type StepResult = { ok: true; warnings?: string[] } | { ok: false; message: string; hint?: string };
 
 /** The real runner: spawn, collect, never echo a key (callers only pass commands, not secrets). */
 export function defaultRunner(): Runner {
@@ -312,6 +314,7 @@ export class Installer {
       awake: () => this.stepAwake(),
     };
 
+    const warnings: string[] = [];
     for (const [index, step] of INSTALL_STEPS.entries()) {
       if (this.state.done.includes(step)) {
         this.io.say(`\n== ${index + 1}/6 ${STEP_LABELS[step]}（已完成，跳过）==`);
@@ -333,12 +336,18 @@ export class Installer {
         this.io.say(`修好后重跑本安装器，会从第 ${index + 1} 步续装。`);
         return 1;
       }
+      if (result.warnings) warnings.push(...result.warnings);
       this.state.done.push(step);
       delete this.state.failedAt;
       this.saveState();
     }
 
-    this.io.say('\n安装完成：六步全过，首醒自检探针通过。');
+    if (warnings.length > 0) {
+      this.io.say('\n安装完成，但有降级（不是全绿）：');
+      for (const warning of warnings) this.io.say(`  ! ${warning}`);
+    } else {
+      this.io.say('\n安装完成：六步全过，首醒自检探针通过。');
+    }
     this.io.say(`终端运行 cog 附着：${this.bunPath} run ${join(this.shellDir, 'src', 'cog.ts')} --data ${this.choices.dataDir} --workspace ${this.choices.workspaceRoot}`);
     return 0;
   }
@@ -736,8 +745,8 @@ export class Installer {
 
     const after = await openProbe(this.socketPath);
     const recalled = await after.recall(token);
-    after.close();
     if (!recalled.ok || !recalled.text.includes(token)) {
+      after.close();
       return {
         ok: false,
         message: `重启后召回没有对上（${token} 不在召回结果里）`,
@@ -745,6 +754,23 @@ export class Installer {
       };
     }
     this.io.say(`召回对上：重启后仍能召回 ${token}`);
+
+    // The recall above can be satisfied by the lexical lane. This is the check that tells the two
+    // apart (#280): a real vector, of the model's dimension, through the resident's own embedder.
+    // A probe that cannot answer is a degradation, not a stopped install: the resident is up and its
+    // memory works, only the semantic lane is missing.
+    const embedded: ProbeReply = await after.embed('安装自检：语义召回通道探针').catch((error) => ({
+      ok: false,
+      text: error instanceof Error ? error.message : String(error),
+    }));
+    after.close();
+    if (!embedded.ok || embedded.dimensions !== EMBEDDING_DIMENSIONS) {
+      const detail = embedded.ok ? `维度 ${embedded.dimensions ?? '?'}，期望 ${EMBEDDING_DIMENSIONS}` : embedded.text;
+      const warning = `语义召回未就绪：${detail}；当前只走词法召回，/health 的 embedding 状态与 shell-events 可查。`;
+      this.io.say(`语义探针：未通过（${detail}）`);
+      return { ok: true, warnings: [warning] };
+    }
+    this.io.say(`语义探针通过：真实向量 ${embedded.dimensions} 维`);
     return { ok: true };
   }
 

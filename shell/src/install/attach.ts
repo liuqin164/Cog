@@ -12,12 +12,15 @@ import { connect, type Socket } from 'node:net';
 export interface ProbeReply {
   ok: boolean;
   text: string;
+  dimensions?: number;
 }
 
 export interface ProbeSession {
   /** `turnId` is the probe's token: a replay of one attempt answers instead of writing again. */
   remember(text: string, turnId?: string): Promise<ProbeReply>;
   recall(query: string): Promise<ProbeReply>;
+  /** A real embedding through the resident's provider; `dimensions` is the vector length (#280). */
+  embed(text: string): Promise<ProbeReply>;
   close(): void;
 }
 
@@ -40,14 +43,15 @@ export async function openProbeSession(socketPath: string, timeoutMs = 10_000): 
       const line = buffer.slice(0, newline);
       buffer = buffer.slice(newline + 1);
       if (line.trim() === '') continue;
-      let message: { t?: string; ok?: unknown; text?: unknown };
+      let message: { t?: string; ok?: unknown; text?: unknown; dimensions?: unknown };
       try {
         message = JSON.parse(line) as typeof message;
       } catch {
         continue; // A malformed line is not this client's to fix; it is not a probe reply either.
       }
       if (message.t !== 'probe') continue;
-      pending.shift()?.resolve({ ok: message.ok === true, text: String(message.text ?? '') });
+      const dimensions = typeof message.dimensions === 'number' ? message.dimensions : undefined;
+      pending.shift()?.resolve({ ok: message.ok === true, text: String(message.text ?? ''), ...(dimensions !== undefined ? { dimensions } : {}) });
     }
   });
   // A resident that dies mid-probe must fail this request, not take the installer down with an
@@ -58,7 +62,7 @@ export async function openProbeSession(socketPath: string, timeoutMs = 10_000): 
   socket.on('error', fail);
   socket.on('close', () => fail(new Error(`attach_probe_closed: ${socketPath}`)));
 
-  const request = (message: Record<string, unknown>): Promise<ProbeReply> =>
+  const request = (message: Record<string, unknown>, requestTimeoutMs = timeoutMs): Promise<ProbeReply> =>
     new Promise<ProbeReply>((resolvePromise, rejectPromise) => {
       const reject = (error: Error) => {
         clearTimeout(timer);
@@ -68,7 +72,7 @@ export async function openProbeSession(socketPath: string, timeoutMs = 10_000): 
         const index = pending.findIndex((entry) => entry.reject === reject);
         if (index >= 0) pending.splice(index, 1);
         reject(new Error(`attach_probe_timeout: ${socketPath}`));
-      }, timeoutMs);
+      }, requestTimeoutMs);
       pending.push({ resolve: (reply) => { clearTimeout(timer); resolvePromise(reply); }, reject });
       socket.write(`${JSON.stringify(message)}\n`);
     });
@@ -76,6 +80,9 @@ export async function openProbeSession(socketPath: string, timeoutMs = 10_000): 
   return {
     remember: (text, turnId) => request({ t: 'probe-remember', text, ...(turnId ? { turnId } : {}) }),
     recall: (query) => request({ t: 'probe-recall', query }),
+    // The first probe can race the worker's model load after a restart; this is the one request
+    // whose wait is a model load, not a socket round trip.
+    embed: (text) => request({ t: 'probe-embed', text }, 60_000),
     close: () => {
       socket.destroy();
     },

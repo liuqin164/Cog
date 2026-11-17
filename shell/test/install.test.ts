@@ -94,6 +94,9 @@ function makeHarness(options: { probeOk: boolean; hooks?: Partial<InstallerHooks
       async recall() {
         return { ok: true, text: stored.text };
       },
+      async embed() {
+        return { ok: true, text: 'dimensions=768', dimensions: 768 };
+      },
       close() {},
     }),
     spawnResident: () => {
@@ -389,6 +392,9 @@ describe('the six-step install', () => {
           async recall() {
             return { ok: true, text: stored.text };
           },
+          async embed() {
+            return { ok: true, text: 'dimensions=768', dimensions: 768 };
+          },
           close() {},
         }),
         spawnResident: () => {
@@ -404,6 +410,35 @@ describe('the six-step install', () => {
     expect(output).toContain('1/6 预检（系统 / 运行时 / 磁盘 / 端口）（已完成，跳过）');
     expect(output).toContain('2/6 落位');
     expect(output).toContain('安装完成');
+  });
+
+  test('a degraded semantic lane is reported at install time, not hidden behind lexical recall (#280)', async () => {
+    const harness = makeHarness({
+      probeOk: true,
+      hooks: {
+        openProbe: async () => ({
+          async remember(text: string) {
+            harness.stored.text = text;
+            return { ok: true, text: 'evt-1' };
+          },
+          async recall() {
+            // Lexical recall still matches, which is exactly why it cannot be the only probe.
+            return { ok: true, text: harness.stored.text };
+          },
+          async embed() {
+            return { ok: false, text: 'embedding_unavailable: worker script rejected' };
+          },
+          close() {},
+        }),
+      },
+    });
+
+    expect(await harness.installer.run()).toBe(0);
+    const output = harness.io.lines.join('\n');
+    expect(output).toContain('语义探针：未通过');
+    expect(output).toContain('语义召回未就绪');
+    expect(output).toContain('embedding_unavailable');
+    expect(output).not.toContain('六步全过');
   });
 
   test('parser keeps booleans and values in their own slots', () => {
