@@ -102,17 +102,34 @@ install_from_location() {
 
 link_cli() {
   mkdir -p "$BIN_DIR"
-  local target="$INSTALL_HOME/node_modules/.bin/cogmem"
-  if [ ! -x "$target" ]; then
-    log "Installed package did not expose $target."
+  local package_json="$INSTALL_HOME/node_modules/cogmem/package.json"
+  if [ ! -f "$package_json" ]; then
+    log "Installed package has no package.json at $package_json."
     exit 1
   fi
-  for bin in "$INSTALL_HOME"/node_modules/.bin/cogmem*; do
-    if [ -x "$bin" ]; then
-      ln -sf "$bin" "$BIN_DIR/$(basename "$bin")"
+  # Link what the package declares, not a name pattern: 5.0 declares `cog` and `cogmem`, while
+  # older releases declare `cogmem` and `cogmem-mcp`. A glob over `cogmem*` silently missed `cog`.
+  local names
+  if ! names=$(bun -e 'const p = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); if (!p.bin || typeof p.bin !== "object") process.exit(2); process.stdout.write(Object.keys(p.bin).join(" "));' "$package_json"); then
+    log "Installed package at $package_json declares no bins."
+    exit 1
+  fi
+  if [ -z "$names" ]; then
+    log "Installed package at $package_json declares no bins."
+    exit 1
+  fi
+  local linked=()
+  local name
+  for name in $names; do
+    local target="$INSTALL_HOME/node_modules/.bin/$name"
+    if [ ! -x "$target" ]; then
+      log "Installed package declares $name but did not create $target."
+      exit 1
     fi
+    ln -sf "$target" "$BIN_DIR/$name"
+    linked+=("$BIN_DIR/$name")
   done
-  log "Installed CLI: $BIN_DIR/cogmem"
+  log "Installed CLIs: ${linked[*]}"
 }
 
 on_path() {

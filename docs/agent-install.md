@@ -2,21 +2,25 @@
 
 This document is written for an AI agent installing Cog on a user's machine
 at the user's request. It is a linear procedure: do the steps in order, stop
-where it says stop, and report the `cogmem doctor` result and the smoke test
-at the end. If anything here disagrees with what the installer or the CLI
-actually does, the CLI is right — stop and report the disagreement instead of
-improvising.
+where it says stop, and report the `cogmem install` result, the
+`cogmem doctor --json` result, and the installer's smoke test at the end. If
+anything here disagrees with what the installer or the CLI actually does, the
+CLI is right — stop and report the disagreement instead of improvising.
 
 ## 0. What you are installing, and what you must not do
 
 - Cog is a local-first resident companion agent with a governed long-term memory
   kernel on your own machine. One SQLite database on this machine, no cloud, no
-  account. The steps below use the CLI.
+  account.
 - Two commands exist: `cog` opens the companion and `cogmem` is the management
   CLI. Every management action is a `cogmem <subcommand>`; the old
   `cogmem-<command>` spellings (for example `cogmem-init`, `cogmem-doctor`) and
   the `cogmem-mcp` server bin were removed. If any message tells you to run
   one, that message is stale — run the subcommand form instead and report it.
+- `cogmem install` is the companion installer described here. `cogmem init` is
+  the kernel CLI's setup wizard for a bare kernel install; it is **not** part
+  of this companion path. Do not run `cogmem init` while following this
+  document.
 - Never write an API key, never invent an encryption passphrase, never spend
   money. If a step needs one of those and the user has not supplied it, stop
   and say so. An unattended install that cannot finish without a human
@@ -41,7 +45,7 @@ improvising.
   checkout the user points you at instead (`bun run build` first; `dist/` is
   not tracked), and say so in your report.
 
-## 2. Install
+## 2. Install the package
 
 Run exactly this, with no other flags unless the user gave them:
 
@@ -49,32 +53,63 @@ Run exactly this, with no other flags unless the user gave them:
 curl -fsSL https://raw.githubusercontent.com/liuqin164/Cog/main/install.sh | bash
 ```
 
-The installer only installs the package and links the CLI. It never runs the
-setup wizard and never writes config — `COGMEM_SKIP_INIT` exists and is
-ignored, because setup has been a separate step since 3.x. If it prints a next
-step, follow it; do not add your own.
+The installer only installs the package and links both declared bins, `cog`
+and `cogmem`. It never runs the setup wizard and never writes config —
+`COGMEM_SKIP_INIT` exists and is ignored, because setup has been a separate
+step since 3.x. If it prints a next step, follow it; do not add your own.
 
-## 3. Configure
+## 3. Run the companion installer
 
 ```bash
-cogmem init --yes --json
+cogmem install
 ```
 
-- Settings you may decide yourself: database path, vector backend, PII
-  redaction (on by default — leave it on).
-- Settings you must not decide: embedding / memory / reasoning provider,
-  any API key, and the AES encryption passphrase. Without a human they fall
-  back to conservative defaults and are
-  reported as WARN. Without a model provider the install runs in
-  deterministic rule-only mode: recall still works by literal match, but it
-  will not match paraphrases. That is a legitimate end state, not a failure.
-- The data directory and its `snapshots/` child are created with mode 0700, but
-  the nightly snapshot and weekly archive are complete copies of the SQLite
-  database in plaintext — mode bits are not encryption. Tell the user this and
-  recommend full-disk or volume encryption (LUKS, FileVault, an encrypted
-  directory) when the machine may be lost, shared or backed up off-device.
+`cogmem install` is the six-step companion install: preflight, place, model,
+rhythm, resident, awake. It asks for the model route during step 3 and does
+not guess one. If the user can answer at the keyboard, run it and let them
+answer.
 
-**When the user asks why the install stopped here**, hand them `docs/install.md`: it is the operator-facing account of the same behaviour — why an unattended run leaves `rule_only`, what that state can do, and the two ways to finish it. It is written for the person, not for you; ADR-0003 remains the authority for the sectioning.
+If you are unattended, collect the route from the user **before** running the
+command; do not invent a provider, an endpoint or a model. Then run:
+
+```bash
+export MG_API_KEY=...
+cogmem install \
+  --yes \
+  --provider openai_compatible \
+  --base-url https://api.example.com/openai \
+  --model your-model
+```
+
+- `--provider` is `mg` (a local OpenAI-compatible gateway) or
+  `openai_compatible` (any endpoint the user names). `mg` is an explicit
+  choice, not a fallback.
+- With `--yes`, `--provider`, `--base-url` and `--model` are all required,
+  even for `mg`. A missing one stops the install before it touches the
+  machine and names what is missing.
+- The key is read from `MG_API_KEY` or `COGMEM_MODEL_KEY`, never from an
+  argument. `openai_compatible` requires one.
+- The other flags are `--data <dir>`, `--workspace <dir>`, `--project <id>`,
+  `--agent <id>`, `--http-port <n>`, `--service-name <name>`,
+  `--home <dir>`, `--platform linux|darwin`, `--skip-service`,
+  `--uninstall`, and `--help`. Use `--help` to show the installer's own
+  wording.
+
+The default data directory is `~/.cogmem/companion` (mode 0700), with
+`memory.sqlite` and a `snapshots/` directory. The resident listens on loopback
+only. Nightly snapshots and weekly archives are complete copies of the
+database in plaintext; mode 0700 is not encryption. Tell the user this and
+recommend full-disk or volume encryption (LUKS, FileVault, an encrypted
+directory) when the machine may be lost, shared or backed up off-device.
+
+The installer stops at the first failed step and prints the step, the reason
+and the next step. Fix that, then rerun the same command; it resumes from the
+step that failed. Do not skip a step or work around a failure. A warning is
+not a failure: the install finished degraded, and you must quote the warning
+verbatim.
+
+The operator-facing distinction between this installer and the kernel's
+`cogmem init` is in [`docs/install.md`](install.md).
 
 ## 4. Gate
 
@@ -82,7 +117,7 @@ cogmem init --yes --json
 cogmem doctor --json
 ```
 
-`doctor` is the gate. In `--json` it answers with a gate `level` of
+`doctor` is the final gate. In `--json` it answers with a gate `level` of
 `not_installed`, `ok`, `warn`, or `fail`; the human output prints the same
 four as **not installed**, **OK**, **WARN**, and **FAIL**. It always names the
 next step.
@@ -91,46 +126,39 @@ next step.
 - **warn** — proceed, but quote the warning verbatim in your report.
 - **fail** — stop. Paste the `doctor` output back to the user and do nothing
   further. Do not work around a fail.
-- **not_installed** — means "no config yet" (exit 0). Run step 3 again; if it
-  still says so, stop and report.
-- A refusal document (`--json`, status `refused`) is also a stop: paste it
-  back unchanged. It names its own next steps (`use_new_database`,
-  `keep_with_3x`, `verify_database_path`) — follow only the one the user
-  picks.
+- **not_installed** — means "no config yet" (exit 0). If this is a fresh
+  companion install, the installer and the CLI disagree about where the
+  install lives: stop and report that disagreement. Do not create a second
+  config or run `cogmem init` to make the message go away.
 
-If the refusal reason is `no_upgrade_path`, the file was created before 4.0
-and this release will not upgrade it. Do not import the old database file or a
-snapshot of it: that is the same file and meets the same refusal. The supported
-path is to keep the old install, export its conversations to files, create a new
-database, and import those files (`cogmem import openclaw` /
+If the reason is `no_upgrade_path`, the database was created before 4.0 and
+this release will not upgrade it. Do not import the old database file or a
+snapshot of it: that is the same file and meets the same refusal. The
+supported path is to keep the old install, export its conversations to files,
+create a new database, and import those files (`cogmem import openclaw` /
 `cogmem import hermes`, or `cogmem episode import --format jsonl --file <path>`).
 
 ## 5. Smoke test — installing is not done until this passes
 
-A zero exit code is not proof the install works. Do all three, in this order:
-record one fact through the CLI, recall it back, and re-run
-`cogmem doctor --json` as the final gate.
+The installer's sixth step, `awake`, is the smoke test. It writes a probe
+memory through the resident's attach socket, restarts the resident, and recalls
+the probe after the restart. A zero exit code from `cogmem install` means that
+step passed; a run that stopped before step 6 is not a finished install, even
+if the package was installed.
+
+Confirm the companion entry point resolves as well:
 
 ```bash
-cogmem episode append --project main --session smoke --source-agent <agent-id> --role user \
-  --text "Deploy window is Tuesday 02:00. Never Fridays." --config <config.toml>
-
-cogmem memory recall --project main --agent <agent-id> --query "When do we deploy?" --json
-
-cogmem doctor --json
+cog --help
 ```
 
-Recall is scoped by agent: pass the same `--agent <agent-id>` you wrote with,
-or the answer comes back empty.
-
-Concretely: write the fact above, then ask "When do we deploy?" and confirm the
-answer comes back with its source attached. If the fact does not come back,
-the install is not finished — report the `doctor` output and the recall
-output, and stop.
+Then re-run `cogmem doctor --json` as the final gate. If the probe did not come
+back after the restart, the install is not finished — report the step's output,
+the `doctor` output, and stop.
 
 ## 6. Report back
 
-Paste, verbatim: the `cogmem doctor --json` result, the smoke-test question
-and answer, and anything that ended in WARN
-(provider not configured, rule-only mode, passphrase not set). Do not
-summarize a FAIL or a refusal — paste it whole.
+Paste, verbatim: the `cogmem install` result (or the step it stopped at and
+its reason), the `cogmem doctor --json` result, the smoke-test probe token or
+its failure, and anything that ended in WARN. Do not summarize a FAIL or a
+refusal — paste it whole.
