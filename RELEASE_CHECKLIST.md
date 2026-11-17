@@ -35,6 +35,8 @@ npm pack --dry-run --json
 
 - [ ] Every command exits 0. Record the root suite's `pass` / `fail` / files and the shell suite's
       counts, with the `TMPDIR` used.
+- [ ] The shipped-doc guards pass inside the root suite: `release-metadata.unit.test.ts`,
+      `agent-install-doc.unit.test.ts`, and `install-doc.unit.test.ts`.
 - [ ] `npm pack --dry-run --json` includes built `dist/**` files, `install.sh`, `docs/install.md`,
       and `docs/agent-install.md`, and includes no local database or machine-specific file.
 - [ ] `bun run ci:status` reports the push to `main` green. CI runs `prepublishOnly` plus the shell
