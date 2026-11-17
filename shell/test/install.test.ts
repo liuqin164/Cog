@@ -73,10 +73,12 @@ function makeHarness(options: {
   io?: ReturnType<typeof createScriptedIO>;
   flags?: Partial<InstallFlags>;
   shellDir?: string;
+  /** Overrides where the workspace sits, given the harness's own temp root (e.g. `(dir) => dir`). */
+  workspaceRoot?: (dir: string) => string;
 } = { probeOk: true }): Harness {
   const dir = makeTempDir();
   const dataDir = join(dir, 'data');
-  const workspace = join(dir, 'ws');
+  const workspace = options.workspaceRoot?.(dir) ?? join(dir, 'ws');
   mkdirSync(workspace, { recursive: true });
   const io = options.io ?? createScriptedIO([]);
   const { runner, calls } = fakeRunner();
@@ -436,6 +438,24 @@ describe('the six-step install', () => {
     expect(output).toContain('1/6 预检（系统 / 运行时 / 磁盘 / 端口）（已完成，跳过）');
     expect(output).toContain('2/6 落位');
     expect(output).toContain('安装完成');
+  });
+
+  test('a workspace that is $HOME is called out loudly and recorded (#302)', async () => {
+    const harness = makeHarness({ probeOk: true, workspaceRoot: (dir) => dir });
+    expect(await harness.installer.run()).toBe(0);
+
+    const output = harness.io.lines.join('\n');
+    expect(output).toContain('[警告] workspace 落在危险位置');
+    expect(output).toContain('workspace 就是家目录');
+    // `--yes` is on in this harness, and the warning still reached the output and the state file.
+    const state = JSON.parse(readFileSync(join(harness.dataDir, 'install.json'), 'utf8')) as { workspaceWarning?: string };
+    expect(state.workspaceWarning).toContain('workspace 就是家目录');
+  });
+
+  test('a dedicated workspace gets no warning', async () => {
+    const harness = makeHarness({ probeOk: true });
+    expect(await harness.installer.run()).toBe(0);
+    expect(harness.io.lines.join('\n')).not.toContain('workspace 落在危险位置');
   });
 
   test('an installed package layout resolves every entry without a source checkout', () => {

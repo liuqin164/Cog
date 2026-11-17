@@ -13,7 +13,7 @@
 import { spawn } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, statfsSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { createMemoryKernel } from 'cogmem';
@@ -95,6 +95,8 @@ export interface InstallState {
   done: InstallStepId[];
   failedAt?: InstallStepId;
   choices: Partial<InstallChoices>;
+  /** Why the chosen workspace was too wide, when it was (#302); recorded so the choice leaves a trace. */
+  workspaceWarning?: string;
   /** The detached resident, when the install runs in `--skip-service` mode. */
   pid?: number;
   updatedAt: number;
@@ -318,6 +320,7 @@ export class Installer {
     this.io.say('安全口径：所有服务面仅回环（127.0.0.1）；快照/数据目录 0700；模型钥匙只经安全输入进 0600 配置文件，不打印、不进日志。');
     this.io.say('全新安装：无旧安装分流、无记忆继承、无迁移分支。');
     mkdirSync(this.choices.dataDir, { recursive: true, mode: 0o700 });
+    this.announceWorkspaceRisk();
     // Minted here, not inside `place`: a re-run resumes past completed steps, and an install that
     // predates #283 still needs the observatory's write token.
     this.ensureObservatoryToken();
@@ -376,6 +379,33 @@ export class Installer {
     this.stopResident();
     this.io.say(`记忆库保留在 ${this.dbPath}；要连数据一起删，手动删目录 ${this.choices.dataDir}。`);
     return 0;
+  }
+
+  /**
+   * The workspace defaults to the directory the installer was run in (#302). From `~` that is the
+   * operator home — `~/.ssh`, `~/.bashrc` and the data dir all fall inside the tools' reach — and a
+   * directory that contains the data dir exposes the env file's model key. The tools now refuse the
+   * data dir and a symlinked escape, but the cwd the user picked still widened the read face, and
+   * `--yes` must not swallow that. Loud and recorded, not fatal: a wide workspace is unusable-looking
+   * rather than broken, and refusing it would break the common `cd ~ && install.sh` flow.
+   */
+  private announceWorkspaceRisk(): void {
+    const workspace = this.choices.workspaceRoot;
+    const dataDir = this.choices.dataDir;
+    const dataInWorkspace = dataDir === workspace
+      || dataDir.startsWith(workspace.endsWith(sep) ? workspace : workspace + sep);
+    const reason = workspace === resolve(this.homeDir)
+      ? `workspace 就是家目录（${workspace}）：~/.ssh、~/.bashrc 与数据目录 ${dataDir} 都落在 read / write / edit 的可达范围内。`
+      : dataInWorkspace
+        ? `workspace 包含数据目录（${dataDir} 在 ${workspace} 内）：env 里的模型钥匙、observatory-token 与 budgets 都在它的可达范围内。`
+        : undefined;
+    if (reason === undefined) return;
+    this.io.say('');
+    this.io.say('[警告] workspace 落在危险位置：');
+    this.io.say(`  ${reason}`);
+    this.io.say('  默认 workspace 是运行安装器时所在的目录；请用 --workspace 指向一个专用目录重装。');
+    this.state.workspaceWarning = reason;
+    this.saveState();
   }
 
   // ── Step 0: 预检 ──────────────────────────────────────────────────────────

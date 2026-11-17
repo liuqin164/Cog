@@ -5,8 +5,8 @@
  * command timeout) and every output is returned as text for the capture path to redact and mark.
  */
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, join, relative, resolve, sep } from 'node:path';
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import type { MemoryEvent, MemoryKernel } from 'cogmem';
 import type { TraceLog } from '../trace.ts';
@@ -38,22 +38,60 @@ export interface BuiltinToolsConfig {
   onMemoryRead?: (eventId: string) => void;
 }
 
-function inside(root: string, candidate: string): string {
-  const resolved = resolve(root, candidate);
-  const rootResolved = resolve(root);
-  if (resolved !== rootResolved && !resolved.startsWith(rootResolved + sep)) {
-    throw new Error(`path_outside_workspace: ${candidate}`);
+/**
+ * The real location a path names, with symlinks resolved (#302). A path that does not exist yet is
+ * appended to the real location of its nearest existing ancestor, so `write` can still create it.
+ * A broken or looping symlink resolves to nothing: `undefined`, which callers treat as outside.
+ */
+function realPath(path: string): string | undefined {
+  let current = path;
+  const tail: string[] = [];
+  for (;;) {
+    try {
+      lstatSync(current);
+      break;
+    } catch {
+      const parent = dirname(current);
+      if (parent === current) break;
+      tail.unshift(basename(current));
+      current = parent;
+    }
   }
-  return resolved;
+  let real: string;
+  try {
+    real = realpathSync(current);
+  } catch {
+    // shortcut: a dangling symlink is refused even if it points back inside the workspace; follow
+    // readlink by hand if writing through an as-yet-uncreated target ever needs to work.
+    return undefined;
+  }
+  return resolve(real, ...tail);
 }
 
-function writableInside(root: string, candidate: string, dataDir?: string): string {
-  const resolved = inside(root, candidate);
-  if (dataDir) {
-    const data = resolve(dataDir);
-    if (resolved === data || resolved.startsWith(data + sep)) throw new Error(`path_in_data_dir: ${candidate}`);
+/** Resolve against the workspace and refuse the path when its real location is outside (#302). */
+function inside(root: string, candidate: string): string {
+  const real = realPath(resolve(root, candidate));
+  const realRoot = realPath(resolve(root));
+  if (real === undefined || realRoot === undefined || (real !== realRoot && !real.startsWith(realRoot + sep))) {
+    throw new Error(`path_outside_workspace: ${candidate}`);
   }
-  return resolved;
+  return real;
+}
+
+/**
+ * `inside`, plus the data-dir exclusion both faces share (#302): a path that resolves into the
+ * shell's own state directory is refused even when it got there through a symlink. `read` uses it
+ * too, because the default data dir lives under the workspace and its env file holds the model key.
+ */
+function insideWorkspace(root: string, candidate: string, dataDir?: string): string {
+  const real = inside(root, candidate);
+  if (dataDir) {
+    const data = realPath(resolve(dataDir));
+    if (data !== undefined && (real === data || real.startsWith(data + sep))) {
+      throw new Error(`path_in_data_dir: ${candidate}`);
+    }
+  }
+  return real;
 }
 
 /** `mem:<eventId>` is the ledger's read key; it is a separate namespace from workspace paths. */
@@ -326,14 +364,14 @@ function definitions(
           if (!ledger.kernel) throw new Error('memory_unavailable: this shell has no kernel attached');
           return `would read memory event ${eventId}`;
         }
-        const path = inside(workspaceRoot, requested);
+        const path = insideWorkspace(workspaceRoot, requested, dataDir);
         return `would read ${path}`;
       },
       execute({ args }) {
         const requested = asString(args, 'path');
         const eventId = memoryEventId(requested);
         if (eventId !== undefined) return readMemoryEvent(eventId, ledger.kernel, ledger.trace, ledger.onMemoryRead);
-        const path = inside(workspaceRoot, requested);
+        const path = insideWorkspace(workspaceRoot, requested, dataDir);
         const size = statSync(path).size;
         if (size > MAX_READ_BYTES) throw new Error(`file_too_large: ${size} bytes (cap ${MAX_READ_BYTES})`);
         return readFileSync(path, 'utf8');
@@ -351,14 +389,14 @@ function definitions(
       rehearse({ args }) {
         const requested = asString(args, 'path');
         refuseMemoryWrite(requested, 'write', ledger.trace);
-        const path = writableInside(workspaceRoot, requested, dataDir);
+        const path = insideWorkspace(workspaceRoot, requested, dataDir);
         const content = asString(args, 'content', false);
         return `would write ${Buffer.byteLength(content)} bytes to ${path}`;
       },
       execute({ args }) {
         const requested = asString(args, 'path');
         refuseMemoryWrite(requested, 'write', ledger.trace);
-        const path = writableInside(workspaceRoot, requested, dataDir);
+        const path = insideWorkspace(workspaceRoot, requested, dataDir);
         const content = asString(args, 'content', false);
         mkdirSync(dirname(path), { recursive: true });
         writeFileSync(path, content, 'utf8');
@@ -377,7 +415,7 @@ function definitions(
       rehearse({ args }) {
         const requested = asString(args, 'path');
         refuseMemoryWrite(requested, 'edit', ledger.trace);
-        const path = writableInside(workspaceRoot, requested, dataDir);
+        const path = insideWorkspace(workspaceRoot, requested, dataDir);
         asString(args, 'old_string');
         asString(args, 'new_string', false);
         return `would edit ${path}`;
@@ -385,7 +423,7 @@ function definitions(
       execute({ args }) {
         const requested = asString(args, 'path');
         refuseMemoryWrite(requested, 'edit', ledger.trace);
-        const path = writableInside(workspaceRoot, requested, dataDir);
+        const path = insideWorkspace(workspaceRoot, requested, dataDir);
         const oldString = asString(args, 'old_string');
         const newString = asString(args, 'new_string', false);
         const original = readFileSync(path, 'utf8');
