@@ -9,14 +9,19 @@
  *
  * The fetch path is a trust boundary. Only HTTP(S), no embedded credentials, every resolved address
  * checked against loopback/private/link-local/reserved ranges, and every redirect hop re-validated.
+ * The connection then uses the exact address that was checked, with the original hostname kept for
+ * the `Host` header and TLS SNI, so a second DNS answer cannot move it (#289).
  * The cache is plugin-private under `<dataDir>/web-cache` (0700/0600), expires after one hour, and
  * is pruned on write and read.
  */
 import { randomUUID } from 'node:crypto';
 import { lookup as dnsLookup } from 'node:dns/promises';
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { isIP } from 'node:net';
+import { request as httpRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
+import { isIP, type LookupFunction } from 'node:net';
 import { join } from 'node:path';
+import { Readable } from 'node:stream';
 import { Readability } from '@mozilla/readability';
 import { parseHTML } from 'linkedom';
 import TurndownService from 'turndown';
@@ -45,12 +50,12 @@ export interface LookupAddress {
   family: number;
 }
 
-type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
+type FetchLike = (input: string | URL, init?: RequestInit, pin?: LookupAddress) => Promise<Response>;
 
 export interface WebPluginOptions {
   dataDir: string;
   now?: () => number;
-  /** Test seam; production uses the global fetch. */
+  /** Test seam; production pins the validated address through `fetchPinned`. The third argument is that pin. */
   fetch?: FetchLike;
   /** Test seam for asserting the resolved-address check. */
   lookup?: (hostname: string) => Promise<LookupAddress[]>;
@@ -211,8 +216,14 @@ interface ValidateOptions {
   allowLoopback: boolean;
 }
 
+export interface ValidatedTarget {
+  url: URL;
+  /** The address the connection must use, so the runtime cannot resolve the hostname again. */
+  pin?: LookupAddress;
+}
+
 /** Only `http(s)`, no credentials, and no address that could reach the machine's own network. */
-export async function validateRemoteUrl(raw: string, options: ValidateOptions): Promise<URL> {
+export async function validateRemoteUrl(raw: string, options: ValidateOptions): Promise<ValidatedTarget> {
   let url: URL;
   try {
     url = new URL(raw);
@@ -228,13 +239,13 @@ export async function validateRemoteUrl(raw: string, options: ValidateOptions): 
   const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
   if (hostname === '') throw new WebToolError('invalid_url', `${raw} has no hostname`);
   if (hostname === 'localhost' || hostname.endsWith('.localhost')) {
-    if (options.allowLoopback) return url;
+    if (options.allowLoopback) return { url };
     throw new WebToolError('ssrf_blocked', `${hostname} resolves inside the machine`);
   }
   if (isIP(hostname)) {
-    if (options.allowLoopback && isLoopbackAddress(hostname)) return url;
+    if (options.allowLoopback && isLoopbackAddress(hostname)) return { url, pin: { address: hostname, family: isIP(hostname) } };
     if (isBlockedAddress(hostname)) throw new WebToolError('ssrf_blocked', `${hostname} is a loopback, private, link-local or reserved address`);
-    return url;
+    return { url, pin: { address: hostname, family: isIP(hostname) } };
   }
   let addresses: LookupAddress[];
   try {
@@ -248,7 +259,8 @@ export async function validateRemoteUrl(raw: string, options: ValidateOptions): 
       throw new WebToolError('ssrf_blocked', `${hostname} resolves to the loopback, private, link-local or reserved address ${address}`);
     }
   }
-  return url;
+  // Every address was checked; the first one is pinned so a second DNS answer is never used.
+  return { url, pin: addresses[0] };
 }
 
 interface Runtime {
@@ -259,21 +271,80 @@ interface Runtime {
   dataDir: string;
 }
 
+/**
+ * Connect to the address validation approved, while keeping the hostname for the `Host` header and
+ * TLS SNI/verification. Passing the pinned address through `lookup` is what closes the DNS-rebinding
+ * TOCTOU (#289): the socket cannot land on a second answer, and there is no hostname fallback.
+ */
+export function fetchPinned(input: string | URL, init: RequestInit | undefined, pin: LookupAddress): Promise<Response> {
+  const url = input instanceof URL ? input : new URL(input);
+  const transport = url.protocol === 'https:' ? httpsRequest : httpRequest;
+  const hostname = url.hostname.replace(/^\[|\]$/g, '');
+  const headers = init?.headers === undefined ? undefined : new Headers(init.headers).toJSON();
+  return new Promise((resolve, reject) => {
+    const options = {
+      protocol: url.protocol,
+      hostname,
+      port: url.port === '' ? undefined : Number(url.port),
+      path: `${url.pathname}${url.search}`,
+      method: init?.method ?? 'GET',
+      headers,
+      signal: init?.signal ?? undefined,
+      // Bun asks for all addresses; Node may ask for the classic (address, family) pair.
+      lookup: ((_host: string, lookupOptions: { all?: boolean }, callback: (...args: unknown[]) => void) => {
+        if (lookupOptions.all) callback(null, [{ address: pin.address, family: pin.family }]);
+        else callback(null, pin.address, pin.family);
+      }) as unknown as LookupFunction,
+      ...(url.protocol === 'https:' && isIP(hostname) === 0 ? { servername: hostname } : {}),
+    };
+    const request = transport(options, (response) => {
+      const responseHeaders = new Headers();
+      for (const [name, value] of Object.entries(response.headers)) {
+        if (value !== undefined) responseHeaders.set(name, Array.isArray(value) ? value.join(', ') : String(value));
+      }
+      resolve(
+        new Response(Readable.toWeb(response) as unknown as BodyInit, {
+          status: response.statusCode ?? 502,
+          headers: responseHeaders,
+        }),
+      );
+    });
+    request.on('error', reject);
+    if (init?.signal) {
+      const abort = () => request.destroy(new DOMException('The operation was aborted.', 'AbortError'));
+      if (init.signal.aborted) abort();
+      else init.signal.addEventListener('abort', abort, { once: true });
+      request.on('close', () => init.signal?.removeEventListener('abort', abort));
+    }
+    request.end();
+  });
+}
+
 async function fetchFollowingRedirects(target: string, runtime: Runtime, signal: AbortSignal): Promise<{ response: Response; finalUrl: string }> {
   let current = await validateRemoteUrl(target, runtime);
   for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
-    const response = await runtime.fetch(current, {
-      method: 'GET',
-      redirect: 'manual',
-      headers: { Accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.1', 'User-Agent': USER_AGENT },
-      signal,
-    });
-    if (!REDIRECT_STATUSES.has(response.status)) return { response, finalUrl: current.href };
+    let response: Response;
+    try {
+      response = await runtime.fetch(
+        current.url,
+        {
+          method: 'GET',
+          redirect: 'manual',
+          headers: { Accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.1', 'Accept-Encoding': 'identity', 'User-Agent': USER_AGENT },
+          signal,
+        },
+        current.pin,
+      );
+    } catch (error) {
+      if (error instanceof WebToolError || (error instanceof Error && error.name === 'AbortError')) throw error;
+      throw new WebToolError('fetch_failed', `${current.url.href}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (!REDIRECT_STATUSES.has(response.status)) return { response, finalUrl: current.url.href };
     const location = response.headers.get('location');
-    if (!location) return { response, finalUrl: current.href };
+    if (!location) return { response, finalUrl: current.url.href };
     await response.body?.cancel().catch(() => {});
     if (redirects === MAX_REDIRECTS) throw new WebToolError('too_many_redirects', `more than ${MAX_REDIRECTS} redirects fetching ${target}`);
-    const next = new URL(location, current);
+    const next = new URL(location, current.url);
     current = await validateRemoteUrl(next.href, runtime);
   }
   throw new WebToolError('too_many_redirects', `more than ${MAX_REDIRECTS} redirects fetching ${target}`);
@@ -754,7 +825,7 @@ export function webPlugin(options: WebPluginOptions): NativePlugin {
     name: 'web',
     apply(ctx) {
       const runtime: Runtime = {
-        fetch: options.fetch ?? ((input, init) => fetch(input, init)),
+        fetch: options.fetch ?? ((input, init, pin) => (pin ? fetchPinned(input, init, pin) : fetch(input, init))),
         lookup: options.lookup ?? ((hostname) => dnsLookup(hostname, { all: true, verbatim: true })),
         allowLoopback: options.allowLoopback === true,
         now: options.now ?? Date.now,

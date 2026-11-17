@@ -233,7 +233,7 @@ export const CORE_COMMANDS: readonly CoreCommand[] = [
     surfaces: ['palette', 'resident', 'tui'],
     run(host) {
       const { state, seq, costDayTokens, sandbox } = host.lifecycle();
-      const sandboxLine = sandbox === 'on' ? '沙箱 开（bwrap）' : '沙箱 关（bwrap 不可用，bash 无隔离）';
+      const sandboxLine = sandbox === 'on' ? '沙箱 开（bwrap，网络隔离）' : '沙箱 关（bwrap 不可用，bash 无隔离）';
       return { text: `生命周期 ${state}，checkpoint seq ${seq}，本日 ${costDayTokens} token，${sandboxLine}。` };
     },
   },

