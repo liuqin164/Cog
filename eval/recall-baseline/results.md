@@ -57,7 +57,7 @@ Chance for a random ranker: memory @1 5.0%, @5 25.0%; procedure @1 10.0%, @5 50.
 - model: `Xenova/bge-base-zh-v1.5` (quantized ONNX; 102M parameters, 768 dimensions)
 - source: https://huggingface.co/Xenova/bge-base-zh-v1.5
 - query instruction: `为这个句子生成表示以用于检索相关文章：` (applied to queries only; documents are embedded as written)
-- cache: `/home/ubuntu/.t3/worktrees/Cogmem/t3-recall-baseline-a162fa37131b7cd8/.cogmem/recall-baseline/models` (gitignored); first run downloads, later runs reuse it.
+- cache: `<worktree>/.cogmem/recall-baseline/models` (gitignored); first run downloads, later runs reuse it.
 - on-disk size: 99 MiB total
   - `Xenova/bge-base-zh-v1.5/onnx/model_quantized.onnx`: 98 MiB
   - `Xenova/bge-base-zh-v1.5/tokenizer.json`: 429 KiB

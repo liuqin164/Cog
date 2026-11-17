@@ -153,18 +153,25 @@ export class XenovaEmbeddingProvider implements EmbeddingProvider {
 
   dispose(): void {
     this.disposed = true;
+    const worker = this.worker;
     this.worker = undefined;
-    for (const pending of this.pending.values()) pending.reject(new Error('embedding provider disposed'));
+    this.rejectReady?.(new Error('embedding_unavailable: worker_not_ready: provider disposed'));
+    for (const pending of this.pending.values()) pending.reject(new Error('embedding_unavailable: worker_not_ready: provider disposed'));
     this.pending.clear();
+    // A degraded worker has no live ONNX session, so stopping it is safe and keeps a failed load
+    // from reporting after its owner is gone. An active worker is left to process exit: Bun's
+    // onnxruntime teardown panics when a live session's worker is terminated.
+    if (worker && this.state === 'degraded') void worker.terminate().catch(() => {});
   }
 
   private whenReady(): Promise<void> {
     if (this.state === 'active') return Promise.resolve();
     if (this.ready) return this.ready;
-    return Promise.reject(new Error('embedding_unavailable: provider was not warmed'));
+    return Promise.reject(new Error('embedding_unavailable: worker_not_ready: provider was not warmed'));
   }
 
   private onMessage(message: Record<string, unknown>): void {
+    if (this.disposed) return;
     switch (message.type) {
       case 'ready':
         this.loadMs = Number(message.loadMs ?? 0);
@@ -172,7 +179,7 @@ export class XenovaEmbeddingProvider implements EmbeddingProvider {
         this.resolveReady?.();
         return;
       case 'failed':
-        this.fail(new Error(String(message.message ?? 'embedding model failed to load')));
+        this.fail(new Error(String(message.message ?? 'embedding model failed to load')), 'model_load_failed');
         return;
       case 'progress':
         return;
@@ -187,18 +194,19 @@ export class XenovaEmbeddingProvider implements EmbeddingProvider {
         const pending = this.pending.get(Number(message.id));
         if (!pending) return;
         this.pending.delete(Number(message.id));
-        pending.reject(new Error(String(message.message ?? 'embedding failed')));
+        pending.reject(new Error(`embedding_unavailable: inference_failed: ${String(message.message ?? 'embedding failed')}`));
         return;
       }
     }
   }
 
-  private fail(error: unknown): void {
+  private fail(error: unknown, reason: 'worker_not_ready' | 'model_load_failed' = 'worker_not_ready'): void {
+    if (this.disposed) return;
     const message = error instanceof Error ? error.message : String(error);
-    this.detail = message;
+    this.detail = `${reason}: ${message}`;
     this.setState('degraded');
-    this.rejectReady?.(new Error(`embedding_unavailable: ${message}`));
-    for (const pending of this.pending.values()) pending.reject(new Error(`embedding_unavailable: ${message}`));
+    this.rejectReady?.(new Error(`embedding_unavailable: ${this.detail}`));
+    for (const pending of this.pending.values()) pending.reject(new Error(`embedding_unavailable: ${this.detail}`));
     this.pending.clear();
   }
 

@@ -1,8 +1,8 @@
 # Coding Standards
 
 Read during **review**, not implementation. Everything a guardrail can enforce lives in
-the guardrail instead: `bun run typecheck`, `bun test __tests__`, `bun run ledger:check`,
-`bun run ci:status`. What is left here is the judgement calls no check can substitute for.
+the guardrail instead: `bun run typecheck`, `bun test __tests__`, `bun run ci:status`.
+What is left here is the judgement calls no check can substitute for.
 
 ## Vocabulary
 

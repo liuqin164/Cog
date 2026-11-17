@@ -8,7 +8,7 @@
 ## 0. 恢复步骤（新会话照做）
 
 ```bash
-cd /home/ubuntu/projects/Cogmem
+cd ~/projects/Cogmem
 git rev-parse --abbrev-ref HEAD          # 期望 feat/cogmem-4.0-multi-bot
 git log --oneline -5
 git status --porcelain                   # 期望干净
@@ -287,7 +287,7 @@ scout 逐条读了 20 个 issue 的正文与全部评论，推翻了台账此前
 
 **规则**：每隔几轮 `du -sh .cogmem/tmp` 看一眼；需要打包或构建前先确认 `df -h .` 有余量。
 
-**另一个**：`npm pack` 在这里需要 `--cache <scratch>`。**注意原因**：我起初写「`/home/ubuntu/.npm` 属于别的 uid」，随后实测**推翻**了它——`.npm` 的属主是 1001，而我就是 1001。真正的原因是**沙箱只允许写工作区**，`/home/ubuntu/.npm` 在工作区之外。npm 自己提示的 `sudo chown` 是误导。上面 851 文件 / 828 个 `dist/` 条目的数字是用 `--cache` 取的。
+**另一个**：`npm pack` 在这里需要 `--cache <scratch>`。**注意原因**：我起初写「`~/.npm` 属于别的 uid」，随后实测**推翻**了它——`.npm` 的属主是 1001，而我就是 1001。真正的原因是**沙箱只允许写工作区**，`~/.npm` 在工作区之外。npm 自己提示的 `sudo chown` 是误导。上面 851 文件 / 828 个 `dist/` 条目的数字是用 `--cache` 取的。
 
 ### 4.12.1 环境陷阱：把子进程 stdout 重定向到文件会得到 0 字节
 
@@ -998,7 +998,7 @@ owner 要求：先补 #89 未满足的验收（无法推导 prefix 时不得静�
 
 **门禁（`fa843f3`）**：两种环境均 **1743 pass / 0 fail / 209 files**；typecheck 0、build 0；`npm pack` 855 / 979,138 B / 832；CI 两条 `verify` **success**（逐条查过，非假定）；scorecard 复跑 Family A 87.5%/0.0%、B 无标记 **91.7%/4.2%**、B′ 同值。
 
-**发布预检（dry-run）**：`npm publish --dry-run --access public` 在干净工作区跑通——`prepublishOnly`（typecheck+build+全量测试+pack）全过，随后 `+ cogmem@4.0.0`、`public access`、855 files、979.1 kB、exit 0。**首次尝试因本机 npm 缓存权限（`EACCES … /home/ubuntu/.npm/_cacache`）失败**，改用 `--cache <scratch>` 重跑；两次都记录，因为只有解释了第一次失败，第二次绿才有意义。
+**发布预检（dry-run）**：`npm publish --dry-run --access public` 在干净工作区跑通——`prepublishOnly`（typecheck+build+全量测试+pack）全过，随后 `+ cogmem@4.0.0`、`public access`、855 files、979.1 kB、exit 0。**首次尝试因本机 npm 缓存权限（`EACCES … ~/.npm/_cacache`）失败**，改用 `--cache <scratch>` 重跑；两次都记录，因为只有解释了第一次失败，第二次绿才有意义。
 
 **三宿主（同一 tarball，串行，各自全新 HOME）**：OpenClaw 插件条目带 `configPath`/`cwd`/`projectId`、`doctor` 收敛；**Hermes 用其自身客户端**、从 Workspace 外运行 → `✓ Connected (440ms)`、`✓ Tools discovered: 6`；**pi 用其自身客户端** → `cogmem: connected, 6 tools`。三者均 `serverInfo 4.0.0`、6 个 core 工具，MCP 写入 `ok: true`、召回命中 marker、**换 project 均为 0**。
 
@@ -1465,7 +1465,7 @@ bun run ledger:check                                                # 每轮末�
 - **`#77` 的 journey 只走到了文档主路径的 OpenClaw 一列**；Hermes 的端到端、MCP/bridge 的端到端、真实 `curl | bash` 安装器路径（需发布后才能验）**仍未走**。journey 里的 `install` 步骤是**复现** `install.sh` 的产物布局，不是真的执行它（需要网络）。
 - **`install.sh` 的「安装」步骤没有在测试里真的执行**（同上）；也没有在真实 `npm` 发布的包上验证过。
 - **InstaBox / 三 Agent（OpenClaw、Hermes、pi）的真实集成验证：受阻，未做。** 核实结果（本轮实测，可复核）：
-  - CLI **存在但不在 PATH 上**：`/home/ubuntu/.local/bin/instabox`，`instabox --version` → `instabox a41fa974`（`command -v instabox` 直接失败，因为 `~/.local/bin` 不在 PATH）。
+  - CLI **存在但不在 PATH 上**：`~/.local/bin/instabox`，`instabox --version` → `instabox a41fa974`（`command -v instabox` 直接失败，因为 `~/.local/bin` 不在 PATH）。
   - **未登录**：`instabox usage --json` 与 `instabox get cogmem-test --json` 都返回 `{"error":{"code":"cli_error","message":"not logged in; run \`instabox login\`"}}`。
   - 环境里**没有** `INSTABOX_API_KEY`（`env | grep -i instabox` 无输出）；`~/.config/instabox/` 只有 `.lock`、`pending-ops.json`（空）与 `telemetry.json`，**没有凭证**。
   - `instabox login` 是设备码流程（`--provider github|google`，需要人在浏览器里输入码），**无人值守无法完成**，且不得伪造凭证。

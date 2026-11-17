@@ -194,7 +194,7 @@ A `SKILL.md` guide is read the same way, by naming the file: `cogmem import open
 
 - Using it — [installing](docs/install.md) · [the memory observatory](docs/observatory.md)
 - Understanding it — [the memory model](MEMORY_MODEL.md) · [the memory atlas](MEMORY_ATLAS.md) · [benchmarks](BENCHMARKS.md) · [why a recall happened](RECALL_EXPLAINABILITY.md)
-- Operating it — [security and privacy](SECURITY.md) · [architecture decisions](docs/adr/) · [engineering records](docs/engineering/) (internal development records, kept for provenance)
+- Operating it — [security and privacy](SECURITY.md) · [architecture decisions](docs/adr/)
 
 ## Contributing
 

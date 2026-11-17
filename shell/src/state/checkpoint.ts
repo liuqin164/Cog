@@ -58,7 +58,7 @@ export interface InFlightToolCall {
  * There is deliberately no expiry: a resident companion may wait days for its owner, and a pause
  * that timed out would silently drop work the user asked for. A question is retired when the owner
  * answers it (or when a new instruction supersedes the paused assignment), a budget request when the
- * owner approves or declines it. See `docs/engineering/4.0-issue-loop.md`'s round record for the
+ * owner approves or declines it. The internal engineering archive holds the round record for the
  * rules as reported.
  */
 export interface Suspension {
