@@ -3,23 +3,28 @@ name: Publish npm package
 on:
   release:
     types: [published]
+  # Rehearsal path (#311): runs the same suites and the CI-green gate, but the publish step is
+  # release-only, so a manual dispatch can never publish a branch.
+  workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
   id-token: write
 
 jobs:
   publish:
     name: Publish release to npm
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     environment: npm publish
-    if: ${{ !github.event.release.draft && !github.event.release.prerelease }}
+    if: ${{ github.event_name == 'workflow_dispatch' || (!github.event.release.draft && !github.event.release.prerelease) }}
 
     steps:
       - name: Check out release tag
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ github.event.release.tag_name || github.ref }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v5
@@ -52,9 +57,12 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="$(node -p "require('./package.json').version")"
-          if [ "$RELEASE_TAG" != "$VERSION" ] && [ "$RELEASE_TAG" != "v$VERSION" ]; then
+          if [ -n "${RELEASE_TAG:-}" ] && [ "$RELEASE_TAG" != "$VERSION" ] && [ "$RELEASE_TAG" != "v$VERSION" ]; then
             echo "Release tag '$RELEASE_TAG' must match package.json version '$VERSION' or 'v$VERSION'." >&2
             exit 1
+          fi
+          if [ -z "${RELEASE_TAG:-}" ]; then
+            echo "Rehearsal dispatch: release tag check skipped."
           fi
           if npm view "cogmem@$VERSION" version >/dev/null 2>&1; then
             echo "cogmem@$VERSION is already published on npm." >&2
@@ -62,11 +70,37 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
+      - name: Require green CI for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          SHA="$(git rev-parse HEAD)"
+          CONCLUSION="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${SHA}&per_page=100" \
+            | jq -r '[.workflow_runs[]] | sort_by(.created_at) | last | .conclusion // "none"')"
+          echo "CI for ${SHA}: ${CONCLUSION}"
+          if [ "$CONCLUSION" != "success" ]; then
+            echo "Refusing to publish: CI for ${SHA} is not green (${CONCLUSION})." >&2
+            exit 1
+          fi
+
       - name: Typecheck
         run: bun run typecheck
 
       - name: Test
         run: bun test __tests__
+
+      # `shell/` is a private package outside the npm tarball, so the root suite never sees it.
+      # CI runs both; a release that skipped it could publish on a red shell suite.
+      - name: Test shell suite
+        run: |
+          cd shell
+          bun install --frozen-lockfile
+          bun test test
+
+      # Same post-suite process check as ci.yml (#244): a leaked server passes every test.
+      - name: Leak check
+        run: bun run leak:check
 
       - name: Build
         run: bun run build
@@ -75,4 +109,5 @@ jobs:
         run: npm pack --dry-run --json
 
       - name: Publish to npm
+        if: ${{ github.event_name == 'release' }}
         run: npm publish --provenance --access public

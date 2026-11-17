@@ -91,9 +91,32 @@ describe('core release metadata', () => {
     expect(workflow).toContain('sha256sum bun.lock');
     expect(manifest.packageManager).toBe('bun@1.3.11');
     expect(workflow).toContain('bun test __tests__');
+    // #311: the release path runs both suites and the leak check, and refuses a non-green commit.
+    expect(workflow).toContain('workflow_dispatch');
+    expect(workflow).toContain('cd shell');
+    expect(workflow).toContain('bun test test');
+    expect(workflow).toContain('bun run leak:check');
+    expect(workflow).toContain('actions/workflows/ci.yml/runs');
+    expect(workflow).toContain('conclusion');
+    expect(workflow).toContain("github.event_name == 'release'");
     expect(workflow).toContain('npm pack --dry-run --json');
     expect(workflow).toContain('npm publish --provenance --access public');
     expect(workflow).toContain('github.event.release.tag_name');
+  });
+
+  test('the vendored three.js bundle ships with its MIT notice', () => {
+    const manifest = packageJson();
+    const license = readText(join(coreRoot, 'src', 'observatory', 'web', 'three.LICENSE'));
+    const bundle = readText(join(coreRoot, 'src', 'observatory', 'web', 'three.bundle.js'));
+    const build = readText(join(coreRoot, 'scripts', 'build.mjs'));
+
+    // The observatory page is copied verbatim into dist by scripts/build.mjs, so the licence
+    // travels with the bundle exactly when the web directory is in `files` and copied as a dir.
+    expect(manifest.files).toContain('dist/observatory/web/**');
+    expect(build).toContain("cpSync('src/observatory/web'");
+    expect(license).toContain('The MIT License');
+    expect(license).toContain('three.js authors');
+    expect(bundle.slice(0, 400)).toContain('MIT License');
   });
 
   test('one-line installer is tracked and installs the npm package', () => {

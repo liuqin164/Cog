@@ -3,10 +3,10 @@
  *
  * The installer and the resident's first start share this. A failure is never fatal: the companion
  * answers with lexical recall and the caller reports the degradation. The download is the official
- * Hugging Face Xenova repository, resolved by `@xenova/transformers` itself.
+ * Hugging Face Xenova repository, resolved by `@huggingface/transformers` itself.
  */
 import { mkdirSync } from 'node:fs';
-import { env, pipeline } from '@xenova/transformers';
+import { env, pipeline } from '@huggingface/transformers';
 import { EMBEDDING_MODEL, embeddingModelPresent, embeddingModelsRoot } from './model.ts';
 
 export interface EmbeddingProgress {
@@ -37,7 +37,7 @@ export async function ensureEmbeddingModel(
   env.useBrowserCache = false;
   try {
     const loaded = await pipeline('feature-extraction', EMBEDDING_MODEL, {
-      quantized: true,
+      dtype: 'q8',
       progress_callback: (progress: EmbeddingProgress) => onProgress?.(progress),
     });
     (loaded as { dispose?: () => void }).dispose?.();

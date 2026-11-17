@@ -5,7 +5,7 @@
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 
-import { env, pipeline } from '@xenova/transformers';
+import { env, pipeline } from '@huggingface/transformers';
 
 import { cosine } from './math.ts';
 import type { WorkerInput, WorkerOutput } from './types.ts';
@@ -45,7 +45,7 @@ async function main(): Promise<void> {
 
   const rssBeforeModelBytes = process.memoryUsage().rss;
   const loadStarted = performance.now();
-  const extract = (await pipeline('feature-extraction', input.model, { quantized: true })) as unknown as Extract;
+  const extract = (await pipeline('feature-extraction', input.model, { dtype: 'q8' })) as unknown as Extract;
   const loadMs = performance.now() - loadStarted;
   const rssAfterModelBytes = process.memoryUsage().rss;
 
