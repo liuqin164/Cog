@@ -32,6 +32,10 @@ export interface FoldTask {
   checks: string[][];
   /** Numeric answer, when the expected value is a number. */
   number?: number;
+  /** #294: how many giant tool outputs this task plants. */
+  blocks?: number;
+  /** #294: the size label this task belongs to. */
+  scale?: string;
 }
 
 export interface RawTask {

@@ -1,0 +1,854 @@
+{
+  "experiment": "fold-drill",
+  "issue": 254,
+  "generatedAt": "2026-11-17T06:20:10.971Z",
+  "head": "f74b3b2b51f4",
+  "model": "auto/deepseek-v4.1-flash",
+  "baseUrl": "http://127.0.0.1:3425/v1",
+  "limit": 8,
+  "stats": {
+    "tasks": 8,
+    "byType": {
+      "number": 2,
+      "name": 2,
+      "constraint": 2,
+      "step": 2
+    },
+    "autoExpandHits": 8,
+    "autoExpandMisses": 0,
+    "avgTurns": 246,
+    "avgChars": 58633
+  },
+  "summary": [
+    {
+      "arm": "full",
+      "tasks": 8,
+      "correct": 8,
+      "hallucinated": 0,
+      "targetDrill": 0,
+      "anyDrill": 0,
+      "avgPromptTokens": 30140.375,
+      "avgModelCalls": 1,
+      "avgToolCalls": 0,
+      "avgContextChars": 62713.375
+    },
+    {
+      "arm": "folded_key",
+      "tasks": 8,
+      "correct": 8,
+      "hallucinated": 0,
+      "targetDrill": 8,
+      "anyDrill": 8,
+      "avgPromptTokens": 27989.25,
+      "avgModelCalls": 2,
+      "avgToolCalls": 3.75,
+      "avgContextChars": 9525.375
+    }
+  ],
+  "groups": [
+    {
+      "arm": "full",
+      "group": "trigger_hit",
+      "tasks": 8,
+      "correct": 8,
+      "hallucinated": 0,
+      "targetDrill": 0
+    },
+    {
+      "arm": "full",
+      "group": "trigger_miss",
+      "tasks": 0,
+      "correct": 0,
+      "hallucinated": 0,
+      "targetDrill": 0
+    },
+    {
+      "arm": "folded_key",
+      "group": "trigger_hit",
+      "tasks": 8,
+      "correct": 8,
+      "hallucinated": 0,
+      "targetDrill": 8
+    },
+    {
+      "arm": "folded_key",
+      "group": "trigger_miss",
+      "tasks": 0,
+      "correct": 0,
+      "hallucinated": 0,
+      "targetDrill": 0
+    }
+  ],
+  "runs": [
+    {
+      "taskId": "r01",
+      "type": "number",
+      "arm": "full",
+      "autoExpand": true,
+      "question": "svc-alpha 的 max_retries 是多少？",
+      "expected": "720",
+      "answerLine": "720",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 62693,
+      "promptTokens": 30139,
+      "completionTokens": 140,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 3972,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 30139,
+          "completionTokens": 140,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "r01",
+      "type": "number",
+      "arm": "folded_key",
+      "autoExpand": true,
+      "question": "svc-alpha 的 max_retries 是多少？",
+      "expected": "720",
+      "answerLine": "720",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 9520,
+      "promptTokens": 37294,
+      "completionTokens": 522,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 6,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:r01-b01",
+        "digest:r01-b02",
+        "digest:r01-b03",
+        "digest:r01-b04",
+        "digest:r01-b05",
+        "digest:r01-b06"
+      ],
+      "exhausted": false,
+      "elapsedMs": 10479,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 6172,
+          "completionTokens": 297,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:r01-b01",
+              "target": true,
+              "known": true
+            },
+            {
+              "name": "read_memory",
+              "key": "digest:r01-b02",
+              "target": false,
+              "known": true
+            },
+            {
+              "name": "read_memory",
+              "key": "digest:r01-b03",
+              "target": false,
+              "known": true
+            },
+            {
+              "name": "read_memory",
+              "key": "digest:r01-b04",
+              "target": false,
+              "known": true
+            },
+            {
+              "name": "read_memory",
+              "key": "digest:r01-b05",
+              "target": false,
+              "known": true
+            },
+            {
+              "name": "read_memory",
+              "key": "digest:r01-b06",
+              "target": false,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 31122,
+          "completionTokens": 225,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "r02",
+      "type": "number",
+      "arm": "full",
+      "autoExpand": true,
+      "question": "batch-worker 的 batch_size 是多少？",
+      "expected": "3600",
+      "answerLine": "3600",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 62693,
+      "promptTokens": 30117,
+      "completionTokens": 174,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 9644,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 30117,
+          "completionTokens": 174,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "r02",
+      "type": "number",
+      "arm": "folded_key",
+      "autoExpand": true,
+      "question": "batch-worker 的 batch_size 是多少？",
+      "expected": "3600",
+      "answerLine": "3600答案：3600",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 9548,
+      "promptTokens": 24919,
+      "completionTokens": 425,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 3,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:r02-b01",
+        "digest:r02-b02",
+        "digest:r02-b03"
+      ],
+      "exhausted": false,
+      "elapsedMs": 9209,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 6165,
+          "completionTokens": 236,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:r02-b01",
+              "target": true,
+              "known": true
+            },
+            {
+              "name": "read_memory",
+              "key": "digest:r02-b02",
+              "target": false,
+              "known": true
+            },
+            {
+              "name": "read_memory",
+              "key": "digest:r02-b03",
+              "target": false,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 18754,
+          "completionTokens": 189,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "c01",
+      "type": "constraint",
+      "arm": "full",
+      "autoExpand": true,
+      "question": "edge-proxy 的 timeout_ms 是多少？",
+      "expected": "4500",
+      "answerLine": "4500",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 62719,
+      "promptTokens": 30133,
+      "completionTokens": 189,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 6878,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 30133,
+          "completionTokens": 189,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "c01",
+      "type": "constraint",
+      "arm": "folded_key",
+      "autoExpand": true,
+      "question": "edge-proxy 的 timeout_ms 是多少？",
+      "expected": "4500",
+      "answerLine": "4500答案：4500",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 9527,
+      "promptTokens": 37243,
+      "completionTokens": 394,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 6,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:c01-b01",
+        "digest:c01-b02",
+        "digest:c01-b03",
+        "digest:c01-b04",
+        "digest:c01-b05",
+        "digest:c01-b06"
+      ],
+      "exhausted": false,
+      "elapsedMs": 12729,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 6161,
+          "completionTokens": 245,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:c01-b01",
+              "target": true,
+              "known": true
+            },
+            {
+              "name": "read_memory",
+              "key": "digest:c01-b02",
+              "target": false,
+              "known": true
+            },
+            {
+              "name": "read_memory",
+              "key": "digest:c01-b03",
+              "target": false,
+              "known": true
+            },
+            {
+              "name": "read_memory",
+              "key": "digest:c01-b04",
+              "target": false,
+              "known": true
+            },
+            {
+              "name": "read_memory",
+              "key": "digest:c01-b05",
+              "target": false,
+              "known": true
+            },
+            {
+              "name": "read_memory",
+              "key": "digest:c01-b06",
+              "target": false,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 31082,
+          "completionTokens": 149,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "c02",
+      "type": "constraint",
+      "arm": "full",
+      "autoExpand": true,
+      "question": "db-pool 的 max_connections 是多少？",
+      "expected": "880",
+      "answerLine": "880",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 62734,
+      "promptTokens": 30127,
+      "completionTokens": 50,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 20410,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 30127,
+          "completionTokens": 50,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "c02",
+      "type": "constraint",
+      "arm": "folded_key",
+      "autoExpand": true,
+      "question": "db-pool 的 max_connections 是多少？",
+      "expected": "880",
+      "answerLine": "880答案：880",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 9524,
+      "promptTokens": 16654,
+      "completionTokens": 442,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 1,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:c02-b01"
+      ],
+      "exhausted": false,
+      "elapsedMs": 14163,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 6164,
+          "completionTokens": 89,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:c02-b01",
+              "target": true,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 10490,
+          "completionTokens": 353,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "n01",
+      "type": "name",
+      "arm": "full",
+      "autoExpand": true,
+      "question": "svc-alpha 的 owner 是谁？",
+      "expected": "长庚",
+      "answerLine": "长庚",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 62645,
+      "promptTokens": 30124,
+      "completionTokens": 115,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 9368,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 30124,
+          "completionTokens": 115,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "n01",
+      "type": "name",
+      "arm": "folded_key",
+      "autoExpand": true,
+      "question": "svc-alpha 的 owner 是谁？",
+      "expected": "长庚",
+      "answerLine": "长庚答案：长庚",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 9513,
+      "promptTokens": 37267,
+      "completionTokens": 309,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 6,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:n01-b01",
+        "digest:n01-b02",
+        "digest:n01-b03",
+        "digest:n01-b04",
+        "digest:n01-b05",
+        "digest:n01-b06"
+      ],
+      "exhausted": false,
+      "elapsedMs": 8264,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 6163,
+          "completionTokens": 253,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:n01-b01",
+              "target": true,
+              "known": true
+            },
+            {
+              "name": "read_memory",
+              "key": "digest:n01-b02",
+              "target": false,
+              "known": true
+            },
+            {
+              "name": "read_memory",
+              "key": "digest:n01-b03",
+              "target": false,
+              "known": true
+            },
+            {
+              "name": "read_memory",
+              "key": "digest:n01-b04",
+              "target": false,
+              "known": true
+            },
+            {
+              "name": "read_memory",
+              "key": "digest:n01-b05",
+              "target": false,
+              "known": true
+            },
+            {
+              "name": "read_memory",
+              "key": "digest:n01-b06",
+              "target": false,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 31104,
+          "completionTokens": 56,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "n02",
+      "type": "name",
+      "arm": "full",
+      "autoExpand": true,
+      "question": "release-bot 的 owner 是谁？",
+      "expected": "苏禾",
+      "answerLine": "苏禾",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 62683,
+      "promptTokens": 30128,
+      "completionTokens": 80,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 4818,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 30128,
+          "completionTokens": 80,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "n02",
+      "type": "name",
+      "arm": "folded_key",
+      "autoExpand": true,
+      "question": "release-bot 的 owner 是谁？",
+      "expected": "苏禾",
+      "answerLine": "苏禾答案：苏禾",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 9531,
+      "promptTokens": 24831,
+      "completionTokens": 387,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 3,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:n02-b01",
+        "digest:n02-b02",
+        "digest:n02-b03"
+      ],
+      "exhausted": false,
+      "elapsedMs": 9229,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 6162,
+          "completionTokens": 206,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:n02-b01",
+              "target": true,
+              "known": true
+            },
+            {
+              "name": "read_memory",
+              "key": "digest:n02-b02",
+              "target": false,
+              "known": true
+            },
+            {
+              "name": "read_memory",
+              "key": "digest:n02-b03",
+              "target": false,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 18669,
+          "completionTokens": 181,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "s01",
+      "type": "step",
+      "arm": "full",
+      "autoExpand": true,
+      "question": "svc-alpha 的 rollback_plan 是什么？",
+      "expected": "先回滚再校验最后切流",
+      "answerLine": "先回滚再校验最后切流",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 62750,
+      "promptTokens": 30178,
+      "completionTokens": 100,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 6766,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 30178,
+          "completionTokens": 100,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "s01",
+      "type": "step",
+      "arm": "folded_key",
+      "autoExpand": true,
+      "question": "svc-alpha 的 rollback_plan 是什么？",
+      "expected": "先回滚再校验最后切流",
+      "answerLine": "先回滚再校验最后切流答案：先回滚再校验最后切流",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 9522,
+      "promptTokens": 20795,
+      "completionTokens": 481,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 2,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:s01-b01",
+        "digest:s01-b02"
+      ],
+      "exhausted": false,
+      "elapsedMs": 21385,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 6166,
+          "completionTokens": 153,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:s01-b01",
+              "target": true,
+              "known": true
+            },
+            {
+              "name": "read_memory",
+              "key": "digest:s01-b02",
+              "target": false,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 14629,
+          "completionTokens": 328,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "s02",
+      "type": "step",
+      "arm": "full",
+      "autoExpand": true,
+      "question": "db-pool 的 recovery_steps 是什么？",
+      "expected": "先停写再导出然后重启",
+      "answerLine": "先停写再导出然后重启",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 62790,
+      "promptTokens": 30177,
+      "completionTokens": 178,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 13892,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 30177,
+          "completionTokens": 178,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "s02",
+      "type": "step",
+      "arm": "folded_key",
+      "autoExpand": true,
+      "question": "db-pool 的 recovery_steps 是什么？",
+      "expected": "先停写再导出然后重启",
+      "answerLine": "先停写再导出然后重启上一条并未被截断，也没有剩余内容需要补写（答案：先停写再导出然后重启）。",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 9518,
+      "promptTokens": 24911,
+      "completionTokens": 613,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 3,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:s02-b01",
+        "digest:s02-b02",
+        "digest:s02-b03"
+      ],
+      "exhausted": false,
+      "elapsedMs": 17400,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 6163,
+          "completionTokens": 173,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:s02-b01",
+              "target": true,
+              "known": true
+            },
+            {
+              "name": "read_memory",
+              "key": "digest:s02-b02",
+              "target": false,
+              "known": true
+            },
+            {
+              "name": "read_memory",
+              "key": "digest:s02-b03",
+              "target": false,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 18748,
+          "completionTokens": 440,
+          "toolCalls": []
+        }
+      ]
+    }
+  ]
+}

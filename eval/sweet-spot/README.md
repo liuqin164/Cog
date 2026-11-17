@@ -89,3 +89,43 @@ pricing, the cost column is `—` rather than an estimate.
 - It measures one model. E6 asks for at least two models before a per-model
   route value is final.
 - `temperature: 0` reduces but does not remove provider nondeterminism.
+
+## #293: the discriminating corpus (2026-11-17)
+
+The 20-task corpus above scores 20/20 at every band, so it prices context but
+cannot show a knee. `--corpus hard` swaps in eight tasks in the four shapes #293
+names, with one exact code as the answer and the same strict grader:
+
+- `multihop` (2): the first hop names a person, the second names that person's
+  attribute; a same-attribute decoy on another entity and a same-entity decoy
+  on another attribute sit beside each hop.
+- `similar` (2): codes and entity names differ by one character or one digit
+  (`DW-31` / `DW-32` / `DW-13` / `DW-310`, `赤霄` / `赤霄东` / `赤霄南`).
+- `longtool` (2): one tool result of ~9k characters (≈2.5k provider tokens) per
+  task, target buried mid-dump among five near-identical service dumps.
+- `session` (2): 200+ turns of chat; 832 turns at 6k, 6,650 at 48k, with the
+  target at 1.5% depth and decoys at 45% and 80%.
+
+Run: `bun eval/sweet-spot/run.ts --corpus hard --out-dir eval/sweet-spot/hard`.
+
+| targetTokens | prompt tokens (provider) | task success | cost total |
+| ---: | ---: | ---: | ---: |
+| 6,000 | 13,629 | 8/8 | $0.0168 |
+| 12,000 | 27,770 | 8/8 | $0.0339 |
+| 24,000 | 56,055 | 8/8 | $0.0678 |
+| 48,000 | 99,400 | 8/8 | $0.1197 |
+
+Every shape is 2/2 at every band, including the two-hop and near-duplicate
+ones. This is the ticket's second branch, not a knee: **raising the budget from
+6k to 48k still buys no accuracy on a corpus built to discriminate**, while
+prompt tokens grow 7.3× and cost 7.1×. The boundary is unchanged and now has
+harder evidence behind it: 6k stays the provisional route value for this model;
+the open question is still coverage, not attention.
+
+Limits that bound the claim: one model, eight tasks per band, one sample per
+cell. The context is one recall lane with the target always present, so this is
+retrieval under load, not the shell's six-lane drop behaviour. One 48k call
+(`se02`) reported 8,187 prompt tokens for a 192k-character context, which is
+implausible and looks like gateway-side truncation; a recheck at the same band
+reported 113,976 and answered correctly, so the cell is a usage-accounting
+outlier, not a long-context success.

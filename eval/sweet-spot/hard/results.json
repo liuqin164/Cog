@@ -1,0 +1,936 @@
+{
+  "at": "2026-11-17T06:09:43.143Z",
+  "head": "f74b3b2b",
+  "model": "auto/deepseek-v4.1-flash",
+  "baseUrl": "http://127.0.0.1:3425/v1",
+  "seed": 258,
+  "corpus": "hard",
+  "bands": [
+    6000,
+    12000,
+    24000,
+    48000
+  ],
+  "tasks": 8,
+  "factsPerTask": 1,
+  "pricing": {
+    "promptPerToken": 1.5e-7,
+    "completionPerToken": 6e-7
+  },
+  "summary": [
+    {
+      "band": 6000,
+      "tasks": 8,
+      "successes": 8,
+      "successRate": 1,
+      "factRecall": 1,
+      "contextChars": 24017,
+      "contextTokens": 6005,
+      "promptTokens": {
+        "mean": 13629,
+        "min": 12977,
+        "max": 14347
+      },
+      "latencyMs": {
+        "mean": 4040,
+        "median": 3219,
+        "p95": 9865
+      },
+      "costUsd": {
+        "total": 0.0167859,
+        "perCall": 0.0020982375
+      },
+      "errors": 0
+    },
+    {
+      "band": 12000,
+      "tasks": 8,
+      "successes": 8,
+      "successRate": 1,
+      "factRecall": 1,
+      "contextChars": 48013,
+      "contextTokens": 12004,
+      "promptTokens": {
+        "mean": 27770,
+        "min": 25838,
+        "max": 30834
+      },
+      "latencyMs": {
+        "mean": 4423,
+        "median": 3990,
+        "p95": 7930
+      },
+      "costUsd": {
+        "total": 0.0338985,
+        "perCall": 0.0042373125
+      },
+      "errors": 0
+    },
+    {
+      "band": 24000,
+      "tasks": 8,
+      "successes": 8,
+      "successRate": 1,
+      "factRecall": 1,
+      "contextChars": 96015,
+      "contextTokens": 24004,
+      "promptTokens": {
+        "mean": 56055,
+        "min": 51562,
+        "max": 64054
+      },
+      "latencyMs": {
+        "mean": 6354,
+        "median": 4404,
+        "p95": 15323
+      },
+      "costUsd": {
+        "total": 0.0678144,
+        "perCall": 0.0084768
+      },
+      "errors": 0
+    },
+    {
+      "band": 48000,
+      "tasks": 8,
+      "successes": 8,
+      "successRate": 1,
+      "factRecall": 1,
+      "contextChars": 192011,
+      "contextTokens": 48003,
+      "promptTokens": {
+        "mean": 99400,
+        "min": 8187,
+        "max": 130494
+      },
+      "latencyMs": {
+        "mean": 8496,
+        "median": 7673,
+        "p95": 19371
+      },
+      "costUsd": {
+        "total": 0.11973824999999999,
+        "perCall": 0.014967281249999999
+      },
+      "errors": 0
+    }
+  ],
+  "types": [
+    {
+      "type": "multihop",
+      "band": 6000,
+      "tasks": 2,
+      "successes": 2,
+      "factRecall": 1
+    },
+    {
+      "type": "multihop",
+      "band": 12000,
+      "tasks": 2,
+      "successes": 2,
+      "factRecall": 1
+    },
+    {
+      "type": "multihop",
+      "band": 24000,
+      "tasks": 2,
+      "successes": 2,
+      "factRecall": 1
+    },
+    {
+      "type": "multihop",
+      "band": 48000,
+      "tasks": 2,
+      "successes": 2,
+      "factRecall": 1
+    },
+    {
+      "type": "similar",
+      "band": 6000,
+      "tasks": 2,
+      "successes": 2,
+      "factRecall": 1
+    },
+    {
+      "type": "similar",
+      "band": 12000,
+      "tasks": 2,
+      "successes": 2,
+      "factRecall": 1
+    },
+    {
+      "type": "similar",
+      "band": 24000,
+      "tasks": 2,
+      "successes": 2,
+      "factRecall": 1
+    },
+    {
+      "type": "similar",
+      "band": 48000,
+      "tasks": 2,
+      "successes": 2,
+      "factRecall": 1
+    },
+    {
+      "type": "longtool",
+      "band": 6000,
+      "tasks": 2,
+      "successes": 2,
+      "factRecall": 1
+    },
+    {
+      "type": "longtool",
+      "band": 12000,
+      "tasks": 2,
+      "successes": 2,
+      "factRecall": 1
+    },
+    {
+      "type": "longtool",
+      "band": 24000,
+      "tasks": 2,
+      "successes": 2,
+      "factRecall": 1
+    },
+    {
+      "type": "longtool",
+      "band": 48000,
+      "tasks": 2,
+      "successes": 2,
+      "factRecall": 1
+    },
+    {
+      "type": "session",
+      "band": 6000,
+      "tasks": 2,
+      "successes": 2,
+      "factRecall": 1
+    },
+    {
+      "type": "session",
+      "band": 12000,
+      "tasks": 2,
+      "successes": 2,
+      "factRecall": 1
+    },
+    {
+      "type": "session",
+      "band": 24000,
+      "tasks": 2,
+      "successes": 2,
+      "factRecall": 1
+    },
+    {
+      "type": "session",
+      "band": 48000,
+      "tasks": 2,
+      "successes": 2,
+      "factRecall": 1
+    }
+  ],
+  "runs": [
+    {
+      "taskId": "mh01",
+      "type": "multihop",
+      "band": 6000,
+      "contextChars": 24007,
+      "contextTokens": 6002,
+      "entries": 889,
+      "expectedCount": 1,
+      "promptTokens": 12977,
+      "completionTokens": 134,
+      "reasoningTokens": 130,
+      "estimatedUsage": false,
+      "latencyMs": 9865,
+      "attempts": 1,
+      "costUsd": 0.00202695,
+      "content": "KA-17",
+      "codes": [
+        "KA17"
+      ],
+      "found": 1,
+      "success": true
+    },
+    {
+      "taskId": "mh02",
+      "type": "multihop",
+      "band": 6000,
+      "contextChars": 24006,
+      "contextTokens": 6002,
+      "entries": 889,
+      "expectedCount": 1,
+      "promptTokens": 12977,
+      "completionTokens": 95,
+      "reasoningTokens": 91,
+      "estimatedUsage": false,
+      "latencyMs": 3179,
+      "attempts": 1,
+      "costUsd": 0.00200355,
+      "content": "RB-24",
+      "codes": [
+        "RB24"
+      ],
+      "found": 1,
+      "success": true
+    },
+    {
+      "taskId": "sm01",
+      "type": "similar",
+      "band": 6000,
+      "contextChars": 24024,
+      "contextTokens": 6006,
+      "entries": 889,
+      "expectedCount": 1,
+      "promptTokens": 12979,
+      "completionTokens": 100,
+      "reasoningTokens": 96,
+      "estimatedUsage": false,
+      "latencyMs": 3576,
+      "attempts": 1,
+      "costUsd": 0.00200685,
+      "content": "DW-31",
+      "codes": [
+        "DW31"
+      ],
+      "found": 1,
+      "success": true
+    },
+    {
+      "taskId": "sm02",
+      "type": "similar",
+      "band": 6000,
+      "contextChars": 24024,
+      "contextTokens": 6006,
+      "entries": 889,
+      "expectedCount": 1,
+      "promptTokens": 12978,
+      "completionTokens": 69,
+      "reasoningTokens": 65,
+      "estimatedUsage": false,
+      "latencyMs": 3288,
+      "attempts": 1,
+      "costUsd": 0.0019881,
+      "content": "AU-48",
+      "codes": [
+        "AU48"
+      ],
+      "found": 1,
+      "success": true
+    },
+    {
+      "taskId": "lt01",
+      "type": "longtool",
+      "band": 6000,
+      "contextChars": 24024,
+      "contextTokens": 6006,
+      "entries": 478,
+      "expectedCount": 1,
+      "promptTokens": 14214,
+      "completionTokens": 109,
+      "reasoningTokens": 105,
+      "estimatedUsage": false,
+      "latencyMs": 2981,
+      "attempts": 1,
+      "costUsd": 0.0021975000000000002,
+      "content": "RT-17",
+      "codes": [
+        "RT17"
+      ],
+      "found": 1,
+      "success": true
+    },
+    {
+      "taskId": "lt02",
+      "type": "longtool",
+      "band": 6000,
+      "contextChars": 24006,
+      "contextTokens": 6002,
+      "entries": 477,
+      "expectedCount": 1,
+      "promptTokens": 14214,
+      "completionTokens": 59,
+      "reasoningTokens": 55,
+      "estimatedUsage": false,
+      "latencyMs": 3022,
+      "attempts": 1,
+      "costUsd": 0.0021675,
+      "content": "PL-39",
+      "codes": [
+        "PL39"
+      ],
+      "found": 1,
+      "success": true
+    },
+    {
+      "taskId": "se01",
+      "type": "session",
+      "band": 6000,
+      "contextChars": 24022,
+      "contextTokens": 6006,
+      "entries": 832,
+      "expectedCount": 1,
+      "promptTokens": 14347,
+      "completionTokens": 81,
+      "reasoningTokens": 77,
+      "estimatedUsage": false,
+      "latencyMs": 3219,
+      "attempts": 1,
+      "costUsd": 0.00220065,
+      "content": "KR-56",
+      "codes": [
+        "KR56"
+      ],
+      "found": 1,
+      "success": true
+    },
+    {
+      "taskId": "se02",
+      "type": "session",
+      "band": 6000,
+      "contextChars": 24022,
+      "contextTokens": 6006,
+      "entries": 832,
+      "expectedCount": 1,
+      "promptTokens": 14344,
+      "completionTokens": 72,
+      "reasoningTokens": 68,
+      "estimatedUsage": false,
+      "latencyMs": 3193,
+      "attempts": 1,
+      "costUsd": 0.0021948000000000002,
+      "content": "GS-73",
+      "codes": [
+        "GS73"
+      ],
+      "found": 1,
+      "success": true
+    },
+    {
+      "taskId": "mh01",
+      "type": "multihop",
+      "band": 12000,
+      "contextChars": 48004,
+      "contextTokens": 12001,
+      "entries": 1776,
+      "expectedCount": 1,
+      "promptTokens": 25838,
+      "completionTokens": 142,
+      "reasoningTokens": 138,
+      "estimatedUsage": false,
+      "latencyMs": 4856,
+      "attempts": 1,
+      "costUsd": 0.0039609,
+      "content": "KA-17",
+      "codes": [
+        "KA17"
+      ],
+      "found": 1,
+      "success": true
+    },
+    {
+      "taskId": "mh02",
+      "type": "multihop",
+      "band": 12000,
+      "contextChars": 48003,
+      "contextTokens": 12001,
+      "entries": 1776,
+      "expectedCount": 1,
+      "promptTokens": 25838,
+      "completionTokens": 129,
+      "reasoningTokens": 125,
+      "estimatedUsage": false,
+      "latencyMs": 7930,
+      "attempts": 1,
+      "costUsd": 0.003953099999999999,
+      "content": "RB-24",
+      "codes": [
+        "RB24"
+      ],
+      "found": 1,
+      "success": true
+    },
+    {
+      "taskId": "sm01",
+      "type": "similar",
+      "band": 12000,
+      "contextChars": 48021,
+      "contextTokens": 12006,
+      "entries": 1776,
+      "expectedCount": 1,
+      "promptTokens": 25840,
+      "completionTokens": 84,
+      "reasoningTokens": 80,
+      "estimatedUsage": false,
+      "latencyMs": 2949,
+      "attempts": 1,
+      "costUsd": 0.0039264,
+      "content": "DW-31",
+      "codes": [
+        "DW31"
+      ],
+      "found": 1,
+      "success": true
+    },
+    {
+      "taskId": "sm02",
+      "type": "similar",
+      "band": 12000,
+      "contextChars": 48021,
+      "contextTokens": 12006,
+      "entries": 1776,
+      "expectedCount": 1,
+      "promptTokens": 25839,
+      "completionTokens": 90,
+      "reasoningTokens": 86,
+      "estimatedUsage": false,
+      "latencyMs": 3794,
+      "attempts": 1,
+      "costUsd": 0.0039298499999999995,
+      "content": "AU-48",
+      "codes": [
+        "AU48"
+      ],
+      "found": 1,
+      "success": true
+    },
+    {
+      "taskId": "lt01",
+      "type": "longtool",
+      "band": 12000,
+      "contextChars": 48004,
+      "contextTokens": 12001,
+      "entries": 1308,
+      "expectedCount": 1,
+      "promptTokens": 30814,
+      "completionTokens": 158,
+      "reasoningTokens": 154,
+      "estimatedUsage": false,
+      "latencyMs": 3990,
+      "attempts": 1,
+      "costUsd": 0.0047168999999999996,
+      "content": "RT-17",
+      "codes": [
+        "RT17"
+      ],
+      "found": 1,
+      "success": true
+    },
+    {
+      "taskId": "lt02",
+      "type": "longtool",
+      "band": 12000,
+      "contextChars": 48015,
+      "contextTokens": 12004,
+      "entries": 1308,
+      "expectedCount": 1,
+      "promptTokens": 30834,
+      "completionTokens": 172,
+      "reasoningTokens": 168,
+      "estimatedUsage": false,
+      "latencyMs": 3929,
+      "attempts": 1,
+      "costUsd": 0.0047283,
+      "content": "PL-39",
+      "codes": [
+        "PL39"
+      ],
+      "found": 1,
+      "success": true
+    },
+    {
+      "taskId": "se01",
+      "type": "session",
+      "band": 12000,
+      "contextChars": 48018,
+      "contextTokens": 12005,
+      "entries": 1663,
+      "expectedCount": 1,
+      "promptTokens": 28579,
+      "completionTokens": 116,
+      "reasoningTokens": 112,
+      "estimatedUsage": false,
+      "latencyMs": 3806,
+      "attempts": 1,
+      "costUsd": 0.00435645,
+      "content": "KR-56",
+      "codes": [
+        "KR56"
+      ],
+      "found": 1,
+      "success": true
+    },
+    {
+      "taskId": "se02",
+      "type": "session",
+      "band": 12000,
+      "contextChars": 48018,
+      "contextTokens": 12005,
+      "entries": 1663,
+      "expectedCount": 1,
+      "promptTokens": 28576,
+      "completionTokens": 67,
+      "reasoningTokens": 63,
+      "estimatedUsage": false,
+      "latencyMs": 4131,
+      "attempts": 1,
+      "costUsd": 0.0043266,
+      "content": "GS-73",
+      "codes": [
+        "GS73"
+      ],
+      "found": 1,
+      "success": true
+    },
+    {
+      "taskId": "mh01",
+      "type": "multihop",
+      "band": 24000,
+      "contextChars": 96025,
+      "contextTokens": 24007,
+      "entries": 3551,
+      "expectedCount": 1,
+      "promptTokens": 51576,
+      "completionTokens": 123,
+      "reasoningTokens": 119,
+      "estimatedUsage": false,
+      "latencyMs": 10359,
+      "attempts": 1,
+      "costUsd": 0.0078102,
+      "content": "KA-17",
+      "codes": [
+        "KA17"
+      ],
+      "found": 1,
+      "success": true
+    },
+    {
+      "taskId": "mh02",
+      "type": "multihop",
+      "band": 24000,
+      "contextChars": 96024,
+      "contextTokens": 24006,
+      "entries": 3551,
+      "expectedCount": 1,
+      "promptTokens": 51576,
+      "completionTokens": 115,
+      "reasoningTokens": 111,
+      "estimatedUsage": false,
+      "latencyMs": 15323,
+      "attempts": 1,
+      "costUsd": 0.0078054,
+      "content": "RB-24",
+      "codes": [
+        "RB24"
+      ],
+      "found": 1,
+      "success": true
+    },
+    {
+      "taskId": "sm01",
+      "type": "similar",
+      "band": 24000,
+      "contextChars": 96015,
+      "contextTokens": 24004,
+      "entries": 3550,
+      "expectedCount": 1,
+      "promptTokens": 51563,
+      "completionTokens": 72,
+      "reasoningTokens": 68,
+      "estimatedUsage": false,
+      "latencyMs": 4136,
+      "attempts": 1,
+      "costUsd": 0.00777765,
+      "content": "DW-31",
+      "codes": [
+        "DW31"
+      ],
+      "found": 1,
+      "success": true
+    },
+    {
+      "taskId": "sm02",
+      "type": "similar",
+      "band": 24000,
+      "contextChars": 96015,
+      "contextTokens": 24004,
+      "entries": 3550,
+      "expectedCount": 1,
+      "promptTokens": 51562,
+      "completionTokens": 86,
+      "reasoningTokens": 82,
+      "estimatedUsage": false,
+      "latencyMs": 4051,
+      "attempts": 1,
+      "costUsd": 0.007785899999999999,
+      "content": "AU-48",
+      "codes": [
+        "AU48"
+      ],
+      "found": 1,
+      "success": true
+    },
+    {
+      "taskId": "lt01",
+      "type": "longtool",
+      "band": 24000,
+      "contextChars": 96003,
+      "contextTokens": 24001,
+      "entries": 2969,
+      "expectedCount": 1,
+      "promptTokens": 64034,
+      "completionTokens": 147,
+      "reasoningTokens": 143,
+      "estimatedUsage": false,
+      "latencyMs": 4404,
+      "attempts": 1,
+      "costUsd": 0.0096933,
+      "content": "RT-17",
+      "codes": [
+        "RT17"
+      ],
+      "found": 1,
+      "success": true
+    },
+    {
+      "taskId": "lt02",
+      "type": "longtool",
+      "band": 24000,
+      "contextChars": 96014,
+      "contextTokens": 24004,
+      "entries": 2969,
+      "expectedCount": 1,
+      "promptTokens": 64054,
+      "completionTokens": 172,
+      "reasoningTokens": 168,
+      "estimatedUsage": false,
+      "latencyMs": 4141,
+      "attempts": 1,
+      "costUsd": 0.009711299999999999,
+      "content": "PL-39",
+      "codes": [
+        "PL39"
+      ],
+      "found": 1,
+      "success": true
+    },
+    {
+      "taskId": "se01",
+      "type": "session",
+      "band": 24000,
+      "contextChars": 96011,
+      "contextTokens": 24003,
+      "entries": 3325,
+      "expectedCount": 1,
+      "promptTokens": 57039,
+      "completionTokens": 94,
+      "reasoningTokens": 90,
+      "estimatedUsage": false,
+      "latencyMs": 3668,
+      "attempts": 1,
+      "costUsd": 0.00861225,
+      "content": "KR-56",
+      "codes": [
+        "KR56"
+      ],
+      "found": 1,
+      "success": true
+    },
+    {
+      "taskId": "se02",
+      "type": "session",
+      "band": 24000,
+      "contextChars": 96011,
+      "contextTokens": 24003,
+      "entries": 3325,
+      "expectedCount": 1,
+      "promptTokens": 57036,
+      "completionTokens": 105,
+      "reasoningTokens": 101,
+      "estimatedUsage": false,
+      "latencyMs": 4751,
+      "attempts": 1,
+      "costUsd": 0.0086184,
+      "content": "GS-73",
+      "codes": [
+        "GS73"
+      ],
+      "found": 1,
+      "success": true
+    },
+    {
+      "taskId": "mh01",
+      "type": "multihop",
+      "band": 48000,
+      "contextChars": 192013,
+      "contextTokens": 48004,
+      "entries": 7099,
+      "expectedCount": 1,
+      "promptTokens": 103023,
+      "completionTokens": 141,
+      "reasoningTokens": 137,
+      "estimatedUsage": false,
+      "latencyMs": 6002,
+      "attempts": 1,
+      "costUsd": 0.01553805,
+      "content": "KA-17",
+      "codes": [
+        "KA17"
+      ],
+      "found": 1,
+      "success": true
+    },
+    {
+      "taskId": "mh02",
+      "type": "multihop",
+      "band": 48000,
+      "contextChars": 192012,
+      "contextTokens": 48003,
+      "entries": 7099,
+      "expectedCount": 1,
+      "promptTokens": 103023,
+      "completionTokens": 55,
+      "reasoningTokens": 51,
+      "estimatedUsage": false,
+      "latencyMs": 4600,
+      "attempts": 1,
+      "costUsd": 0.015486449999999999,
+      "content": "RB-24",
+      "codes": [
+        "RB24"
+      ],
+      "found": 1,
+      "success": true
+    },
+    {
+      "taskId": "sm01",
+      "type": "similar",
+      "band": 48000,
+      "contextChars": 192003,
+      "contextTokens": 48001,
+      "entries": 7098,
+      "expectedCount": 1,
+      "promptTokens": 103010,
+      "completionTokens": 77,
+      "reasoningTokens": 73,
+      "estimatedUsage": false,
+      "latencyMs": 7673,
+      "attempts": 1,
+      "costUsd": 0.0154977,
+      "content": "DW-31",
+      "codes": [
+        "DW31"
+      ],
+      "found": 1,
+      "success": true
+    },
+    {
+      "taskId": "sm02",
+      "type": "similar",
+      "band": 48000,
+      "contextChars": 192003,
+      "contextTokens": 48001,
+      "entries": 7098,
+      "expectedCount": 1,
+      "promptTokens": 103009,
+      "completionTokens": 4,
+      "estimatedUsage": false,
+      "latencyMs": 9825,
+      "attempts": 1,
+      "costUsd": 0.015453749999999999,
+      "content": "AU-48",
+      "codes": [
+        "AU48"
+      ],
+      "found": 1,
+      "success": true
+    },
+    {
+      "taskId": "lt01",
+      "type": "longtool",
+      "band": 48000,
+      "contextChars": 192001,
+      "contextTokens": 48001,
+      "entries": 6291,
+      "expectedCount": 1,
+      "promptTokens": 130474,
+      "completionTokens": 153,
+      "reasoningTokens": 149,
+      "estimatedUsage": false,
+      "latencyMs": 19371,
+      "attempts": 1,
+      "costUsd": 0.019662899999999997,
+      "content": "RT-17",
+      "codes": [
+        "RT17"
+      ],
+      "found": 1,
+      "success": true
+    },
+    {
+      "taskId": "lt02",
+      "type": "longtool",
+      "band": 48000,
+      "contextChars": 192012,
+      "contextTokens": 48003,
+      "entries": 6291,
+      "expectedCount": 1,
+      "promptTokens": 130494,
+      "completionTokens": 164,
+      "reasoningTokens": 160,
+      "estimatedUsage": false,
+      "latencyMs": 6311,
+      "attempts": 1,
+      "costUsd": 0.0196725,
+      "content": "PL-39",
+      "codes": [
+        "PL39"
+      ],
+      "found": 1,
+      "success": true
+    },
+    {
+      "taskId": "se01",
+      "type": "session",
+      "band": 48000,
+      "contextChars": 192023,
+      "contextTokens": 48006,
+      "entries": 6650,
+      "expectedCount": 1,
+      "promptTokens": 113979,
+      "completionTokens": 124,
+      "reasoningTokens": 120,
+      "estimatedUsage": false,
+      "latencyMs": 6339,
+      "attempts": 1,
+      "costUsd": 0.01717125,
+      "content": "KR-56",
+      "codes": [
+        "KR56"
+      ],
+      "found": 1,
+      "success": true
+    },
+    {
+      "taskId": "se02",
+      "type": "session",
+      "band": 48000,
+      "contextChars": 192023,
+      "contextTokens": 48006,
+      "entries": 6650,
+      "expectedCount": 1,
+      "promptTokens": 8187,
+      "completionTokens": 46,
+      "estimatedUsage": false,
+      "latencyMs": 7845,
+      "attempts": 1,
+      "costUsd": 0.0012556499999999999,
+      "content": "GS-73",
+      "codes": [
+        "GS73"
+      ],
+      "found": 1,
+      "success": true
+    }
+  ]
+}
