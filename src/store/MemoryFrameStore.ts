@@ -142,6 +142,37 @@ export class MemoryFrameStore {
     return { checked: rows.length, total, stale, truncated: total > rows.length };
   }
 
+  /**
+   * The frames a bounded Night repair must re-project: the double-stamp stale set (#110) plus
+   * active frames whose projection is absent (the ones Dream just wrote). "Absent" is a missing
+   * active `frame` support, which is what the projector writes per node; a frame with any support
+   * was projected.
+   *
+   * Capped, because a repair that needs the whole corpus is a full rebuild and should be asked for
+   * explicitly. The cap bounds one night's work; the rest is the next night's set.
+   */
+  listRepairFrames(options: { projectId: string; limit?: number }): { ids: string[]; stale: number; unprojected: number; truncated: boolean } {
+    const limit = Math.max(1, Math.min(Math.trunc(options.limit ?? 100), 500));
+    const scan = this.listStaleFrames({ projectId: options.projectId, statuses: ['active'], limit: 5000 });
+    const stale = new Set(scan.stale);
+    if (!this.tableExists('memory_atlas_supports')) {
+      return { ids: [...stale].slice(0, limit), stale: stale.size, unprojected: 0, truncated: scan.truncated || stale.size > limit };
+    }
+    // One indexed EXISTS per active frame, not a scan of every support row: the projection may
+    // hold tens of thousands of supports and only the frame count should matter here.
+    const unprojected = (this.db.prepare(`
+      SELECT f.frame_id FROM memory_frames f
+      WHERE f.project_id=? AND f.status='active'
+        AND NOT EXISTS (SELECT 1 FROM memory_atlas_supports s
+          WHERE s.project_id=? AND s.source_type='frame' AND s.source_id=f.frame_id AND s.status='active')
+      ORDER BY f.updated_at DESC, f.frame_id ASC
+    `).all(options.projectId, options.projectId) as Array<{ frame_id: string }>)
+      .map((row) => row.frame_id)
+      .filter((id) => !stale.has(id));
+    const ids = [...stale, ...unprojected];
+    return { ids: ids.slice(0, limit), stale: stale.size, unprojected: unprojected.length, truncated: scan.truncated || ids.length > limit };
+  }
+
   publish(frameId: string, from: MemoryFrameStatus, to?: MemoryFrameStatus, now = Date.now()): boolean {
     const published = Boolean(this.db.transaction(() => this.publishUnsafe(frameId, from, to, now))());
     if (published) this.notifyFrameActive(frameId, now);

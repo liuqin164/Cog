@@ -28,35 +28,84 @@ export class MemoryFrameProjector {
     return this.db.transaction(() => this.rebuildUnsafe(projectId, now, options))();
   }
 
+  /**
+   * Re-project only the frames named here (#110). The per-frame work is the same code a full
+   * rebuild runs, so the two paths cannot drift; the difference is what they touch: supports,
+   * aliases and edges belonging to these frames, not the project's.
+   *
+   * The caller gets the set from the double-stamp scan (`listStaleFrames`) plus active frames
+   * the projection does not carry yet. Cost is k × one frame, independent of how many frames
+   * the project holds — the whole point of splitting this from the nightly batch rebuild.
+   */
+  repair(projectId: string, frameIds: readonly string[], now = Date.now(), options: { canonicalDocumentsRebuilt?: boolean } = {}): MemoryFrameProjectionResult {
+    const ids = new Set(frameIds.filter(Boolean));
+    if (!ids.size) return { frames: 0, nodes: 0, edges: 0, needsReview: 0 };
+    return this.db.transaction(() => {
+      const frames = [...ids]
+        .map((frameId) => this.frameStore.get(frameId))
+        .filter((frame): frame is MemoryFrameV1 => Boolean(frame && frame.projectId === projectId && frame.status === 'active'));
+      return this.projectUnsafe(projectId, frames, now, { ...options, frameIds: ids });
+    })();
+  }
+
   private rebuildUnsafe(projectId: string, now: number, options: { canonicalDocumentsRebuilt?: boolean }): MemoryFrameProjectionResult {
-    this.rebuildAliasIndex.clear();
-    this.affectedNodeIds.clear();
     const frames: MemoryFrameV1[] = [];
     for (let offset = 0; ; offset += 500) {
       const page = this.frameStore.list(projectId, { statuses: ['active'], limit: 500, offset });
       frames.push(...page);
       if (page.length < 500) break;
     }
+    return this.projectUnsafe(projectId, frames, now, options);
+  }
+
+  private projectUnsafe(projectId: string, frames: MemoryFrameV1[], now: number, options: { canonicalDocumentsRebuilt?: boolean; frameIds?: Set<string> }): MemoryFrameProjectionResult {
+    const scoped = options.frameIds;
+    const frameIdList = scoped ? [...scoped] : [];
+    const framePlaceholders = frameIdList.map(() => '?').join(',');
+    this.rebuildAliasIndex.clear();
+    this.affectedNodeIds.clear();
     frames.sort((a, b) => this.frameEvidenceTime(b) - this.frameEvidenceTime(a) || b.frameId.localeCompare(a.frameId));
     let nodes = 0; let edges = 0; let needsReview = 0;
     if (this.tableExists('memory_atlas_supports')) {
-      const previous = this.db.prepare(`SELECT DISTINCT node_id FROM memory_atlas_supports WHERE project_id=? AND source_type='frame'`).all(projectId) as Array<{ node_id: string }>;
+      const previous = (scoped
+        ? this.db.prepare(`SELECT DISTINCT node_id FROM memory_atlas_supports WHERE project_id=? AND source_type='frame' AND source_id IN (${framePlaceholders})`).all(projectId, ...frameIdList)
+        : this.db.prepare(`SELECT DISTINCT node_id FROM memory_atlas_supports WHERE project_id=? AND source_type='frame'`).all(projectId)) as Array<{ node_id: string }>;
       for (const row of previous) this.affectedNodeIds.add(row.node_id);
     }
-    const staleSupportIds = (this.db.prepare(`SELECT support_id FROM memory_edge_supports WHERE project_id=? AND source_authority='memory_frame_projector' AND support_status='active'`).all(projectId) as Array<{ support_id: string }>).map((row) => row.support_id);
-    const staleEdgeIds = invalidateMemoryEdgeSupportIds(this.db, staleSupportIds, now, false);
-    this.db.prepare(`DELETE FROM memory_atlas_fts WHERE project_id=? AND node_id IN (SELECT node_id FROM memory_atlas_documents WHERE project_id=? AND status='archived' AND json_extract(metadata_json, '$.projection')='memory_atlas.frame.v2')`).run(projectId, projectId);
-    this.db.prepare(`DELETE FROM memory_atlas_documents WHERE project_id=? AND status='archived' AND json_extract(metadata_json, '$.projection')='memory_atlas.frame.v2'`).run(projectId);
-    if (options.canonicalDocumentsRebuilt) this.refreshCanonicalBaselineSupports(projectId, now);
-    this.db.prepare(`UPDATE memory_atlas_supports SET status='invalidated', invalidated_at=? WHERE project_id=? AND source_type='frame' AND status='active'`).run(now, projectId);
-    if (this.tableExists('memory_atlas_alias_supports')) this.db.prepare(`UPDATE memory_atlas_alias_supports SET status='invalidated', invalidated_at=? WHERE project_id=? AND status='active'`).run(now, projectId);
+    const staleSupportIds = (scoped
+      // shortcut: `support_source_id` has no index, so this reads the project's frame-edge
+      // supports and filters in SQLite (~0.2 ms per 100 frames measured). Upgrade with an index on
+      // memory_edge_supports(project_id,support_source_id,support_status) if the frame count makes
+      // that read visible next to the per-frame projection.
+      ? this.db.prepare(`SELECT support_id FROM memory_edge_supports WHERE project_id=? AND source_authority='memory_frame_projector' AND support_status='active' AND support_source_type='frame' AND support_source_id IN (${framePlaceholders})`).all(projectId, ...frameIdList)
+      : this.db.prepare(`SELECT support_id FROM memory_edge_supports WHERE project_id=? AND source_authority='memory_frame_projector' AND support_status='active'`).all(projectId)) as Array<{ support_id: string }>;
+    const staleSupportIdList = staleSupportIds.map((row) => row.support_id);
+    const staleEdgeIds = invalidateMemoryEdgeSupportIds(this.db, staleSupportIdList, now, false);
+    if (!scoped) {
+      this.db.prepare(`DELETE FROM memory_atlas_fts WHERE project_id=? AND node_id IN (SELECT node_id FROM memory_atlas_documents WHERE project_id=? AND status='archived' AND json_extract(metadata_json, '$.projection')='memory_atlas.frame.v2')`).run(projectId, projectId);
+      this.db.prepare(`DELETE FROM memory_atlas_documents WHERE project_id=? AND status='archived' AND json_extract(metadata_json, '$.projection')='memory_atlas.frame.v2'`).run(projectId);
+    }
+    if (options.canonicalDocumentsRebuilt) {
+      if (scoped) this.refreshCanonicalBaselineSupportsFor(projectId, now);
+      else this.refreshCanonicalBaselineSupports(projectId, now);
+    }
+    if (scoped) {
+      this.db.prepare(`UPDATE memory_atlas_supports SET status='invalidated', invalidated_at=? WHERE project_id=? AND source_type='frame' AND status='active' AND source_id IN (${framePlaceholders})`).run(now, projectId, ...frameIdList);
+    } else {
+      this.db.prepare(`UPDATE memory_atlas_supports SET status='invalidated', invalidated_at=? WHERE project_id=? AND source_type='frame' AND status='active'`).run(now, projectId);
+      if (this.tableExists('memory_atlas_alias_supports')) this.db.prepare(`UPDATE memory_atlas_alias_supports SET status='invalidated', invalidated_at=? WHERE project_id=? AND status='active'`).run(now, projectId);
+    }
     // Resolve only governed/legacy aliases from the stable pre-projection
     // state. Newly written Frame aliases must not become their own resolver.
-    this.rebuildAliasIndex = this.loadActiveAliasIndex(projectId);
-    const nodeIdsByFrame = new Map(frames.map((frame) => [frame.frameId,
+    this.rebuildAliasIndex = scoped ? this.loadStableAliasIndex(projectId, frames) : this.loadActiveAliasIndex(projectId);
+    const stateFrames = scoped ? [...frames, ...this.framesSharingSubjects(projectId, frames)] : frames;
+    const nodeIdsByFrame = new Map(stateFrames.map((frame) => [frame.frameId,
       new Map(frame.nodes.map((node) => [node.frameNodeId, this.nodeId(projectId, node, frame, now)]))]));
+    for (const frame of frames) for (const id of nodeIdsByFrame.get(frame.frameId)!.values()) if (id) this.affectedNodeIds.add(id);
+    if (scoped) this.invalidateFrameAliasSupports(projectId, frameIdList, now);
+    if (scoped) this.deleteArchivedFrameDocuments(projectId);
     const transitionOrders = new WeakMap<StateTransition, EvidenceOrder>();
-    const currentStates = this.resolveCurrentStates(frames, nodeIdsByFrame, transitionOrders);
+    const currentStates = this.resolveCurrentStates(stateFrames, nodeIdsByFrame, transitionOrders);
     const ambiguousStateFrames = new Set([...currentStates.values()]
       .filter((decision) => decision.stateKeys.size > 1)
       .flatMap((decision) => [...decision.frameIds]));
@@ -158,7 +207,8 @@ export class MemoryFrameProjector {
         this.flushAliasSnapshots(aliasSnapshots, projectId, frame, now);
         this.flushEdgeSnapshots(edgeSnapshots);
     }
-    this.db.prepare(`UPDATE memory_atlas_aliases SET status='invalidated', updated_at=? WHERE project_id=? AND source_frame_id IS NOT NULL AND status='active' AND NOT EXISTS (SELECT 1 FROM memory_atlas_alias_supports s WHERE s.alias_id=memory_atlas_aliases.alias_id AND s.status='active')`).run(now, projectId);
+    if (scoped) this.invalidateUnsupportedAliases(projectId, now);
+    else this.db.prepare(`UPDATE memory_atlas_aliases SET status='invalidated', updated_at=? WHERE project_id=? AND source_frame_id IS NOT NULL AND status='active' AND NOT EXISTS (SELECT 1 FROM memory_atlas_alias_supports s WHERE s.alias_id=memory_atlas_aliases.alias_id AND s.status='active')`).run(now, projectId);
     // Include legacy canonical documents that received Frame supports, while
     // preserving counts maintained by older Atlas authorities.
     this.reduceAffectedDocuments(projectId, now);
@@ -187,6 +237,147 @@ export class MemoryFrameProjector {
       index.set(key, ids);
     }
     return index;
+  }
+
+  /**
+   * The alias index a full rebuild actually resolves against.
+   *
+   * A full rebuild invalidates every frame-backed alias support before it loads the index, so the
+   * join above only keeps aliases whose `source_frame_id` is null. Repair invalidates one frame's
+   * supports, so it must not accidentally start resolving against another frame's aliases; this is
+   * the same set with one query and no project-wide invalidation.
+   */
+  private loadStableAliasIndex(projectId: string, frames: MemoryFrameV1[]): Map<string, string[]> {
+    const index = new Map<string, string[]>();
+    if (!this.tableExists('memory_atlas_alias_supports')) return index;
+    // Only the labels these frames can resolve against: the alias table is per project and grows
+    // with the corpus, while one frame's node set is fixed. Every other key cannot be looked up
+    // by this repair, so loading it would only make the cost scale with the corpus.
+    const labelsByDimension = new Map<string, Set<string>>();
+    for (const frame of frames) for (const node of frame.nodes) {
+      if (node.dimension === 'episode' || node.dimension === 'location' || node.dimension === 'project'
+        || node.dimension === 'raw_event' || node.dimension === 'state') continue;
+      const normalized = normalizeAlias(node.label);
+      if (!normalized) continue;
+      const labels = labelsByDimension.get(node.dimension) ?? new Set<string>();
+      labels.add(normalized);
+      labelsByDimension.set(node.dimension, labels);
+    }
+    const rows: Array<{ dimension: string; normalized_alias: string; node_id: string }> = [];
+    for (const [dimension, labels] of labelsByDimension) {
+      rows.push(...this.db.prepare(`
+        SELECT dimension, normalized_alias, node_id
+        FROM memory_atlas_aliases
+        WHERE project_id=? AND status='active' AND source_frame_id IS NULL
+          AND dimension=? AND normalized_alias IN (${[...labels].map(() => '?').join(',')})
+        GROUP BY dimension, normalized_alias, node_id
+        ORDER BY node_id
+      `).all(projectId, dimension, ...labels) as Array<{ dimension: string; normalized_alias: string; node_id: string }>);
+    }
+    for (const row of rows) {
+      const key = `${row.dimension}\0${normalizeAlias(row.normalized_alias)}`;
+      const ids = index.get(key) ?? [];
+      if (!ids.includes(row.node_id)) ids.push(row.node_id);
+      index.set(key, ids);
+    }
+    return index;
+  }
+
+  /**
+   * Frames whose state transitions share a subject with the frames being repaired. A subject's
+   * "current state" is decided across every frame that names it, so a bounded repair has to look at
+   * those frames while it decides HAS_STATE — but only those, not the corpus.
+   */
+  private framesSharingSubjects(projectId: string, frames: MemoryFrameV1[]): MemoryFrameV1[] {
+    const pairs = new Set<string>();
+    const labels = new Set<string>();
+    const dimensions = new Set<string>();
+    for (const frame of frames) {
+      const byFrameNode = new Map(frame.nodes.map((node) => [node.frameNodeId, node]));
+      for (const transition of frame.stateTransitions) {
+        const node = byFrameNode.get(transition.subjectFrameNodeId);
+        if (!node || !['task', 'entity', 'event', 'object'].includes(node.dimension)) continue;
+        pairs.add(`${node.dimension}\0${node.label}`);
+        labels.add(node.label);
+        dimensions.add(node.dimension);
+      }
+    }
+    if (!pairs.size) return [];
+    const rows = this.db.prepare(`
+      SELECT DISTINCT f.frame_id, n.dimension, n.label
+      FROM memory_frames f JOIN memory_frame_nodes n ON n.frame_id=f.frame_id
+      WHERE f.project_id=? AND f.status='active'
+        AND n.dimension IN (${[...dimensions].map(() => '?').join(',')})
+        AND n.label IN (${[...labels].map(() => '?').join(',')})
+    `).all(projectId, ...dimensions, ...labels) as Array<{ frame_id: string; dimension: string; label: string }>;
+    const own = new Set(frames.map((frame) => frame.frameId));
+    const ids = new Set(rows.filter((row) => pairs.has(`${row.dimension}\0${row.label}`)).map((row) => row.frame_id));
+    for (const id of own) ids.delete(id);
+    return [...ids]
+      .map((id) => this.frameStore.get(id))
+      .filter((frame): frame is MemoryFrameV1 => Boolean(frame && frame.projectId === projectId && frame.status === 'active'));
+  }
+
+  /** Archived frame documents for the nodes this repair touches, not the whole project. */
+  private deleteArchivedFrameDocuments(projectId: string): void {
+    const ids = [...this.affectedNodeIds];
+    const archived: string[] = [];
+    for (let offset = 0; offset < ids.length; offset += 400) {
+      const chunk = ids.slice(offset, offset + 400);
+      const placeholders = chunk.map(() => '?').join(',');
+      // Read by node_id (the primary key) and filter in JS: adding `project_id=` invites a scan of
+      // the project's documents, whose size is the corpus.
+      const rows = this.db.prepare(`SELECT node_id,project_id,status,metadata_json FROM memory_atlas_documents WHERE node_id IN (${placeholders})`).all(...chunk) as Array<{ node_id: string; project_id: string; status: string; metadata_json?: string }>;
+      const hit = rows.filter((row) => row.project_id === projectId && row.status === 'archived' && frameProjection(row.metadata_json));
+      if (!hit.length) continue;
+      archived.push(...hit.map((row) => row.node_id));
+      this.db.prepare(`DELETE FROM memory_atlas_documents WHERE node_id IN (${hit.map(() => '?').join(',')})`).run(...hit.map((row) => row.node_id));
+    }
+    this.deleteFtsNodes(projectId, archived);
+  }
+
+  private invalidateUnsupportedAliases(projectId: string, now: number): void {
+    if (!this.tableExists('memory_atlas_alias_supports')) return;
+    // Read the aliases through the alias-support index on (project_id,node_id,status) and then
+    // check each by its primary key; `node_id` is not indexed on the alias table itself.
+    const candidates = new Set<string>();
+    const ids = [...this.affectedNodeIds];
+    for (let offset = 0; offset < ids.length; offset += 400) {
+      const chunk = ids.slice(offset, offset + 400);
+      // `INDEXED BY`: without the hint SQLite reads the whole project through the reduction index.
+      const rows = this.db.prepare(`SELECT DISTINCT alias_id FROM memory_atlas_alias_supports INDEXED BY idx_memory_atlas_alias_support_lookup WHERE project_id=? AND node_id IN (${chunk.map(() => '?').join(',')})`).all(projectId, ...chunk) as Array<{ alias_id: string }>;
+      for (const row of rows) candidates.add(row.alias_id);
+    }
+    const activeSupport = this.db.prepare(`SELECT 1 FROM memory_atlas_alias_supports WHERE alias_id=? AND status='active' LIMIT 1`);
+    const invalidate = this.db.prepare(`UPDATE memory_atlas_aliases SET status='invalidated', updated_at=? WHERE alias_id=? AND source_frame_id IS NOT NULL AND status='active'`);
+    for (const aliasId of candidates) if (!activeSupport.get(aliasId)) invalidate.run(now, aliasId);
+  }
+
+  /** Invalidate one frame's alias supports through the (project_id,node_id,status) index. */
+  private invalidateFrameAliasSupports(projectId: string, frameIds: string[], now: number): void {
+    if (!this.tableExists('memory_atlas_alias_supports')) return;
+    const ids = [...this.affectedNodeIds];
+    const framePlaceholders = frameIds.map(() => '?').join(',');
+    for (let offset = 0; offset < ids.length; offset += 400) {
+      const chunk = ids.slice(offset, offset + 400);
+      this.db.prepare(`UPDATE memory_atlas_alias_supports SET status='invalidated', invalidated_at=? WHERE project_id=? AND status='active' AND source_frame_id IN (${framePlaceholders}) AND node_id IN (${chunk.map(() => '?').join(',')})`).run(now, projectId, ...frameIds, ...chunk);
+    }
+  }
+
+  private deleteFtsNodes(projectId: string, nodeIds: readonly string[]): void {
+    for (let offset = 0; offset < nodeIds.length; offset += 400) {
+      const chunk = nodeIds.slice(offset, offset + 400);
+      const rowids = this.db.prepare(`SELECT rowid FROM memory_atlas_fts WHERE project_id=? AND node_id IN (${chunk.map(() => '?').join(',')})`).all(projectId, ...chunk) as Array<{ rowid: number }>;
+      if (!rowids.length) continue;
+      this.db.prepare(`DELETE FROM memory_atlas_fts WHERE rowid IN (${rowids.map(() => '?').join(',')})`).run(...rowids.map((row) => row.rowid));
+    }
+  }
+
+  private insertFtsNodes(projectId: string, nodeIds: readonly string[]): void {
+    for (let offset = 0; offset < nodeIds.length; offset += 400) {
+      const chunk = nodeIds.slice(offset, offset + 400);
+      this.db.prepare(`INSERT INTO memory_atlas_fts(node_id,project_id,node_type,label,summary,topic_path) SELECT node_id,project_id,node_type,label,COALESCE(summary,''),COALESCE(topic_path,'') FROM memory_atlas_documents WHERE project_id=? AND node_id IN (${chunk.map(() => '?').join(',')})`).run(projectId, ...chunk);
+    }
   }
 
   private nodeId(projectId: string, node: MemoryFrameNode, frame: MemoryFrameV1, now: number): string | undefined {
@@ -322,21 +513,29 @@ export class MemoryFrameProjector {
   private refreshCanonicalBaselineSupports(projectId: string, now: number): void {
     if (!this.hasColumn('memory_atlas_supports', 'payload_json')) return;
     const rows = this.db.prepare(`SELECT DISTINCT node_id FROM memory_atlas_supports WHERE project_id=? AND source_type='canonical_baseline'`).all(projectId) as Array<{ node_id: string }>;
-    for (const row of rows) {
-      this.affectedNodeIds.add(row.node_id);
-      const document = this.db.prepare(`SELECT metadata_json FROM memory_atlas_documents WHERE project_id=? AND node_id=?`).get(projectId, row.node_id) as { metadata_json?: string } | null;
-      if (!document) {
-        this.db.prepare(`UPDATE memory_atlas_supports SET status='invalidated',invalidated_at=? WHERE project_id=? AND node_id=? AND source_type='canonical_baseline' AND status='active'`).run(now, projectId, row.node_id);
-        continue;
-      }
-      let frameProjection = false;
-      try { frameProjection = JSON.parse(document.metadata_json ?? '{}')?.projection === 'memory_atlas.frame.v2'; } catch { frameProjection = true; }
-      if (frameProjection) {
-        this.db.prepare(`UPDATE memory_atlas_supports SET status='invalidated',invalidated_at=? WHERE project_id=? AND node_id=? AND source_type='canonical_baseline' AND status='active'`).run(now, projectId, row.node_id);
-        continue;
-      }
-      this.ensureCanonicalBaselineSupport(projectId, row.node_id, now, true);
+    for (const row of rows) this.refreshCanonicalBaselineSupport(projectId, row.node_id, now);
+  }
+
+  /** The same refresh, for the nodes a bounded repair can touch. */
+  private refreshCanonicalBaselineSupportsFor(projectId: string, now: number): void {
+    if (!this.hasColumn('memory_atlas_supports', 'payload_json')) return;
+    for (const nodeId of [...this.affectedNodeIds]) this.refreshCanonicalBaselineSupport(projectId, nodeId, now);
+  }
+
+  private refreshCanonicalBaselineSupport(projectId: string, nodeId: string, now: number): void {
+    this.affectedNodeIds.add(nodeId);
+    const document = this.db.prepare(`SELECT metadata_json FROM memory_atlas_documents WHERE project_id=? AND node_id=?`).get(projectId, nodeId) as { metadata_json?: string } | null;
+    if (!document) {
+      this.db.prepare(`UPDATE memory_atlas_supports SET status='invalidated',invalidated_at=? WHERE project_id=? AND node_id=? AND source_type='canonical_baseline' AND status='active'`).run(now, projectId, nodeId);
+      return;
     }
+    let frameProjection = false;
+    try { frameProjection = JSON.parse(document.metadata_json ?? '{}')?.projection === 'memory_atlas.frame.v2'; } catch { frameProjection = true; }
+    if (frameProjection) {
+      this.db.prepare(`UPDATE memory_atlas_supports SET status='invalidated',invalidated_at=? WHERE project_id=? AND node_id=? AND source_type='canonical_baseline' AND status='active'`).run(now, projectId, nodeId);
+      return;
+    }
+    this.ensureCanonicalBaselineSupport(projectId, nodeId, now, true);
   }
 
   private contributeAlias(snapshots: Map<string, AliasSupportSnapshot>, projectId: string, nodeId: string, node: Pick<MemoryFrameNode, 'dimension' | 'evidenceEventIds' | 'confidence'>, alias: string): void {
@@ -465,6 +664,8 @@ export class MemoryFrameProjector {
 
   private reduceAffectedDocuments(projectId: string, now: number): void {
     const authorityRank: Record<string, number> = { operator: 5, governed: 5, canonical: 4, validated_processor: 3, memory_frame_projector: 2, deterministic_fallback: 1 };
+    const deleted: string[] = [];
+    const changed: string[] = [];
     for (const nodeId of this.affectedNodeIds) {
       if (nodeId === `project:${projectId}`) continue;
       const current = this.db.prepare(`SELECT label,summary,confidence,support_count,status,occurred_at,evidence_event_ids_json,metadata_json FROM memory_atlas_documents WHERE project_id=? AND node_id=?`).get(projectId, nodeId) as {
@@ -473,7 +674,7 @@ export class MemoryFrameProjector {
       const supports = this.db.prepare(`SELECT support_id,payload_json,confidence,evidence_event_ids_json,source_authority,created_at FROM memory_atlas_supports WHERE project_id=? AND node_id=? AND status='active'`).all(projectId, nodeId) as Array<{ support_id: string; payload_json?: string; confidence?: number; evidence_event_ids_json?: string; source_authority?: string; created_at: number }>;
       if (!supports.length) {
         if (current && frameProjection(current.metadata_json)) {
-          this.db.prepare(`DELETE FROM memory_atlas_fts WHERE project_id=? AND node_id=?`).run(projectId, nodeId);
+          deleted.push(nodeId);
           this.db.prepare(`DELETE FROM memory_atlas_documents WHERE project_id=? AND node_id=?`).run(projectId, nodeId);
         } else if (current && current.support_count !== 0) {
           this.db.prepare(`UPDATE memory_atlas_documents SET support_count=0,updated_at=? WHERE project_id=? AND node_id=?`).run(now, projectId, nodeId);
@@ -516,9 +717,12 @@ export class MemoryFrameProjector {
         && current.evidence_event_ids_json === evidenceJson && current.status === status && current.metadata_json === metadataJson) continue;
       this.db.prepare(`UPDATE memory_atlas_documents SET support_count=?,confidence=?,label=?,summary=?,occurred_at=?,evidence_event_ids_json=?,status=?,metadata_json=?,updated_at=? WHERE project_id=? AND node_id=?`)
         .run(supportCount, confidence, label, summary, occurredAt, evidenceJson, status, metadataJson, now, projectId, nodeId);
-      this.db.prepare(`DELETE FROM memory_atlas_fts WHERE project_id=? AND node_id=?`).run(projectId, nodeId);
-      this.db.prepare(`INSERT INTO memory_atlas_fts(node_id,project_id,node_type,label,summary,topic_path) SELECT node_id,project_id,node_type,label,COALESCE(summary,''),COALESCE(topic_path,'') FROM memory_atlas_documents WHERE project_id=? AND node_id=?`).run(projectId, nodeId);
+      changed.push(nodeId);
     }
+    // One scan for every touched row instead of one per node: FTS5 has no index on node_id, so a
+    // per-node delete walks the whole index and the repair's cost would follow the corpus.
+    this.deleteFtsNodes(projectId, [...deleted, ...changed]);
+    this.insertFtsNodes(projectId, changed);
   }
 
   private evidenceTime(eventIds: string[], fallback: number): number {
