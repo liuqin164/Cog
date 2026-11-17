@@ -330,6 +330,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       dbPath: this.config.dbPath,
       projectTimeZone: this.config.timeZone,
       snapshotsDir: join(this.config.dataDir, 'snapshots'),
+      exportsDir: join(this.config.dataDir, 'exports'),
       modelRegistry: registry,
       ...(embeddingProvider ? { embeddingProvider } : {}),
     });
@@ -2340,6 +2341,8 @@ export class CompanionShell implements ShellControl, AttachShell {
       text: [
         `将删除 ${new Date(start).toISOString()} 至 ${new Date(end).toISOString()}（含起不含止）的 ${count} 条账本记录。`,
         '引用这些记录的画像、程序、承诺、情节与图谱条目会随证据一并删除，然后重建。',
+        '数据库页会被重写；本机数据目录内的夜间快照、周归档与导出副本也会一并删除。',
+        '数据目录之外的导出文件与已复制到其他机器的备份不在覆盖范围内。',
         '确认执行：/forget confirm。回执与审计只记范围、条数和审计 id，不记被删内容。',
       ].join('\n'),
       receipt: true,
@@ -2368,8 +2371,14 @@ export class CompanionShell implements ShellControl, AttachShell {
       .filter(([, value]) => value > 0)
       .map(([field, value]) => `${field} ${value}`)
       .join(' · ');
+    const copies = [
+      `本机快照 ${result.artifacts.snapshotsRemoved} 个`,
+      `周归档 ${result.artifacts.archivesRemoved} 个`,
+      `数据目录内导出 ${result.artifacts.exportsRemoved} 个已删除`,
+      `${result.artifacts.notCovered.join('、')}不在覆盖范围内`,
+    ].join('；');
     return {
-      text: `已删除 ${new Date(pending.start).toISOString()} 至 ${new Date(pending.end).toISOString()}：${deleted || '没有记录'}。审计 ${result.auditId}。`,
+      text: `已删除 ${new Date(pending.start).toISOString()} 至 ${new Date(pending.end).toISOString()}：${deleted || '没有记录'}。副本：${copies}。审计 ${result.auditId}。`,
       receipt: true,
       data: { sovereignty_delete: result },
     };

@@ -18,8 +18,8 @@
  */
 import type Database from 'bun:sqlite';
 import { createHash, randomUUID } from 'node:crypto';
-import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 import type { CommitmentBook } from '../commitment/CommitmentBook.js';
 import type { ProcedureCompiler } from '../procedure/ProcedureCompiler.js';
@@ -124,6 +124,20 @@ export interface SovereigntyDeleteInput {
 export interface SovereigntyDeleteResult extends SovereigntyDeleteInput {
   auditId: string;
   deleted: Record<string, number>;
+  artifacts: SovereigntyArtifactCoverage;
+}
+
+/**
+ * The copies outside the live database that a range deletion handled. The receipt states these
+ * numbers and what stayed out of reach, so "deleted" never means more than it did.
+ */
+export interface SovereigntyArtifactCoverage {
+  snapshotsRemoved: number;
+  archivesRemoved: number;
+  exportsRemoved: number;
+  snapshotsScanned: number;
+  exportsScanned: number;
+  notCovered: string[];
 }
 
 export interface SovereigntyExportInput {
@@ -145,6 +159,10 @@ export interface MemorySovereigntyPorts {
   profile: ProfileCompiler;
   procedures: ProcedureCompiler;
   commitments: CommitmentBook;
+  /** Nightly snapshots and weekly archives; unset means this kernel writes none. */
+  snapshotsDir?: string;
+  /** Markdown exports written by `/export`; unset means none are scanned. */
+  exportsDir?: string;
   rebuildAtlas?: (projectId: string) => unknown;
   afterNeuronsDeleted?: (neuronIds: readonly string[], projectId: string) => void;
   now?: () => number;
@@ -280,9 +298,19 @@ export class MemorySovereigntyService {
     deleted.events = rangeIds.size;
     deleted.derivedEntries = derived.length;
     deleted.entryVersions = streamRows.length;
+    const artifacts: SovereigntyArtifactCoverage = {
+      snapshotsRemoved: 0,
+      archivesRemoved: 0,
+      exportsRemoved: 0,
+      snapshotsScanned: 0,
+      exportsScanned: 0,
+      notCovered: ['数据目录之外的导出文件', '已复制到其他机器的备份'],
+    };
+    let earliestRecordedAt = input.start;
+    for (const event of range) earliestRecordedAt = Math.min(earliestRecordedAt, event.createdAt ?? event.occurredAt);
     if (deleteIds.size === 0) {
-      const auditId = this.writeAudit('delete_range', scope, { start: input.start, end: input.end, counts: deleted }, input.reason);
-      return { ...input, projectId: scope, auditId, deleted };
+      const auditId = this.writeAudit('delete_range', scope, { start: input.start, end: input.end, counts: deleted, artifacts }, input.reason);
+      return { ...input, projectId: scope, auditId, deleted, artifacts };
     }
 
     const episodeRows = this.episodesInRange(scope, input.start, input.end, rangeIds);
@@ -298,6 +326,10 @@ export class MemorySovereigntyService {
       deleted.frames = 0;
     }
 
+    // The live database is rewritten, not only logically emptied: without secure_delete the
+    // deleted text stays in freelist pages, and without VACUUM it stays in pages that the table
+    // b-trees no longer reference. This is the same filesystem contract as `forgetUser`.
+    this.ports.db.exec(`PRAGMA secure_delete = ON`);
     this.ports.db.transaction(() => {
       const placeholders = [...deleteIds].map(() => '?').join(', ');
       const ids = [...deleteIds];
@@ -334,12 +366,17 @@ export class MemorySovereigntyService {
         [scope, ...ids, ...ids]);
       this.runDelete(`DELETE FROM memory_events WHERE event_id IN (${placeholders})`, ids);
     })();
+    this.eraseFreedPages();
 
     if (neuronIds.length > 0) this.ports.afterNeuronsDeleted?.(neuronIds, scope);
 
+    // A snapshot or export made after the earliest deleted row was recorded may hold that row's
+    // text. Both are whole copies, so they are removed rather than rewritten.
+    Object.assign(artifacts, this.removeAffectedArtifacts(earliestRecordedAt));
+
     // The ledger and derived rows are gone before the audit row is written, so a failed recompile
     // still leaves the owner a record of what was removed.
-    const auditId = this.writeAudit('delete_range', scope, { start: input.start, end: input.end, counts: deleted }, input.reason);
+    const auditId = this.writeAudit('delete_range', scope, { start: input.start, end: input.end, counts: deleted, artifacts }, input.reason);
     // The books are views over the ledger, so a recompile is the consistency proof rather than a
     // second deletion list: an entry whose evidence is gone does not come back.
     if (scope) {
@@ -348,7 +385,7 @@ export class MemorySovereigntyService {
       this.ports.commitments.compile({ projectId: scope, now: this.now() });
     }
     this.ports.rebuildAtlas?.(scope);
-    return { ...input, projectId: scope, auditId, deleted };
+    return { ...input, projectId: scope, auditId, deleted, artifacts };
   }
 
   /** Write the human-readable archive. The current ledger is the source, so deleted ranges are absent. */
@@ -503,6 +540,95 @@ export class MemorySovereigntyService {
       WHERE project_id=? AND status='active'
       ORDER BY node_type, label LIMIT 500
     `).all(scope) as Array<{ node_type: string; label: string }>;
+  }
+
+  /**
+   * `secure_delete` zeroes the cells as they are deleted; VACUUM then rebuilds every page so no
+   * unreferenced copy survives. VACUUM writes through the WAL, so the checkpoint has to come after
+   * it: a checkpoint before the rebuild leaves the pre-VACUUM pages in the main database file.
+   */
+  private eraseFreedPages(): void {
+    const db = this.ports.db;
+    const previousTempStore = (db.prepare('PRAGMA temp_store').get() as { temp_store?: number } | undefined)?.temp_store ?? 0;
+    db.exec('PRAGMA temp_store = MEMORY');
+    try {
+      db.exec('VACUUM');
+    } finally {
+      db.exec(`PRAGMA temp_store = ${previousTempStore}`);
+    }
+    db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+  }
+
+  /**
+   * Whole-copy artifacts made after the earliest deleted row was recorded can contain it. They are
+   * removed, not rewritten: a snapshot is a verification chain of checksum + manifest, and
+   * re-creating an old point in time would silently change what that day held.
+   */
+  private removeAffectedArtifacts(cutoff: number): SovereigntyArtifactCoverage {
+    const coverage: SovereigntyArtifactCoverage = {
+      snapshotsRemoved: 0,
+      archivesRemoved: 0,
+      exportsRemoved: 0,
+      snapshotsScanned: 0,
+      exportsScanned: 0,
+      notCovered: ['数据目录之外的导出文件', '已复制到其他机器的备份'],
+    };
+    const snapshotsDir = this.ports.snapshotsDir;
+    if (snapshotsDir && existsSync(snapshotsDir)) {
+      const removedBrainManifests = new Set<string>();
+      for (const file of readdirSync(snapshotsDir)) {
+        if (!/^(?:brain|archive)-.*\.snap$/u.test(file)) continue;
+        coverage.snapshotsScanned += 1;
+        const snapshotPath = join(snapshotsDir, file);
+        const manifestPath = snapshotPath.replace(/\.snap$/u, '.json');
+        let createdAt = statSync(snapshotPath).mtimeMs;
+        try {
+          const parsed = JSON.parse(readFileSync(manifestPath, 'utf8')) as { createdAt?: unknown };
+          if (typeof parsed.createdAt === 'string' && Number.isFinite(Date.parse(parsed.createdAt))) {
+            createdAt = Date.parse(parsed.createdAt);
+          }
+        } catch {
+          // No readable manifest: the file's own mtime is the only timestamp left.
+        }
+        if (createdAt < cutoff) continue;
+        rmSync(snapshotPath, { force: true });
+        rmSync(manifestPath, { force: true });
+        if (file.startsWith('archive-')) coverage.archivesRemoved += 1;
+        else {
+          coverage.snapshotsRemoved += 1;
+          removedBrainManifests.add(file);
+        }
+      }
+      this.forgetSnapshotMarker(removedBrainManifests);
+    }
+    const exportsDir = this.ports.exportsDir;
+    if (exportsDir && existsSync(exportsDir)) {
+      for (const file of readdirSync(exportsDir)) {
+        if (!file.endsWith('.md')) continue;
+        coverage.exportsScanned += 1;
+        const exportPath = join(exportsDir, file);
+        if (statSync(exportPath).mtimeMs < cutoff) continue;
+        rmSync(exportPath, { force: true });
+        coverage.exportsRemoved += 1;
+      }
+    }
+    return coverage;
+  }
+
+  /** `brain_snapshot_last` must not point at a snapshot this deletion removed. */
+  private forgetSnapshotMarker(removedBrainManifests: Set<string>): void {
+    if (removedBrainManifests.size === 0 || !this.tableExists('_meta')) return;
+    const row = this.ports.db.prepare(`SELECT value FROM _meta WHERE key='brain_snapshot_last'`).get() as { value?: string } | undefined;
+    if (!row?.value) return;
+    try {
+      const file = (JSON.parse(row.value) as { file?: unknown }).file;
+      if (typeof file === 'string' && removedBrainManifests.has(file)) {
+        this.ports.db.prepare(`DELETE FROM _meta WHERE key='brain_snapshot_last'`).run();
+      }
+    } catch {
+      // A malformed marker is not a reason to keep a deleted snapshot's name around.
+      this.ports.db.prepare(`DELETE FROM _meta WHERE key='brain_snapshot_last'`).run();
+    }
   }
 
   private readPause(scope: string): { pausedAt: number } | undefined {
