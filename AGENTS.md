@@ -15,9 +15,9 @@ Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root. See `docs/agents/d
 ### Memory pipeline
 
 What the tiers are, how Dream reads a conversation, and what the Atlas projects:
-`MEMORY_MODEL.md` and `MEMORY_ATLAS.md`. This round's measurements and the
-per-commit record: `docs/engineering/4.0-issue-loop.md`. Review rules no guardrail
-can enforce: `CODING_STANDARDS.md`.
+`MEMORY_MODEL.md` and `MEMORY_ATLAS.md`. The 4.0 per-commit ledger is historical:
+`docs/engineering/4.0-issue-loop.md`. Review rules no guardrail can enforce:
+`CODING_STANDARDS.md`.
 
 ## Local development facts
 
@@ -28,14 +28,24 @@ can enforce: `CODING_STANDARDS.md`.
   refused, so the SQLite operations that need a temporary file — the `VACUUM` in the snapshot export
   and in `forgetUser` — fail with `SQLITE_CANTOPEN`. Run the suite as
   `TMPDIR="$PWD/.cogmem/tmp" bun test __tests__`; `.cogmem/` is gitignored, so this leaves no trace.
-- **The active branch is `feat/cogmem-4.0-multi-bot`, not `main`.** 4.0.0 is unreleased; do not tag
-  or publish without the owner's explicit go-ahead. A tag is not a free label here: the owner's
-  release flow creates the GitHub Release through the tag, and `release: published` runs
-  `.github/workflows/publish.yml`, which publishes to npm. 4.0 must be settled before that happens.
+- **The active branch is `main`.** Feature work lands on short-lived branches and merges into
+  `main`, which is the release line. 5.0.0 is unreleased: `package.json` says 5.0.0 while npm's
+  `latest` is 4.1.0. Do not tag, create a GitHub Release, or publish without the owner's explicit
+  go-ahead. A tag is not a free label here: the owner's release flow creates the GitHub Release
+  through the tag, and `release: published` runs `.github/workflows/publish.yml`, which publishes
+  to npm.
+- **Release order is merge to `main` → gates → CI → box → tag/Release → npm.** The local gate is
+  `bun run prepublishOnly` (typecheck → build → `bun test __tests__` → `leak:check` →
+  `npm pack --dry-run`) plus `cd shell && bun test test`. CI repeats both on the push, and
+  `bun run ci:status` reads that run. The 5.0 gate then measures the packed artifact on the box:
+  a seven-day survival run (`shell/SURVIVAL.md`, dispatched by #165) plus the F13
+  companion-behaviour evaluation (`docs/box.md`, #167).
+  Only then does the owner create the version tag and GitHub Release; the release `published`
+  event runs `.github/workflows/publish.yml`, which checks the tag against `package.json` and
+  publishes to npm.
 - **README Quick Start installs from npm, not from this checkout.** `install.sh` resolves
-  `cogmem@latest`, and npm's `latest` is the last *released* version. So no merge of this branch
-  makes those three lines run 4.0 — only publishing does. Any doc claim that "Quick Start works
-  once this lands on `main`" is wrong; issue #44 is blocked on the release, not on the merge.
+  `cogmem@latest`, and npm's `latest` is the last *released* version (4.1.0 while 5.0.0 is in
+  this tree). So no merge to `main` makes those three lines run 5.0 — only publishing does.
 - **The resident observatory does not hot-reload.** A long-running `cogmem observatory` keeps the
   `src/`/`dist/` it started with. Restart it after a build, and check
   `ss -ltnp | grep 7337` before assuming it is current.
@@ -53,9 +63,10 @@ can enforce: `CODING_STANDARDS.md`.
 ## End of round
 
 **CI has already run.** `.github/workflows/ci.yml` runs `prepublishOnly` (typecheck →
-build → test → pack) on every push to `feat/**`, so read it instead of reporting it
-as unrun: `bun run ci:status`. It exits non-zero when a gating check failed and
-labels the external Cloudflare build, which is not this repo's CI.
+build → test → pack) plus the shell suite and `leak:check` on every push to `main` and the
+feature branches (`codex/**`, `feat/**`, `t3/**`), so read it instead of reporting it as unrun:
+`bun run ci:status`. It exits non-zero when a gating check failed and labels the external
+Cloudflare build, which is not this repo's CI.
 
 Post the round's measured result where GitHub shows it — a comment on the open PR for the
 branch, or on the issue that drove the round when there is no PR. The local progress file stays
@@ -77,7 +88,7 @@ or reverts gets one reason per change, and `git revert` can undo one without dra
 with it. Bundling is what made the two-axis review of `309f305..HEAD` report a sequencing problem
 instead of a code one.
 
-## Complexity budget (4.x, #52)
+## Complexity budget (#52)
 
 One rule, cheap enough to actually hold. Everything else about size stays a judgement call.
 
@@ -86,7 +97,7 @@ One rule, cheap enough to actually hold. Everything else about size stays a judg
 
 The two `core` MCP-profile rules that stood here went with the MCP surface (R2 of #200): the
 profile, its eight-tool ceiling and `docs/mcp-server.md`'s retrieval-chain classification no longer
-exist to budget. What replaces them is a decision for R5, not a sentence smuggled in here.
+exist to budget.
 
 Consolidating the 22 bins (one dispatcher plus 21 separate `cogmem-*` entry points) under one
 entry point is a breaking change with its own migration for users' scripts, so it is tracked

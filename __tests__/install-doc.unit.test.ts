@@ -6,6 +6,14 @@ import { join } from 'node:path';
 const root = join(import.meta.dir, '..');
 const help = (args: string[]) => spawnSync('bun', [join(root, 'src', 'bin', 'cogmem.ts'), ...args, '--help'], { encoding: 'utf8' }).stdout;
 
+/** `cogmem install` is a shim over the shell installer; this is the exact text its `--help` prints. */
+function installUsage(): string {
+  const source = readFileSync(join(root, 'shell', 'src', 'install', 'installer.ts'), 'utf8');
+  return /export const INSTALL_USAGE = \[([\s\S]*?)\]\.join\('\\n'\)/.exec(source)?.[1] ?? '';
+}
+
+const helpFor = (command: string) => command === 'install' ? installUsage() : help([command]);
+
 /**
  * The install page is read by someone who has no way to check it. Same shape as the agent-install guard:
  * every `cogmem <subcommand>` must exist and every flag must be one that command's own `--help` lists, with
@@ -44,14 +52,26 @@ test('every flag the install page shows in a command really belongs to that comm
   expect(shown.size).toBeGreaterThan(2);
   const known = new Set<string>(['--help']);
   for (const command of shown) {
-    for (const match of help([command]).matchAll(/(--[a-z][a-z-]+)/g)) known.add(match[1]!);
+    for (const match of helpFor(command).matchAll(/(--[a-z][a-z-]+)/g)) known.add(match[1]!);
   }
   expect([...flags].filter((flag) => !known.has(flag))).toEqual([]);
   // And the flag the ticket singles out is called out as absent rather than shown.
   expect(doc).toContain('no `--provider` flag');
-  expect(fences).not.toContain('--provider');
+  // The absence is about the kernel wizard. The companion installer above does take `--provider`.
+  const kernelFences = [...doc.slice(doc.indexOf('## 1. Why')).matchAll(/```[\s\S]*?```/g)].map((match) => match[0]).join('\n');
+  expect(kernelFences).not.toContain('--provider');
   const initFlags = new Set([...help(['init']).matchAll(/(--[a-z][a-z-]+)/g)].map((match) => match[1]!));
   expect(initFlags.has('--yes')).toBe(true);
+});
+
+test('the install page separates the companion installer from kernel initialization', () => {
+  const doc = readFileSync(join(root, 'docs', 'install.md'), 'utf8');
+  expect(doc).toContain('## Companion install (`cogmem install`)');
+  expect(doc).toContain('cogmem init');
+  expect(doc).toContain('initializes a bare kernel');
+  // The companion command really is the one the CLI dispatches; the doc guard above checks its flags.
+  const commands = spawnSync('bun', [join(root, 'src', 'bin', 'cogmem.ts'), '--help'], { encoding: 'utf8' }).stdout;
+  expect(commands).toMatch(/^ {2}install\b/m);
 });
 
 test('the install page ships with the package and carries no release wording', () => {

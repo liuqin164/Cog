@@ -14,16 +14,25 @@ bun test
 
 ## Pull Request Gate
 
-Before opening a pull request that changes core, run:
+Before opening a pull request, run:
 
 ```bash
 bun run build
 bun run typecheck
-bun test
+TMPDIR="$PWD/.cogmem/tmp" bun test __tests__
+cd shell && bun install --frozen-lockfile && bun test test && cd ..
+bun run leak:check
 npm pack --dry-run --json
 ```
 
-`cogmem` is distributed through the npm registry. **This is not the PR gate.** Publishing is the point of no return for a version, and the 4.0 line is unreleased by decision (AGENTS.md): a tag creates a GitHub Release whose `published` event publishes to npm, so nothing here should be run until the owner says so. Use `npm pack --dry-run --json` to verify package contents. Normal publishing happens by creating a GitHub Release from the matching version tag; `.github/workflows/publish.yml` is intentionally triggered by the release `published` event, not by tag pushes. Use `npm publish --provenance --access public` only as an emergency manual fallback.
+`cogmem` is distributed through the npm registry. **This is not the PR gate.** Publishing is the
+point of no return for a version. Normal publishing creates a GitHub Release from the matching
+version tag (`v5.0.0` or `5.0.0`); `.github/workflows/publish.yml` runs on the release `published`
+event, refuses a tag that does not match `package.json` or a version already on npm, and then
+publishes with provenance. Tag pushes alone do not publish. Do not tag or publish while 5.0 is
+unreleased without the owner's explicit go-ahead. Use `npm pack --dry-run --json` to verify
+package contents. Use `npm publish --provenance --access public` only as an emergency manual
+fallback.
 
 ## API Discipline
 

@@ -24,9 +24,16 @@ const STUB = `#!/bin/sh
 # A stand-in for \`bun add\`: it records the spec, resolves it the way a package
 # manager does, and emulates the one rule that made a source install impossible —
 # a git dependency's \`prepare\` runs without its devDependencies, so it fails.
-printf '%s\\n' "$*" >> "$STUB_LOG"
-cmd="$1"; shift
+cmd="$1"
+if [ "$cmd" != "-e" ]; then printf '%s\\n' "$*" >> "$STUB_LOG"; fi
+shift
 case "$cmd" in
+  -e)
+    # install.sh reads the package's declared bins with bun. Delegate to the real runtime;
+    # this stub only stands in for package resolution.
+    code="$1"; shift
+    exec "__BUN_REAL__" -e "$code" "$@"
+    ;;
   add)
     ignore_scripts=0
     for arg in "$@"; do
@@ -47,12 +54,20 @@ case "$cmd" in
         mkdir -p node_modules/.bin
         printf '#!/bin/sh\\nexit 0\\n' > node_modules/.bin/cogmem
         chmod +x node_modules/.bin/cogmem
+        printf '#!/bin/sh\\nexit 0\\n' > node_modules/.bin/cog
+        chmod +x node_modules/.bin/cog
+        mkdir -p node_modules/cogmem
+        printf '{"name":"cogmem","bin":{"cog":"dist/bin/cog.js","cogmem":"dist/bin/cogmem.js"}}\\n' > node_modules/cogmem/package.json
         ;;
       npm:*)
         # An aliased registry spec: built, like any other registry install.
         mkdir -p node_modules/.bin
         printf '#!/bin/sh\\nexit 0\\n' > node_modules/.bin/cogmem
         chmod +x node_modules/.bin/cogmem
+        printf '#!/bin/sh\\nexit 0\\n' > node_modules/.bin/cog
+        chmod +x node_modules/.bin/cog
+        mkdir -p node_modules/cogmem
+        printf '{"name":"cogmem","bin":{"cog":"dist/bin/cog.js","cogmem":"dist/bin/cogmem.js"}}\\n' > node_modules/cogmem/package.json
         ;;
       *.tgz | *.tar.gz)
         # A packed tarball already contains the built package — but only if it is
@@ -64,6 +79,10 @@ case "$cmd" in
         mkdir -p node_modules/.bin
         printf '#!/bin/sh\\nexit 0\\n' > node_modules/.bin/cogmem
         chmod +x node_modules/.bin/cogmem
+        printf '#!/bin/sh\\nexit 0\\n' > node_modules/.bin/cog
+        chmod +x node_modules/.bin/cog
+        mkdir -p node_modules/cogmem
+        printf '{"name":"cogmem","bin":{"cog":"dist/bin/cog.js","cogmem":"dist/bin/cogmem.js"}}\\n' > node_modules/cogmem/package.json
         ;;
       *)
         case "$spec" in
@@ -75,7 +94,7 @@ case "$cmd" in
           exit 1
         fi
         mkdir -p node_modules/cogmem
-        printf '{"name":"cogmem","scripts":{"prepare":"node scripts/build.mjs"}}\\n' > node_modules/cogmem/package.json
+        printf '{"name":"cogmem","scripts":{"prepare":"node scripts/build.mjs"},"bin":{"cog":"dist/bin/cog.js","cogmem":"dist/bin/cogmem.js"}}\\n' > node_modules/cogmem/package.json
         ;;
     esac
     ;;
@@ -85,12 +104,16 @@ case "$cmd" in
       mkdir -p node_modules/.bin
       printf '#!/bin/sh\\nexit 0\\n' > node_modules/.bin/cogmem
       chmod +x node_modules/.bin/cogmem
+      printf '#!/bin/sh\\nexit 0\\n' > node_modules/.bin/cog
+      chmod +x node_modules/.bin/cog
     fi
     ;;
   run)
     mkdir -p dist/bin
     printf '#!/bin/sh\\nexit 0\\n' > dist/bin/cogmem.js
     chmod +x dist/bin/cogmem.js
+    printf '#!/bin/sh\\nexit 0\\n' > dist/bin/cog.js
+    chmod +x dist/bin/cog.js
     ;;
 esac
 `;
@@ -105,7 +128,7 @@ function runInstaller(spec: string | undefined, extraEnv: Record<string, string>
   mkdirSync(installHome, { recursive: true });
 
   const stub = join(stubDir, 'bun');
-  writeFileSync(stub, STUB.replace('$STUB_LOG', JSON.stringify(logPath)));
+  writeFileSync(stub, STUB.replace('$STUB_LOG', JSON.stringify(logPath)).replace('__BUN_REAL__', process.execPath));
   chmodSync(stub, 0o755);
   // The locations a spec can name, so the stub's resolution has something to find:
   // one beside the package home for the relative form, one absolute.
@@ -135,9 +158,11 @@ function runInstaller(spec: string | undefined, extraEnv: Record<string, string>
   const proc = Bun.spawnSync({ cmd: ['bash', installScript], cwd: scratch, env, stdout: 'pipe', stderr: 'pipe' });
   return {
     exitCode: proc.exitCode,
+    stdout: proc.stdout.toString(),
     stderr: proc.stderr.toString(),
     chunks: existsSync(logPath) ? readFileSync(logPath, 'utf8').trim().split('\n') : [],
     launcher: join(binDir, 'cogmem'),
+    cogLauncher: join(binDir, 'cog'),
     tarball,
   };
 }
@@ -150,6 +175,8 @@ describe('install.sh installs the package it was asked for', () => {
     expect(run.chunks).toEqual(['add cogmem@latest']);
     // And the script's own link_cli step linked what `bun add` produced.
     expect(existsSync(run.launcher)).toBe(true);
+    expect(existsSync(run.cogLauncher)).toBe(true);
+    expect(run.stdout).toContain(`Installed CLIs: ${dirname(run.launcher)}/cog ${dirname(run.launcher)}/cogmem`);
   });
 
   test('a version and a range keep the package name', () => {

@@ -1,13 +1,49 @@
-# Installing Cog when nobody is at the keyboard
+# Installing Cog
 
-This page is for the person who comes back to an unattended install and finds recall "dumber
-than expected". It says why the install stopped where it did, what the state it left is actually
-capable of, and the two ways out. Nothing here is a bug report or a to-do: `rule_only` is a
-legal end state, and the install gate is working when it says `WARN`.
+Cog has two commands that both sound like "install", and this page keeps them apart:
 
-Every command and field below was checked against `cogmem init --help` and the configuration
-source. If you are reading this page from an installed package and something does not match the
-`--help` you have, the `--help` is right.
+- `cogmem install` — the companion installer used by the README Quick Start. It installs the
+  resident, registers the user-level service and runs a first-wake smoke test. An agent
+  installing the companion follows [`docs/agent-install.md`](agent-install.md).
+- `cogmem init` — the kernel CLI's setup wizard. It writes `.cogmem/config.toml` for a bare
+  kernel install. Sections 1 to 7 below are the operator-facing account of that path: why an
+  unattended `cogmem init --yes` stops, what `rule_only` can actually do, and the two ways to
+  finish it.
+
+Nothing below is a bug report or a to-do: `rule_only` is a legal end state, and the install gate
+is working when it says `WARN`. Every command and field below was checked against the `--help`
+of the command it is shown with and the configuration source. If you are reading this page from
+an installed package and something does not match the `--help` you have, the `--help` is right.
+
+## Companion install (`cogmem install`)
+
+`install.sh` installs the package and links both declared bins, `cog` and `cogmem`; it does not
+run this installer. `cogmem install` runs six steps: preflight, place, model, rhythm, resident
+and awake. Step 6 writes a probe memory through the resident, restarts it and recalls the probe;
+that is the smoke test. The installer stops at the first failed step, prints the reason, and
+resumes from that step when you rerun it.
+
+Interactively it asks for the model route. Unattended, the whole route must be named:
+
+```bash
+export MG_API_KEY=...
+cogmem install \
+  --yes \
+  --provider openai_compatible \
+  --base-url https://api.example.com/openai \
+  --model your-model
+```
+
+`--yes` requires `--provider` (`mg` or `openai_compatible`), `--base-url` and `--model`;
+`openai_compatible` also requires `MG_API_KEY` or `COGMEM_MODEL_KEY`. A missing flag stops the
+install before it touches the machine and names what is missing. The other flags are `--data`,
+`--workspace`, `--project`, `--agent`, `--http-port`, `--service-name`, `--home`, `--platform`,
+`--skip-service`, `--uninstall` and `--help`.
+
+The default data directory is `~/.cogmem/companion` (mode 0700); the nightly snapshots and weekly
+archives there are complete plaintext copies of the database. A warning such as an unavailable
+local embedding model means a degraded install, not a failed one. `cogmem init` is not this
+installer: it initializes a bare kernel and is described below.
 
 ## 1. Why `cogmem init --yes` stops here
 

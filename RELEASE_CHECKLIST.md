@@ -1,133 +1,73 @@
 # Cog 5.0.0 Release Checklist
 
 This release is distributed through the npm registry. GitHub remains the source and review mirror.
+Every item below is a command or a file fact. A claim that cannot be checked mechanically is not
+on this list. Paste the command output beside the checkbox in the release issue.
 
 ## Required Metadata
 
-- `package.json` name is `cogmem` (the product is Cog; the npm name is the one that was free).
-- `package.json` version is `5.0.0`.
-- `package.json` has `publishConfig.access = public`.
-- Public export `.` points to `dist/public.js` and `dist/public.d.ts`.
-- Internal subpath `./internal` exists only as an explicit advanced subpath.
-- `install.sh` is tracked and installs `cogmem@latest` from npm by default.
-- The companion shell ships inside the same `cogmem` package as `dist/shell`; `shell/package.json`
-  is private and is not published as a second package.
-- `README.md` carries no version number, no Status section and no version badge (2026-11-03);
-  `release-metadata.unit.test.ts` fails if any of the three returns.
-- Local databases, SQLite sidecars, `.DS_Store`, `dist/.tsbuildinfo`, and `dist/` are not tracked.
+- [ ] `package.json` has `name = cogmem`, `version = 5.0.0`, and `publishConfig.access = public`.
+- [ ] Public export `.` points to `dist/public.js` and `dist/public.d.ts`; `./internal` is the
+      only other subpath.
+- [ ] `package.json` declares exactly two bins, `cog` and `cogmem`, and both source entrypoints
+      exist (`__tests__/release-metadata.unit.test.ts`).
+- [ ] `files` includes `install.sh`, `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`,
+      `RELEASE_CHECKLIST.md`, `docs/install.md`, and `docs/agent-install.md`.
+- [ ] `git ls-files dist` prints nothing; no local database, SQLite sidecar, `.DS_Store`, or
+      `dist/.tsbuildinfo` is tracked.
+- [ ] The `cogmem-*` aliases were removed in 4.0 (#112); the `cogmem-mcp` bin went with the MCP
+      surface in 5.0 (R2 of #200).
+- [ ] `CHANGELOG.md` has `## 5.0.0`, and its entry names what was removed or merged (#52).
 
-## Required Binaries
+## Local Gates
 
-- Two bins, and no command has one of its own:
-  - `cog` — the companion: attaches to the resident shell (or starts it) and opens the terminal
-    interface (`src/bin/cog.ts` hands off to `dist/shell/cog.js`).
-  - `cogmem` — the management CLI.
-- The `cogmem-*` aliases (all sixteen, with `src/bin/alias/` and the `warnDeprecatedAlias`
-  helper) were removed in 4.0 (#112); the `cogmem-mcp` bin went with the MCP surface in 5.0
-  (R2 of #200). Every management command is now a subcommand of `cogmem`: `init`, `doctor`,
-  `update`, `compact`, `memory`, `explain-recall`, `observatory`, `repair`, `import`,
-  `normalize-transcript`, `snapshot`, `backup`, `prospective`, `strategy`, `brain-eval`,
-  `episode`, `dream`, `cleanup` and `install`.
-
-## Required Journey Guarantees
-
-`__tests__/agent-import-cli.unit.test.ts` walks `init → import → recall` through the CLI process boundary
-in a scratch `HOME` and Workspace. Pinned there:
-
-- One Workspace derivation: every command derives it as the directory containing `.cogmem/`, and `doctor`
-  reports the one it decided on (`__tests__/workspace-derivation.unit.test.ts`).
-- The printed import steps carry the Workspace they were given rather than a `.`, and the import step names
-  the integration's project rather than a literal.
-- Imported memory is recalled under the importing project.
-- The gate's exact level and diagnostic set are asserted, not the exit code — every defect this cycle
-  repaired exited 0.
-
-The roster guarantees under "Required Documentation" are pinned by
-`__tests__/agent-roster-lookup.unit.test.ts`, and the gate's launcher convergence by
-`__tests__/install-gate-convergence.unit.test.ts`.
-
-## Required Documentation
-
-- README explains the vision, architecture, limits, and one-line install command.
-- README document npm as the default install path: workspace-local `npm install cogmem@latest --save`, global npm only when the operator wants one shared CLI, and the one-line installer as compatibility.
-- README state that `cogmem init` is an interactive operator wizard and must not be scripted by an unattended agent; agents should use resolved `cogmem` commands and `cogmem doctor`.
-- README says this is a local memory kernel on one device, with private memory and project scope per agent.
-- README distinguishes embedding models from Dream Curator memory-model LLMs.
-- README and integration docs explain labeled `sourceContext`, strict before/after window metadata, and `charRange` / `sourceRange`.
-- README explain collection routing, `cogmem memory map`, and `cogmem memory tick` as host-owned inspection and maintenance surfaces.
-- README explain `decisionTrace` / `recallDecision`, source-first raw fallback, correction semantics, audited review actions, and review-queue aging.
-- README explain `cogmem update --yes` and npm install resolution.
-- README explain that 5.0 refuses a database created before 4.0 instead of upgrading it, without
-  changing or backing up the file, and give the export-then-import path for moving history into a
-  new database.
-- README has a "start the companion" section: `cog` attaches to the resident (starting it when it
-  is not running), and `cogmem install` registers it as a user-level service.
-- README states the support matrix: Linux with systemd user units, macOS with launchd agents,
-  Windows unsupported, and Bun as the only runtime. It also states that macOS has no bwrap, so
-  the bash tool runs without an isolation boundary there (the shell reports `sandbox: off`).
-- SECURITY and the installer prompt say that nightly snapshots and weekly archives are whole
-  database copies in plaintext, and name disk/volume encryption as the optional protection.
-- README explain that entity aliases are evidence-backed, project-scoped, reversible, and stricter for person entities.
-- README explain Belief Graph ownership, user-evidence requirements, reinforcement, conflict review, and supersession history.
-- README explain Temporal Memory validity windows, historical lookup, correction reasons, and current-state stale suppression.
-- README explain Context Cortex intent suppression, 25% default/30% maximum budget, source drill-down, and activation receipts.
-- README explain that Prospective Memory is confirmed-only state with no task execution capability, and how to use BrainEval as a release gate.
-- README explain Strategy Cortex templates, no-instruction-authority lifecycle, one-retry replanning, strategy-conditioned retrieval, offline-only rollout comparison, and read-only MemoryUseJudge telemetry.
-- README explain Raw Ledger-first episode assembly, soft/hard sealing, explicit conditional Dream ticks, raw-event evidence grounding, repair/retry, and Hermes import usage.
-- README give the full post-import maintenance sequence: status, episode status, Dream status, bounded Dream tick, candidate listing, govern candidate, needs-confirmation listing, explicit review, and recall verification.
-- README explain that 3.6.4+ skips empty imported episode boundaries and legacy empty Dream jobs instead of letting them abort `dream tick`.
-- README explain the 3.7.4 agent operations protocol and MemoryFrame/Atlas V2 projection path: `memory plan` for next actions, default grouped `memory candidates --json`, `memory list --since/--until/--order`, historical-discussion recall intent, Atlas canonical cards, `matchedFacets`, `relatedButNotSelected`, `relaxationTrace`, Atlas evidence `sourceLocator`, cursor-based `memory bind`, and read-only episode boundary audit/split planning.
-- README and `MEMORY_ATLAS.md` explain the multi-dimensional Atlas model: a canonical episode/raw event exists once, facet nodes connect through typed edges, query results intersect facets, and display/injection dedupes by `canonicalId`.
-- README document `cogmem observatory` as the resident read-only page command.
-- README explain CPU foreground versus hybrid background classification, contextual short replies, registry-aware topic boundaries, safe reopen, semantic-summary non-evidence status, per-job Dream modes/failures, and stable import identity.
-- README explain user-shaped topic operations, user-explicit versus model-candidate authority, alias collision review, operation rollback, and project isolation.
-- README and `MEMORY_ATLAS.md` distinguish the system anatomy map from the content Atlas; explain graph overview/search/explore/node/neighbors/path/timeline, generic multi-facet cold-memory resurrection, activation visibility, source drill-down, and project isolation.
-- README documents `cogmem.cli.v1`: object payloads are top-level, array payloads use `items`, and queue counters expose top-level compatibility aliases.
-- README documents that 5.0 creates a fresh final schema on a new database and refuses a
-  pre-4.0 database without modifying, backing up, or partially rewriting it.
-- README documents stale graph reads and conservative empty-project project-scope repair for rows imported under an empty project scope.
-- README explain episode surgery, closure recomputation, stale-candidate invalidation, cross-reference/audit preservation, and sealed-only Dream requeue.
-- README and the import reference explain per-message import checkpoints, stable `externalMessageId` requirements across split batches, source-agent validation, CLI range/error controls, and recall freshness warnings.
-- BrainEval fixtures cover Atlas scope isolation, traversal bounds, evidence locators, path reconstruction, faceted resurrection, and canonical-source immutability.
-- Concurrency fixtures prove read-only inspection while another connection is open; Atlas fixtures prove pure reads, explicit touch, dirty-only rebuild, error state, retention, weighted path, and exact facet composition.
-- SECURITY documents local-first storage, explicit external providers, snapshots as sensitive, and governed recall.
-
-## Verification
-
-Run from the repository root:
+Run from the repository root, in this order:
 
 ```bash
+bun install --frozen-lockfile
 bun run typecheck
 bun run build
-bun test
+TMPDIR="$PWD/.cogmem/tmp" bun test __tests__
+cd shell && bun install --frozen-lockfile && bun test test && cd ..
+bun run leak:check
 npm pack --dry-run --json
-npm publish --dry-run --access public
 ```
 
-Gates added in this release, all inside `bun test`:
+- [ ] Every command exits 0. Record the root suite's `pass` / `fail` / files and the shell suite's
+      counts, with the `TMPDIR` used.
+- [ ] The shipped-doc guards pass inside the root suite: `release-metadata.unit.test.ts`,
+      `agent-install-doc.unit.test.ts`, and `install-doc.unit.test.ts`.
+- [ ] `npm pack --dry-run --json` includes built `dist/**` files, `install.sh`, `docs/install.md`,
+      and `docs/agent-install.md`, and includes no local database or machine-specific file.
+- [ ] `bun run ci:status` reports the push to `main` green. CI runs `prepublishOnly` plus the shell
+      suite and `leak:check` (`.github/workflows/ci.yml`).
 
-- `observatory` — every endpoint leaves the database byte-identical, and the page answers GET/HEAD on loopback only.
-- `agent-roster-lookup` — a roster is found Workspace-first, a named roster that cannot be read is refused, and the credential trust path is gone.
-- `drilldown-project-isolation` — a project-bound `memory show` cannot read another project's event.
-- `memory-atlas-cold-resurrection` — decay never makes a memory unreachable (ADR 0001).
-- `belief-history-cli` — a superseded belief reports the version that replaced it.
+## Install Path
 
-The pack dry-run must include built public API files, CLI files, docs, and `install.sh`. It must not include local databases or machine-specific files.
+- [ ] `__tests__/installer-script.unit.test.ts` passes: `install.sh` links the bins the package
+      declares, not a `cogmem*` glob.
+- [ ] In a clean `HOME`, package home, and bin directory, `install.sh` leaves both `cog --help`
+      and `cogmem --version` executable. Record the two commands and their exit codes.
 
-`npm publish --dry-run` runs `prepublishOnly` first, so it repeats typecheck, the full test suite, the build, and the pack listing. To inspect only the packing path, add `--ignore-scripts`.
+## Box Gate
 
-`build` compiles into `dist.next` and renames it over `dist` only after `tsc` exits 0. `dist/` is generated and not tracked in git, so a fresh checkout must run `bun run build` before publishing.
+- [ ] The 5.0 seven-day survival run has a recorded result on #165.
+- [ ] The F13 companion-behaviour evaluation on the same box is green (result on #167).
+- [ ] The box is back in first-install state and `Paused`, following the cleanup list in
+      `docs/box.md`.
 
-## Old-Database Refusal Rehearsal
+## Old-Database Refusal
 
-5.0 has no upgrade path for a database created before 4.0, so the release rehearsal is the
-refusal itself. Build a database shaped like a pre-4.0 file, then confirm 5.0 refuses it and
-leaves it byte-for-byte unchanged.
+5.0 has no upgrade path for a database created before 4.0. The release rehearsal is the refusal
+itself: build a pre-4.0-shaped file, confirm 5.0 refuses it, and confirm the bytes did not change.
 
 ```bash
+work="$PWD/.cogmem/tmp/release-olddb"
+mkdir -p "$work"
+export OLD_DB="$work/schema31.db"
 bun -e '
 import { Database } from "bun:sqlite";
-const db = new Database("/tmp/schema31.db");
+const db = new Database(process.env.OLD_DB ?? ".cogmem/tmp/release-olddb/schema31.db");
 db.exec(`
   CREATE TABLE _meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
   CREATE TABLE _schema_migrations (version TEXT PRIMARY KEY, description TEXT NOT NULL, applied_at TEXT NOT NULL);
@@ -139,34 +79,25 @@ for (let version = 15; version <= 31; version += 1) {
 }
 db.close();
 '
-sha256sum /tmp/schema31.db > /tmp/schema31.before.sha256
-cogmem memory status --db /tmp/schema31.db --json
-sha256sum -c /tmp/schema31.before.sha256
+sha256sum "$OLD_DB" > "$OLD_DB.before.sha256"
+cogmem memory recall --query x --db "$OLD_DB" --timezone UTC --json
+sha256sum -c "$OLD_DB.before.sha256"
+cogmem memory status --db "$work/fresh-5.0.db" --json
 ```
 
-The kernel start must fail with a non-zero exit and a message beginning `no_upgrade_path:`, saying
-that this is a database created before 4.0, that 5.0 does not upgrade an old database, and that
-the file has not been changed. `sha256sum -c` must then report `OK`: no backup is written beside
-the file and no partial rewrite is left behind.
+- [ ] The old file exits non-zero with `"reason": "no_upgrade_path"`, and `sha256sum -c` prints
+      `OK` (no backup, no partial rewrite). `memory status` reports counters and does not open the
+      kernel, so it is not the refusal command.
+- [ ] The fresh file answers with the raw and Dream counters.
+- [ ] The refusal text names the supported path: export from the old install, then
+      `cogmem import openclaw|hermes` or `cogmem episode import`.
 
-A fresh database is the supported path and must still start:
+## Publish
 
-```bash
-cogmem memory status --db /tmp/fresh-5.0.db --json
-```
-
-The fresh file must answer with the raw and Dream counters. There is nothing left to rehearse on
-the old file beyond the refusal. A user who wants their history in 5.0 exports it from the old
-install and imports those files into the new database (`cogmem import openclaw|hermes`, or
-`cogmem episode import` for transcripts); importing the old database file, or a snapshot taken
-from it, is not a migration — 5.0 refuses it the same way.
-
-After verification, create a GitHub Release from the matching version tag, for example `v5.0.0`.
-The release workflow publishes through npm Trusted Publishing when the release is published. It
-must not publish on tag push alone.
-
-Emergency manual fallback:
-
-```bash
-npm publish --provenance --access public
-```
+- [ ] The version tag points at the reviewed `main` commit and matches `package.json` (`5.0.0` or
+      `v5.0.0`).
+- [ ] A GitHub Release is created from that tag. `publish.yml` runs on `release: published`, not
+      on a tag push, and refuses a mismatched tag or an already-published version.
+- [ ] `npm view cogmem@5.0.0 version` prints `5.0.0`.
+- [ ] `npm view cogmem dist-tags.latest` prints `5.0.0`.
+- [ ] Emergency manual fallback only: `npm publish --provenance --access public`.
