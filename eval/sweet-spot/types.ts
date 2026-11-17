@@ -28,10 +28,13 @@ export interface ModelPricing {
 
 export interface RunResult {
   taskId: string;
+  /** `easy` for the #258 corpus, otherwise the hard-corpus shape (#293). */
+  type: string;
   band: number;
   contextChars: number;
   contextTokens: number;
   entries: number;
+  expectedCount: number;
   promptTokens: number;
   completionTokens: number;
   reasoningTokens?: number;
@@ -58,4 +61,12 @@ export interface BandSummary {
   latencyMs: { mean: number; median: number; p95: number };
   costUsd: { total: number; perCall: number } | null;
   errors: number;
+}
+
+export interface TypeSummary {
+  type: string;
+  band: number;
+  tasks: number;
+  successes: number;
+  factRecall: number;
 }

@@ -13,8 +13,9 @@ import { execSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
-import { BANDS, FACTS_PER_TASK, TASKS, buildContext } from './corpus.ts';
-import type { BandSummary, ModelPricing, RunResult, Task } from './types.ts';
+import { BANDS, TASKS, buildContext } from './corpus.ts';
+import { HARD_TASKS, validateHardCorpus } from './hard-corpus.ts';
+import type { BandSummary, BuiltContext, ModelPricing, RunResult, TypeSummary } from './types.ts';
 
 const SYSTEM_PROMPT = '你是 Cog 的记忆助手。只根据提供的记忆上下文回答；不要使用上下文之外的知识。';
 const MAX_TOKENS = 1_024;
@@ -24,6 +25,7 @@ const ATTEMPTS = 3;
 interface Options {
   tasks: number;
   bands: number[];
+  corpus: 'easy' | 'hard';
   model: string;
   baseUrl: string;
   apiKey: string;
@@ -38,19 +40,23 @@ function argument(argv: string[], name: string): string | undefined {
 
 function parse(argv: string[]): Options {
   if (argv.includes('--help') || argv.includes('-h')) {
-    console.log('usage: bun eval/sweet-spot/run.ts [--tasks N] [--bands 6000,12000,24000,48000] [--model ID] [--base-url URL] [--seed N] [--out-dir DIR]');
+    console.log('usage: bun eval/sweet-spot/run.ts [--corpus easy|hard] [--tasks N] [--bands 6000,12000,24000,48000] [--model ID] [--base-url URL] [--seed N] [--out-dir DIR]');
     process.exit(0);
   }
-  const tasks = Number(argument(argv, 'tasks') ?? TASKS.length);
+  const corpus = argument(argv, 'corpus') ?? 'easy';
+  if (corpus !== 'easy' && corpus !== 'hard') throw new Error('--corpus must be "easy" or "hard"');
+  const available = corpus === 'hard' ? HARD_TASKS.length : TASKS.length;
+  const tasks = Number(argument(argv, 'tasks') ?? available);
   const bands = (argument(argv, 'bands') ?? BANDS.join(','))
     .split(',')
     .map((value) => Number(value.trim()))
     .filter((value) => Number.isInteger(value) && value > 0);
-  if (!Number.isInteger(tasks) || tasks <= 0 || tasks > TASKS.length) throw new Error(`--tasks must be 1..${TASKS.length}`);
+  if (!Number.isInteger(tasks) || tasks <= 0 || tasks > available) throw new Error(`--tasks must be 1..${available}`);
   if (bands.length === 0) throw new Error('--bands must be a comma-separated list of positive integers');
   return {
     tasks,
     bands,
+    corpus,
     model: argument(argv, 'model') ?? process.env.MG_MODEL ?? 'auto/deepseek-v4.1-flash',
     baseUrl: (argument(argv, 'base-url') ?? process.env.MG_BASE_URL ?? 'http://127.0.0.1:3425/v1').replace(/\/+$/, ''),
     apiKey: argument(argv, 'api-key') ?? process.env.MG_API_KEY ?? 'magpie',
@@ -159,12 +165,40 @@ async function callModel(options: Options, context: string, question: string): P
   return { content: '', reasoning: '', promptTokens: 0, completionTokens: 0, estimatedUsage: false, latencyMs: 0, attempts: ATTEMPTS, error: lastError };
 }
 
+/** One row of work: the question, its exact codes, and the context for a band. */
+interface Planned {
+  id: string;
+  type: string;
+  question: string;
+  expected: string[];
+  render: (band: number) => BuiltContext;
+}
+
+function plan(corpus: Options['corpus'], limit: number, seed: number): Planned[] {
+  if (corpus === 'hard') {
+    return HARD_TASKS.slice(0, limit).map((task) => ({
+      id: task.id,
+      type: task.type,
+      question: task.question,
+      expected: task.expected,
+      render: (band) => task.render(band, seed),
+    }));
+  }
+  return TASKS.slice(0, limit).map((task) => ({
+    id: task.id,
+    type: 'easy',
+    question: task.question,
+    expected: task.facts.map((fact) => fact.code),
+    render: (band) => buildContext(task, band, seed),
+  }));
+}
+
 function extractCodes(text: string): string[] {
   return [...text.toUpperCase().matchAll(/[A-Z]{2}-\d{1,3}/g)].map((match) => match[0].replace('-', ''));
 }
 
-function expectedCodes(task: Task): string[] {
-  return task.facts.map((fact) => fact.code.replace('-', ''));
+function expectedCodes(task: Planned): string[] {
+  return task.expected.map((code) => code.replace('-', ''));
 }
 
 function costOf(pricing: ModelPricing | null, promptTokens: number, completionTokens: number): number | null {
@@ -187,6 +221,7 @@ function summarize(runs: RunResult[], bands: number[]): BandSummary[] {
     const selected = runs.filter((run) => run.band === band);
     const successes = selected.filter((run) => run.success).length;
     const found = selected.reduce((sum, run) => sum + run.found, 0);
+    const expected = selected.reduce((sum, run) => sum + run.expectedCount, 0);
     const costs = selected.map((run) => run.costUsd).filter((cost): cost is number => cost !== null);
     const latencies = selected.map((run) => run.latencyMs);
     const promptTokens = selected.map((run) => run.promptTokens);
@@ -195,7 +230,7 @@ function summarize(runs: RunResult[], bands: number[]): BandSummary[] {
       tasks: selected.length,
       successes,
       successRate: selected.length === 0 ? 0 : successes / selected.length,
-      factRecall: selected.length === 0 ? 0 : found / (selected.length * FACTS_PER_TASK),
+      factRecall: expected === 0 ? 0 : found / expected,
       contextChars: Math.round(mean(selected.map((run) => run.contextChars))),
       contextTokens: Math.round(mean(selected.map((run) => run.contextTokens))),
       promptTokens: { mean: Math.round(mean(promptTokens)), min: Math.min(...promptTokens), max: Math.max(...promptTokens) },
@@ -204,6 +239,24 @@ function summarize(runs: RunResult[], bands: number[]): BandSummary[] {
       errors: selected.filter((run) => run.error !== undefined).length,
     };
   });
+}
+
+function byType(runs: RunResult[], bands: number[]): TypeSummary[] {
+  const types = [...new Set(runs.map((run) => run.type))];
+  return types.flatMap((type) =>
+    bands.map((band) => {
+      const selected = runs.filter((run) => run.type === type && run.band === band);
+      return {
+        type,
+        band,
+        tasks: selected.length,
+        successes: selected.filter((run) => run.success).length,
+        factRecall: selected.reduce((sum, run) => sum + run.expectedCount, 0) === 0
+          ? 0
+          : selected.reduce((sum, run) => sum + run.found, 0) / selected.reduce((sum, run) => sum + run.expectedCount, 0),
+      };
+    }),
+  );
 }
 
 function money(value: number | null): string {
@@ -229,7 +282,7 @@ function reading(summary: BandSummary[]): string[] {
   return lines;
 }
 
-function conclusion(summary: BandSummary[], model: string): string[] {
+function conclusion(summary: BandSummary[], model: string, hard: boolean): string[] {
   const first = summary[0]!;
   const last = summary[summary.length - 1]!;
   const flat = Math.max(...summary.map((entry) => entry.successRate)) - Math.min(...summary.map((entry) => entry.successRate)) < 0.05;
@@ -238,33 +291,48 @@ function conclusion(summary: BandSummary[], model: string): string[] {
   const latencyRatio = first.latencyMs.mean === 0 ? 0 : last.latencyMs.mean / first.latencyMs.mean;
   return [
     flat
-      ? `No attention knee in ${first.band}–${last.band}: ${first.successes}/${first.tasks} tasks and ${Math.round(first.factRecall * 100)}% of facts at every band.`
+      ? `${hard ? 'Even on the hard corpus, task success is flat' : 'No attention knee'} in ${first.band}–${last.band}: ${first.successes}/${first.tasks} tasks and ${Math.round(first.factRecall * 100)}% of facts at every band.`
       : `Success is not flat: ${Math.round(first.successRate * 100)}% at ${first.band} versus ${Math.round(last.successRate * 100)}% at ${last.band}.`,
     `From ${first.band} to ${last.band}, provider prompt tokens grow ${(last.promptTokens.mean / Math.max(1, first.promptTokens.mean)).toFixed(1)}×, total cost ${costRatio.toFixed(1)}×, and mean latency ${latencyRatio.toFixed(1)}×.`,
     `The shell's chars/4 unit undercounts this Chinese corpus by ${ratio.toFixed(1)}×: ${first.band} shell tokens are ${first.promptTokens.mean} provider prompt tokens.`,
     flat
-      ? `On this evidence, raising \`targetTokens\` above ${first.band} buys no accuracy. Keep ${first.band} as the provisional route value for \`${model}\`; the open question is coverage (does ${first.band} keep the useful lane?), not attention.`
+      ? `On this evidence, raising \`targetTokens\` above ${first.band} buys no accuracy${hard ? ' even on the discriminating corpus' : ''}. Keep ${first.band} as the provisional route value for \`${model}\`; the open question is coverage (does ${first.band} keep the useful lane?), not attention.`
       : `The first band below the best rate is the knee; the route value should be set at or above it, after a second model repeats the curve.`,
     'E6 still needs a second model before the per-model value is final, and this experiment always includes the target, so it cannot show that a small budget keeps the useful lane.',
   ];
 }
 
-function report(options: Options, startedAt: string, head: string, pricing: ModelPricing | null, summary: BandSummary[], runs: RunResult[]): string {
+function report(
+  options: Options,
+  startedAt: string,
+  head: string,
+  pricing: ModelPricing | null,
+  summary: BandSummary[],
+  runs: RunResult[],
+  planned: Planned[],
+  types: TypeSummary[],
+): string {
+  const hard = options.corpus === 'hard';
+  const perTask = runs[0]?.expectedCount ?? 0;
   const lines: string[] = [
-    '# Context sweet spot — #258 C3',
+    hard ? '# Context sweet spot, discriminating corpus — #293' : '# Context sweet spot — #258 C3',
     '',
     `- base commit at run: \`${head}\``,
     `- run at: ${startedAt}`,
     `- model: \`${options.model}\``,
     `- endpoint: \`${options.baseUrl}\``,
     `- seed: ${options.seed}`,
-    `- tasks: ${options.tasks} × ${FACTS_PER_TASK} facts`,
+    `- tasks: ${planned.length} × ${perTask} ${hard ? 'target code' : 'facts'}${hard ? ` (${[...new Set(planned.map((task) => task.type))].join(', ')})` : ''}`,
     '',
     '## What a band means',
     '',
-    '`targetTokens` is the shell assembler\'s own unit: it fits a lane to `ceil(chars / 4)`. Each context here is one `<recall-context>` block built to `targetTokens * 4` characters, so the table shows both that shell estimate and the provider\'s `usage.prompt_tokens`. The five target lines sit at 10/30/50/70/90% depth; the rest are distractors.',
+    hard
+      ? '`targetTokens` is the shell assembler\'s own unit: it fits a lane to `ceil(chars / 4)`. Each context here is one `<recall-context>` block built to `targetTokens * 4` characters, so the table shows both that shell estimate and the provider\'s `usage.prompt_tokens`. The anchors sit at fixed relative depths per shape: the session target at 1.5%, the long-tool block mid-dump, the hop lines at 8% and 55%; the rest is filler.'
+      : '`targetTokens` is the shell assembler\'s own unit: it fits a lane to `ceil(chars / 4)`. Each context here is one `<recall-context>` block built to `targetTokens * 4` characters, so the table shows both that shell estimate and the provider\'s `usage.prompt_tokens`. The five target lines sit at 10/30/50/70/90% depth; the rest are distractors.',
     '',
-    'A distractor shares at most one cue with a target: the target entity with another attribute, another entity with a target attribute, or neither. No distractor is the target entity+attribute pair, so every question has exactly one correct answer. No dates are attached, so recency cannot be used as a shortcut.',
+    hard
+      ? 'The four hard shapes are two-hop chains (the first hop names the second entity), near-duplicate codes and entity names, one multi-thousand-token tool output per task, and 200+ turn sessions with the target near the start. Each question still has exactly one correct code, so a wrong-but-near code counts as a failure.'
+      : 'A distractor shares at most one cue with a target: the target entity with another attribute, another entity with a target attribute, or neither. No distractor is the target entity+attribute pair, so every question has exactly one correct answer. No dates are attached, so recency cannot be used as a shortcut.',
     '',
     '## Results',
     '',
@@ -273,6 +341,16 @@ function report(options: Options, startedAt: string, head: string, pricing: Mode
   ];
   for (const entry of summary) {
     lines.push(`| ${entry.band} | ${entry.contextChars} | ${entry.contextTokens} | ${entry.promptTokens.mean} (${entry.promptTokens.min}–${entry.promptTokens.max}) | ${entry.successes}/${entry.tasks} (${Math.round(entry.successRate * 100)}%) | ${Math.round(entry.factRecall * 100)}% | ${entry.latencyMs.mean} ms | ${entry.latencyMs.p95} ms | ${money(entry.costUsd?.total ?? null)} | ${money(entry.costUsd?.perCall ?? null)} | ${entry.errors} |`);
+  }
+  if (hard) {
+    lines.push('', '### By shape', '', `| shape | ${options.bands.map((band) => `${band}`).join(' | ')} |`, `| --- | ${options.bands.map(() => '---:').join(' | ')} |`);
+    for (const type of [...new Set(types.map((entry) => entry.type))]) {
+      const cells = options.bands.map((band) => {
+        const entry = types.find((candidate) => candidate.type === type && candidate.band === band);
+        return entry ? `${entry.successes}/${entry.tasks}` : '—';
+      });
+      lines.push(`| ${type} | ${cells.join(' | ')} |`);
+    }
   }
   lines.push(
     '',
@@ -283,10 +361,10 @@ function report(options: Options, startedAt: string, head: string, pricing: Mode
     `| task | ${options.bands.map((band) => `${band}`).join(' | ')} |`,
     `| --- | ${options.bands.map(() => '---:').join(' | ')} |`,
   );
-  for (const task of TASKS.slice(0, options.tasks)) {
+  for (const task of planned) {
     const cells = options.bands.map((band) => {
       const run = runs.find((entry) => entry.taskId === task.id && entry.band === band);
-      return run ? `${run.found}/${FACTS_PER_TASK}${run.success ? ' ✓' : ''}` : '—';
+      return run ? `${run.found}/${run.expectedCount}${run.success ? ' ✓' : ''}` : '—';
     });
     lines.push(`| ${task.id} | ${cells.join(' | ')} |`);
   }
@@ -297,8 +375,8 @@ function report(options: Options, startedAt: string, head: string, pricing: Mode
     lines.push('None.');
   } else {
     for (const failure of failures) {
-      const task = TASKS.find((entry) => entry.id === failure.taskId);
-      lines.push(`- \`${failure.taskId}\` @ ${failure.band} (${failure.found}/${FACTS_PER_TASK}) — expected \`${task?.facts.map((fact) => fact.code).join(', ')}\`; got \`${failure.content.slice(0, 300)}\`${failure.error ? `; error: ${failure.error}` : ''}`);
+      const task = planned.find((entry) => entry.id === failure.taskId);
+      lines.push(`- \`${failure.taskId}\` @ ${failure.band} (${failure.found}/${failure.expectedCount}) — expected \`${task?.expected.join(', ')}\`; got \`${failure.content.slice(0, 300)}\`${failure.error ? `; error: ${failure.error}` : ''}`);
     }
   }
 
@@ -308,7 +386,7 @@ function report(options: Options, startedAt: string, head: string, pricing: Mode
     '',
     '## Random baseline',
     '',
-    `A uniform guess over the codes present would have roughly \`1/${entries}\` chance per fact at the smallest band (the pool grows with fill), and \`1/(K·(K−1)·…·(K−4))\` for all five in order — effectively zero. The task is extraction, not multiple choice, so success is not inflated by a 25% guess rate.`,
+    `A uniform guess over the codes present would have roughly \`1/${entries}\` chance per fact at the smallest band (the pool grows with fill), so a blind pick is effectively zero. The task is extraction, not multiple choice, so success is not inflated by a 25% guess rate.`,
     '',
     '## Reading',
     '',
@@ -316,7 +394,7 @@ function report(options: Options, startedAt: string, head: string, pricing: Mode
     '',
     '## Conclusion',
     '',
-    ...conclusion(summary, options.model).map((line) => `- ${line}`),
+    ...conclusion(summary, options.model, hard).map((line) => `- ${line}`),
     '',
     '## Limitations',
     '',
@@ -333,13 +411,17 @@ async function main(): Promise<void> {
   const startedAt = new Date().toISOString();
   const head = headCommit();
   const pricing = await pricingFor(options);
-  const tasks = TASKS.slice(0, options.tasks);
+  if (options.corpus === 'hard') {
+    const problems = validateHardCorpus();
+    if (problems.length > 0) throw new Error(`hard corpus invalid: ${problems.join('; ')}`);
+  }
+  const tasks = plan(options.corpus, options.tasks, options.seed);
   const runs: RunResult[] = [];
 
-  console.log(`sweet-spot: ${tasks.length} tasks × ${options.bands.join('/')} bands · ${options.model}`);
+  console.log(`sweet-spot (${options.corpus}): ${tasks.length} tasks × ${options.bands.join('/')} bands · ${options.model}`);
   for (const band of options.bands) {
     for (const task of tasks) {
-      const context = buildContext(task, band, options.seed);
+      const context = task.render(band);
       const outcome = await callModel(options, context.text, task.question);
       const content = outcome.content || outcome.reasoning;
       const codes = extractCodes(content);
@@ -348,10 +430,12 @@ async function main(): Promise<void> {
       const success = codes.length === expected.length && expected.every((code, index) => codes[index] === code);
       const run: RunResult = {
         taskId: task.id,
+        type: task.type,
         band,
         contextChars: context.contextChars,
         contextTokens: context.contextTokens,
         entries: context.entries,
+        expectedCount: expected.length,
         promptTokens: outcome.promptTokens,
         completionTokens: outcome.completionTokens,
         ...(outcome.reasoningTokens === undefined ? {} : { reasoningTokens: outcome.reasoningTokens }),
@@ -366,11 +450,12 @@ async function main(): Promise<void> {
         ...(outcome.error === undefined ? {} : { error: outcome.error }),
       };
       runs.push(run);
-      console.log(`${run.success ? 'PASS' : 'FAIL'} ${task.id} @ ${band} · ${found}/${FACTS_PER_TASK} · ${run.promptTokens} tok · ${run.latencyMs} ms${run.error ? ` · ${run.error}` : ''}`);
+      console.log(`${run.success ? 'PASS' : 'FAIL'} ${task.id} @ ${band} · ${found}/${expected.length} · ${run.promptTokens} tok · ${run.latencyMs} ms${run.error ? ` · ${run.error}` : ''}`);
     }
   }
 
   const summary = summarize(runs, options.bands);
+  const types = byType(runs, options.bands);
   mkdirSync(options.outDir, { recursive: true });
   writeFileSync(join(options.outDir, 'results.json'), `${JSON.stringify({
     at: startedAt,
@@ -378,14 +463,16 @@ async function main(): Promise<void> {
     model: options.model,
     baseUrl: options.baseUrl,
     seed: options.seed,
+    corpus: options.corpus,
     bands: options.bands,
     tasks: tasks.length,
-    factsPerTask: FACTS_PER_TASK,
+    factsPerTask: runs[0]?.expectedCount ?? 0,
     pricing,
     summary,
+    types,
     runs,
   }, null, 2)}\n`);
-  writeFileSync(join(options.outDir, 'results.md'), report(options, startedAt, head, pricing, summary, runs));
+  writeFileSync(join(options.outDir, 'results.md'), report(options, startedAt, head, pricing, summary, runs, tasks, types));
   console.log(`wrote ${join(options.outDir, 'results.md')} and results.json`);
   if (runs.some((run) => run.error !== undefined)) process.exitCode = 1;
 }
