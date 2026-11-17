@@ -114,10 +114,10 @@ const NON_RETRYABLE_LIMIT_PATTERNS = [
 const TIMEOUT_PATTERNS = [/\bTimeoutError\b/i, /timed? ?out/i, /\btimeout\b/i];
 
 /**
- * Transport failures only (#240). Server-capacity and rate-limit answers are not here: a retry
- * inside the 1/2/4 s backoff cannot clear a 429 or a 503, and the ticket reserves retries for a
- * connection that actually failed. `unable to forward upstream` / `upstream request failed` are the
- * gateway's own transport hop to the model, so they stay.
+ * Transport failures only (#240). Server-capacity and rate-limit answers are not here: the provider
+ * itself retries 429/5xx with its own budget (#282), and a second 1/2/4 s ladder retry would only
+ * double the wait. `unable to forward upstream` / `upstream request failed` are the gateway's own
+ * transport hop to the model, so they stay.
  */
 const CONNECTION_FAILURE_PATTERNS = [
   /unable to forward upstream/i,

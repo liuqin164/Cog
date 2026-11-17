@@ -16,6 +16,8 @@ export interface ModelRouterOptions {
   /** The env-derived mg route. Never written to the store; it is the built-in default. */
   builtin: ModelRoute;
   timeoutMs: number;
+  /** Each provider retry, so a recovered 429 is in the trace (#282). */
+  onRetry?: (event: { attempt: number; status: number; delayMs: number }) => void;
 }
 
 export class ModelRouter implements ModelProvider {
@@ -88,7 +90,13 @@ export class ModelRouter implements ModelProvider {
   }
 
   private build(route: ModelRoute): ModelProvider {
-    const config: MgProviderConfig = { baseUrl: route.baseUrl, apiKey: route.apiKey, model: route.model, timeoutMs: this.timeoutMs };
+    const config: MgProviderConfig = {
+      baseUrl: route.baseUrl,
+      apiKey: route.apiKey,
+      model: route.model,
+      timeoutMs: this.timeoutMs,
+      ...(this.options.onRetry ? { onRetry: this.options.onRetry } : {}),
+    };
     return new MgModelProvider(config, route.name);
   }
 }
