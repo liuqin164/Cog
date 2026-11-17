@@ -27,6 +27,24 @@ describe('the model is told that capture and recall are already done (#277)', ()
     }
   });
 
+  test('session-lane facts are framed as memory, not as a failed save (#278)', async () => {
+    const shell = makeShell(makeTempDir('memory-lane-prompt-'), new ScriptedProvider([{ text: '好。', toolCalls: [] }]), { dream: NO_DREAM });
+    await shell.start();
+    try {
+      const prompt = shell.systemPromptSections().pinned;
+      // One ledger, several lanes: the conversation is a view of the same memory, not a fallback.
+      expect(prompt).toContain('Your memory is one ledger with several lanes');
+      expect(prompt).toContain('a fact from the conversation is a fact from your memory');
+      // Naming the lane is allowed; the "not long-term memory / not saved" framing is not.
+      expect(prompt).toContain('name the lane ("from our conversation earlier")');
+      expect(prompt).toContain('Never call a conversation-lane fact "not from long-term memory"');
+      expect(prompt).toContain('never claim it was not stored');
+      expect(prompt).not.toContain('answer from the conversation');
+    } finally {
+      await shell.stop();
+    }
+  });
+
   test('a recall item drills down with read mem:, not the operator CLI', async () => {
     const provider = new ScriptedProvider([{ text: '记下了。', toolCalls: [] }, { text: '是周二。', toolCalls: [] }]);
     const shell = makeShell(makeTempDir('memory-recall-key-'), provider, { dream: NO_DREAM });

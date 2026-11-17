@@ -82,6 +82,10 @@ describe('attach over the socket (spec §0, §6)', () => {
     try {
       const socketPath = socketPathOf(dir);
       expect(statSync(socketPath).mode & 0o777).toBe(0o600);
+      // #292: the socket is 0600, and its parent is 0700 so no other user can reach it at all —
+      // including the window between listen() and the chmod above.
+      expect(statSync(join(dir, 'data')).mode & 0o777).toBe(0o700);
+      if (typeof process.getuid === 'function') expect(statSync(socketPath).uid).toBe(process.getuid());
 
       const first = await connect(socketPath);
       expect(first.snapshot.status.lifecycle).toBe('IDLE');

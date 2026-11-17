@@ -5,7 +5,7 @@
  * taking it over is recovery, not a second host. A lock whose pid is alive refuses to start, which
  * is the property a checkpoint alone cannot give.
  */
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 export class RuntimeLockHeldError extends Error {
@@ -38,7 +38,15 @@ export class ProcessLock {
   }
 
   acquire(pid = process.pid, now = Date.now()): { recoveredStalePid?: number } {
-    mkdirSync(this.dir, { recursive: true });
+    // The data directory is private: it holds the ledger, the observatory token and the attach
+    // socket. A hand-run shell must not create it 0755 (#292); the installer already uses 0700.
+    mkdirSync(this.dir, { recursive: true, mode: 0o700 });
+    try {
+      chmodSync(this.dir, 0o700);
+    } catch {
+      // A directory we cannot tighten is still usable by this user; the attach socket's own 0600
+      // remains the connect gate.
+    }
     if (existsSync(this.path)) {
       let holder: RuntimeLock | undefined;
       try {

@@ -7,7 +7,7 @@
  * kernel face are the same ones a user reaches.
  */
 import { describe, expect, test } from 'bun:test';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { makeShell, makeTempDir, ScriptedProvider } from './helpers.ts';
@@ -114,7 +114,7 @@ describe('/forget deletes one previewed window and leaves an audit row', () => {
 });
 
 describe('/export writes the archive and answers with the path', () => {
-  test('the file exists at the returned path and carries the conversation', async () => {
+  test('an outside path asks first; the confirmed file is 0600 and carries the conversation', async () => {
     const dir = makeTempDir();
     const shell = await startedShell(dir);
     try {
@@ -126,9 +126,15 @@ describe('/export writes the archive and answers with the path', () => {
         userText: `${marker} 我明天把报告发你。`,
       });
       const path = join(dir, 'out', 'archive.md');
-      const reply = await shell.runCommand('export', path);
+      // #290: outside the data dir the path is shown and nothing is written until the owner says so.
+      const preview = await shell.runCommand('export', path);
+      expect(preview.text).toContain(path);
+      expect(preview.text).toContain('确认执行');
+      expect(existsSync(path)).toBe(false);
+      const reply = await shell.runCommand('export', 'confirm');
       expect(reply.text).toContain(path);
       expect(existsSync(path)).toBe(true);
+      expect(statSync(path).mode & 0o777).toBe(0o600);
       const body = readFileSync(path, 'utf8');
       expect(body).toContain('## Conversations');
       expect(body).toContain('## Profile');
@@ -139,6 +145,12 @@ describe('/export writes the archive and answers with the path', () => {
       const fallbackPath = (fallback.data as { sovereignty_export: { path: string } }).sovereignty_export.path;
       expect(fallbackPath.startsWith(join(dir, 'data', 'exports'))).toBe(true);
       expect(existsSync(fallbackPath)).toBe(true);
+
+      // An explicit path inside the data dir is still direct: no confirmation for its own folder.
+      const inside = join(dir, 'data', 'inside.md');
+      const direct = await shell.runCommand('export', inside);
+      expect(direct.text).toContain(inside);
+      expect(existsSync(inside)).toBe(true);
     } finally {
       await shell.stop();
     }

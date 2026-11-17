@@ -9,7 +9,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { ChannelContract, createMemoryKernel, digestAnchors, KernelAgentMemoryBackend, readSessionToolCalls, readSessionTurns, type ChannelSession, type EmbeddingProvider, type MemoryKernel, type ProcedureWorkflow, type SessionContextAssembly, type SessionContextItem, type SessionDigestEntry, type SessionToolCall, type SessionTurn } from 'cogmem';
 import { ModelRegistry, TraceStore, type ModelRoleConfig, type ModelRoleName, type ModelTextUsage } from 'cogmem/internal';
 import { defaultShellConfig, type ShellConfig } from './config.ts';
@@ -254,6 +254,11 @@ export class CompanionShell implements ShellControl, AttachShell {
    * asks for a fresh preview rather than resuming a confirmation the owner can no longer see.
    */
   private pendingForget?: { start: number; end: number };
+  /**
+   * The export path `/export` asked the owner to confirm (#290). Process-local: unlike the data-dir
+   * path, writing outside the data dir must belong to a confirmation the owner just saw.
+   */
+  private pendingExport?: { path: string };
   /**
    * The practice `/correct` proposed and `/correct confirm` may write (#264). Process-local for the
    * same reason as the forget window: a confirmation must belong to a proposal the owner just saw.
@@ -685,7 +690,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   /** Idempotent: rewritten on every start so `--db` and a data-dir move stay in sync. */
   private writeCliConfig(): void {
     try {
-      mkdirSync(this.config.dataDir, { recursive: true });
+      mkdirSync(this.config.dataDir, { recursive: true, mode: 0o700 });
       writeFileSync(this.cliConfigPath, `[core]\ndb_path = ${JSON.stringify(this.config.dbPath)}\n`, { mode: 0o600 });
     } catch (error) {
       this.trace.append('cli_config_write_failed', {
@@ -976,12 +981,13 @@ export class CompanionShell implements ShellControl, AttachShell {
       this.soulText(),
       'You are a resident companion agent whose memory is Cogmem. The recall lane in this request is already assembled for the turn; use it before you answer. You do not need to fetch it.',
       'Conversation capture is automatic: every user turn and every reply is already written to your memory. Do not run a CLI, open a SQLite file, or search the filesystem to save or look up a memory. The cogmem CLI belongs to the operator, not to you. For one exact ledger row, use the `read` tool with `mem:<eventId>`; that is the in-process memory read.',
-      'If the recall lane is empty, say so plainly and answer from the conversation. Do not go looking for another database, an archive, or an older install.',
+      'Your memory is one ledger with several lanes. The recall, digest, working-set and conversation lanes are all views of it: a fact from the conversation is a fact from your memory, not a missing or unsaved one.',
+      'When you name a source, name the lane ("from our conversation earlier"). Never call a conversation-lane fact "not from long-term memory", and never offer to save what capture has already written. If a lane is empty, answer from the lane that carries the fact; do not go looking for another database, an archive, or an older install.',
       'You are present at all hours; when nothing needs you, you are quiet rather than chatty.',
       'You have four basic tools (read, write, edit, bash). Use them when the moment needs real work; otherwise just talk.',
       'To hand the user a shell command, call `propose_command` with the command and a one-line reason. It is only an offer: the command runs when the user confirms it, never before, so never say it already ran.',
       'A new user line continues the open task by default. Call `declare_task` with action "start" only when the newest line begins a different task, and with "end" when the open task is finished. Judge by meaning, never by a word.',
-      'Never invent a memory. If recall is empty, say so plainly.',
+      'Never invent a memory. If no lane carries a fact, say so plainly and ask; never claim it was not stored.',
     ].filter(Boolean);
     const tail = [this.clock ? this.clock.timeContextBlock(this.now()) : '', this.openAssignmentBlock(), this.suspensionBlock()].filter(Boolean);
     return { pinned: pinned.join('\n\n'), tail: tail.join('\n\n') };
@@ -1163,10 +1169,27 @@ export class CompanionShell implements ShellControl, AttachShell {
       }
       return;
     }
+    // #279: the end declaration's own ledger row is the idempotency key. A kill between the
+    // append below and the checkpoint clear leaves that row in the ledger, so a replay finds it
+    // and writes nothing; compile still runs in case the kill landed before the compile.
+    if (this.taskProcedureWritten(evidence.declarationEventId)) {
+      try {
+        this.kernel.procedures.compile({ projectId: this.config.projectId, now: this.now() });
+      } catch (error) {
+        this.trace.append('task_procedure_failed', {
+          assignmentId: pending.assignmentId,
+          message: error instanceof Error ? error.message : String(error),
+        });
+        return;
+      }
+      this.machine.updateRuntime({ lastEndedTask: { ...pending, procedure: undefined } });
+      this.trace.append('task_procedure_duplicate_skipped', {
+        assignmentId: pending.assignmentId,
+        declarationEventId: evidence.declarationEventId,
+      });
+      return;
+    }
     try {
-      // shortcut: a kill between this append and the checkpoint clear below would write the row
-      // twice, and two identical experiences read as `established`; key the row by assignmentId
-      // when a duplicate is ever observed.
       this.kernel.recordTaskEvent({
         projectId: this.config.projectId,
         workspaceId: this.config.projectId,
@@ -1188,6 +1211,7 @@ export class CompanionShell implements ShellControl, AttachShell {
             outcome: 'succeeded',
             steps: evidence.steps,
             tools: evidence.tools,
+            declarationEventId: evidence.declarationEventId,
           },
         },
       });
@@ -1207,6 +1231,29 @@ export class CompanionShell implements ShellControl, AttachShell {
       steps: evidence.steps.length,
       tools: evidence.tools,
     });
+  }
+
+  /** Whether the same end declaration already produced its task_event (#279). */
+  private taskProcedureWritten(declarationEventId: string): boolean {
+    try {
+      const row = this.kernel.factStore.getDatabase().query(`
+        SELECT 1
+        FROM memory_events
+        WHERE event_type = 'RAW_EVENT_RECORDED'
+          AND raw_event_type = 'task_event'
+          AND COALESCE(project_id, '') = ?
+          AND json_valid(payload_json)
+          AND json_extract(payload_json, '$.metadata.procedure.declarationEventId') = ?
+        LIMIT 1
+      `).get(this.config.projectId, declarationEventId);
+      return row !== null && row !== undefined;
+    } catch (error) {
+      this.trace.append('task_procedure_lookup_failed', {
+        declarationEventId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
   }
 
   /**
@@ -2277,9 +2324,31 @@ export class CompanionShell implements ShellControl, AttachShell {
   }
 
   exportMemory(path: string | undefined): CommandReply {
-    const outputPath = path
-      ?? join(this.config.dataDir, 'exports', `memory-${new Date(this.now()).toISOString().replace(/[:.]/gu, '-')}.md`);
+    const arg = path?.trim() ?? '';
+    if (arg === 'confirm') {
+      const pending = this.pendingExport;
+      if (!pending) return { text: '还没有待确认的导出：先 /export <路径> 看落盘位置。', receipt: true };
+      return this.writeExport(pending.path, true);
+    }
+    const outputPath = arg !== ''
+      ? arg
+      : join(this.config.dataDir, 'exports', `memory-${new Date(this.now()).toISOString().replace(/[:.]/gu, '-')}.md`);
+    // Any new export invalidates an older unconfirmed request: a confirmation must belong to the
+    // path the owner just saw, not one two commands ago.
+    this.pendingExport = undefined;
+    if (!isWithin(this.config.dataDir, outputPath)) {
+      this.pendingExport = { path: outputPath };
+      return {
+        text: `导出会写到数据目录之外的 ${resolve(outputPath)}（文件权限 0600）。确认执行：/export confirm。`,
+        receipt: true,
+      };
+    }
+    return this.writeExport(outputPath, false);
+  }
+
+  private writeExport(outputPath: string, confirmed: boolean): CommandReply {
     const result = this.kernel.sovereignty.exportArchive({ projectId: this.config.projectId, outputPath });
+    if (confirmed) this.pendingExport = undefined;
     this.trace.append('memory_exported', { path: result.path, bytes: result.bytes, auditId: result.auditId });
     const { events, profile, procedures, commitments, graph } = result.counts;
     return {
@@ -3465,7 +3534,7 @@ function buildTaskStub(
  * means no evidence — the caller writes nothing rather than an empty practice. The compiler's
  * frozen caps (`MAX_STEPS` 16, `MAX_TOOLS` 8) are applied here so the trace records what was kept.
  */
-function procedureEvidenceOf(calls: readonly SessionToolCall[]): { steps: string[]; tools: string[] } | undefined {
+function procedureEvidenceOf(calls: readonly SessionToolCall[]): { steps: string[]; tools: string[]; declarationEventId: string } | undefined {
   const end = calls.findIndex((call) =>
     call.toolName === 'declare_task'
     && (call.input as { action?: unknown } | undefined)?.action === 'end');
@@ -3477,7 +3546,7 @@ function procedureEvidenceOf(calls: readonly SessionToolCall[]): { steps: string
     return input ? `${call.toolName}: ${input}` : call.toolName;
   });
   const tools = [...new Set(ordered.map((call) => call.toolName))].slice(0, 8);
-  return { steps, tools };
+  return { steps, tools, declarationEventId: calls[end]!.eventId };
 }
 
 /** A tool call's input, one line and bounded: the step names what was called, not the whole file. */
@@ -3493,5 +3562,11 @@ function compactToolInput(input: unknown): string {
 function exactLinePrefix(text: string, limit: number): string {
   const line = text.split('\n').find((candidate) => candidate.trim() !== '') ?? text;
   return line.length <= limit ? line : `${line.slice(0, limit - 1)}…`;
+}
+
+/** Whether `target` resolves inside `root`; a sibling whose name starts with `..` is not inside. */
+function isWithin(root: string, target: string): boolean {
+  const rel = relative(resolve(root), resolve(target));
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 
