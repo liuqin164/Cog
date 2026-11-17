@@ -9,7 +9,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { ChannelContract, createMemoryKernel, digestAnchors, KernelAgentMemoryBackend, readSessionToolCalls, readSessionTurns, type ChannelSession, type EmbeddingProvider, type MemoryKernel, type ProcedureWorkflow, type SessionContextAssembly, type SessionContextItem, type SessionDigestEntry, type SessionToolCall, type SessionTurn } from 'cogmem';
 import { ModelRegistry, TraceStore, type ModelRoleConfig, type ModelRoleName, type ModelTextUsage } from 'cogmem/internal';
 import { defaultShellConfig, type ShellConfig } from './config.ts';
@@ -254,6 +254,11 @@ export class CompanionShell implements ShellControl, AttachShell {
    * asks for a fresh preview rather than resuming a confirmation the owner can no longer see.
    */
   private pendingForget?: { start: number; end: number };
+  /**
+   * The export path `/export` asked the owner to confirm (#290). Process-local: unlike the data-dir
+   * path, writing outside the data dir must belong to a confirmation the owner just saw.
+   */
+  private pendingExport?: { path: string };
   /**
    * The practice `/correct` proposed and `/correct confirm` may write (#264). Process-local for the
    * same reason as the forget window: a confirmation must belong to a proposal the owner just saw.
@@ -2318,9 +2323,31 @@ export class CompanionShell implements ShellControl, AttachShell {
   }
 
   exportMemory(path: string | undefined): CommandReply {
-    const outputPath = path
-      ?? join(this.config.dataDir, 'exports', `memory-${new Date(this.now()).toISOString().replace(/[:.]/gu, '-')}.md`);
+    const arg = path?.trim() ?? '';
+    if (arg === 'confirm') {
+      const pending = this.pendingExport;
+      if (!pending) return { text: '还没有待确认的导出：先 /export <路径> 看落盘位置。', receipt: true };
+      return this.writeExport(pending.path, true);
+    }
+    const outputPath = arg !== ''
+      ? arg
+      : join(this.config.dataDir, 'exports', `memory-${new Date(this.now()).toISOString().replace(/[:.]/gu, '-')}.md`);
+    // Any new export invalidates an older unconfirmed request: a confirmation must belong to the
+    // path the owner just saw, not one two commands ago.
+    this.pendingExport = undefined;
+    if (!isWithin(this.config.dataDir, outputPath)) {
+      this.pendingExport = { path: outputPath };
+      return {
+        text: `导出会写到数据目录之外的 ${resolve(outputPath)}（文件权限 0600）。确认执行：/export confirm。`,
+        receipt: true,
+      };
+    }
+    return this.writeExport(outputPath, false);
+  }
+
+  private writeExport(outputPath: string, confirmed: boolean): CommandReply {
     const result = this.kernel.sovereignty.exportArchive({ projectId: this.config.projectId, outputPath });
+    if (confirmed) this.pendingExport = undefined;
     this.trace.append('memory_exported', { path: result.path, bytes: result.bytes, auditId: result.auditId });
     const { events, profile, procedures, commitments, graph } = result.counts;
     return {
@@ -3534,5 +3561,11 @@ function compactToolInput(input: unknown): string {
 function exactLinePrefix(text: string, limit: number): string {
   const line = text.split('\n').find((candidate) => candidate.trim() !== '') ?? text;
   return line.length <= limit ? line : `${line.slice(0, limit - 1)}…`;
+}
+
+/** Whether `target` resolves inside `root`; a sibling whose name starts with `..` is not inside. */
+function isWithin(root: string, target: string): boolean {
+  const rel = relative(resolve(root), resolve(target));
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 

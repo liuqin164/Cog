@@ -171,8 +171,8 @@ export const CORE_COMMANDS: readonly CoreCommand[] = [
   },
   {
     name: 'export',
-    description: '导出人类可读的记忆归档（Markdown）',
-    argumentHint: '[文件路径]',
+    description: '导出人类可读的记忆归档（Markdown）；数据目录外的路径先确认再写',
+    argumentHint: '[文件路径] | confirm',
     surfaces: ['palette', 'resident', 'tui'],
     run: (host, args) => host.exportMemory(args.trim() || undefined),
   },
