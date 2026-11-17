@@ -20,7 +20,7 @@ alone — the ticket's "放行生活敏感内容进默认车道" fault.
 Command:
 
 ```bash
-TMPDIR=/home/ubuntu/projects/Cogmem/.cogmem/tmp bun eval/behavior/run.ts --json
+TMPDIR="$PWD/.cogmem/tmp" bun eval/behavior/run.ts --json
 ```
 
 Exit: `1`. Summary: `14 pass / 2 fail / 16 scenarios`.

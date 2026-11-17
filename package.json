@@ -34,8 +34,7 @@
     "ci:status": "bun scripts/ci-status.ts",
     "leak:check": "bun scripts/leak-check.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "scorecard": "bun scripts/scorecard.ts",
-    "ledger:check": "bun scripts/check-ledger.ts"
+    "scorecard": "bun scripts/scorecard.ts"
   },
   "engines": {
     "bun": ">=1.0.0"

@@ -15,8 +15,7 @@ Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root. See `docs/agents/d
 ### Memory pipeline
 
 What the tiers are, how Dream reads a conversation, and what the Atlas projects:
-`MEMORY_MODEL.md` and `MEMORY_ATLAS.md`. The 4.0 per-commit ledger is historical:
-`docs/engineering/4.0-issue-loop.md`. Review rules no guardrail can enforce:
+`MEMORY_MODEL.md` and `MEMORY_ATLAS.md`. Review rules no guardrail can enforce:
 `CODING_STANDARDS.md`.
 
 ## Local development facts

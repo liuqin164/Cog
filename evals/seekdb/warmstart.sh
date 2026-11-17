@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -u
-ROOT=/home/ubuntu/.hermes/cache/scratch/seekdb-probe
+ROOT="$HOME/.hermes/cache/scratch/seekdb-probe"
 N=$ROOT/node_modules/@oceanbase/seekdb-node-linux-arm64-gnu/native
 DIR=$ROOT/sd-routeb
 

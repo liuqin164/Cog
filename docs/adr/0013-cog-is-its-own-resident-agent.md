@@ -65,7 +65,7 @@ private scope, and two Workspaces cannot surface in each other.
   exists.** They are kept verbatim as decision records — rewriting them would
   falsify what was decided then — and this ADR is the superseding record. ADR-0009
   is superseded on positioning, not on isolation.
-- A reader of the old ADRs or of `docs/engineering/` is reading history. The
+- A reader of the old ADRs or of the internal engineering archive is reading history. The
   README, `MEMORY_MODEL.md`, `MEMORY_ATLAS.md`, `GLOSSARY.md`,
   `RECALL_EXPLAINABILITY.md`, `docs/install.md` and `docs/observatory.md` describe
   what ships.
