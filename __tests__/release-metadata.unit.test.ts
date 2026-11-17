@@ -200,6 +200,20 @@ describe('core release metadata', () => {
     expect(manifest.files).toContain('RELEASE_CHECKLIST.md');
   });
 
+  test('release-facing documents and source carry no internal assignee names', () => {
+    const shippedDocs = [
+      'README.md', 'SECURITY.md', 'RELEASE_CHECKLIST.md', 'CONTRIBUTING.md',
+      'MEMORY_MODEL.md', 'MEMORY_ATLAS.md', 'RECALL_EXPLAINABILITY.md', 'BENCHMARKS.md',
+      'CONCURRENT_ACCESS.md', 'CHANGELOG.md', 'docs/install.md', 'docs/agent-install.md',
+      'docs/observatory.md', 'docs/events.md',
+    ];
+    const sources = globSync('{src,shell/src}/**/*.ts', { cwd: coreRoot });
+    for (const file of [...shippedDocs, ...sources]) {
+      const names = [...readText(join(coreRoot, file)).matchAll(/\b(Ryu|Susan)\b/g)].map((match) => match[1]);
+      expect({ file, names }).toEqual({ file, names: [] });
+    }
+  });
+
   test('no current document promises an upgrade path from an old database', () => {
     // #59: the upgrade path is gone, so a document that still tells a reader to
     // migrate is a promise this release cannot keep. The check stops at the
@@ -314,5 +328,5 @@ test('the deprecated aliases are gone, and the checklist says so', () => {
   expect(readFileSync(join(coreRoot, 'src', 'bin', 'CliArgs.ts'), 'utf8')).not.toContain('warnDeprecatedAlias');
 
   const checklist = readFileSync(join(coreRoot, 'RELEASE_CHECKLIST.md'), 'utf8');
-  expect(checklist).toContain('Removed in 4.0 (#112)');
+  expect(checklist).toMatch(/removed in 4\.0 \(#112\)/i);
 });

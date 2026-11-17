@@ -646,7 +646,7 @@ async function main(): Promise<void> {
 
     // 1. Stop the resident service, before the package it is running from is replaced.
     //    A service that cannot be stopped aborts here, with nothing swapped and
-    //    nothing lost (#150, Ryu's 停旧 → 换版 → 迁移 → 起新).
+    //    nothing lost (#150, 停旧 → 换版 → 迁移 → 起新).
     if (ownsResident && resident) {
       const stopped = await stopResidentProcess(resident.session, { run: runResident, cwd: target.cwd });
       if (stopped.error) {

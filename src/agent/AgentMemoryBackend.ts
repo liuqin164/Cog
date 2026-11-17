@@ -1301,7 +1301,7 @@ export class KernelAgentMemoryBackend {
     if (!this.kernel.sharedEnabled) return result;
     const agentId = query.agentId;
     if (!agentId) return result;
-    // Reading is open to any agent that can connect (#146, Ryu 2026-11-06): the readers list is no longer a gate.
+    // Reading is open to any agent that can connect (#146, 2026-11-06): the readers list is no longer a gate.
     // The registry stays in the database and is left unused on purpose — a future multi-user deployment can turn it
     // back on — but nothing here consults it, so there is no runtime branch to keep in step.
     const readable = this.kernel.listSharedCollectionsSync().map((collection) => collection.collection);
@@ -1372,7 +1372,7 @@ export class KernelAgentMemoryBackend {
   /**
    * Whether an agent may read an item, read from the same chain as the secret mark (#143).
    *
-   * The rule (Ryu 2026-11-07, route 1): imported material is project-level public whatever `sourceAgent` says,
+   * The rule (2026-11-07, route 1): imported material is project-level public whatever `sourceAgent` says,
    * because making an import worth doing means the other agents in the project can read it; a turn someone had
    * is scoped to the agent that had it; material whose chain names no agent — a migration, an old row, a record
    * written by a connection that had no identity — is public too. Cross-project isolation is untouched: this

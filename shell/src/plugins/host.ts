@@ -18,7 +18,7 @@ const BUILTIN_SOURCE = 'plugin:builtin-tools';
  * dispatcher answer to, and a plugin command shadowing `/pause` would make the same word mean two
  * things depending on which layer saw it first.
  *
- * `forget` is the spec's §7 addendum (Ryu 2026-11-12) for F9 (#163) and now has a core entry
+ * `forget` is the spec's §7 addendum (2026-11-12) for F9 (#163) and now has a core entry
  * (`commands.ts`, #232). `export` and `correct` joined with the same round. `pin` and `unpin` belong
  * to F14 (#191), remain unimplemented, and stay reserved but absent from the palette
  * (`tui/commands.ts`), which must never present an unimplemented command as available.

@@ -199,3 +199,30 @@ auto_upgrade_in_service = true   # only when the service manager owns the restar
 One upgrade runs at a time: a lock beside the config refuses a second, and a lock left by a killed
 process is cleared after an hour.
 
+## 6. Platforms
+
+The resident is a user-level service: a systemd user unit on Linux, a launchd agent on macOS. It
+does not need root. Windows is not supported; `cogmem install` refuses the platform at preflight,
+before any install step runs, rather than half-installing. The runtime is Bun; the package declares
+`engines.bun` and does not support Node for the resident.
+
+macOS has no bubblewrap (`bwrap`), so the bash tool has no isolation boundary there. The companion
+stays usable and reports the fact: `/status` and `doctor` show `sandbox: off`, and startup writes
+`bash_sandbox_unavailable` to the trace. On Linux the installer probes bwrap; when it is missing,
+the same report appears and the hint names the package to install.
+
+## 7. Old databases, snapshots and encryption
+
+A database created before 4.0 cannot be opened by this release. It is identified and refused with
+a message beginning `no_upgrade_path:`; the file is left byte-for-byte unchanged, with no backup
+written beside it and no partial rewrite. Keep the old install for that file. To move the history
+forward, export the conversations from the old install into files, create a new database, and
+import those files (`cogmem import openclaw` / `cogmem import hermes`, or
+`cogmem episode import --format jsonl --file <path>`). Importing the old database or a snapshot of
+it is not a migration — it meets the same refusal.
+
+The nightly snapshot and the weekly archive are complete copies of the SQLite database in
+plaintext. They live under `<data dir>/snapshots` with mode 0700, but mode 0700 is not encryption:
+anyone who can read the disk, or a copy of it, can read every remembered turn. Use full-disk or
+volume encryption (LUKS, FileVault, an encrypted directory) when the machine may be lost, shared
+or backed up off-device. See [SECURITY.md](../SECURITY.md).

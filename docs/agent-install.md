@@ -12,10 +12,11 @@ improvising.
 - Cog is a local-first resident companion agent with a governed long-term memory
   kernel on your own machine. One SQLite database on this machine, no cloud, no
   account. The steps below use the CLI.
-- Only one command exists: `cogmem`. The old `cogmem-<command>` spellings
-  (for example `cogmem-init`, `cogmem-doctor`) and the `cogmem-mcp` server bin
-  were removed. If any message tells you to run one, that message is
-  stale — run the `cogmem <subcommand>` form instead and report it.
+- Two commands exist: `cog` opens the companion and `cogmem` is the management
+  CLI. Every management action is a `cogmem <subcommand>`; the old
+  `cogmem-<command>` spellings (for example `cogmem-init`, `cogmem-doctor`) and
+  the `cogmem-mcp` server bin were removed. If any message tells you to run
+  one, that message is stale — run the subcommand form instead and report it.
 - Never write an API key, never invent an encryption passphrase, never spend
   money. If a step needs one of those and the user has not supplied it, stop
   and say so. An unattended install that cannot finish without a human
@@ -31,12 +32,14 @@ improvising.
 - The installer needs Bun; if Bun is missing it installs Bun for the current
   user (`install.sh`, the `bun.sh/install` step). Check `command -v bun` first
   and say which case applied.
+- Supported machines are Linux (systemd user service) and macOS (launchd
+  agent). Windows is not supported: stop and report it rather than trying to
+  work around the refusal. The resident runtime is Bun, not Node.
 - The Quick Start install path below resolves `cogmem@latest` from npm.
-  That means it installs the latest *released* version. Until 4.0.0 is
-  published, `latest` is still 3.x: if the user asked for 4.0 before its
-  release, do not use the installer — work from the source checkout the user
-  points you at instead (`bun run build` first; `dist/` is not tracked), and
-  say so in your report.
+  That means it installs the latest *released* version. If the user asked for
+  a build from a source checkout, do not use the installer — work from the
+  checkout the user points you at instead (`bun run build` first; `dist/` is
+  not tracked), and say so in your report.
 
 ## 2. Install
 
@@ -65,6 +68,11 @@ cogmem init --yes --json
   reported as WARN. Without a model provider the install runs in
   deterministic rule-only mode: recall still works by literal match, but it
   will not match paraphrases. That is a legitimate end state, not a failure.
+- The data directory and its `snapshots/` child are created with mode 0700, but
+  the nightly snapshot and weekly archive are complete copies of the SQLite
+  database in plaintext — mode bits are not encryption. Tell the user this and
+  recommend full-disk or volume encryption (LUKS, FileVault, an encrypted
+  directory) when the machine may be lost, shared or backed up off-device.
 
 **When the user asks why the install stopped here**, hand them `docs/install.md`: it is the operator-facing account of the same behaviour — why an unattended run leaves `rule_only`, what that state can do, and the two ways to finish it. It is written for the person, not for you; ADR-0003 remains the authority for the sectioning.
 
@@ -89,6 +97,13 @@ next step.
   back unchanged. It names its own next steps (`use_new_database`,
   `keep_with_3x`, `verify_database_path`) — follow only the one the user
   picks.
+
+If the refusal reason is `no_upgrade_path`, the file was created before 4.0
+and this release will not upgrade it. Do not import the old database file or a
+snapshot of it: that is the same file and meets the same refusal. The supported
+path is to keep the old install, export its conversations to files, create a new
+database, and import those files (`cogmem import openclaw` /
+`cogmem import hermes`, or `cogmem episode import --format jsonl --file <path>`).
 
 ## 5. Smoke test — installing is not done until this passes
 

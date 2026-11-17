@@ -35,7 +35,8 @@ export const REFUSAL_NEXT_STEPS: Record<RefusalReason, RefusalNextStep[]> = {
       safeForAutomation: false,
     },
   ],
-  // A 3.x database is kept for 3.x; 4.0 starts beside it and brings the history across.
+  // A pre-4.0 database is kept for the install that created it; a new database starts beside it
+  // and receives history exported from that install.
   no_upgrade_path: [
     {
       id: 'keep_with_3x',
@@ -44,7 +45,7 @@ export const REFUSAL_NEXT_STEPS: Record<RefusalReason, RefusalNextStep[]> = {
     },
     {
       id: 'use_new_database',
-      action: 'point cogmem at a new database path and move the history across from the 3.x install',
+      action: 'point cogmem at a new database path and import history exported from the old install',
       command: 'cogmem init --config <new-config.toml> --yes',
       safeForAutomation: true,
     },

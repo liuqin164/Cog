@@ -471,6 +471,8 @@ export class Installer {
     mkdirSync(snapshots, { recursive: true, mode: 0o700 });
     chmodSync(snapshots, 0o700);
     this.io.say(`数据目录：${this.choices.dataDir}（0700，快照目录 ${snapshots}）`);
+    this.io.say('提醒：夜间快照（brain-*.snap）与周归档（archive-*.snap）是整库明文副本，Cog 不会替你加密；'
+      + '机器可能丢失或共享时，请用全盘 / 卷加密（LUKS、FileVault 或加密目录）保护，并像对待数据库本身一样对待拷走的快照。');
     // One stable session identity per install (#248). A re-run or an upgrade reuses the value
     // already in the env file; only an install that has none mints one.
     const existingSession = parseEnvFile(this.envPath).COGMEM_SHELL_SESSION;
