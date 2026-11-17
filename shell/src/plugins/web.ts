@@ -280,7 +280,7 @@ export function fetchPinned(input: string | URL, init: RequestInit | undefined, 
   const url = input instanceof URL ? input : new URL(input);
   const transport = url.protocol === 'https:' ? httpsRequest : httpRequest;
   const hostname = url.hostname.replace(/^\[|\]$/g, '');
-  const headers = init?.headers === undefined ? undefined : Object.fromEntries(new Headers(init.headers));
+  const headers = init?.headers === undefined ? undefined : new Headers(init.headers).toJSON();
   return new Promise((resolve, reject) => {
     const options = {
       protocol: url.protocol,
