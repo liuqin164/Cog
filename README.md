@@ -44,7 +44,9 @@ The default data directory is `~/.cogmem/companion` (mode 0700), with `memory.sq
 `cogmem install` asks for the model route during step 3. `mg` is one explicit choice — a local OpenAI-compatible gateway — and `openai_compatible` is any endpoint you name. Nothing is guessed on your behalf, and `mg` is not a fallback. An unattended install must name the whole route:
 
 ```bash
-MG_API_KEY=... cogmem install --yes \
+export MG_API_KEY=...
+cogmem install \
+  --yes \
   --provider openai_compatible \
   --base-url https://api.example.com/openai \
   --model your-model
