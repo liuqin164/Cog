@@ -167,6 +167,15 @@ describe('service units', () => {
     expect(unit).toContain('Restart=always');
     expect(unit).toContain('MemoryHigh=1536M');
     expect(unit).toContain('MemoryMax=2048M');
+    expect(unit).toContain('Documentation=https://github.com/liuqin164/Cog');
+    expect(unit).not.toContain('liuqin164/cogmem');
+    expect(unit).toContain('StartLimitIntervalSec=300');
+    expect(unit).toContain('StartLimitBurst=5');
+    expect(unit).toContain('ProtectSystem=strict');
+    expect(unit).toContain('ProtectHome=read-only');
+    expect(unit).toContain(`ReadWritePaths=${spec.workspaceRoot} ${spec.dataDir}`);
+    expect(unit).toContain('RestrictSUIDSGID=true');
+    expect(unit).toContain('RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK');
     expect(unit).toContain('EnvironmentFile=/home/u/.cogmem/companion/env');
     expect(unit).toContain('--attach --no-terminal');
     expect(unit).toContain('--http-port 7338');

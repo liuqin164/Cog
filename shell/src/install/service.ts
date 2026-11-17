@@ -100,8 +100,12 @@ export function renderSystemdUnit(spec: ServiceSpec): string {
   return [
     '[Unit]',
     'Description=Cogmem companion (resident, user service)',
-    'Documentation=https://github.com/liuqin164/cogmem',
+    'Documentation=https://github.com/liuqin164/Cog',
     'After=network.target',
+    // Five starts in five minutes: a transient crash still self-heals, a deterministic failure
+    // stops and leaves the last log instead of rewriting it every three seconds.
+    'StartLimitIntervalSec=300',
+    'StartLimitBurst=5',
     '',
     '[Service]',
     'Type=simple',
@@ -114,6 +118,16 @@ export function renderSystemdUnit(spec: ServiceSpec): string {
     `MemoryMax=${COMPANION_MEMORY_MAX}`,
     'NoNewPrivileges=true',
     'PrivateTmp=true',
+    // The workspace and data directory are the only writable paths. ProtectHome stays read-only
+    // rather than hidden or absent because both may live under $HOME; hiding home would make the
+    // resident and its checkout unreadable, while ReadWritePaths carves out the two paths the
+    // companion actually writes. ProtectSystem covers the rest of the filesystem, including /etc.
+    'ProtectSystem=strict',
+    'ProtectHome=read-only',
+    `ReadWritePaths=${[spec.workspaceRoot, spec.dataDir].map(quote).join(' ')}`,
+    'RestrictSUIDSGID=true',
+    'LockPersonality=true',
+    'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK',
     'StandardOutput=append:' + spec.logFile,
     'StandardError=append:' + spec.logFile,
     '',

@@ -6,7 +6,7 @@ import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runDoctor } from '../src/install/doctor.ts';
 import { writeDefaultSoul } from '../src/install/soul.ts';
-import type { ServiceSpec } from '../src/install/service.ts';
+import type { Runner, ServiceSpec } from '../src/install/service.ts';
 import { rotateLogFile } from '../src/log-rotation.ts';
 import { formatBytes, memoryPressureAction, readMemoryUsage, type MemoryReading } from '../src/memory.ts';
 import { TraceLog } from '../src/trace.ts';
@@ -216,5 +216,31 @@ describe('doctor memory ceiling (#226)', () => {
       spec, platform: 'linux', run: async () => ({ code: 0, stdout: '', stderr: '' }), mode: 'process', pid: process.pid,
     });
     expect(report.checks.find((check) => check.id === 'memory-cap')?.ok).toBe(true);
+  });
+
+  test('a unit stopped by StartLimit is visible and not reported as a healthy service', async () => {
+    const { dataDir, dbPath, socketPath, spec } = context();
+    const runner: Runner = async (_command, args) => {
+      if (args.includes('is-active')) return { code: 3, stdout: '', stderr: '' };
+      if (args.includes('show')) {
+        return {
+          code: 0,
+          stdout: 'ActiveState=failed\nSubState=failed\nResult=exit-code\nNRestarts=5\nStartLimitBurst=5\n',
+          stderr: '',
+        };
+      }
+      return { code: 0, stdout: '', stderr: '' };
+    };
+    const report = await runDoctor({
+      dataDir, dbPath, agentId: 'agent-a', socketPath, healthUrl: 'http://127.0.0.1:7338/health',
+      fetchHealth: async () => {
+        throw new Error('resident unreachable');
+      },
+      spec, platform: 'linux', run: runner, mode: 'service',
+    });
+    const check = report.checks.find((entry) => entry.id === 'start-limit');
+    expect(check?.ok).toBe(false);
+    expect(check?.detail).toContain('stopped by StartLimit');
+    expect(check?.detail).toContain('NRestarts=5');
   });
 });
