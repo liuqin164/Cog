@@ -17,7 +17,7 @@ cogmem observatory
 |---|---|
 | The read path never writes | `openObservatoryDatabase` in `src/observatory/HttpServer.ts` opens a read-only connection; SQLite refuses a write on it. A `:memory:` or `file:`-URI database gets no page at all rather than being handed the kernel's writable handle. `__tests__/observatory.unit.test.ts` hashes the file and its WAL across a full GET/HEAD traversal and reads the observatory's own SQL for write statements. |
 | Loopback only, with no option to change it | `isLoopbackAddress` in `src/observatory/routes.ts`, checked on the socket address of every request, and the URL the process prints always names `127.0.0.1`. The page's process binds loopback (`127.0.0.1`) and every request whose socket address is not loopback is refused. |
-| No rebinding, no cross-site writes | Every route (reads included) requires `Host` to be `127.0.0.1`, `localhost` or `::1`, any port; a rebinding name is `403`. Soul `POST`s additionally require `content-type: application/json` (a preflight), a same-page or absent `Origin`, and `x-observatory-token` matching `<dataDir>/observatory-token` (0600, minted once by the installer). Comparison is constant-time. An install without the file refuses writes with `observatory_write_token_unavailable`; the page fetches the token from the same-origin `GET /observatory/token` (#283). |
+| No rebinding, no cross-site writes | Every route (reads included) requires `Host` to be `127.0.0.1`, `localhost` or `::1`, any port; a rebinding name is `403`. Soul `POST`s additionally require `content-type: application/json` (a preflight), a same-page or absent `Origin`, and `x-observatory-token` matching `<dataDir>/observatory-token` (0600, minted once by the installer). Comparison is constant-time. An install without the file refuses writes with `observatory_write_token_unavailable`. Since #308 there is no token route: the owner pastes the 0600 file's value into the soul editor once per tab, so no local GET hands out the long-lived write token. |
 | Reads, plus the soul governance writes | `createObservatoryRoutes` answers `GET`/`HEAD` everywhere and `POST` only on `/observatory/soul` and `/observatory/soul/rollback`; every other verb is `405` with an `Allow` header. The two soul routes call the kernel's owner-only save/rollback, not the page's read-only handle. `/observatory/events` is `GET`-only (`HEAD` there is `405`, since a stream has no body to omit). |
 | The event stream writes nothing either | `GET /observatory/events` reads the kernel's in-process stream and opens no database connection at all; `__tests__/observatory-events.integration.test.ts` hashes the file across a stream round trip. |
 | Live and demo never mix | Demo mode is a single explicit entry (`?demo=1`), loads `web/demo.json`, never calls the API, and marks every page with a fictional badge and no watermark. |
@@ -44,7 +44,6 @@ the read views, and is required for `/soul`.
 | `/observatory/events?project=&agent=&topic=&types=&since=` | Server-sent events from the kernel's memory event stream, `GET` only and no database connection behind it. The contract — envelope, cursor, filters, error codes — is [docs/events.md](events.md); `409`/`400` carry the same typed error the in-process subscription raises |
 | `/observatory/health?project=` | The last persisted health report, Dream/compile/budget/anomaly readings, snapshot verification, and the surfacing gate's windowed counts with its current priors (#239). The surfacing block reads feedback rows from this database and the shell's `shell-events.jsonl` (+ `.1`), scoped to the selected project; it writes neither |
 | `/observatory/soul?agent=` | The selected agent's current soul version, version history, latest agent proposal and audit rows. `agent` is required; there is no merged soul view |
-| `/observatory/token` | The soul-write token for the page's own origin. `403` when the install has none |
 | `POST /observatory/soul` | The owner saves a new version. Body `{ agentId, content, reason? }`; the route supplies `actor: 'user'`. Requires the write token and a JSON body |
 | `POST /observatory/soul/rollback` | The owner appends a new version with an older version's content. Body `{ agentId, version, reason? }`. Same write locks as the save |
 
@@ -59,6 +58,10 @@ beside the text area, and writes only when the owner presses save or rollback. T
 older version into a new row, and both land a `governance_audit_log` row. An agent's proposal is
 shown above the editor; it is a draft, not a version, and the agent has no save face. The full
 contract is [docs/soul-storage.md](soul-storage.md).
+
+Soul writes use the token from `<dataDir>/observatory-token`; paste it into the editor's token field
+once per tab. The page keeps it in `sessionStorage` and sends it as `x-observatory-token` — there is
+no route that reads the file for the page (#308).
 
 The revised zero-write proof is the same fingerprint method, applied to the whole read path plus the
 soul `GET`: hash the database file and `-wal` before and after a full `GET`/`HEAD` traversal, then

@@ -103,12 +103,14 @@ function api(path, params = {}) {
   });
 }
 
-let writeToken = null;
+const WRITE_TOKEN_KEY = 'observatory-write-token';
+let writeToken = sessionStorage.getItem(WRITE_TOKEN_KEY) || null;
 
 async function postJson(path, body) {
+  // Out-of-band by design: the owner pastes the token from `<dataDir>/observatory-token`, so no
+  // HTTP route hands the long-lived write token to any local GET (#308).
+  if (!writeToken) throw new Error('没有写入令牌：把数据目录下 observatory-token 的内容粘贴到 Soul 页的令牌框。');
   const url = new URL(`./${path.replace(/^\//, '')}`, location.href);
-  // The installer-minted token, read from the page's own origin. Kept for the tab's lifetime.
-  if (writeToken === null) writeToken = (await api('token')).token;
   const response = await fetch(url, {
     method: 'POST',
     headers: {
@@ -119,6 +121,9 @@ async function postJson(path, body) {
     body: JSON.stringify(body),
   });
   const data = await response.json().catch(() => ({}));
+  if (response.status === 403 && data.error === 'invalid_observatory_token') {
+    throw new Error('写入令牌不对：重新粘贴数据目录下 observatory-token 的内容。');
+  }
   if (!response.ok) throw new Error(data.message || data.error || `HTTP ${response.status}`);
   return data;
 }
@@ -927,6 +932,19 @@ function renderSoul() {
   textarea.value = data.current?.content ?? '';
   const counter = el('span', { class: 'soul-count' });
   const save = el('button', { type: 'button', class: 'primary', text: '保存新版本' });
+  const tokenInput = el('input', {
+    class: 'soul-token',
+    type: 'password',
+    placeholder: '写入令牌',
+    autocomplete: 'off',
+    spellcheck: 'false',
+  });
+  tokenInput.value = writeToken ?? '';
+  tokenInput.addEventListener('input', () => {
+    writeToken = tokenInput.value.trim() || null;
+    if (writeToken) sessionStorage.setItem(WRITE_TOKEN_KEY, writeToken);
+    else sessionStorage.removeItem(WRITE_TOKEN_KEY);
+  });
   const updateCount = () => {
     const tokens = soulTokens(textarea.value);
     counter.textContent = `${tokens} / ${data.maxTokens} tokens`;
@@ -963,6 +981,8 @@ function renderSoul() {
     editor.append(proposal);
   }
 
+  editor.append(el('p', { class: 'hint', text: '写操作需要数据目录下 observatory-token 文件的令牌；令牌不经 HTTP 读取，只留在本标签页。' }));
+  editor.append(tokenInput);
   editor.append(textarea);
   editor.append(el('div', { class: 'soul-toolbar' }, [
     counter,

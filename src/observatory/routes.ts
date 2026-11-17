@@ -314,21 +314,6 @@ export function createObservatoryRoutes(
       }
     }
 
-    // The page reads the write token from its own origin; a cross-site fetch cannot see this body,
-    // and the Host check above refuses the rebinding page that would make it same-origin.
-    if (url.pathname === '/observatory/token') {
-      if (request.method !== 'GET' && request.method !== 'HEAD') {
-        return new Response('method_not_allowed', { status: 405, headers: { allow: 'GET, HEAD' } });
-      }
-      if (!options.token) {
-        return jsonResponse({
-          error: 'observatory_write_token_unavailable',
-          message: 'no observatory write token: rerun the installer (or create <dataDir>/observatory-token) to enable the soul editor',
-        }, 403, acceptEncoding);
-      }
-      return jsonResponse({ token: options.token }, 200, acceptEncoding);
-    }
-
     if (request.method !== 'GET' && request.method !== 'HEAD') {
       return new Response('method_not_allowed: this endpoint is read-only', { status: 405, headers: { allow: 'GET, HEAD' } });
     }
@@ -388,7 +373,7 @@ export function createObservatoryRoutes(
 
     return jsonResponse({
       error: 'not_found',
-      endpoints: ['/snapshot', '/node/:id', '/timeline', '/workflows', '/workflows.json', '/recalls', '/recalls/:recallId', '/health', '/events', '/soul', '/soul/rollback', '/token'],
+      endpoints: ['/snapshot', '/node/:id', '/timeline', '/workflows', '/workflows.json', '/recalls', '/recalls/:recallId', '/health', '/events', '/soul', '/soul/rollback'],
     }, 404, acceptEncoding);
   };
 }

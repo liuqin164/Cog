@@ -248,8 +248,13 @@ describe('web_fetch trust boundary', () => {
 });
 
 describe('web_search backends', () => {
+  function enableSearch(dir: string): void {
+    writeFileSync(join(dir, 'web.json'), JSON.stringify({ search: { exa: { enabled: true }, duckduckgo: { enabled: true } } }));
+  }
+
   test('falls back from Exa to DuckDuckGo and parses both result shapes', async () => {
     const dir = makeTempDir();
+    enableSearch(dir);
     const calls: string[] = [];
     const stub: WebPluginOptions['fetch'] = async (input) => {
       const url = typeof input === 'string' ? input : input.href;
@@ -284,6 +289,7 @@ describe('web_search backends', () => {
 
   test('uses Exa when it answers and parses its text-block format', async () => {
     const dir = makeTempDir();
+    enableSearch(dir);
     const stub: WebPluginOptions['fetch'] = async () =>
       new Response(
         `data: ${JSON.stringify({
@@ -318,6 +324,21 @@ describe('web_search backends', () => {
     expect(result.output).toContain(join(dir, 'web.json'));
     expect(result.output).toContain('search.exa.enabled=false');
     expect(result.output).toContain('search.duckduckgo.enabled=false');
+  });
+
+  test('a missing web.json leaves search off and sends no query anywhere', async () => {
+    const dir = makeTempDir();
+    const calls: string[] = [];
+    const stub: WebPluginOptions['fetch'] = async (input) => {
+      calls.push(typeof input === 'string' ? input : input.href);
+      throw new Error('no outbound call is expected by default');
+    };
+    const host = await start({ dataDir: dir, fetch: stub });
+    const result = await call(host, 'web_search', { query: 'cogmem' });
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain('web_search_unavailable');
+    expect(result.output).toContain(join(dir, 'web.json'));
+    expect(calls).toEqual([]);
   });
 
   test('a malformed backend field fails startup and names the file and field', async () => {
