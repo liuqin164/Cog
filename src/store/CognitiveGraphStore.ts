@@ -212,12 +212,16 @@ export class CognitiveGraphStore {
     const queryProject = projectQueryValue(input.projectId);
     const excludeTemporal = Boolean(input.excludeTemporal || !this.hasReadableTimeProjection(input.projectId));
     const seedNodeIds = new Set<string>();
+    // The recallable predicate reads the schema and embeds several EXISTS
+    // subqueries; building it per term and per hop cost more than the rows it
+    // looked at (#243). It cannot change while one collectContext runs.
+    const recallableNode = recallableCognitiveNodeSql(this.db, 'cognitive_nodes');
     const suppliedSeed = this.db.prepare(`
       SELECT 1 FROM cognitive_nodes
       WHERE node_id=?
         AND (? IS NULL OR project_id=?)
         AND (?=0 OR node_type<>'time_bucket')
-        AND ${recallableCognitiveNodeSql(this.db, 'cognitive_nodes')}
+        AND ${recallableNode}
       LIMIT 1
     `);
     for (const nodeId of input.seedNodeIds ?? []) {
@@ -234,7 +238,7 @@ export class CognitiveGraphStore {
         WHERE node_key = ?
           AND (? IS NULL OR project_id = ?)
           AND (? = 0 OR node_type <> 'time_bucket')
-          AND ${recallableCognitiveNodeSql(this.db, 'cognitive_nodes')}
+          AND ${recallableNode}
       `).all(key, queryProject, queryProject, excludeTemporal ? 1 : 0) as Array<{ node_id: string }>;
       for (const row of rows) seedNodeIds.add(row.node_id);
     }
@@ -245,7 +249,7 @@ export class CognitiveGraphStore {
         FROM cognitive_nodes
         WHERE (? IS NULL OR project_id = ?)
           AND (? = 0 OR node_type <> 'time_bucket')
-          AND ${recallableCognitiveNodeSql(this.db, 'cognitive_nodes')}
+          AND ${recallableNode}
           AND (lower(title) LIKE ? OR lower(node_key) LIKE ?)
         ORDER BY updated_at DESC
         LIMIT ?
@@ -264,26 +268,28 @@ export class CognitiveGraphStore {
     let frontier = Array.from(seedNodeIds);
     for (const nodeId of frontier) traversedNodeIds.add(nodeId);
 
+    const traversableNode = recallableCognitiveNodeSql(this.db, 'cn');
     for (let hop = 0; hop < hopLimit; hop += 1) {
       if (frontier.length === 0) break;
       const nextFrontier: string[] = [];
+      const neighborRows = this.db.prepare(`
+        SELECT ce.source_node_id, ce.target_node_id, cn.node_type, cn.source_neuron_id
+        FROM cognitive_edges ce
+        JOIN cognitive_nodes cn
+          ON cn.node_id = CASE
+            WHEN ce.source_node_id = ? THEN ce.target_node_id
+            ELSE ce.source_node_id
+          END
+        WHERE (ce.source_node_id = ? OR ce.target_node_id = ?)
+          AND (? IS NULL OR ce.project_id = ?)
+          AND (? IS NULL OR cn.project_id = ?)
+          AND (? = 0 OR (ce.edge_type <> 'occurred_in_time_bucket' AND cn.node_type <> 'time_bucket'))
+          AND ${traversableNode}
+        ORDER BY ce.created_at DESC
+        LIMIT ?
+      `);
       for (const nodeId of frontier) {
-        const rows = this.db.prepare(`
-          SELECT ce.source_node_id, ce.target_node_id, cn.node_type, cn.source_neuron_id
-          FROM cognitive_edges ce
-          JOIN cognitive_nodes cn
-            ON cn.node_id = CASE
-              WHEN ce.source_node_id = ? THEN ce.target_node_id
-              ELSE ce.source_node_id
-            END
-          WHERE (ce.source_node_id = ? OR ce.target_node_id = ?)
-            AND (? IS NULL OR ce.project_id = ?)
-            AND (? IS NULL OR cn.project_id = ?)
-            AND (? = 0 OR (ce.edge_type <> 'occurred_in_time_bucket' AND cn.node_type <> 'time_bucket'))
-            AND ${recallableCognitiveNodeSql(this.db, 'cn')}
-          ORDER BY ce.created_at DESC
-          LIMIT ?
-        `).all(
+        const rows = neighborRows.all(
           nodeId,
           nodeId,
           nodeId,
@@ -319,7 +325,7 @@ export class CognitiveGraphStore {
         FROM cognitive_nodes
         WHERE node_id IN (${placeholders})
           AND (? IS NULL OR project_id = ?)
-          AND ${recallableCognitiveNodeSql(this.db, 'cognitive_nodes')}
+          AND ${recallableNode}
       `).all(...Array.from(traversedNodeIds), queryProject, queryProject) as Array<{
         node_id: string;
         node_type: CognitiveNodeType;

@@ -1661,7 +1661,12 @@ export class MemoryKernel {
     const cognitiveContext = this.cognitiveGraphStore.collectContext({
       projectId: options.projectId,
       terms: extractNavigationTerms(query),
-      limit: seedLimit,
+      // The raw/lexical seeds are already bounded by `seedLimit`; the cognitive
+      // graph walk then expands each seed through two hops, so passing it the
+      // same number multiplies the candidates the navigator must read. Recall
+      // asks for `limit` items, and the decade corpus priced the difference at
+      // ~35 ms per recall (#243).
+      limit: Math.min(seedLimit, 48),
       hopLimit: 2,
       excludeTemporal: !temporalEnabled,
     });
@@ -1693,9 +1698,7 @@ export class MemoryKernel {
       ...seedNeuronIds,
       ...cognitiveContext.neuronIds,
     ]);
-    const rawEvidence = candidateIds
-      .map((id) => this.memoryGraph.getNeuron(id))
-      .filter((item): item is Neuron => Boolean(item))
+    const rawEvidence = this.memoryGraph.getNeurons(candidateIds)
       .filter((neuron) => matchesProjectScope(options.projectId, neuron.metadata.projectId));
     const governedEvidence = selectRecallableEvidence(rawEvidence, limit);
 
@@ -3897,6 +3900,7 @@ export class MemoryKernel {
         'memory_frames'
       ]) deleteScoped(table);
       runDelete(`DELETE FROM memory_events_fts WHERE event_id IN (SELECT event_id FROM memory_events WHERE COALESCE(project_id, '') = ?)`, [scope]);
+      runDelete(`DELETE FROM memory_event_cjk_terms WHERE event_id IN (SELECT event_id FROM memory_events WHERE COALESCE(project_id, '') = ?)`, [scope]);
       deleted.events += deleteScoped('memory_events');
       deleteScoped('compiler_confidence_runs');
       if (neuronIds.length > 0) {

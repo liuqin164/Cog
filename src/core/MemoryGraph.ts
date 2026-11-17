@@ -44,6 +44,7 @@ export class MemoryGraph {
   private readonly ownsDb: boolean;
   private timeIndex = new Map<string, Set<string>>();
   private projectIndex = new Map<string, Set<string>>();
+  private neuronByIdStatement?: any;
   private topicReclassifiedListeners = new Set<(observation: TopicReclassifiedObservation) => void>();
 
   constructor(dbOrPath: Database | string = ':memory:') {
@@ -381,8 +382,25 @@ export class MemoryGraph {
   }
 
   getNeuron(id: string): Neuron | null {
-    const row = this.db.prepare(`SELECT * FROM neurons WHERE id = ? AND is_deleted = 0`).get(id) as any;
+    // Recall reads the same neuron once per lane (candidate retention, profile
+    // signals, profile surface, navigation). Re-preparing this statement for
+    // every read was measurable on the decade corpus, where one recall reads
+    // the small neuron table ~465 times (#243).
+    const statement = this.neuronByIdStatement ??= this.db.prepare(`SELECT * FROM neurons WHERE id = ? AND is_deleted = 0`);
+    const row = statement.get(id) as any;
     return row ? this.mapNeuron(row) : null;
+  }
+
+  /** The same read for a candidate list, in one statement and in the given order. */
+  getNeurons(ids: string[]): Neuron[] {
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) return [];
+    const placeholders = unique.map(() => '?').join(', ');
+    const rows = this.db.prepare(
+      `SELECT * FROM neurons WHERE id IN (${placeholders}) AND is_deleted = 0`,
+    ).all(...unique) as any[];
+    const byId = new Map(rows.map((row) => [row.id, this.mapNeuron(row)]));
+    return unique.map((id) => byId.get(id)).filter((neuron): neuron is Neuron => Boolean(neuron));
   }
 
   getNeuronIdsByProject(projectId: string): string[] {

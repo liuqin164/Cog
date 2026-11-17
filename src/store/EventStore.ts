@@ -184,6 +184,16 @@ export class EventStore {
         tokenize='unicode61'
       );
 
+      CREATE TABLE IF NOT EXISTS memory_event_cjk_terms (
+        term TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        global_seq INTEGER NOT NULL,
+        PRIMARY KEY (term, event_id)
+      ) WITHOUT ROWID;
+
+      CREATE INDEX IF NOT EXISTS idx_memory_event_cjk_terms_seq
+        ON memory_event_cjk_terms(term, global_seq, event_id);
+
       CREATE TABLE IF NOT EXISTS vector_projection_state (
         projection_name TEXT PRIMARY KEY,
         last_event_id TEXT,
@@ -266,12 +276,22 @@ export class EventStore {
       );
     `);
     this.db.exec(`
+      CREATE TABLE IF NOT EXISTS memory_event_cjk_terms (
+        term TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        global_seq INTEGER NOT NULL,
+        PRIMARY KEY (term, event_id)
+      ) WITHOUT ROWID;
+    `);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_event_cjk_terms_seq ON memory_event_cjk_terms(term, global_seq, event_id);`);
+    this.db.exec(`
       CREATE TABLE IF NOT EXISTS memory_event_fts_state (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
       );
     `);
     this.rebuildRawEventFtsIfNeeded();
+    this.rebuildCjkTermsIfNeeded();
   }
 
   /**
@@ -995,6 +1015,25 @@ export class EventStore {
     const columns = MEMORY_EVENT_COLUMNS.split(',').map((column) => `e.${column.trim()}`).join(', ');
     const scope = this.rawEventScopeConditions(options);
 
+    // A two-character Chinese word is one indexed term here, not a run the
+    // FTS tokenizer merges into a sentence (#100). The term index is ordered by
+    // `global_seq`, which is the order the LIKE fallback would produce for a
+    // single token, so this path returns the same rows without the scan.
+    const cjkTerm = this.cjkQueryTerm(query);
+    if (cjkTerm) {
+      const rows = this.db.prepare(`
+        SELECT ${columns}
+        FROM memory_event_cjk_terms t
+        JOIN memory_events e ON e.event_id = t.event_id
+        WHERE t.term = ?${scope.sql}
+        ORDER BY t.global_seq ASC, t.event_id ASC
+        LIMIT ?
+      `).all(cjkTerm, ...scope.params, limit) as any[];
+      // An empty answer from a complete index is the answer; only an
+      // incomplete index has to ask the scan.
+      if (rows.length > 0 || this.cjkIndexComplete()) return rows.map((row) => this.mapRow(row));
+    }
+
     // An event holding every word of the query is the best answer there is, and
     // keeping this first attempt means the looser one below can never displace it.
     const exactOrder = options.orderBy === 'relevance'
@@ -1015,17 +1054,12 @@ export class EventStore {
 
     // Nothing held every word. The query may still be a question about a
     // statement — see toRawEventFtsOrQuery — so match any word and rank by how
-    // much of the query each event actually carries.
-    const loose = this.db.prepare(`
-      SELECT ${columns}, bm25(memory_events_fts) AS rank
-      FROM memory_events_fts
-      JOIN memory_events e ON e.event_id = memory_events_fts.event_id
-      WHERE memory_events_fts MATCH ?${scope.sql}
-      ORDER BY rank ASC,
-               COALESCE(e.global_seq, 0) ASC,
-               e.event_id ASC
-      LIMIT ?
-    `).all(this.toRawEventFtsOrQuery(query), ...scope.params, limit) as any[];
+    // much of the query each event actually carries. A single OR over every
+    // word is not bounded: one word held by most of the ledger (a document
+    // number prefix, a project name) makes SQLite rank the whole table before
+    // the LIMIT can apply (#243). Each word is therefore read with its own
+    // capped candidate list, and the lists are merged here.
+    const loose = this.boundedRawEventCandidates(query, options, limit);
     if (loose.length > 0) return loose.map((row) => this.mapRow(row));
 
     return this.fallbackRawTextSearch(query, options, limit);
@@ -1203,6 +1237,7 @@ export class EventStore {
 
   private upsertRawEventFts(event: MemoryEvent<unknown>): void {
     this.db.prepare(`DELETE FROM memory_events_fts WHERE event_id = ?`).run(event.eventId);
+    this.db.prepare(`DELETE FROM memory_event_cjk_terms WHERE event_id = ?`).run(event.eventId);
     if (this.encryptionProvider) return;
     const text = this.extractIndexText(event.payload);
     if (!text.trim()) return;
@@ -1221,6 +1256,17 @@ export class EventStore {
       event.role || null,
       event.rawEventType || null,
     );
+    const insertTerm = this.db.prepare(`
+      INSERT OR IGNORE INTO memory_event_cjk_terms (term, event_id, global_seq) VALUES (?, ?, ?)
+    `);
+    for (const term of this.cjkTermKeys(text)) insertTerm.run(term, event.eventId, event.globalSeq ?? 0);
+    // The term index now covers every row this connection has written, so an
+    // empty two-character answer is final instead of a reason to scan.
+    this.db.prepare(`
+      INSERT INTO memory_event_fts_state (key, value)
+      VALUES ('cjk_indexed_rowid', (SELECT COALESCE(MAX(rowid), 0) FROM memory_events))
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `).run();
   }
 
   private rebuildRawEventFtsIfNeeded(): void {
@@ -1262,6 +1308,10 @@ export class EventStore {
     }
     const indexedCount = Number((this.db.prepare(`SELECT COUNT(*) AS count FROM memory_events_fts`).get() as { count: number } | null)?.count || 0);
     this.writeFtsState(maxRowid, indexedCount);
+    if (startRowid < 0) {
+      const terms = Number((this.db.prepare(`SELECT COUNT(*) AS count FROM memory_event_cjk_terms`).get() as { count: number } | null)?.count || 0);
+      this.writeCjkState(maxRowid, terms);
+    }
   }
 
   getRawEventFtsState(): { watermark: number | null; maxRowid: number; ftsRows: number; rebuilds: number } {
@@ -1303,11 +1353,122 @@ export class EventStore {
     return '';
   }
 
+  /** A query that is exactly one two-character CJK word, the #100 lookup case. */
+  private cjkQueryTerm(query: string): string | null {
+    const term = query.trim();
+    return /^[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]{2}$/.test(term) ? term : null;
+  }
+
+  /** Every overlapping two-character CJK term in a piece of text, once each. */
+  private cjkTermKeys(text: string): string[] {
+    const terms = new Set<string>();
+    for (const run of text.match(/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]+/gu) ?? []) {
+      for (let index = 0; index + 2 <= run.length; index += 1) terms.add(run.slice(index, index + 2));
+    }
+    return [...terms];
+  }
+
+  private readCjkState(): { rowid: number; terms: number } | null {
+    const rows = this.db.prepare(`SELECT key, value FROM memory_event_fts_state WHERE key IN ('cjk_indexed_rowid', 'cjk_terms')`).all() as Array<{ key: string; value: string }>;
+    const map = new Map(rows.map((row) => [row.key, Number(row.value)]));
+    const rowid = map.get('cjk_indexed_rowid');
+    const terms = map.get('cjk_terms');
+    if (!Number.isFinite(rowid) || !Number.isFinite(terms)) return null;
+    return { rowid: rowid as number, terms: terms as number };
+  }
+
+  private writeCjkState(rowid: number | null, terms: number): void {
+    if (rowid === null) {
+      this.db.prepare(`DELETE FROM memory_event_fts_state WHERE key IN ('cjk_indexed_rowid', 'cjk_terms')`).run();
+      return;
+    }
+    const upsert = this.db.prepare(`
+      INSERT INTO memory_event_fts_state (key, value) VALUES (?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `);
+    this.db.transaction(() => {
+      upsert.run('cjk_indexed_rowid', String(rowid));
+      upsert.run('cjk_terms', String(terms));
+    })();
+  }
+
+  /** Whether every event the ledger holds has already been read for CJK terms. */
+  private cjkIndexComplete(): boolean {
+    const maxRowid = Number((this.db.prepare(`SELECT COALESCE(MAX(rowid), 0) AS value FROM memory_events`).get() as { value: number } | null)?.value || 0);
+    const state = this.readCjkState();
+    return Boolean(state && state.rowid >= maxRowid);
+  }
+
+  /**
+   * Fills the CJK term table for events written before it existed.
+   *
+   * The text is read from the raw-event FTS row rather than by parsing every
+   * payload again: the two indexes describe the same text, and this corpus is
+   * 200k events. The watermark makes it one pass per new batch, not per open.
+   */
+  private rebuildCjkTermsIfNeeded(): void {
+    if (this.encryptionProvider) {
+      this.db.prepare(`DELETE FROM memory_event_cjk_terms`).run();
+      this.writeCjkState(null, 0);
+      return;
+    }
+    const maxRowid = Number((this.db.prepare(`SELECT COALESCE(MAX(rowid), 0) AS value FROM memory_events`).get() as { value: number } | null)?.value || 0);
+    const state = this.readCjkState();
+    if (state && state.rowid >= maxRowid) return;
+    const rows = this.db.prepare(`
+      SELECT e.event_id, e.global_seq, f.text
+      FROM memory_events e
+      JOIN memory_events_fts f ON f.event_id = e.event_id
+      WHERE e.rowid > ?
+      ORDER BY e.rowid ASC
+    `).all(state?.rowid ?? 0) as Array<{ event_id: string; global_seq: number | null; text: string }>;
+    const remove = this.db.prepare(`DELETE FROM memory_event_cjk_terms WHERE event_id = ?`);
+    const insert = this.db.prepare(`INSERT OR IGNORE INTO memory_event_cjk_terms (term, event_id, global_seq) VALUES (?, ?, ?)`);
+    this.db.transaction(() => {
+      for (const row of rows) {
+        remove.run(row.event_id);
+        for (const term of this.cjkTermKeys(row.text)) insert.run(term, row.event_id, row.global_seq ?? 0);
+      }
+    })();
+    const terms = Number((this.db.prepare(`SELECT COUNT(*) AS count FROM memory_event_cjk_terms`).get() as { count: number } | null)?.count || 0);
+    this.writeCjkState(maxRowid, terms);
+  }
+
   /** Capped per-term document count, routed through the search path recall itself uses. */
   countRawEventMatches(token: string, options: { projectId?: string; workspaceId?: string; threadId?: string; cap?: number } = {}): number {
     const cap = Math.max(1, Math.min(options.cap ?? 64, 500));
-    if (!this.toRawEventFtsQuery(token)) return 0;
-    return this.searchRawEvents(token, { projectId: options.projectId, workspaceId: options.workspaceId, threadId: options.threadId, limit: cap }).length;
+    const ftsQuery = this.toRawEventFtsQuery(token);
+    if (!ftsQuery) return 0;
+    const scope = this.rawEventScopeConditions(options);
+    const cjkTerm = this.cjkQueryTerm(token);
+    if (cjkTerm) {
+      const rows = this.db.prepare(`
+        SELECT 1 FROM memory_event_cjk_terms t
+        JOIN memory_events e ON e.event_id = t.event_id
+        WHERE t.term = ?${scope.sql}
+        LIMIT ?
+      `).all(cjkTerm, ...scope.params, cap) as any[];
+      if (rows.length > 0 || this.cjkIndexComplete()) return rows.length;
+    }
+    // Only the cap matters: whether a word is held by three events or by the
+    // whole ledger is a frequency question, not a ranking one. Asking the
+    // ranked search answered it by sorting every match, which is exactly the
+    // cost this check exists to avoid (#243).
+    const found = this.db.prepare(`
+      SELECT 1 FROM memory_events_fts
+      JOIN memory_events e ON e.event_id = memory_events_fts.event_id
+      WHERE memory_events_fts MATCH ?${scope.sql}
+      LIMIT ?
+    `).all(ftsQuery, ...scope.params, cap) as any[];
+    if (found.length > 0 || this.encryptionProvider) return found.length;
+    // The index cannot split a CJK run, so the fallback scan is the only
+    // evidence left. It stops at the cap the same way.
+    return this.db.prepare(`
+      SELECT 1 FROM memory_events_fts
+      JOIN memory_events e ON e.event_id = memory_events_fts.event_id
+      WHERE LOWER(memory_events_fts.text) LIKE ? ESCAPE '\\'${scope.sql}
+      LIMIT ?
+    `).all(`%${escapeSqlLike(token)}%`, ...scope.params, cap).length;
   }
 
   private toRawEventFtsQuery(query: string): string {
@@ -1327,18 +1488,78 @@ export class EventStore {
    * A question therefore falls back to matching any of its words and lets BM25
    * rank the event that shares the most of them.
    */
-  private toRawEventFtsOrQuery(query: string): string {
+  private rawEventFtsOrTokens(query: string): string[] {
     const meaningful = this.rawEventFtsTokens(query).filter((token) => !QUERY_STOP_WORDS.has(token));
     // Every word was a question word; the query still has to search for them.
-    const tokens = meaningful.length > 0 ? meaningful : this.rawEventFtsTokens(query);
-    return tokens
-      .map((token) => `"${token}"`)
-      .join(' OR ');
+    return meaningful.length > 0 ? meaningful : this.rawEventFtsTokens(query);
+  }
+
+  /**
+   * The match-any-word candidates, with a hard cap on what one word may cost.
+   *
+   * One word per candidate list, never one OR across every word: `bm25` has to
+   * sort every row it sees before `LIMIT` can drop any, so a word present in
+   * most of the ledger turns "find the rare code" into a full-table sort. Each
+   * list is capped instead, which also makes a word's rarity visible: a list
+   * shorter than the cap is the whole posting list.
+   */
+  private boundedRawEventCandidates(
+    query: string,
+    options: {
+      projectId?: string;
+      workspaceId?: string;
+      threadId?: string;
+      sessionId?: string;
+      localDate?: string;
+      startTime?: number;
+      endTime?: number;
+    },
+    limit: number,
+  ): any[] {
+    const tokens = [...new Set(this.rawEventFtsOrTokens(query))].slice(0, 12);
+    if (tokens.length === 0) return [];
+    const cap = Math.max(limit * 8, 64);
+    const columns = MEMORY_EVENT_COLUMNS.split(',').map((column) => `e.${column.trim()}`).join(', ');
+    const scope = this.rawEventScopeConditions(options);
+    const statement = this.db.prepare(`
+      SELECT ${columns}, bm25(memory_events_fts) AS rank
+      FROM memory_events_fts
+      JOIN memory_events e ON e.event_id = memory_events_fts.event_id
+      WHERE memory_events_fts MATCH ?${scope.sql}
+      ORDER BY rank ASC, COALESCE(e.global_seq, 0) ASC, e.event_id ASC
+      LIMIT ?
+    `);
+    const candidates = new Map<string, { row: any; matched: number; rarest: number; rank: number }>();
+    for (const token of tokens) {
+      const rows = statement.all(`"${token}"`, ...scope.params, cap) as any[];
+      for (const row of rows) {
+        const existing = candidates.get(row.event_id);
+        if (existing) {
+          existing.matched += 1;
+          existing.rarest = Math.min(existing.rarest, rows.length);
+          existing.rank = Math.min(existing.rank, row.rank);
+          continue;
+        }
+        candidates.set(row.event_id, { row, matched: 1, rarest: rows.length, rank: row.rank });
+      }
+    }
+    return [...candidates.values()]
+      .sort((left, right) =>
+        right.matched - left.matched
+        || left.rarest - right.rarest
+        || left.rank - right.rank
+        || (left.row.global_seq ?? 0) - (right.row.global_seq ?? 0)
+        || String(left.row.event_id).localeCompare(String(right.row.event_id)))
+      .slice(0, limit)
+      .map((candidate) => candidate.row);
   }
 
   private rawEventFtsTokens(query: string): string[] {
     return query
-      .split(/[^\p{L}\p{N}_-]+/u)
+      // A hyphen separates words for the index too: `unicode61` indexes
+      // `CODE-10-7000` as three tokens, so keeping the hyphen here made the
+      // phrase `"CODE-10-7000"` the one query the index could never answer.
+      .split(/[^\p{L}\p{N}_]+/u)
       .map((token) => token.trim().replace(/"/g, ''))
       .filter((token) => token.length > 0)
       .slice(0, 12);

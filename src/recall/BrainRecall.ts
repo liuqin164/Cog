@@ -222,8 +222,12 @@ export class BrainRecall {
     for (let index = rawEvidence.length - 1; index >= 0; index -= 1) {
       if (!matchesProjectScope(options.projectId, rawEvidence[index]?.metadata.projectId)) rawEvidence.splice(index, 1);
     }
-    const profileSignals = this.collectProfileSignals(query, options.projectId, limit);
-    const profileSurface = this.collectProfileSurface(query, options.projectId, limit);
+    // The surface reads the same signals with a wider limit. Reading them twice
+    // meant walking the candidate neurons twice; the corpus made that visible
+    // (#243). One read serves both, and the result still holds `limit` of them.
+    const profileSignalCandidates = this.collectProfileSignals(query, options.projectId, limit * 2);
+    const profileSignals = profileSignalCandidates.slice(0, limit);
+    const profileSurface = this.collectProfileSurface(query, options.projectId, limit, profileSignalCandidates);
 
     const totalStructuredHits = compiledHitCount + profileSignals.length + profileSurface.userProfile.length + profileSurface.agentPersona.length;
     const fallbackSnippets = totalStructuredHits > 0 || options.includeUnprocessedFallback === false
@@ -501,9 +505,7 @@ export class BrainRecall {
     projectId: string | undefined,
     limit: number
   ): BrainRecallResult['profileSignals'] {
-    return this.deps.memoryGraph.fullTextSearch(query, projectId, limit * 6)
-      .map((neuronId) => this.deps.memoryGraph.getNeuron(neuronId))
-      .filter((item): item is Neuron => Boolean(item))
+    return this.neuronsByIds(this.deps.memoryGraph.fullTextSearch(query, projectId, limit * 6))
       .filter((neuron) => this.isRecallableNeuron(neuron))
       .filter((neuron) => {
         const tags = neuron.metadata.tags || [];
@@ -562,13 +564,13 @@ export class BrainRecall {
   private collectProfileSurface(
     query: string,
     projectId: string | undefined,
-    limit: number
+    limit: number,
+    signals: BrainRecallResult['profileSignals'] = this.collectProfileSignals(query, projectId, limit * 2)
   ): BrainRecallResult['profileSurface'] {
-    const profileSignals = this.collectProfileSignals(query, projectId, limit * 2);
     const userProfile: BrainRecallResult['profileSurface']['userProfile'] = [];
     const agentPersona: BrainRecallResult['profileSurface']['agentPersona'] = [];
 
-    for (const signal of profileSignals) {
+    for (const signal of signals) {
       const facets = this.extractProfileFacets(signal.text);
       for (const facet of facets) {
         const entry = {
@@ -786,16 +788,31 @@ export class BrainRecall {
   }
 
   private toRecallableNeurons(neuronIds: string[], limit: number): Neuron[] {
-    return neuronIds
-      .map((neuronId) => this.deps.memoryGraph.getNeuron(neuronId))
+    return this.neuronsByIds(neuronIds)
       .filter((item): item is Neuron => this.isRecallableNeuron(item))
       .slice(0, limit);
   }
 
   private retainRecallableNeuronIds(neuronIds: string[]): void {
+    const present = new Map(this.neuronsByIds(neuronIds).map((neuron) => [neuron.id, neuron]));
     for (let index = neuronIds.length - 1; index >= 0; index--) {
-      if (!this.isRecallableNeuronId(neuronIds[index])) neuronIds.splice(index, 1);
+      const neuron = present.get(neuronIds[index]);
+      // A missing neuron was kept before: "not found" is not evidence about a
+      // record that no longer exists.
+      if (neuron && !this.isRecallableNeuron(neuron)) neuronIds.splice(index, 1);
     }
+  }
+
+  /**
+   * One read for a candidate list where the graph supports it.
+   *
+   * `MemoryGraph.getNeurons` is the batched form; a test or an embedder may
+   * still supply the older getNeuron-only surface, so keep that path.
+   */
+  private neuronsByIds(ids: string[]): Neuron[] {
+    const graph = this.deps.memoryGraph as MemoryGraph & { getNeurons?: (ids: string[]) => Neuron[] };
+    if (typeof graph.getNeurons === 'function') return graph.getNeurons(ids);
+    return ids.map((id) => graph.getNeuron(id)).filter((neuron): neuron is Neuron => Boolean(neuron));
   }
 
   private filterRecallableNeuronIds(neuronIds: string[]): string[] {
