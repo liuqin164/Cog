@@ -586,7 +586,14 @@ export class AgentRuntime {
                 ...calibration,
               }, this.clock());
             }
-            this.options.trace?.append('provider_usage', { runId: input.runId, turnIndex, attempt, ...turn.usage }, this.clock());
+            this.options.trace?.append('provider_usage', {
+              runId: input.runId,
+              turnIndex,
+              attempt,
+              route: this.options.provider.name,
+              model: request.model,
+              ...turn.usage,
+            }, this.clock());
           }
           await this.options.bus.emit('message_update', { type: 'message_update', message: draft, delta: turn.text }, { runId: input.runId });
           await this.options.bus.emit('message_end', { type: 'message_end', message: draft }, { runId: input.runId });

@@ -25,6 +25,7 @@ const COMMANDS: Record<string, string> = {
   'brain-eval': 'brain-eval',
   episode: 'episode',
   dream: 'dream',
+  daily: 'daily',
   cleanup: 'cleanup',
   install: 'install',
 };
@@ -51,6 +52,7 @@ function usage(): string {
     '  brain-eval           evaluate recall, provenance, leakage, budget, and false activation',
     '  episode              append, import, inspect, seal, or repair conversation episodes',
     '  dream                conditionally process sealed episode backlog',
+    '  daily                write a zero-model-call daily report from the ledger and trace',
     '  cleanup              remove the managed launcher after its installation is gone',
     '  install              install the resident companion (six steps, first wake self-check)',
     '',
