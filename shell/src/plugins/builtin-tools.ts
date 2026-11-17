@@ -391,7 +391,8 @@ function definitions(
         const original = readFileSync(path, 'utf8');
         const matches = original.split(oldString).length - 1;
         if (matches !== 1) throw new Error(`edit_not_unique: old_string occurs ${matches} times in ${path}`);
-        writeFileSync(path, original.replace(oldString, newString), 'utf8');
+        // A replacer function keeps `$&`, `$'`, `` $` `` and `$n` in `new_string` literal (#301).
+        writeFileSync(path, original.replace(oldString, () => newString), 'utf8');
         return `edited ${path}`;
       },
     },
