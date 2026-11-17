@@ -109,7 +109,7 @@ Working from a source checkout is the developer path, not the install path: `bun
 
 ## How it works
 
-**One database, private scopes.** Cog keeps everything in one SQLite database on your machine. Rows are scoped to a project, and one project's memory is not readable from another. There is no cloud copy and no Cog account. If you configure external model endpoints, those calls go only to the endpoint you named.
+**One database, private scopes.** Cog keeps everything in one SQLite database on your machine. Rows are scoped to a project, and one project's memory is not readable from another. There is no cloud copy and no Cog account. If you configure external model endpoints, those calls go only to the endpoint you named. Web search is off by default; enabling Exa and/or DuckDuckGo in `web.json` sends your queries to that third party (Exa first, DuckDuckGo as fallback).
 
 **The ledger comes first.** Every write lands in an append-only raw ledger before anything is compiled. Promotion into compiled memory is a curated, audited step; decay changes what surfaces, not what exists (ADR 0001). Because the raw turn stays, an exact quote is available even when the compiled layer holds only a summary.
 

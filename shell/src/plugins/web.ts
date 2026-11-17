@@ -90,13 +90,14 @@ function backendEnabled(value: unknown, path: string, field: string, defaultEnab
 }
 
 /**
- * `<dataDir>/web.json`. A missing file means both free backends are on; a file that exists but
- * cannot be understood names itself and the offending field, like `budgets.json`.
+ * `<dataDir>/web.json`. A missing file leaves both free backends off, so a fresh install sends no
+ * search query anywhere until the owner enables one; a file that exists but cannot be understood
+ * names itself and the offending field, like `budgets.json`.
  */
 export function readWebConfig(dataDir: string): WebConfig {
   const path = join(dataDir, CONFIG_FILE);
   if (!existsSync(path)) {
-    return { search: { exa: { enabled: true }, duckduckgo: { enabled: true } } };
+    return { search: { exa: { enabled: false }, duckduckgo: { enabled: false } } };
   }
   let parsed: unknown;
   try {
@@ -109,7 +110,7 @@ export function readWebConfig(dataDir: string): WebConfig {
   }
   const search = (parsed as Record<string, unknown>).search;
   if (search === undefined) {
-    return { search: { exa: { enabled: true }, duckduckgo: { enabled: true } } };
+    return { search: { exa: { enabled: false }, duckduckgo: { enabled: false } } };
   }
   if (search === null || typeof search !== 'object' || Array.isArray(search)) {
     throw new WebToolError('invalid_web_config', `${path}: search must be an object`);
@@ -117,8 +118,8 @@ export function readWebConfig(dataDir: string): WebConfig {
   const record = search as Record<string, unknown>;
   return {
     search: {
-      exa: { enabled: backendEnabled(record.exa, path, 'search.exa', true) },
-      duckduckgo: { enabled: backendEnabled(record.duckduckgo, path, 'search.duckduckgo', true) },
+      exa: { enabled: backendEnabled(record.exa, path, 'search.exa', false) },
+      duckduckgo: { enabled: backendEnabled(record.duckduckgo, path, 'search.duckduckgo', false) },
     },
   };
 }
@@ -680,7 +681,7 @@ function definitions(runtime: Runtime, config: WebConfig): ToolDefinition[] {
       name: 'web_search',
       replay: 'safe',
       description:
-        'Search the web and return result titles, URLs and snippets. Uses Exa\'s free MCP backend first and DuckDuckGo HTML as fallback (each can be disabled in web.json). Results over 30,000 characters are cached; page the rest with web_recall using the returned responseId. This is a search, not a browser.',
+        'Search the web and return result titles, URLs and snippets. Both backends are off by default: enable Exa and/or DuckDuckGo in web.json, and enabled queries are sent to that third party (Exa first, DuckDuckGo as fallback). Results over 30,000 characters are cached; page the rest with web_recall using the returned responseId. This is a search, not a browser.',
       parameters: {
         type: 'object',
         properties: {
@@ -696,7 +697,7 @@ function definitions(runtime: Runtime, config: WebConfig): ToolDefinition[] {
           if (!config.search.exa.enabled && !config.search.duckduckgo.enabled) {
             throw new WebToolError(
               'web_search_unavailable',
-              `no search backend is enabled in ${join(runtime.dataDir, CONFIG_FILE)} (search.exa.enabled=false, search.duckduckgo.enabled=false)`,
+              `no search backend is enabled in ${join(runtime.dataDir, CONFIG_FILE)} (search.exa.enabled=false, search.duckduckgo.enabled=false); set one to true there to send queries to Exa or DuckDuckGo`,
             );
           }
           const failures: string[] = [];
