@@ -151,7 +151,7 @@ describe('the soul endpoints', () => {
 });
 
 describe('the editor is present and shows the token estimate', () => {
-  test('the page has a soul tab and the live limit is rendered', () => {
+  test('the page has a soul tab, the live limit, and an out-of-band token field', () => {
     const root = fileURLToPath(new URL('../src/observatory/web/', import.meta.url));
     const html = readFileSync(join(root, 'index.html'), 'utf8');
     const app = readFileSync(join(root, 'app.js'), 'utf8');
@@ -161,5 +161,7 @@ describe('the editor is present and shows the token estimate', () => {
     expect(app).toContain('maxTokens');
     expect(app).toContain("api('soul'");
     expect(app).toContain("postJson('soul'");
+    expect(app).toContain('soul-token');
+    expect(app).not.toContain("api('token')");
   });
 });

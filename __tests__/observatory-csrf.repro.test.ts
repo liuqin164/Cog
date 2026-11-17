@@ -5,6 +5,10 @@
  * without a preflight or ride DNS rebinding to a loopback socket. The fix has three locks:
  * JSON content-type (forces a preflight), a loopback Host/Origin, and the installer-minted token.
  * The first two tests are Claude's original repro; the rest cover the token itself.
+ *
+ * #308 removed `GET /observatory/token`: no local request can read the long-lived write token over
+ * HTTP any more. The page takes it out-of-band (a paste from the 0600 file) and the write route
+ * still checks it exactly as #283 did.
  */
 import { describe, expect, test } from 'bun:test';
 import { rmSync, statSync } from 'node:fs';
@@ -74,7 +78,7 @@ describe('observatory soul write is reachable from a hostile web page', () => {
   test('the Host check covers reads too, not only writes', async () => {
     const { handle } = harness(TOKEN);
     const response = await handle(
-      new Request('http://rebind.evil.example:7338/observatory/token'),
+      new Request('http://rebind.evil.example:7338/observatory/snapshot'),
       '127.0.0.1',
     );
     expect(response?.status).toBe(403);
@@ -108,15 +112,18 @@ describe('observatory soul write is reachable from a hostile web page', () => {
     expect(saved.length).toBe(0);
   });
 
-  test('the page can read the token from its own origin and write with it', async () => {
-    const { saved, handle } = harness(TOKEN);
-    const tokenResponse = await handle(
+  test('a local GET can no longer obtain the write token (#308)', async () => {
+    const { handle } = harness(TOKEN);
+    const response = await handle(
       new Request('http://127.0.0.1:7338/observatory/token', { headers: { origin: 'http://127.0.0.1:7338' } }),
       '127.0.0.1',
     );
-    expect(tokenResponse?.status).toBe(200);
-    expect((await tokenResponse!.json() as { token: string }).token).toBe(TOKEN);
+    expect(response?.status).toBe(404);
+    expect(await response!.text()).not.toContain(TOKEN);
+  });
 
+  test('the out-of-band token still writes from the page origin', async () => {
+    const { saved, handle } = harness(TOKEN);
     const response = await handle(
       saveRequest({ origin: 'http://127.0.0.1:7338' }),
       '127.0.0.1',

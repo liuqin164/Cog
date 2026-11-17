@@ -22,6 +22,64 @@ Cog is local-first by default. Memory data is stored in the configured SQLite da
 - Raw user utterances can be recalled as provenance evidence when explicitly tagged as raw user evidence; this does not promote them into verified facts.
 - Recall explanations expose same-project `filteredEvidence` with `reason` and optional `governanceReason`. Scoped explanations must not expose filtered evidence from other projects.
 
+## Threat model
+
+The supported deployment is one operating-system user on one machine. The guarantees below are
+written for that user's own processes; they are not isolation between users.
+
+### Same-machine, multiple users
+
+Every service face binds loopback, but loopback is machine-wide and an HTTP request carries no OS
+identity. A second local user, or any process that can connect to `127.0.0.1:<port>`, can:
+
+- Read the observatory. `/snapshot`, `/node/:id`, `/timeline`, `/recalls`, `/health`, `/events` and
+  `/soul` require only a loopback socket and a loopback `Host`; they answer without a token. That
+  exposes the whole memory corpus, stored recall decisions and every soul version. This is the
+  accepted single-user posture, recorded here so a shared-VPS deployment can see its exposure. The
+  read routes are deliberately unchanged in 5.0: TCP loopback gives the server no peer identity
+  (`SO_PEERCRED` is a Unix-socket facility), so "authenticate the local user" needs a different
+  transport or an out-of-band credential flow, not another header check.
+- Write a soul only with the token. The token is minted by the installer at
+  `<dataDir>/observatory-token`, mode 0600; since #308 no HTTP route returns it. The page asks the
+  owner to paste it once per tab, and `POST /observatory/soul` compares it in constant time.
+  Another user who cannot read the 0600 file cannot obtain it over HTTP. A process running as the
+  owner can read the file directly, and no local file mode prevents that.
+
+The model API key follows the same rule: it lives only in `<dataDir>/env` (0600), is read by the
+resident, and is never printed or logged. A process running as the owner can read it; another user
+cannot.
+
+### bash tool
+
+- Sandbox on (Linux, when the installer's `bwrap` probe succeeds): the command runs with
+  `--unshare-net` (no network), the workspace writable, the data directory masked read-only (when it
+  is not the workspace itself), system directories read-only, `/tmp` and `/var/tmp` as private
+  tmpfs, and `HOME=/tmp`. Writes outside the workspace fail as read-only.
+- Sandbox off (macOS, which has no `bwrap`, or Linux when the probe fails): the command runs as the
+  owner with the owner's full filesystem and network access. Every result is prefixed
+  `[sandbox: off]`, and startup records `bash_sandbox_unavailable` in the trace. `doctor` and
+  `/status` report the same state.
+
+### Outbound traffic
+
+- `web_fetch` accepts only `http(s)`, refuses embedded credentials, resolves the hostname, refuses
+  loopback, private, link-local and reserved answers, re-validates every redirect, and pins the
+  first validated address so a second DNS answer cannot move the connection. It still reaches any
+  public host the model asks for; that host sees the request and the `cogmem-web/1.0` user agent.
+  It sends no cookies and no model key, and it does not execute JavaScript.
+- `web_search` is off by default since #306. Enabling Exa and/or DuckDuckGo in
+  `<dataDir>/web.json` sends the query text to that third party (Exa first, DuckDuckGo as fallback).
+- Embedding and model calls go only to the provider configured in `config.toml` or the install's
+  model route. There is no Cog-hosted copy of the memory database.
+
+### Native plugins
+
+`<dataDir>/plugins.json` names packages or module paths that the resident imports into its own
+process. A plugin is arbitrary code with the resident's privileges — the database, the files the
+user can read, outbound network, in-memory keys — and there is no sandbox or permission model
+around it. Installing a plugin is trusting that code. The host's conflict and quarantine rules
+protect the process from a *broken* plugin, not a hostile one.
+
 ## Agent roster
 
 A registry file (`<workspace>/.cogmem/agents.json` first, then `~/.cogmem/agents.json`, or the
