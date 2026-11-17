@@ -11,7 +11,7 @@ import { dirname } from 'node:path';
 import { SoulService, ensureSoulSchema, readSoulVersion } from 'cogmem';
 
 /**
- * The v0 soul, verbatim (Ryu, 2026-11-11). Every character matters — it is injected into the
+ * The v0 soul, verbatim (2026-11-11). Every character matters — it is injected into the
  * pinned identity lane unchanged once F14 lands, so this literal is not reformatted, wrapped or
  * trimmed. The bullets are U+2022, and the text ends with one newline.
  */

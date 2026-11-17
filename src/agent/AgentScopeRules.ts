@@ -1,5 +1,5 @@
 /**
- * Who may read a record, and who it is scoped to (#143, Ryu 2026-11-07 route 1).
+ * Who may read a record, and who it is scoped to (#143, 2026-11-07 route 1).
  *
  * The rule is asked in three places now — the default lane, the compiled lanes, and the read-only
  * observatory — and a second copy of it is how two surfaces start disagreeing about the same

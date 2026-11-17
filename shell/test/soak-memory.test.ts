@@ -4,9 +4,19 @@
  *   warmup:        first 20 cycles discarded (JIT, lazy imports, first fills)
  *   sampling:     every 10 cycles after warmup, 10 samples (cycles 20, 30, … 110)
  *   sample:       Bun.gc(true), then process.memoryUsage().rss and .heapUsed
- *   judgement:    rss end-to-end (last sample − first sample) < 32 MiB
+ *   judgement:    rss end-to-end (last sample − first sample) < 96 MiB
  *                 heap slope < 64 KiB/cycle
  *                 The per-cycle RSS slope is logged for diagnosis, not asserted (#230).
+ *   rss bound:    calibrated on the development box (Linux, Bun 1.3.14, 96 GB disk) over
+ *                 seven full 120-cycle runs of this exact load: end-to-end was 9.7, 18.0,
+ *                 18.7, 20.7, 30.9, 34.0 and 35.2 MiB. Individual samples swing
+ *                 307–387 MiB around a flat ~355 MiB mean because forced-GC timing moves
+ *                 the measurement, not retention; one run's own samples spanned 74 MiB,
+ *                 so end-to-end — a difference of two noisy points — is only as stable as
+ *                 that swing. The old 32 MiB line sat inside it and flaked once in seven
+ *                 runs (33.96 MiB with a negative heap slope). 96 MiB is ~2.7× the
+ *                 observed maximum and above the largest within-run span: a retained leak
+ *                 still has to clear the GC noise floor to trip it.
  *   why the RSS slope is no longer a gate: #230 removed the old per-tick recall, whose SQLite
  *                 writes used to trigger WAL auto-checkpoint. The soak then retained WAL/mmap
  *                 pages, so the slope was measuring allocator/WAL noise rather than retained
@@ -40,7 +50,7 @@ const SAMPLE_EVERY = 10;
 const SAMPLE_COUNT = 10;
 const TOTAL_CYCLES = WARMUP_CYCLES + SAMPLE_EVERY * SAMPLE_COUNT;
 const RSS_SLOPE_DIAGNOSTIC_BYTES_PER_CYCLE = 256 * 1024;
-const MAX_RSS_END_TO_END_BYTES = 32 * 1024 * 1024;
+const MAX_RSS_END_TO_END_BYTES = 96 * 1024 * 1024;
 const MAX_HEAP_SLOPE_BYTES_PER_CYCLE = 64 * 1024;
 
 const ARTICLE_HTML = `<!doctype html><html><head><title>Soak Article</title></head><body>

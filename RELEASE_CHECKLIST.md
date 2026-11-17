@@ -10,7 +10,9 @@ This release is distributed through the npm registry. GitHub remains the source 
 - Public export `.` points to `dist/public.js` and `dist/public.d.ts`.
 - Internal subpath `./internal` exists only as an explicit advanced subpath.
 - `install.sh` is tracked and installs `cogmem@latest` from npm by default.
-- `README.md` carries no version number, no Status section and no version badge (Ryu 2026-11-03);
+- The companion shell ships inside the same `cogmem` package as `dist/shell`; `shell/package.json`
+  is private and is not published as a second package.
+- `README.md` carries no version number, no Status section and no version badge (2026-11-03);
   `release-metadata.unit.test.ts` fails if any of the three returns.
 - Local databases, SQLite sidecars, `.DS_Store`, `dist/.tsbuildinfo`, and `dist/` are not tracked.
 
@@ -20,23 +22,12 @@ This release is distributed through the npm registry. GitHub remains the source 
   - `cog` — the companion: attaches to the resident shell (or starts it) and opens the terminal
     interface (`src/bin/cog.ts` hands off to `dist/shell/cog.js`).
   - `cogmem` — the management CLI.
-- `cogmem`
-- `cogmem init`
-- `cogmem doctor`
-- `cogmem update`
-- `cogmem observatory`
-- The `cogmem-*` aliases for the other commands are **Removed in 4.0 (#112)** — all sixteen,
-  with `src/bin/alias/` and the `warnDeprecatedAlias` helper — and the `cogmem-mcp` bin is
-  **Removed in 5.0 (R2 of #200)** with the MCP surface, so `cog` and `cogmem` are the whole
-  surface.
-- `cogmem import <openclaw|hermes>`
-- `cogmem normalize-transcript`
-- `cogmem snapshot`
-- `cogmem prospective`
-- `cogmem strategy`
-- `cogmem brain-eval`
-- `cogmem episode`
-- `cogmem dream`
+- The `cogmem-*` aliases (all sixteen, with `src/bin/alias/` and the `warnDeprecatedAlias`
+  helper) were removed in 4.0 (#112); the `cogmem-mcp` bin went with the MCP surface in 5.0
+  (R2 of #200). Every management command is now a subcommand of `cogmem`: `init`, `doctor`,
+  `update`, `compact`, `memory`, `explain-recall`, `observatory`, `repair`, `import`,
+  `normalize-transcript`, `snapshot`, `backup`, `prospective`, `strategy`, `brain-eval`,
+  `episode`, `dream`, `cleanup` and `install`.
 
 ## Required Journey Guarantees
 
@@ -65,7 +56,17 @@ The roster guarantees under "Required Documentation" are pinned by
 - README and integration docs explain labeled `sourceContext`, strict before/after window metadata, and `charRange` / `sourceRange`.
 - README explain collection routing, `cogmem memory map`, and `cogmem memory tick` as host-owned inspection and maintenance surfaces.
 - README explain `decisionTrace` / `recallDecision`, source-first raw fallback, correction semantics, audited review actions, and review-queue aging.
-- README explain `cogmem update --yes`, npm install resolution, and that 4.0 refuses a pre-4.0 database instead of upgrading it, without changing or backing up the file.
+- README explain `cogmem update --yes` and npm install resolution.
+- README explain that 5.0 refuses a database created before 4.0 instead of upgrading it, without
+  changing or backing up the file, and give the export-then-import path for moving history into a
+  new database.
+- README has a "start the companion" section: `cog` attaches to the resident (starting it when it
+  is not running), and `cogmem install` registers it as a user-level service.
+- README states the support matrix: Linux with systemd user units, macOS with launchd agents,
+  Windows unsupported, and Bun as the only runtime. It also states that macOS has no bwrap, so
+  the bash tool runs without an isolation boundary there (the shell reports `sandbox: off`).
+- SECURITY and the installer prompt say that nightly snapshots and weekly archives are whole
+  database copies in plaintext, and name disk/volume encryption as the optional protection.
 - README explain that entity aliases are evidence-backed, project-scoped, reversible, and stricter for person entities.
 - README explain Belief Graph ownership, user-evidence requirements, reinforcement, conflict review, and supersession history.
 - README explain Temporal Memory validity windows, historical lookup, correction reasons, and current-state stale suppression.
@@ -82,7 +83,8 @@ The roster guarantees under "Required Documentation" are pinned by
 - README explain user-shaped topic operations, user-explicit versus model-candidate authority, alias collision review, operation rollback, and project isolation.
 - README and `MEMORY_ATLAS.md` distinguish the system anatomy map from the content Atlas; explain graph overview/search/explore/node/neighbors/path/timeline, generic multi-facet cold-memory resurrection, activation visibility, source drill-down, and project isolation.
 - README documents `cogmem.cli.v1`: object payloads are top-level, array payloads use `items`, and queue counters expose top-level compatibility aliases.
-- README documents that 4.0 creates a fresh final schema on a new database and refuses a pre-4.0 database without modifying, backing up, or partially rewriting it.
+- README documents that 5.0 creates a fresh final schema on a new database and refuses a
+  pre-4.0 database without modifying, backing up, or partially rewriting it.
 - README documents stale graph reads and conservative empty-project project-scope repair for rows imported under an empty project scope.
 - README explain episode surgery, closure recomputation, stale-candidate invalidation, cross-reference/audit preservation, and sealed-only Dream requeue.
 - README and the import reference explain per-message import checkpoints, stable `externalMessageId` requirements across split batches, source-agent validation, CLI range/error controls, and recall freshness warnings.
@@ -118,7 +120,9 @@ The pack dry-run must include built public API files, CLI files, docs, and `inst
 
 ## Old-Database Refusal Rehearsal
 
-4.0 has no upgrade path, so the release rehearsal is the refusal itself. Build a database shaped like a Cog 3.x file, then confirm 4.0 refuses it and leaves it byte-for-byte unchanged.
+5.0 has no upgrade path for a database created before 4.0, so the release rehearsal is the
+refusal itself. Build a database shaped like a pre-4.0 file, then confirm 5.0 refuses it and
+leaves it byte-for-byte unchanged.
 
 ```bash
 bun -e '
@@ -140,17 +144,26 @@ cogmem memory status --db /tmp/schema31.db --json
 sha256sum -c /tmp/schema31.before.sha256
 ```
 
-The kernel start must fail with a non-zero exit and a message beginning `no_upgrade_path:`, saying that this is a Cog 3.x database, that 4.0 does not upgrade an old database, and that the file has not been changed. `sha256sum -c` must then report `OK`: no backup is written beside the file and no partial rewrite is left behind.
+The kernel start must fail with a non-zero exit and a message beginning `no_upgrade_path:`, saying
+that this is a database created before 4.0, that 5.0 does not upgrade an old database, and that
+the file has not been changed. `sha256sum -c` must then report `OK`: no backup is written beside
+the file and no partial rewrite is left behind.
 
 A fresh database is the supported path and must still start:
 
 ```bash
-cogmem memory status --db /tmp/fresh-4.0.db --json
+cogmem memory status --db /tmp/fresh-5.0.db --json
 ```
 
-The fresh file must answer with the raw and Dream counters. There is nothing left to rehearse on the old file beyond the refusal.
+The fresh file must answer with the raw and Dream counters. There is nothing left to rehearse on
+the old file beyond the refusal. A user who wants their history in 5.0 exports it from the old
+install and imports those files into the new database (`cogmem import openclaw|hermes`, or
+`cogmem episode import` for transcripts); importing the old database file, or a snapshot taken
+from it, is not a migration — 5.0 refuses it the same way.
 
-After verification, create a GitHub Release from the matching version tag, for example `v4.0.0`. The release workflow publishes through npm Trusted Publishing when the release is published. It must not publish on tag push alone.
+After verification, create a GitHub Release from the matching version tag, for example `v5.0.0`.
+The release workflow publishes through npm Trusted Publishing when the release is published. It
+must not publish on tag push alone.
 
 Emergency manual fallback:
 

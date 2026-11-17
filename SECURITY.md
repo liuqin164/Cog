@@ -9,7 +9,13 @@ Cog is local-first by default. Memory data is stored in the configured SQLite da
 - PII redaction is configured under `[governance]` with `pii_redact_email`, `pii_redact_phone`, and `pii_redact_ssn`.
 - Field encryption is available by passing an `EncryptionProvider` when creating the kernel.
 - Embedding providers may send text to the provider explicitly configured in `config.toml`.
-- Snapshot files should be treated as sensitive because they contain exported memory data.
+- Snapshot files should be treated as sensitive because they contain exported memory data. The
+  nightly snapshot and the weekly archive are complete copies of the SQLite database as raw bytes;
+  Cog does not encrypt them for you. With no `EncryptionProvider`, every remembered turn, profile
+  entry and procedure in those files is readable plaintext. Encrypt the disk or volume (LUKS,
+  FileVault, an encrypted directory) when the machine may be lost, shared or backed up off-device,
+  and treat a copied snapshot as a copy of the database itself. Deleting the live database does not
+  delete the snapshots that already hold it; remove them deliberately when that is what you mean.
 - Imports and migrations should be run with dry-run first when moving existing agent memory into core.
 - Raw chronological ledger events are written through the kernel so configured PII redaction runs before persistence. Encrypted deployments still treat ledger payloads as sensitive.
 - Agent-facing recall is governed by default: archived memory, suspect LLM inference, suspect tool observations, and suspect unverified claims are suppressed from active context.

@@ -785,7 +785,11 @@ test('unified cogmem CLI dispatches doctor and update commands', async () => {
   expect(parsed.source).toBe('npm');
   expect(parsed.packageSpec).toBe('3.6.5');
   expect(parsed.targetCwd).toBe(coreRoot);
-  expect(parsed.installKind).toBe('source_checkout');
+  // #296: a packed copy or a host without git is not a source checkout. The update command classifies
+  // it as a local_project by design, and that is not a failure of the dispatcher.
+  const sourceCheckout = existsSync(join(coreRoot, '.git'));
+  if (!sourceCheckout) console.error('[env] agent-import-cli: no .git in this copy, so update is classified local_project, not source_checkout');
+  expect(parsed.installKind).toBe(sourceCheckout ? 'source_checkout' : 'local_project');
   expect(parsed.nextCommand).toContain('cogmem@3.6.5');
   expect(parsed.nextCommand).not.toContain('releases/latest/download/cogmem.tgz');
   expect(parsed.nextCommand).not.toContain('@CognitiveOS/core');

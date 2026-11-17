@@ -58,6 +58,37 @@ Without a memory model, Cog runs in `rule_only` mode: storing and literal recall
 
 What you get is the companion, not a memory library. `cog` attaches to the resident (or starts it) and opens the terminal interface; `cogmem` stays the management CLI (`doctor`, `update`, `observatory`, `memory`, `episode`, `dream`, `backup` and the rest). Both bins live in the same package.
 
+## Start the companion
+
+`cogmem install` is the one-time setup: it places the data directory, creates the database,
+registers the resident as a user-level service and runs a first-wake self-check. After that there
+is nothing to launch by hand unless you want to.
+
+- `cog` attaches to the resident and opens the terminal interface. When no resident is running it
+  starts one first, with the same data directory and workspace.
+- On Linux the resident is a systemd **user** unit; on macOS it is a launchd **agent**. Both are
+  user-level, so they do not need root and they come back after a reboot when the service manager
+  is enabled.
+- `cogmem doctor` is the check: it reports the disk version, the serving version, whether the
+  resident is running, and whether the bash tool is isolated. A stale resident is reported rather
+  than silently trusted.
+- `cogmem install` again repairs or re-registers the service. For a manual start against another
+  tree, `cog --data <dir> --workspace <dir>` is the explicit form.
+
+## Supported machines
+
+| | Support |
+| --- | --- |
+| Linux | systemd user units. The installer sets `MemoryHigh` and `MemoryMax` on the unit and reports RSS against them. |
+| macOS | launchd user agents. launchd has no per-service RSS ceiling, so the installer cannot set a cap; `doctor` reports the reading and says the limit is absent. |
+| Windows | Not supported. `cogmem install` refuses the platform at preflight, before any install step runs. |
+| Runtime | Bun only. The package declares `engines.bun`; Node is not a supported runtime for the resident. |
+
+macOS has no bubblewrap (`bwrap`), so the bash tool has no isolation boundary there. The
+companion stays usable and says so instead of pretending: `/status` and `doctor` report
+`sandbox: off`, and startup writes `bash_sandbox_unavailable` to the trace. On Linux the installer
+probes bwrap and, when it works, the bash tool runs inside it.
+
 An agent installing it for you can follow the same path — give it this prompt and nothing else:
 
 ```text
@@ -142,6 +173,20 @@ cogmem import openclaw     # or: cogmem import hermes
 ```
 
 Transcripts, Markdown, JSON, CSV and TSV import too, landing in the importing workspace's own project scope — which is also the scope `cogmem memory recall` reads when it is not told otherwise. The importer reads those products' files as a source format; Cog does not attach to them or run inside them.
+
+A database created before 4.0 is refused, not upgraded. This release identifies it, exits with a
+message beginning `no_upgrade_path:`, and leaves the file byte-for-byte unchanged: no backup
+beside it, no partial rewrite. Keep the old install for that file. To bring its history forward, export the
+conversations from the old install to files, point 5.0 at a new database, and import those files —
+`cogmem import openclaw` or `cogmem import hermes` for those products, or
+`cogmem episode import --format jsonl --file <path>` for a transcript. Importing the old database
+file, or a snapshot taken from it, is not a migration: it meets the same refusal.
+
+Nightly snapshots and weekly archives under the data directory are complete copies of the SQLite
+database in plaintext, not encrypted exports. Treat them as sensitive: use full-disk or volume
+encryption (LUKS, FileVault, an encrypted directory) if the machine may be lost or shared, and
+remember that deleting the live database does not delete what a snapshot already holds. See
+[SECURITY.md](SECURITY.md).
 
 A `SKILL.md` guide is read the same way, by naming the file: `cogmem import openclaw --skill <path/to/SKILL.md>` (the flag is host-agnostic, so `hermes` accepts it too). The row is marked imported and compiles into the procedure book as a low-weight `imported` guide, after the project's own practices. There is no skills directory to mount or scan.
 

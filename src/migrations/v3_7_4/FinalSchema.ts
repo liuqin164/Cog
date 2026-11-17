@@ -59,7 +59,7 @@ export function hasUserSchema(db: Database): boolean {
 }
 
 /**
- * Refuse a database 4.0 did not create, or accept a 4.0 one.
+ * Refuse a database this release did not create, or accept one it did.
  *
  * Three cheap signals, in order, and no schema walk unless none of them applies:
  *
@@ -70,7 +70,7 @@ export function hasUserSchema(db: Database): boolean {
  *    which is what separates "created by this release" from "a SQLite file
  *    someone pointed us at". A 3.x database has `_meta` too, with its own
  *    version, so the number is compared rather than the column merely found.
- * 3. **The schema itself**, for a 4.0 database that predates the marker.
+ * 3. **The schema itself**, for a database that predates the marker.
  */
 /**
  * How long an unmarked but populated database is given for a concurrent initializer to write its
@@ -117,7 +117,7 @@ function assertSupportedDatabaseOnce(db: Database): void {
       const newer = versions.find((version) => Number(version) > LATEST_SCHEMA_VERSION);
       if (newer) throw new Error(`unsupported_development_schema:${newer}`);
       if (versions.some((version) => Number(version) === LATEST_SCHEMA_VERSION)) {
-        // A 4.0 database from the release that still recorded receipts. Verify
+        // A database from the release that still recorded receipts. Verify
         // the schema only when it cannot identify itself by the marker.
         if (readsSchemaVersion(db) === LATEST_SCHEMA_VERSION) return;
         assertFinalSchema(db);
@@ -150,15 +150,15 @@ export function assertFinalSchema(db: Database): void {
  * and that the file was left alone. Same shape here, and the same guarantee (#127).
  */
 function unknownIdentityMessage(): string {
-  return 'unsupported_database_identity - this file has tables Cog 4.0 does not recognise and no '
-    + 'Cog version marker, so 4.0 will not open it. Point 4.0 at a new database path (a new `db_path` in the '
+  return 'unsupported_database_identity - this file has tables Cog 5.0 does not recognise and no '
+    + 'Cog version marker, so 5.0 will not open it. Point 5.0 at a new database path (a new `db_path` in the '
     + 'config, or --db for one command), or check that this is the file you meant. This file has not been changed.';
 }
 
 function refusalMessage(latest: string): string {
-  return `no_upgrade_path:${latest} - this is a Cog 3.x database and 4.0 does not upgrade an old database. `
-    + 'Keep it for Cog 3.x, or point 4.0 at a new database path (a new `db_path` in the config, or --db for one command) '
-    + 'and move history across from the 3.x install. This file has not been changed.';
+  return `no_upgrade_path:${latest} - this is a database created before 4.0 and 5.0 does not upgrade an old database. `
+    + 'Keep it for the install that created it, or point 5.0 at a new database path (a new `db_path` in the config, or --db for one command) '
+    + 'and import history exported from the old install. This file has not been changed.';
 }
 
 function readsSchemaVersion(db: Database): number {

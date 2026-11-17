@@ -7,13 +7,19 @@
  * anything a test deliberately points `TMPDIR` at.
  */
 
-import { dirname, join, resolve } from 'node:path';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { sweepOrphanServers, sweepOrphanUnits } from '../../scripts/leak-scan.js';
 import { clearProjectTempRoot, sweepStaleRunRoots } from './tmp.js';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+// #296: the suite spawns `bun` by name in ~200 places. When the suite itself was
+// launched by an absolute path (`~/.bun/bin/bun test`) with no bun on PATH, those
+// children fail with ENOENT — a red that says nothing about the code. Put the
+// running binary first instead of rewriting every spawn site.
+process.env.PATH = [dirname(process.execPath), process.env.PATH].filter(Boolean).join(delimiter);
 
 // #150: the version check is on by default in the product. A test suite must not
 // reach the package registry every time it runs a CLI command, nor leave detached

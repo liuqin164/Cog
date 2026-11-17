@@ -8,6 +8,23 @@ import { LATEST_SCHEMA_VERSION } from '../src/migrations/v3_7_4/FinalSchema.js';
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const packageJsonPath = join(coreRoot, 'package.json');
 
+// #296: `git ls-files` is only meaningful in a git work tree. A packed copy (the
+// `npm pack` tarball) or a host without git used to turn this into a red; the
+// tracked-file claim cannot be checked there, so the case is skipped with a reason.
+function inGitWorkTree(): boolean {
+  try {
+    const probe = Bun.spawnSync({ cmd: ['git', 'rev-parse', '--is-inside-work-tree'], cwd: coreRoot, stdout: 'pipe', stderr: 'pipe' });
+    return probe.exitCode === 0;
+  } catch {
+    return false;
+  }
+}
+
+const gitWorkTree = inGitWorkTree();
+if (!gitWorkTree) {
+  console.error('[skip] release-metadata: not a git work tree (packed copy or git absent), so `git ls-files` cannot be checked');
+}
+
 function readText(path: string): string {
   return readFileSync(path, 'utf8');
 }
@@ -108,7 +125,7 @@ describe('core release metadata', () => {
     expect(installer).toContain('COGMEM_SKIP_INIT');
   });
 
-  test('local databases and desktop metadata are not tracked as release files', async () => {
+  test.skipIf(!gitWorkTree)('local databases and desktop metadata are not tracked as release files', async () => {
     const proc = Bun.spawn({
       cmd: ['git', 'ls-files'],
       cwd: coreRoot,
@@ -198,6 +215,20 @@ describe('core release metadata', () => {
     expect(manifest.files).toContain('CONTRIBUTING.md');
     expect(manifest.files).toContain('CHANGELOG.md');
     expect(manifest.files).toContain('RELEASE_CHECKLIST.md');
+  });
+
+  test('release-facing documents and source carry no internal assignee names', () => {
+    const shippedDocs = [
+      'README.md', 'SECURITY.md', 'RELEASE_CHECKLIST.md', 'CONTRIBUTING.md',
+      'MEMORY_MODEL.md', 'MEMORY_ATLAS.md', 'RECALL_EXPLAINABILITY.md', 'BENCHMARKS.md',
+      'CONCURRENT_ACCESS.md', 'CHANGELOG.md', 'docs/install.md', 'docs/agent-install.md',
+      'docs/observatory.md', 'docs/events.md',
+    ];
+    const sources = globSync('{src,shell/src}/**/*.ts', { cwd: coreRoot });
+    for (const file of [...shippedDocs, ...sources]) {
+      const names = [...readText(join(coreRoot, file)).matchAll(/\b(Ryu|Susan)\b/g)].map((match) => match[1]);
+      expect({ file, names }).toEqual({ file, names: [] });
+    }
   });
 
   test('no current document promises an upgrade path from an old database', () => {
@@ -314,5 +345,5 @@ test('the deprecated aliases are gone, and the checklist says so', () => {
   expect(readFileSync(join(coreRoot, 'src', 'bin', 'CliArgs.ts'), 'utf8')).not.toContain('warnDeprecatedAlias');
 
   const checklist = readFileSync(join(coreRoot, 'RELEASE_CHECKLIST.md'), 'utf8');
-  expect(checklist).toContain('Removed in 4.0 (#112)');
+  expect(checklist).toMatch(/removed in 4\.0 \(#112\)/i);
 });

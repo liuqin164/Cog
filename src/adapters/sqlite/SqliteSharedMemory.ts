@@ -180,7 +180,7 @@ export class SqliteSharedMemory implements SharedMemoryPort {
         ORDER BY s.published_at DESC
         LIMIT ?
       `)
-      // Reading is not gated per reader (#146, Ryu 2026-11-06): while sharing is enabled, every agent that can
+      // Reading is not gated per reader (#146, 2026-11-06): while sharing is enabled, every agent that can
       // connect reads every shared collection. `shared_collection_readers` and the owner column stay in the schema
       // and are deliberately not consulted — a future multi-user deployment can turn the check back on, and until
       // then there is no branch here to keep in step. Publishing and retraction are still owner-bound.
