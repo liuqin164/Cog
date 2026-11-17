@@ -1015,17 +1015,12 @@ export class EventStore {
 
     // Nothing held every word. The query may still be a question about a
     // statement — see toRawEventFtsOrQuery — so match any word and rank by how
-    // much of the query each event actually carries.
-    const loose = this.db.prepare(`
-      SELECT ${columns}, bm25(memory_events_fts) AS rank
-      FROM memory_events_fts
-      JOIN memory_events e ON e.event_id = memory_events_fts.event_id
-      WHERE memory_events_fts MATCH ?${scope.sql}
-      ORDER BY rank ASC,
-               COALESCE(e.global_seq, 0) ASC,
-               e.event_id ASC
-      LIMIT ?
-    `).all(this.toRawEventFtsOrQuery(query), ...scope.params, limit) as any[];
+    // much of the query each event actually carries. A single OR over every
+    // word is not bounded: one word held by most of the ledger (a document
+    // number prefix, a project name) makes SQLite rank the whole table before
+    // the LIMIT can apply (#243). Each word is therefore read with its own
+    // capped candidate list, and the lists are merged here.
+    const loose = this.boundedRawEventCandidates(query, options, limit);
     if (loose.length > 0) return loose.map((row) => this.mapRow(row));
 
     return this.fallbackRawTextSearch(query, options, limit);
@@ -1306,8 +1301,28 @@ export class EventStore {
   /** Capped per-term document count, routed through the search path recall itself uses. */
   countRawEventMatches(token: string, options: { projectId?: string; workspaceId?: string; threadId?: string; cap?: number } = {}): number {
     const cap = Math.max(1, Math.min(options.cap ?? 64, 500));
-    if (!this.toRawEventFtsQuery(token)) return 0;
-    return this.searchRawEvents(token, { projectId: options.projectId, workspaceId: options.workspaceId, threadId: options.threadId, limit: cap }).length;
+    const ftsQuery = this.toRawEventFtsQuery(token);
+    if (!ftsQuery) return 0;
+    const scope = this.rawEventScopeConditions(options);
+    // Only the cap matters: whether a word is held by three events or by the
+    // whole ledger is a frequency question, not a ranking one. Asking the
+    // ranked search answered it by sorting every match, which is exactly the
+    // cost this check exists to avoid (#243).
+    const found = this.db.prepare(`
+      SELECT 1 FROM memory_events_fts
+      JOIN memory_events e ON e.event_id = memory_events_fts.event_id
+      WHERE memory_events_fts MATCH ?${scope.sql}
+      LIMIT ?
+    `).all(ftsQuery, ...scope.params, cap) as any[];
+    if (found.length > 0 || this.encryptionProvider) return found.length;
+    // The index cannot split a CJK run, so the fallback scan is the only
+    // evidence left. It stops at the cap the same way.
+    return this.db.prepare(`
+      SELECT 1 FROM memory_events_fts
+      JOIN memory_events e ON e.event_id = memory_events_fts.event_id
+      WHERE LOWER(memory_events_fts.text) LIKE ? ESCAPE '\\'${scope.sql}
+      LIMIT ?
+    `).all(`%${escapeSqlLike(token)}%`, ...scope.params, cap).length;
   }
 
   private toRawEventFtsQuery(query: string): string {
@@ -1327,18 +1342,78 @@ export class EventStore {
    * A question therefore falls back to matching any of its words and lets BM25
    * rank the event that shares the most of them.
    */
-  private toRawEventFtsOrQuery(query: string): string {
+  private rawEventFtsOrTokens(query: string): string[] {
     const meaningful = this.rawEventFtsTokens(query).filter((token) => !QUERY_STOP_WORDS.has(token));
     // Every word was a question word; the query still has to search for them.
-    const tokens = meaningful.length > 0 ? meaningful : this.rawEventFtsTokens(query);
-    return tokens
-      .map((token) => `"${token}"`)
-      .join(' OR ');
+    return meaningful.length > 0 ? meaningful : this.rawEventFtsTokens(query);
+  }
+
+  /**
+   * The match-any-word candidates, with a hard cap on what one word may cost.
+   *
+   * One word per candidate list, never one OR across every word: `bm25` has to
+   * sort every row it sees before `LIMIT` can drop any, so a word present in
+   * most of the ledger turns "find the rare code" into a full-table sort. Each
+   * list is capped instead, which also makes a word's rarity visible: a list
+   * shorter than the cap is the whole posting list.
+   */
+  private boundedRawEventCandidates(
+    query: string,
+    options: {
+      projectId?: string;
+      workspaceId?: string;
+      threadId?: string;
+      sessionId?: string;
+      localDate?: string;
+      startTime?: number;
+      endTime?: number;
+    },
+    limit: number,
+  ): any[] {
+    const tokens = [...new Set(this.rawEventFtsOrTokens(query))].slice(0, 12);
+    if (tokens.length === 0) return [];
+    const cap = Math.max(limit * 8, 64);
+    const columns = MEMORY_EVENT_COLUMNS.split(',').map((column) => `e.${column.trim()}`).join(', ');
+    const scope = this.rawEventScopeConditions(options);
+    const statement = this.db.prepare(`
+      SELECT ${columns}, bm25(memory_events_fts) AS rank
+      FROM memory_events_fts
+      JOIN memory_events e ON e.event_id = memory_events_fts.event_id
+      WHERE memory_events_fts MATCH ?${scope.sql}
+      ORDER BY rank ASC, COALESCE(e.global_seq, 0) ASC, e.event_id ASC
+      LIMIT ?
+    `);
+    const candidates = new Map<string, { row: any; matched: number; rarest: number; rank: number }>();
+    for (const token of tokens) {
+      const rows = statement.all(`"${token}"`, ...scope.params, cap) as any[];
+      for (const row of rows) {
+        const existing = candidates.get(row.event_id);
+        if (existing) {
+          existing.matched += 1;
+          existing.rarest = Math.min(existing.rarest, rows.length);
+          existing.rank = Math.min(existing.rank, row.rank);
+          continue;
+        }
+        candidates.set(row.event_id, { row, matched: 1, rarest: rows.length, rank: row.rank });
+      }
+    }
+    return [...candidates.values()]
+      .sort((left, right) =>
+        right.matched - left.matched
+        || left.rarest - right.rarest
+        || left.rank - right.rank
+        || (left.row.global_seq ?? 0) - (right.row.global_seq ?? 0)
+        || String(left.row.event_id).localeCompare(String(right.row.event_id)))
+      .slice(0, limit)
+      .map((candidate) => candidate.row);
   }
 
   private rawEventFtsTokens(query: string): string[] {
     return query
-      .split(/[^\p{L}\p{N}_-]+/u)
+      // A hyphen separates words for the index too: `unicode61` indexes
+      // `CODE-10-7000` as three tokens, so keeping the hyphen here made the
+      // phrase `"CODE-10-7000"` the one query the index could never answer.
+      .split(/[^\p{L}\p{N}_]+/u)
       .map((token) => token.trim().replace(/"/g, ''))
       .filter((token) => token.length > 0)
       .slice(0, 12);
