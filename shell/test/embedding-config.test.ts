@@ -156,7 +156,7 @@ describe('remote HTTP providers', () => {
       await provider.warm();
       const embedded = await provider.embed('会议时间');
       expect(embedded.length).toBe(1024);
-      expect(provider.embedSync('会议时间').length).toBe(1024);
+      expect(provider.embedSync?('会议时间')?.length).toBe(1024);
       await provider.embedBatch(['文档正文']);
 
       const inputs = fixture.requests
@@ -189,7 +189,7 @@ describe('remote HTTP providers', () => {
     try {
       await provider.warm();
       expect((await provider.embed('查一下')).length).toBe(1024);
-      expect(provider.embedSync('查一下').length).toBe(1024);
+      expect(provider.embedSync?('查一下')?.length).toBe(1024);
       expect(fixture.requests[0]?.url).toBe('/v1/embeddings');
       expect(fixture.requests[0]?.authorization).toBe('Bearer sk-test-only');
       expect(provider.modelId).toBe('openai/text-embedding-v3@1024');
@@ -215,7 +215,7 @@ describe('remote HTTP providers', () => {
     try {
       await expect(provider.warm()).rejects.toThrow(/embedding_unavailable/);
       expect(provider.status().state).toBe('degraded');
-      expect(provider.embedSync('x').length).toBe(0);
+      expect(provider.embedSync?('x')?.length).toBe(0);
     } finally {
       provider.dispose?.();
       fixture.stop();
