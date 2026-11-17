@@ -2,7 +2,7 @@ import { cliArg } from './utils/CliArgument.js';
 import { describeSqliteTempDirectoryFailure } from './utils/SqliteTempDirectory.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import Database from 'bun:sqlite';
 import type { GraphEdgeStoreLike } from './types/ExtensionPoints.js';
 
@@ -229,6 +229,8 @@ export interface MemoryKernelOptions {
   configDiagnostics?: ConfigDiagnosticLike[];
   /** F19 (#196): where nightly whole-brain snapshots are written. Unset takes none. */
   snapshotsDir?: string;
+  /** Where `/export` writes Markdown copies. Unset derives `<db dir>/exports`. */
+  exportsDir?: string;
 }
 
 export interface MemoryKernelFromConfigOptions extends MemoryKernelOptions {
@@ -1143,6 +1145,8 @@ export class MemoryKernel {
       profile: this.profile,
       procedures: this.procedures,
       commitments: this.commitments,
+      snapshotsDir: options.snapshotsDir,
+      exportsDir: options.exportsDir ?? (this.dbPath === ':memory:' ? undefined : join(dirname(this.dbPath), 'exports')),
       rebuildAtlas: (projectId) => this.memoryAtlasIndexer.rebuild({ projectId }),
       afterNeuronsDeleted: (neuronIds, projectId) => {
         this.memoryGraph.removeNeuronIdsFromIndexes(neuronIds);
@@ -4012,6 +4016,10 @@ export class MemoryKernel {
     } finally {
       db.exec(`PRAGMA temp_store = ${previousTempStore}`);
     }
+    // #303: VACUUM writes its new page images through the WAL, so the checkpoint above (taken
+    // before the rebuild) is not enough: the main database file still holds the pre-VACUUM pages
+    // until a later checkpoint, and a copy of that file still contains the deleted text.
+    db.exec(`PRAGMA wal_checkpoint(TRUNCATE)`);
 
     for (const neuronId of neuronIds) {
       this.vectorStore.removePoint(neuronId);

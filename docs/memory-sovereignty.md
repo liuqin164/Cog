@@ -5,7 +5,8 @@ The owner's controls over memory, next to the sensitivity marks of #164. Four ac
 - **Pause** stops intake while the owner wants a window off the record. It is a kernel state checked
   on the write path, not a read-time filter: a paused project appends no ledger row at all.
 - **Delete by time range** removes a half-open window `[start, end)` from the ledger, from the
-  compiled books that cite it, and from the graph derived from it.
+  compiled books that cite it, and from the graph derived from it. It erases the window from the
+  database file too, and removes the local whole-copy artifacts that can contain it.
 - **Export** writes a human-readable archive, not a database dump. It reads the current ledger and
   books, so an exported file cannot contain a range that was deleted.
 - **Audit** is the owner's read of the first three: action, range, counts and time.
@@ -160,10 +161,22 @@ The window is half-open: `start <= occurredAt < end`.
    ledger.
 6. The profile, procedure and commitment books recompile. Their visible read is the proof: an
    entry whose evidence is gone does not come back.
+7. The database is rewritten physically, not only logically: `secure_delete` zeroes deleted cells,
+   `VACUUM` drops pages that no table references, and a WAL checkpoint follows the rebuild so the
+   main database file no longer holds pre-deletion page images.
+8. Nightly snapshots, weekly archives and Markdown exports inside the data directory are removed
+   whole when they were created at or after the earliest deleted row was recorded, because a copy
+   can contain that row. They are not rewritten: a snapshot's checksum and manifest describe the
+   point in time it was taken.
+
+Coverage stops at the machine. Exports written outside the data directory and backups copied to
+another machine are not reached by `/forget`; the confirm receipt names both as out of scope. A
+snapshot or export older than every deleted row is kept: it cannot contain the window.
 
 Session summaries are read-time views of the ledger, so removing the ledger rows is what removes
 them. The audit row is written after the delete transaction and before the recompile, so a failed
-recompile cannot hide that the deletion happened.
+recompile cannot hide that the deletion happened. Its `details_json` also carries the artifact
+counts, so the owner's read shows what was handled and what was not.
 
 ## Export policy (frozen)
 

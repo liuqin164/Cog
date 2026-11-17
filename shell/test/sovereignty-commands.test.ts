@@ -90,6 +90,8 @@ describe('/forget deletes one previewed window and leaves an audit row', () => {
       const confirmed = await shell.runCommand('forget', 'confirm');
       expect(confirmed.text).toContain('已删除');
       expect(confirmed.text).toContain('审计');
+      expect(confirmed.text).toContain('副本：');
+      expect(confirmed.text).toContain('不在覆盖范围内');
       const deleted = (confirmed.data as { sovereignty_delete: { deleted: Record<string, number>; auditId: string } }).sovereignty_delete;
       expect(deleted.deleted.events).toBeGreaterThanOrEqual(1);
 

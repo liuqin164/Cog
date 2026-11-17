@@ -147,7 +147,7 @@ The conversation has a small command surface; the management CLI has the rest.
 
 | Command | What it does |
 |---|---|
-| `/forget <from> <to>`, then `/forget confirm` | Shows the half-open window and its ledger row count; the confirm deletes exactly that window from the ledger, the books that cite it, the graph, its episodes, and the Atlas, then recompiles. The audit row carries the range, counts and time, never the deleted text. |
+| `/forget <from> <to>`, then `/forget confirm` | Shows the half-open window and its ledger row count; the confirm deletes exactly that window from the ledger, the books that cite it, the graph, its episodes, and the Atlas, rewrites the database pages so the text is not left in freed space, and removes local snapshots, archives and exports that can contain it, then recompiles. The audit row carries the range, counts and time, never the deleted text. Exports outside the data directory and off-machine backups are out of scope and the receipt says so. |
 | `/correct <key> <new value>` | Records your turn, corrects one current profile entry and recompiles that book, so the next recall reads the new value. With no profile match, a practice correction is proposed first; `/correct confirm` writes it. The replaced value stays in history. |
 | `/export [path]` | Writes a human-readable Markdown archive: conversations, profile, procedures, commitments and graph. The default path is under the data directory. |
 | `/pause` / `/resume` | Stops the shell from writing new conversation turns into the kernel; the state is checkpointed and survives a restart. `/resume` ends it. |
