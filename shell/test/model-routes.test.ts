@@ -152,7 +152,7 @@ interface FakeEndpoint {
   requests: string[];
 }
 
-function startFake(status: number, body: unknown, options: { delayMs?: number } = {}): FakeEndpoint {
+function startFake(status: number, body: unknown, options: { delayMs?: number; statuses?: number[]; headers?: Record<string, string> } = {}): FakeEndpoint {
   const requests: string[] = [];
   const server = Bun.serve({
     port: 0,
@@ -160,7 +160,8 @@ function startFake(status: number, body: unknown, options: { delayMs?: number } 
     async fetch(request) {
       requests.push(new URL(request.url).pathname);
       if (options.delayMs) await new Promise((resolve) => setTimeout(resolve, options.delayMs));
-      return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+      const answer = options.statuses?.[requests.length - 1] ?? status;
+      return new Response(JSON.stringify(body), { status: answer, headers: { 'content-type': 'application/json', ...options.headers } });
     },
   });
   return { baseUrl: `http://127.0.0.1:${server.port}/v1`, requests, stop: () => server.stop(true) };
@@ -185,8 +186,20 @@ async function failureOf(provider: MgModelProvider, timeoutMs?: number): Promise
   throw new Error('expected the call to fail');
 }
 
-function providerFor(endpoint: FakeEndpoint, apiKey = 'sk-test'): MgModelProvider {
-  return new MgModelProvider({ baseUrl: endpoint.baseUrl, apiKey, model: 'test-model', timeoutMs: 3_000 }, 'custom');
+function providerFor(
+  endpoint: FakeEndpoint,
+  apiKey = 'sk-test',
+  retry?: { maxAttempts: number; baseDelayMs: number; maxDelayMs: number; maxTotalMs: number },
+  onRetry?: (event: { attempt: number; status: number; delayMs: number }) => void,
+): MgModelProvider {
+  return new MgModelProvider({
+    baseUrl: endpoint.baseUrl,
+    apiKey,
+    model: 'test-model',
+    timeoutMs: 3_000,
+    ...(retry ? { retry } : {}),
+    ...(onRetry ? { onRetry } : {}),
+  }, 'custom');
 }
 
 describe('custom endpoint failures land in the existing ladder', () => {
@@ -239,13 +252,51 @@ describe('custom endpoint failures land in the existing ladder', () => {
     }
   });
 
-  test('429 is named, and fails fast: a rate limit does not clear inside the backoff', async () => {
+  test('429 is retried by the provider, and the retry count reaches the caller', async () => {
     const endpoint = startFake(429, { error: { message: 'rate limit exceeded, slow down' } });
+    const retries: Array<{ attempt: number; status: number; delayMs: number }> = [];
     try {
-      const message = await failureOf(providerFor(endpoint));
+      const message = await failureOf(providerFor(
+        endpoint,
+        'sk-test',
+        { maxAttempts: 3, baseDelayMs: 1, maxDelayMs: 1, maxTotalMs: 1_000 },
+        (event) => retries.push(event),
+      ));
+      expect(endpoint.requests).toHaveLength(3);
+      expect(retries.map((event) => event.attempt)).toEqual([1, 2]);
       expect(classifyEndpointFailure(message)).toBe('rate_limit');
-      expect(classifyProviderError(message)).toBe('fatal');
+      expect(message).toContain('provider_retry: attempts=3');
+      // The run ladder does not retry it again: the provider already spent the budget (#282).
       expect(planFailure({ message, attempt: 0, policy: POLICY, overflowRecoveryUsed: false })).toMatchObject({ action: 'fail' });
+    } finally {
+      endpoint.stop();
+    }
+  });
+
+  test('a 429 followed by 200 succeeds, and the retry is accounted', async () => {
+    const endpoint = startFake(200, { choices: [{ message: { content: 'OK' }, finish_reason: 'stop' }] }, { statuses: [429, 200] });
+    const retries: Array<{ attempt: number; status: number; delayMs: number }> = [];
+    try {
+      const turn = (await complete(providerFor(
+        endpoint,
+        'sk-test',
+        { maxAttempts: 3, baseDelayMs: 1, maxDelayMs: 1, maxTotalMs: 1_000 },
+        (event) => retries.push(event),
+      ))) as { text: string };
+      expect(turn.text).toBe('OK');
+      expect(endpoint.requests).toHaveLength(2);
+      expect(retries).toEqual([{ attempt: 1, status: 429, delayMs: 1 }]);
+    } finally {
+      endpoint.stop();
+    }
+  });
+
+  test('a 400 is not retried: the provider loop only takes 429/5xx', async () => {
+    const endpoint = startFake(400, { error: { message: 'bad request' } });
+    try {
+      const message = await failureOf(providerFor(endpoint, 'sk-test', { maxAttempts: 3, baseDelayMs: 1, maxDelayMs: 1, maxTotalMs: 1_000 }));
+      expect(endpoint.requests).toHaveLength(1);
+      expect(message).not.toContain('provider_retry');
     } finally {
       endpoint.stop();
     }

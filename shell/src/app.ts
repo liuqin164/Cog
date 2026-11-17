@@ -43,6 +43,7 @@ import { dreamPlugin } from './plugins/dream.ts';
 import { emergencePlugin } from './plugins/emergence.ts';
 import { terminalPlugin, TerminalChannel, type ShellControl } from './channels/terminal.ts';
 import { AgentRuntime, type AgentMessage, type ModelProvider, type RunSummary, type TurnUsage } from './state/agent-loop.ts';
+import { classifyEndpointFailure } from './state/retry.ts';
 import { laneAssemblyView, type ContextMetrics } from './state/session-lanes.ts';
 import { SecretRedactor, startKernelHttpFace, type HttpFaceHandle } from './kernel-host.ts';
 import { formatBytes, memoryPressureAction, readMemoryUsage } from './memory.ts';
@@ -289,6 +290,8 @@ export class CompanionShell implements ShellControl, AttachShell {
   /** This process's native plugin load outcomes; `/plugins` and `/health` read it. */
   readonly pluginResults: PluginLoadResult[] = [];
   private readonly embedding?: XenovaEmbeddingProvider;
+  /** Any host-supplied embedder, so the install's semantic probe is not limited to the local one. */
+  private readonly embeddingProvider?: EmbeddingProvider;
   private readonly shellRegistry?: ShellModelRegistry;
   private reEmbedRunning = false;
 
@@ -320,6 +323,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.shellRegistry = registry instanceof ShellModelRegistry ? registry : undefined;
     const embeddingProvider = options.embeddingProvider
       ?? (options.embedding ? new XenovaEmbeddingProvider(this.config.dataDir) : undefined);
+    this.embeddingProvider = embeddingProvider;
     this.embedding = embeddingProvider instanceof XenovaEmbeddingProvider ? embeddingProvider : undefined;
     this.kernel = createMemoryKernel({
       dbPath: this.config.dbPath,
@@ -680,10 +684,14 @@ export class CompanionShell implements ShellControl, AttachShell {
     } catch (error) {
       // A missing model, a failed download or a broken ONNX file all land here. The companion keeps
       // answering with lexical recall; health and this trace record why.
+      const message = error instanceof Error ? error.message : String(error);
       this.trace.append('embedding_unavailable', {
         modelId: EMBEDDING_MODEL,
-        message: error instanceof Error ? error.message : String(error),
+        message,
       });
+      // The service log is inherited stdout/stderr; the trace is the durable record. Say it on both
+      // faces so a worker that never starts is not only a `/health` line nobody reads (#280).
+      console.error(`[companion-shell] embedding degraded: ${message}`);
     }
   }
 
@@ -748,6 +756,8 @@ export class CompanionShell implements ShellControl, AttachShell {
         store: new RouteStore(join(this.config.dataDir, 'routes.json')).load(),
         builtin: { name: 'mg', baseUrl: this.config.model.baseUrl, apiKey: this.config.model.apiKey, model: this.config.model.model, targetTokens: this.config.contextSweetSpot },
         timeoutMs: this.config.model.timeoutMs,
+        // A 429 the gateway could not absorb is retried by the provider, not the run ladder (#282).
+        onRetry: ({ attempt, status, delayMs }) => this.trace.append('provider_retry', { attempt, status, delayMs }),
       });
       // A routes file that did not parse is a real problem the user must see, but it must not stop the
       // resident: mg is available either way.
@@ -1481,6 +1491,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.materializeTaskEndStub(summary.turnId, summary.runId);
     if (summary.stopReason === 'run_error' && summary.error?.startsWith('model_timeout:')) this.announceModelTimeout(summary);
     if (summary.stopReason === 'run_error' && summary.error?.startsWith('no_progress:')) this.announceNoProgress(summary);
+    if (summary.stopReason === 'run_error' && summary.error?.startsWith('mg_gateway_error:')) this.announceProviderFailure(summary);
     await this.machine.dispatch(outcome, { reason: summary.error ?? reason, runId });
     if (this.machine.state === 'SUSPENDED' && this.machine.runtime.suspension?.kind === 'budget') {
       this.offerResume(this.machine.runtime.suspension.id);
@@ -1573,6 +1584,29 @@ export class CompanionShell implements ShellControl, AttachShell {
     const text = `连续 ${this.config.maxIdleTurns} 回合无用户可见产出，已停止本轮（无进展判据 maxIdleTurns=${this.config.maxIdleTurns}）；停在 ${where}`;
     void this.host.bus.emit('terminal_print', { text: `${text}\n` });
     void this.host.bus.emit('companion_notice', { text, tone: 'warn' });
+  }
+
+  /**
+   * A run the provider ended (#282): the provider retried 429/5xx within its budget and still failed,
+   * so the user gets a line instead of a silently missing answer. The reason is truncated; the trace
+   * keeps the same account.
+   */
+  private announceProviderFailure(summary: RunSummary): void {
+    const reason = summary.error ?? 'provider_error';
+    const kind = classifyEndpointFailure(reason);
+    const retryable = kind === 'rate_limit' || /mg_gateway_error:\s*5\d\d/u.test(reason);
+    const head = kind === 'rate_limit'
+      ? '模型网关限流（429），壳已按预算重试仍未恢复'
+      : retryable
+        ? '模型网关临时失败（5xx），壳已按预算重试仍未恢复'
+        : `模型调用失败（${kind}）`;
+    const tail = retryable
+      ? '；这句话可以稍后重发，记忆和已完成的工具结果都还在。'
+      : '；这不是可重试的网络抖动，先看原因再发。';
+    const text = `${head}${tail} 原因：${truncate(reason, 300)}`;
+    void this.host.bus.emit('terminal_print', { text: `${text}\n` });
+    void this.host.bus.emit('companion_notice', { text, tone: 'warn' });
+    this.trace.append('run_failure_announced', { runId: summary.runId, kind, retryable, reason: truncate(reason, 300) });
   }
 
   /**
@@ -2239,6 +2273,21 @@ export class CompanionShell implements ShellControl, AttachShell {
     try {
       const result = this.backend.recall({ agentId: this.config.agentId, projectId: this.config.projectId, query, limit: 5 });
       return { ok: true, text: result.items.map((item) => item.text).join('\n') };
+    } catch (error) {
+      return { ok: false, text: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  /**
+   * The install's semantic probe (#280): run one real embedding and report its dimension. A lexical
+   * recall cannot stand in for this, because the whole failure mode is recall silently falling back
+   * to lexical while the self-check still looks green.
+   */
+  async probeEmbed(text: string): Promise<{ ok: boolean; text: string; dimensions?: number }> {
+    if (!this.embeddingProvider) return { ok: false, text: 'embedding host not enabled for this process' };
+    try {
+      const vector = await this.embeddingProvider.embed(text);
+      return { ok: true, text: `dimensions=${vector.length}`, dimensions: vector.length };
     } catch (error) {
       return { ok: false, text: error instanceof Error ? error.message : String(error) };
     }

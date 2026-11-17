@@ -26,7 +26,8 @@ describe('the failure ladder classification', () => {
     expect(classifyProviderError('prompt is too long: 213462 tokens > 200000 maximum')).toBe('overflow');
     expect(classifyProviderError('tool_name_conflict: nope')).toBe('fatal');
     expect(classifyProviderError('')).toBe('fatal');
-    // The account limit and the rate limit both fail fast now; neither retries.
+    // The account limit and the rate limit both fail on this ladder. A 429 is retried first by the
+    // provider's own budget (#282); the ladder only sees what that budget could not absorb.
     expect(classifyProviderError('mg_gateway_error: 429 quota exceeded')).toBe('fatal');
   });
 

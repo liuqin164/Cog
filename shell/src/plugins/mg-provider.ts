@@ -16,6 +16,57 @@ export interface MgProviderConfig {
   apiKey: string;
   model: string;
   timeoutMs: number;
+  /** Bounded provider-side backoff (#282); tests shrink it, production uses the default. */
+  retry?: Partial<ProviderRetryPolicy>;
+  /** The account of each retry; the shell writes it to the trace so a recovered 429 is visible. */
+  onRetry?: (event: { attempt: number; status: number; delayMs: number }) => void;
+}
+
+/**
+ * The provider's own retry budget (#282): at most 3 calls (1 + 2 retries), exponential from 1 s to
+ * 8 s, and no more than 30 s in requests and waits for one turn. The whole-turn timeout (#240) still
+ * caps the call; this budget only spends part of it, and a 429 that outlasts it fails loudly instead
+ * of looping. Non-retryable 4xx never enters this loop.
+ */
+export interface ProviderRetryPolicy {
+  /** Total attempts, including the first call. */
+  maxAttempts: number;
+  baseDelayMs: number;
+  maxDelayMs: number;
+  /** Wall-clock ceiling for retry waits; a request already in flight is bounded by `timeoutMs`. */
+  maxTotalMs: number;
+}
+
+export const DEFAULT_PROVIDER_RETRY_POLICY: ProviderRetryPolicy = {
+  maxAttempts: 3,
+  baseDelayMs: 1_000,
+  maxDelayMs: 8_000,
+  maxTotalMs: 30_000,
+};
+
+/** 429 and the transient server answers; 501/505 are configuration or protocol failures. */
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+
+function retryAfterMs(header: string | null, now: number): number | undefined {
+  if (!header) return undefined;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1_000;
+  const at = Date.parse(header);
+  return Number.isFinite(at) ? Math.max(0, at - now) : undefined;
+}
+
+function sleepAbortable(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new Error('aborted'));
+      return;
+    }
+    const timer = setTimeout(resolve, ms);
+    signal.addEventListener('abort', () => {
+      clearTimeout(timer);
+      reject(new Error('aborted'));
+    }, { once: true });
+  });
 }
 
 function toOpenAiMessages(messages: AgentMessage[]): unknown[] {
@@ -98,27 +149,53 @@ export class MgModelProvider implements ModelProvider {
 
   async complete(input: ModelCompletionInput): Promise<ModelTurn> {
     const url = `${this.config.baseUrl.replace(/\/+$/u, '')}/chat/completions`;
-    const signal = AbortSignal.any([input.signal, AbortSignal.timeout(this.config.timeoutMs)]);
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${this.config.apiKey}` },
-      body: JSON.stringify({
-        model: this.config.model,
-        messages: [{ role: 'system', content: input.systemPrompt }, ...toOpenAiMessages(input.messages)],
-        tools: input.tools.length
-          ? input.tools.map((tool) => ({
-              type: 'function',
-              function: { name: tool.name, description: tool.description, parameters: tool.parameters },
-            }))
-          : undefined,
-        tool_choice: input.tools.length ? 'auto' : undefined,
-      }),
-      signal,
-    });
-    const text = await response.text();
-    // Some endpoints echo the request (and its Authorization header) back in an error body. The key
-    // is a known secret here, so it is stripped before the message can reach a trace or a transcript.
-    if (!response.ok) throw new Error(redactSecrets(`mg_gateway_error: ${response.status} ${text.slice(0, 400)}`, [this.config.apiKey]));
+    const retry = { ...DEFAULT_PROVIDER_RETRY_POLICY, ...this.config.retry };
+    // One cap covers every attempt and the waits between them, so #240's fast failure is unchanged.
+    const timeout = AbortSignal.timeout(this.config.timeoutMs);
+    const signal = AbortSignal.any([input.signal, timeout]);
+    const startedAt = Date.now();
+    let text = '';
+    let response: Response;
+    for (let attempt = 1; ; attempt += 1) {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${this.config.apiKey}` },
+        body: JSON.stringify({
+          model: this.config.model,
+          messages: [{ role: 'system', content: input.systemPrompt }, ...toOpenAiMessages(input.messages)],
+          tools: input.tools.length
+            ? input.tools.map((tool) => ({
+                type: 'function',
+                function: { name: tool.name, description: tool.description, parameters: tool.parameters },
+              }))
+            : undefined,
+          tool_choice: input.tools.length ? 'auto' : undefined,
+        }),
+        signal,
+      });
+      text = await response.text();
+      if (response.ok) break;
+      const elapsed = Date.now() - startedAt;
+      const budgetLeft = retry.maxTotalMs - elapsed;
+      const retryable = RETRYABLE_STATUS.has(response.status);
+      if (!retryable || attempt >= retry.maxAttempts || budgetLeft <= 0) {
+        // Some endpoints echo the request (and its Authorization header) back in an error body. The
+        // key is a known secret here, so it is stripped before the message reaches a trace.
+        const account = attempt > 1 ? ` (provider_retry: attempts=${attempt}, elapsedMs=${elapsed})` : '';
+        throw new Error(redactSecrets(`mg_gateway_error: ${response.status} ${text.slice(0, 400)}${account}`, [this.config.apiKey]));
+      }
+      const exponential = Math.min(retry.baseDelayMs * 2 ** (attempt - 1), retry.maxDelayMs);
+      const requested = retryAfterMs(response.headers.get('retry-after'), Date.now()) ?? exponential;
+      const delayMs = Math.min(requested, retry.maxDelayMs, budgetLeft);
+      this.config.onRetry?.({ attempt, status: response.status, delayMs });
+      try {
+        await sleepAbortable(delayMs, signal);
+      } catch {
+        // The timeout signal and the user's abort are different outcomes: the first is #240's
+        // whole-turn cap and must keep its name, the second is a stop.
+        throw timeout.aborted ? new Error('TimeoutError: The operation timed out.') : new Error('aborted');
+      }
+    }
     let parsed: { choices?: Array<{ message?: { content?: unknown; tool_calls?: unknown }; finish_reason?: string }>; usage?: RawUsage };
     try {
       parsed = JSON.parse(text);
