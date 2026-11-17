@@ -1163,10 +1163,27 @@ export class CompanionShell implements ShellControl, AttachShell {
       }
       return;
     }
+    // #279: the end declaration's own ledger row is the idempotency key. A kill between the
+    // append below and the checkpoint clear leaves that row in the ledger, so a replay finds it
+    // and writes nothing; compile still runs in case the kill landed before the compile.
+    if (this.taskProcedureWritten(evidence.declarationEventId)) {
+      try {
+        this.kernel.procedures.compile({ projectId: this.config.projectId, now: this.now() });
+      } catch (error) {
+        this.trace.append('task_procedure_failed', {
+          assignmentId: pending.assignmentId,
+          message: error instanceof Error ? error.message : String(error),
+        });
+        return;
+      }
+      this.machine.updateRuntime({ lastEndedTask: { ...pending, procedure: undefined } });
+      this.trace.append('task_procedure_duplicate_skipped', {
+        assignmentId: pending.assignmentId,
+        declarationEventId: evidence.declarationEventId,
+      });
+      return;
+    }
     try {
-      // shortcut: a kill between this append and the checkpoint clear below would write the row
-      // twice, and two identical experiences read as `established`; key the row by assignmentId
-      // when a duplicate is ever observed.
       this.kernel.recordTaskEvent({
         projectId: this.config.projectId,
         workspaceId: this.config.projectId,
@@ -1188,6 +1205,7 @@ export class CompanionShell implements ShellControl, AttachShell {
             outcome: 'succeeded',
             steps: evidence.steps,
             tools: evidence.tools,
+            declarationEventId: evidence.declarationEventId,
           },
         },
       });
@@ -1207,6 +1225,29 @@ export class CompanionShell implements ShellControl, AttachShell {
       steps: evidence.steps.length,
       tools: evidence.tools,
     });
+  }
+
+  /** Whether the same end declaration already produced its task_event (#279). */
+  private taskProcedureWritten(declarationEventId: string): boolean {
+    try {
+      const row = this.kernel.factStore.getDatabase().query(`
+        SELECT 1
+        FROM memory_events
+        WHERE event_type = 'RAW_EVENT_RECORDED'
+          AND raw_event_type = 'task_event'
+          AND COALESCE(project_id, '') = ?
+          AND json_valid(payload_json)
+          AND json_extract(payload_json, '$.metadata.procedure.declarationEventId') = ?
+        LIMIT 1
+      `).get(this.config.projectId, declarationEventId);
+      return row !== null && row !== undefined;
+    } catch (error) {
+      this.trace.append('task_procedure_lookup_failed', {
+        declarationEventId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
   }
 
   /**
@@ -3465,7 +3506,7 @@ function buildTaskStub(
  * means no evidence — the caller writes nothing rather than an empty practice. The compiler's
  * frozen caps (`MAX_STEPS` 16, `MAX_TOOLS` 8) are applied here so the trace records what was kept.
  */
-function procedureEvidenceOf(calls: readonly SessionToolCall[]): { steps: string[]; tools: string[] } | undefined {
+function procedureEvidenceOf(calls: readonly SessionToolCall[]): { steps: string[]; tools: string[]; declarationEventId: string } | undefined {
   const end = calls.findIndex((call) =>
     call.toolName === 'declare_task'
     && (call.input as { action?: unknown } | undefined)?.action === 'end');
@@ -3477,7 +3518,7 @@ function procedureEvidenceOf(calls: readonly SessionToolCall[]): { steps: string
     return input ? `${call.toolName}: ${input}` : call.toolName;
   });
   const tools = [...new Set(ordered.map((call) => call.toolName))].slice(0, 8);
-  return { steps, tools };
+  return { steps, tools, declarationEventId: calls[end]!.eventId };
 }
 
 /** A tool call's input, one line and bounded: the step names what was called, not the whole file. */

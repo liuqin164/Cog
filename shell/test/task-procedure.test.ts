@@ -3,17 +3,22 @@
  * from the task's captured `tool_call` rows. The book never records a step the trace does not show.
  */
 import { describe, expect, test } from 'bun:test';
+import { join } from 'node:path';
+import { CheckpointStore } from '../src/state/checkpoint.ts';
 import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
 
 const NO_DREAM = { runKernelNight: false, maxEpisodes: 5, windowStartHour: 3, windowEndHour: 3 };
 
-const shellFor = (prefix: string, provider: ScriptedProvider, contextSweetSpot = 6_000) =>
-  makeShell(makeTempDir(prefix), provider, {
+const shellAt = (dir: string, provider: ScriptedProvider, contextSweetSpot = 6_000) =>
+  makeShell(dir, provider, {
     dream: NO_DREAM,
     contextSweetSpot,
     budgets: { maxTurnsPerRun: 8, maxTokensPerRun: 40_000, toolWhitelist: null },
     workBudget: { maxTurnsPerRun: 8, maxTokensPerRun: 40_000 },
   });
+
+const shellFor = (prefix: string, provider: ScriptedProvider, contextSweetSpot = 6_000) =>
+  shellAt(makeTempDir(prefix), provider, contextSweetSpot);
 
 describe('the task-end producer leaves only the real trajectory (#262)', () => {
   test('two completed attempts establish the practice from captured calls only', async () => {
@@ -97,6 +102,57 @@ describe('the task-end producer leaves only the real trajectory (#262)', () => {
       expect(shell.trace.read().some((record) => record.kind === 'task_procedure_written')).toBe(false);
     } finally {
       await shell.stop();
+    }
+  }, 30_000);
+
+  test('a replay of the same task end leaves one descriptor (#279)', async () => {
+    const dir = makeTempDir('task-procedure-replay-');
+    const first = shellAt(dir, new ScriptedProvider([
+      { text: '读一下。', toolCalls: [{ toolCallId: 'c1', toolName: 'read', input: { path: 'notes.txt' } }] },
+      {
+        text: '做完了。',
+        toolCalls: [{
+          toolCallId: 'c2',
+          toolName: 'declare_task',
+          input: { action: 'end', domain: '发布', key: 'npm-publish' },
+        }],
+      },
+      { text: '收尾。', toolCalls: [] },
+    ]));
+    await first.start();
+    try {
+      await first.submit('读一下笔记');
+      const before = first.kernel.procedures.entries({ projectId: first.config.projectId })
+        .filter((entry) => entry.origin !== 'imported');
+      expect(before).toHaveLength(1);
+      expect(before[0]!.support.successes).toBe(1);
+    } finally {
+      await first.stop();
+    }
+
+    // The crash state: the task_event is committed but the checkpoint still carries the pending
+    // end, as a kill between the append and the clear would leave it.
+    const store = new CheckpointStore(join(dir, 'data'));
+    const state = store.load()!;
+    state.runtime.lastEndedTask = {
+      assignmentId: 'assignment-replay',
+      startedAt: 0,
+      endedAt: Date.now(),
+      procedure: { domain: '发布', key: 'npm-publish', checklist: false },
+    };
+    store.save(state);
+
+    const second = shellAt(dir, new ScriptedProvider([{ text: '在。', toolCalls: [] }]));
+    await second.start();
+    try {
+      await second.submit('还在吗');
+      const after = second.kernel.procedures.entries({ projectId: second.config.projectId })
+        .filter((entry) => entry.origin !== 'imported');
+      expect(after).toHaveLength(1);
+      expect(after[0]!.support.successes).toBe(1);
+      expect(second.trace.read().some((record) => record.kind === 'task_procedure_duplicate_skipped')).toBe(true);
+    } finally {
+      await second.stop();
     }
   }, 30_000);
 });
