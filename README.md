@@ -137,7 +137,7 @@ The value is quotable exactly because the block carries the raw turn. "Why do yo
 | vector top-k | 100.0% | 100.0% | 100% |
 | recent-turns window | 87.5% | 0.0% | 100% |
 
-24 generated scenarios per family, reproducible from a fixed seed. This is synthetic data, not LongMemEval; the method, the other families, and where the default path loses are in [BENCHMARKS.md](BENCHMARKS.md).
+Each family is 24 generated scenarios, reproducible from a fixed seed; Cog's 91.7% is 22 of 24. This is synthetic data, not LongMemEval; the method, the other families, and where the default path loses are in [BENCHMARKS.md](BENCHMARKS.md).
 
 **Context is budgeted.** A turn's context is assembled from six lanes — pinned, profile, digest, working set, recall, tail — and fitted to a token budget. Memory planning takes 25% of the available window by default, with a 30% hard ceiling. When a lane does not fit, it becomes a browse-only pointer with its ids kept, and the text stays one recall away; it is never silently dropped or paraphrased.
 
