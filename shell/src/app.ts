@@ -690,7 +690,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   /** Idempotent: rewritten on every start so `--db` and a data-dir move stay in sync. */
   private writeCliConfig(): void {
     try {
-      mkdirSync(this.config.dataDir, { recursive: true });
+      mkdirSync(this.config.dataDir, { recursive: true, mode: 0o700 });
       writeFileSync(this.cliConfigPath, `[core]\ndb_path = ${JSON.stringify(this.config.dbPath)}\n`, { mode: 0o600 });
     } catch (error) {
       this.trace.append('cli_config_write_failed', {
