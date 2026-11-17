@@ -79,6 +79,9 @@ export function leakedUnits(units: TestUnit[], alive: (pid: number) => boolean =
 }
 
 export function readProcessTable(): string {
+  // #296: a minimal host may have no `ps`; the sweep is best-effort, and its absence
+  // must not fail every test file through the preload.
+  if (!Bun.which('ps')) return '';
   const proc = Bun.spawnSync({ cmd: ['ps', '-eo', 'pid=,args='], stdout: 'pipe', stderr: 'pipe' });
   return proc.stdout.toString();
 }

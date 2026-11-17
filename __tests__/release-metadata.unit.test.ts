@@ -8,6 +8,23 @@ import { LATEST_SCHEMA_VERSION } from '../src/migrations/v3_7_4/FinalSchema.js';
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const packageJsonPath = join(coreRoot, 'package.json');
 
+// #296: `git ls-files` is only meaningful in a git work tree. A packed copy (the
+// `npm pack` tarball) or a host without git used to turn this into a red; the
+// tracked-file claim cannot be checked there, so the case is skipped with a reason.
+function inGitWorkTree(): boolean {
+  try {
+    const probe = Bun.spawnSync({ cmd: ['git', 'rev-parse', '--is-inside-work-tree'], cwd: coreRoot, stdout: 'pipe', stderr: 'pipe' });
+    return probe.exitCode === 0;
+  } catch {
+    return false;
+  }
+}
+
+const gitWorkTree = inGitWorkTree();
+if (!gitWorkTree) {
+  console.error('[skip] release-metadata: not a git work tree (packed copy or git absent), so `git ls-files` cannot be checked');
+}
+
 function readText(path: string): string {
   return readFileSync(path, 'utf8');
 }
@@ -108,7 +125,7 @@ describe('core release metadata', () => {
     expect(installer).toContain('COGMEM_SKIP_INIT');
   });
 
-  test('local databases and desktop metadata are not tracked as release files', async () => {
+  test.skipIf(!gitWorkTree)('local databases and desktop metadata are not tracked as release files', async () => {
     const proc = Bun.spawn({
       cmd: ['git', 'ls-files'],
       cwd: coreRoot,
