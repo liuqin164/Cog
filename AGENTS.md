@@ -38,7 +38,8 @@ What the tiers are, how Dream reads a conversation, and what the Atlas projects:
   `bun run prepublishOnly` (typecheck → build → `bun test __tests__` → `leak:check` →
   `npm pack --dry-run`) plus `cd shell && bun test test`. CI repeats both on the push, and
   `bun run ci:status` reads that run. The 5.0 gate then measures the packed artifact on the box:
-  a seven-day survival run plus the F13 companion-behaviour evaluation (`docs/box.md`, #167).
+  a seven-day survival run (`shell/SURVIVAL.md`, dispatched by #165) plus the F13
+  companion-behaviour evaluation (`docs/box.md`, #167).
   Only then does the owner create the version tag and GitHub Release; the release `published`
   event runs `.github/workflows/publish.yml`, which checks the tag against `package.json` and
   publishes to npm.

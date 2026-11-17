@@ -51,7 +51,7 @@ npm pack --dry-run --json
 
 ## Box Gate
 
-- [ ] The 5.0 seven-day survival run has a recorded result on #167.
+- [ ] The 5.0 seven-day survival run has a recorded result on #165.
 - [ ] The F13 companion-behaviour evaluation on the same box is green (result on #167).
 - [ ] The box is back in first-install state and `Paused`, following the cleanup list in
       `docs/box.md`.
@@ -62,9 +62,12 @@ npm pack --dry-run --json
 itself: build a pre-4.0-shaped file, confirm 5.0 refuses it, and confirm the bytes did not change.
 
 ```bash
+work="$PWD/.cogmem/tmp/release-olddb"
+mkdir -p "$work"
+export OLD_DB="$work/schema31.db"
 bun -e '
 import { Database } from "bun:sqlite";
-const db = new Database("/tmp/schema31.db");
+const db = new Database(process.env.OLD_DB ?? ".cogmem/tmp/release-olddb/schema31.db");
 db.exec(`
   CREATE TABLE _meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
   CREATE TABLE _schema_migrations (version TEXT PRIMARY KEY, description TEXT NOT NULL, applied_at TEXT NOT NULL);
@@ -76,10 +79,10 @@ for (let version = 15; version <= 31; version += 1) {
 }
 db.close();
 '
-sha256sum /tmp/schema31.db > /tmp/schema31.before.sha256
-cogmem memory recall --query x --db /tmp/schema31.db --timezone UTC --json
-sha256sum -c /tmp/schema31.before.sha256
-cogmem memory status --db /tmp/fresh-5.0.db --json
+sha256sum "$OLD_DB" > "$OLD_DB.before.sha256"
+cogmem memory recall --query x --db "$OLD_DB" --timezone UTC --json
+sha256sum -c "$OLD_DB.before.sha256"
+cogmem memory status --db "$work/fresh-5.0.db" --json
 ```
 
 - [ ] The old file exits non-zero with `"reason": "no_upgrade_path"`, and `sha256sum -c` prints
