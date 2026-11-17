@@ -3897,6 +3897,7 @@ export class MemoryKernel {
         'memory_frames'
       ]) deleteScoped(table);
       runDelete(`DELETE FROM memory_events_fts WHERE event_id IN (SELECT event_id FROM memory_events WHERE COALESCE(project_id, '') = ?)`, [scope]);
+      runDelete(`DELETE FROM memory_event_cjk_terms WHERE event_id IN (SELECT event_id FROM memory_events WHERE COALESCE(project_id, '') = ?)`, [scope]);
       deleted.events += deleteScoped('memory_events');
       deleteScoped('compiler_confidence_runs');
       if (neuronIds.length > 0) {

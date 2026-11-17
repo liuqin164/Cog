@@ -125,6 +125,18 @@ export const FINAL_TABLES: readonly FinalSchemaObject[] = [
         tokenize='unicode61'
       )` },
 
+  { type: "table", name: "memory_event_cjk_terms", table: "memory_event_cjk_terms", sql: `CREATE TABLE memory_event_cjk_terms (
+        term TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        global_seq INTEGER NOT NULL,
+        PRIMARY KEY (term, event_id)
+      ) WITHOUT ROWID` },
+
+  { type: "table", name: "memory_event_fts_state", table: "memory_event_fts_state", sql: `CREATE TABLE memory_event_fts_state (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      )` },
+
   { type: "table", name: "vector_projection_state", table: "vector_projection_state", sql: `CREATE TABLE vector_projection_state (
         projection_name TEXT PRIMARY KEY,
         last_event_id TEXT,
@@ -1841,6 +1853,8 @@ export const FINAL_AUXILIARY_OBJECTS: readonly FinalSchemaObject[] = [
   { type: "index", name: "idx_memory_events_thread_order", table: "memory_events", sql: `CREATE INDEX idx_memory_events_thread_order ON memory_events(project_scope,thread_id,thread_seq,event_ordinal,global_seq)` },
 
   { type: "index", name: "idx_memory_events_parent", table: "memory_events", sql: `CREATE INDEX idx_memory_events_parent ON memory_events(parent_event_id)` },
+
+  { type: "index", name: "idx_memory_event_cjk_terms_seq", table: "memory_event_cjk_terms", sql: `CREATE INDEX idx_memory_event_cjk_terms_seq ON memory_event_cjk_terms(term,global_seq,event_id)` },
 
   { type: "index", name: "idx_neuron_embeddings_project", table: "neuron_embeddings", sql: `CREATE INDEX idx_neuron_embeddings_project ON neuron_embeddings(project_id,model_id)` },
 
