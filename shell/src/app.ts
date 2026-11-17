@@ -34,6 +34,7 @@ import { WorkflowService, workflowsPlugin } from './plugins/workflows.ts';
 import { CommandProposals, executeProposal, type CommandProposal, type ProposalConfirmation } from './proposals.ts';
 import { capturePlugin } from './plugins/capture.ts';
 import { sessionContextPlugin } from './plugins/session-context.ts';
+import { toolsByTaskPlugin } from './plugins/tools-by-task.ts';
 import { assignmentPlugin } from './plugins/assignment.ts';
 import { recallPlugin } from './plugins/recall.ts';
 import { soulEditPlugin } from './plugins/soul-edit.ts';
@@ -789,6 +790,8 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.host.register(proposalPlugin());
     this.host.register(askPlugin());
     this.host.register(assignmentPlugin());
+    // Mounts the optional web/workflow/self-change schemas per task (#267); no state of its own.
+    this.host.register(toolsByTaskPlugin());
     this.host.register(hygienePlugin());
     this.host.register(capturePlugin({ agentId: this.config.agentId, projectId: this.config.projectId, sessionId: this.config.sessionId, paused: () => this.capturePaused }));
     this.host.register(sessionContextPlugin({

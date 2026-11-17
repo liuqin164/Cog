@@ -2377,9 +2377,12 @@ export class MemoryKernel {
     // layers Dream just wrote are still owed. Finishing the run with the
     // reconciliation pass is what clears the dirty flag, so the next night's tick
     // does not pay a corpus rebuild for work this run already knew about.
+    // The frame half is bounded: only the frames the double-stamp scan calls stale
+    // (plus the ones Dream just wrote and the projection lacks) are re-projected,
+    // not the project's whole frame layer (#110).
     const reconciled = options.projectId !== undefined
-      ? this.ensureMemoryAtlas({ projectId: options.projectId })
-      : this.memoryAtlasIndexer.ensureAllFresh();
+      ? this.memoryAtlasIndexer.ensureFresh({ projectId: options.projectId, frameMode: 'repair' })
+      : this.memoryAtlasIndexer.ensureAllFresh({ frameMode: 'repair' });
     // The nightly copy is taken after the Dream and the atlas reconcile, so the snapshot is the
     // brain the night produced rather than the one it started with. A failure fails the Night: the
     // Dream rows are already committed and a re-run is idempotent.

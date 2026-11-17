@@ -14,14 +14,23 @@ export class MemoryAtlasIndexer {
   private readonly actions: ActionFrameExtractor;
   private readonly curator: GraphCurator;
   private readonly frameProjector?: MemoryFrameProjector;
-  constructor(private db: Database, eventStore: EventStore, private store: MemoryAtlasStore, frameStore?: MemoryFrameStore, taxonomy: MemoryTaxonomy = DEFAULT_TAXONOMY) {
+  constructor(private db: Database, eventStore: EventStore, private store: MemoryAtlasStore, private readonly frameStore?: MemoryFrameStore, taxonomy: MemoryTaxonomy = DEFAULT_TAXONOMY) {
     installAtlasProjectionDirtyTriggersV3(db);
     this.actions = new ActionFrameExtractor(db, eventStore, store);
     this.curator = new GraphCurator(db, eventStore, store, taxonomy);
     if (frameStore) this.frameProjector = new MemoryFrameProjector(db, frameStore, store, eventStore.getProjectTimeZone());
   }
-  rebuild(options: { projectId?: string } = {}): { documents: number; actions: number; curatedEpisodes: number; facetEdges: number; reviewNeeded: number } {
+  /**
+   * `frameMode: 'repair'` keeps the canonical and action layers on this batch path but re-projects
+   * only the frames that need it (#110): the double-stamp stale set plus active frames the
+   * projection does not carry. Frame-owned documents are left in place for the same reason — the
+   * projector is no longer rewriting every frame, so deleting theirs would lose them. The default
+   * `'full'` stays the consistency guarantee an operator asks for explicitly.
+   */
+  rebuild(options: { projectId?: string; frameMode?: 'full' | 'repair' } = {}): { documents: number; actions: number; curatedEpisodes: number; facetEdges: number; reviewNeeded: number } {
     const projectId = options.projectId;
+    const repair = options.frameMode === 'repair';
+    const keepFrameDocuments = repair ? ` AND COALESCE(json_extract(metadata_json, '$.projection'), '') <> 'memory_atlas.frame.v2'` : '';
     let actions = 0;
     let curatedEpisodes = 0;
     let facetEdges = 0;
@@ -30,13 +39,13 @@ export class MemoryAtlasIndexer {
       this.store.deferFts(() => this.db.transaction(() => {
       const ftsExists = Boolean(this.db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_atlas_fts'`).get());
       if (ftsExists) {
-        if (projectId !== undefined) this.db.prepare(`DELETE FROM memory_atlas_fts WHERE project_id=? AND node_id IN (SELECT node_id FROM memory_atlas_documents WHERE project_id=?)`).run(projectId, projectId);
-        else this.db.exec(`DELETE FROM memory_atlas_fts WHERE node_id IN (SELECT node_id FROM memory_atlas_documents);`);
+        if (projectId !== undefined) this.db.prepare(`DELETE FROM memory_atlas_fts WHERE project_id=? AND node_id IN (SELECT node_id FROM memory_atlas_documents WHERE project_id=?${keepFrameDocuments})`).run(projectId, projectId);
+        else this.db.exec(`DELETE FROM memory_atlas_fts WHERE node_id IN (SELECT node_id FROM memory_atlas_documents WHERE 1${keepFrameDocuments});`);
       }
       if (projectId !== undefined) {
-        this.db.prepare(`DELETE FROM memory_atlas_documents WHERE project_id=? AND node_type IN ('project','entity','topic','issue','session','thread','memoryKind','actionKind','cluster','episode','raw_event','belief','time')`).run(projectId);
+        this.db.prepare(`DELETE FROM memory_atlas_documents WHERE project_id=? AND node_type IN ('project','entity','topic','issue','session','thread','memoryKind','actionKind','cluster','episode','raw_event','belief','time')${keepFrameDocuments}`).run(projectId);
       } else {
-        this.db.exec(`DELETE FROM memory_atlas_documents WHERE node_type IN ('project','entity','topic','issue','session','thread','memoryKind','actionKind','cluster','episode','raw_event','belief','time');`);
+        this.db.exec(`DELETE FROM memory_atlas_documents WHERE node_type IN ('project','entity','topic','issue','session','thread','memoryKind','actionKind','cluster','episode','raw_event','belief','time')${keepFrameDocuments};`);
       }
       backfillAtlasDocuments(this.db, projectId);
       actions = this.actions.rebuild(projectId);
@@ -50,7 +59,10 @@ export class MemoryAtlasIndexer {
         reviewNeeded += result.reviewNeeded;
       }
       if (this.frameProjector) for (const id of projects) {
-        const result = this.frameProjector.rebuild(id, Date.now(), { canonicalDocumentsRebuilt: true });
+        const frameIds = repair && this.frameStore ? this.frameStore.listRepairFrames({ projectId: id }).ids : undefined;
+        const result = frameIds
+          ? this.frameProjector.repair(id, frameIds, Date.now(), { canonicalDocumentsRebuilt: true })
+          : this.frameProjector.rebuild(id, Date.now(), { canonicalDocumentsRebuilt: true });
         facetEdges += result.edges;
         reviewNeeded += result.needsReview;
       }
@@ -79,7 +91,7 @@ export class MemoryAtlasIndexer {
     return { documents: this.store.countDocuments(projectId), actions, curatedEpisodes, facetEdges, reviewNeeded };
   }
 
-  ensureFresh(options: { projectId: string }): { documents: number; actions: number; curatedEpisodes?: number; refreshed: boolean } {
+  ensureFresh(options: { projectId: string; frameMode?: 'full' | 'repair' }): { documents: number; actions: number; curatedEpisodes?: number; refreshed: boolean } {
     if (!this.store.projectionNeedsRefresh(options.projectId)) {
       return { documents: this.store.countDocuments(options.projectId), actions: 0, refreshed: false };
     }
@@ -160,12 +172,12 @@ export class MemoryAtlasIndexer {
     };
   }
 
-  ensureAllFresh(): { documents: number; actions: number; refreshed: boolean; errors: Array<{ projectId: string; error: string }> } {
+  ensureAllFresh(options: { frameMode?: 'full' | 'repair' } = {}): { documents: number; actions: number; refreshed: boolean; errors: Array<{ projectId: string; error: string }> } {
     let documents = 0; let actions = 0; let refreshed = false;
     const errors: Array<{ projectId: string; error: string }> = [];
     for (const projectId of this.store.listKnownProjectIds()) {
       try {
-        const result = this.ensureFresh({ projectId });
+        const result = this.ensureFresh({ projectId, frameMode: options.frameMode });
         documents += result.documents; actions += result.actions; refreshed ||= result.refreshed;
       } catch (error) { errors.push({ projectId, error: error instanceof Error ? error.message : String(error) }); }
     }

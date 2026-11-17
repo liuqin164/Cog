@@ -102,18 +102,22 @@ export class ActionFrameExtractor {
   }
 
   private clear(projectId?: string): void {
+    // A frame time document is the frame projector's; a full rebuild deletes it and the projector
+    // writes it back, but a bounded repair only touches the frames it names. Preserving it here is
+    // what keeps the other frames' documents from disappearing when Night repairs one of them.
+    const notFrame = `AND COALESCE(json_extract(metadata_json, '$.projection'), '') <> 'memory_atlas.frame.v2'`;
     if (projectId !== undefined) {
       this.db.prepare(`DELETE FROM memory_action_frame_evidence WHERE project_id=?`).run(projectId);
       this.db.prepare(`DELETE FROM memory_action_frames WHERE project_id=?`).run(projectId);
-      this.db.prepare(`DELETE FROM memory_atlas_documents WHERE project_id=? AND node_type IN ('action','time')`).run(projectId);
-      this.db.prepare(`DELETE FROM memory_atlas_fts WHERE project_id=? AND node_type IN ('action','time')`).run(projectId);
+      this.db.prepare(`DELETE FROM memory_atlas_fts WHERE project_id=? AND node_type IN ('action','time') AND node_id IN (SELECT node_id FROM memory_atlas_documents WHERE project_id=? AND node_type IN ('action','time') ${notFrame})`).run(projectId, projectId);
+      this.db.prepare(`DELETE FROM memory_atlas_documents WHERE project_id=? AND node_type IN ('action','time') ${notFrame}`).run(projectId);
       return;
     }
     this.db.exec(`
       DELETE FROM memory_action_frame_evidence;
       DELETE FROM memory_action_frames;
-      DELETE FROM memory_atlas_documents WHERE node_type IN ('action','time');
-      DELETE FROM memory_atlas_fts WHERE node_type IN ('action','time');
+      DELETE FROM memory_atlas_fts WHERE node_type IN ('action','time') AND node_id IN (SELECT node_id FROM memory_atlas_documents WHERE node_type IN ('action','time') ${notFrame});
+      DELETE FROM memory_atlas_documents WHERE node_type IN ('action','time') ${notFrame};
     `);
   }
 
