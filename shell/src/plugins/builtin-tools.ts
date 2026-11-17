@@ -125,13 +125,24 @@ function isWithin(root: string, candidate: string): boolean {
   return child === resolved || child.startsWith(resolved + sep);
 }
 
+/**
+ * The bin directory of the runtime running this shell, when it is not already on the sandbox's
+ * fixed PATH (setup-bun's `/home/runner/.bun/bin`, a per-user `~/.bun/bin`). Binding the directory
+ * into the sandbox is not enough: `bun tamper.ts` looks it up by name, so PATH must name it too.
+ */
+function runtimeBin(): string | undefined {
+  const dir = dirname(realpathSync(process.execPath));
+  return SANDBOX_SYSTEM_DIRS.some((system) => isWithin(system, dir)) ? undefined : dir;
+}
+
 function bashEnv(sandboxed: boolean, cliConfigPath?: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const key of BASH_ENV_ALLOWLIST) {
     const value = process.env[key];
     if (value !== undefined) env[key] = value;
   }
-  env.PATH = sandboxed ? SANDBOX_PATH : process.env.PATH ?? SANDBOX_PATH;
+  const ownBin = sandboxed ? runtimeBin() : undefined;
+  env.PATH = sandboxed ? (ownBin ? `${ownBin}:${SANDBOX_PATH}` : SANDBOX_PATH) : process.env.PATH ?? SANDBOX_PATH;
   env.HOME = sandboxed ? '/tmp' : process.env.HOME ?? '/tmp';
   env.TMPDIR = sandboxed ? '/tmp' : process.env.TMPDIR ?? '/tmp';
   env.SHELL = '/bin/bash';
@@ -144,7 +155,8 @@ function bashEnv(sandboxed: boolean, cliConfigPath?: string): NodeJS.ProcessEnv 
  * mount, so memory, budgets and the CLI config are not readable from bash (#288) whether it sits
  * under the workspace (the default `<workspace>/.cogmem-shell`) or elsewhere. Network is unshared:
  * a fetched page cannot ask bash to send a secret out. The runtime's own bin directory is bound
- * when bun/node lives outside `/usr` (a per-user install); only that directory, never `$HOME`.
+ * and named on PATH when bun/node lives outside `/usr` (a per-user install); only that directory,
+ * never `$HOME`.
  */
 function sandboxArgs(workspaceRoot: string, dataDir: string, command: string): string[] {
   const workspace = realpathSync(workspaceRoot);
@@ -168,8 +180,8 @@ function sandboxArgs(workspaceRoot: string, dataDir: string, command: string): s
     args.push('--bind', workspace, workspace);
   }
   // Bound after the data mask: a per-user bun/node install inside a masked home stays runnable.
-  const runtimeBin = dirname(realpathSync(process.execPath));
-  if (!SANDBOX_SYSTEM_DIRS.some((dir) => isWithin(dir, runtimeBin))) args.push('--ro-bind', runtimeBin, runtimeBin);
+  const ownBin = runtimeBin();
+  if (ownBin) args.push('--ro-bind', ownBin, ownBin);
   args.push('--chdir', workspace, '--', '/bin/bash', '-lc', command);
   return args;
 }

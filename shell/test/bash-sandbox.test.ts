@@ -92,6 +92,15 @@ describe('the bash sandbox (#233)', () => {
     });
   });
 
+  test.skipIf(!sandboxed)('the runtime that runs the shell is reachable by name in the sandbox', async () => {
+    const { workspace, data, trace } = layout();
+    await withHost(data, workspace, trace, async (host) => {
+      const result = await host.tools.invoke('bash', { toolCallId: 'c1', input: { command: 'bun --version' } }, { runId: 'r' });
+      expect(result.isError).toBe(false);
+      expect(result.output.trim()).toMatch(/^\d+\.\d+\.\d+/);
+    });
+  });
+
   test.skipIf(!sandboxed)('the data dir is not readable from bash (#288)', async () => {
     const { workspace, data, trace } = layout();
     const secret = join(data, 'memory.sqlite');
