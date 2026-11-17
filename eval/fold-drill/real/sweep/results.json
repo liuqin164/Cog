@@ -1,0 +1,525 @@
+{
+  "experiment": "fold-drill",
+  "issue": 254,
+  "generatedAt": "2026-11-17T06:24:03.060Z",
+  "head": "f74b3b2b51f4",
+  "model": "auto/deepseek-v4.1-flash",
+  "baseUrl": "http://127.0.0.1:3425/v1",
+  "limit": 5,
+  "stats": {
+    "tasks": 5,
+    "byType": {
+      "number": 5,
+      "name": 0,
+      "constraint": 0,
+      "step": 0
+    },
+    "autoExpandHits": 5,
+    "autoExpandMisses": 0,
+    "avgTurns": 246.2,
+    "avgChars": 60416
+  },
+  "summary": [
+    {
+      "arm": "full",
+      "tasks": 5,
+      "correct": 5,
+      "hallucinated": 0,
+      "targetDrill": 0,
+      "anyDrill": 0,
+      "avgPromptTokens": 30966.6,
+      "avgModelCalls": 1,
+      "avgToolCalls": 0,
+      "avgContextChars": 64499.8
+    },
+    {
+      "arm": "folded_key",
+      "tasks": 5,
+      "correct": 5,
+      "hallucinated": 0,
+      "targetDrill": 5,
+      "anyDrill": 5,
+      "avgPromptTokens": 23278,
+      "avgModelCalls": 2,
+      "avgToolCalls": 2.6,
+      "avgContextChars": 9544.4
+    }
+  ],
+  "groups": [
+    {
+      "arm": "full",
+      "group": "trigger_hit",
+      "tasks": 5,
+      "correct": 5,
+      "hallucinated": 0,
+      "targetDrill": 0
+    },
+    {
+      "arm": "full",
+      "group": "trigger_miss",
+      "tasks": 0,
+      "correct": 0,
+      "hallucinated": 0,
+      "targetDrill": 0
+    },
+    {
+      "arm": "folded_key",
+      "group": "trigger_hit",
+      "tasks": 5,
+      "correct": 5,
+      "hallucinated": 0,
+      "targetDrill": 5
+    },
+    {
+      "arm": "folded_key",
+      "group": "trigger_miss",
+      "tasks": 0,
+      "correct": 0,
+      "hallucinated": 0,
+      "targetDrill": 0
+    }
+  ],
+  "runs": [
+    {
+      "taskId": "r01-sweep-1",
+      "type": "number",
+      "arm": "full",
+      "autoExpand": true,
+      "question": "svc-alpha 的 max_retries 是多少？",
+      "expected": "720",
+      "answerLine": "720",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 17909,
+      "promptTokens": 9667,
+      "completionTokens": 75,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 7567,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 9667,
+          "completionTokens": 75,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "r01-sweep-1",
+      "type": "number",
+      "arm": "folded_key",
+      "autoExpand": true,
+      "question": "svc-alpha 的 max_retries 是多少？",
+      "expected": "720",
+      "answerLine": "720答案：720",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 9055,
+      "promptTokens": 16127,
+      "completionTokens": 248,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 1,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:r01-b01"
+      ],
+      "exhausted": false,
+      "elapsedMs": 10383,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 5942,
+          "completionTokens": 104,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:r01-b01",
+              "target": true,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 10185,
+          "completionTokens": 144,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "r01-sweep-2",
+      "type": "number",
+      "arm": "full",
+      "autoExpand": true,
+      "question": "svc-alpha 的 max_retries 是多少？",
+      "expected": "720",
+      "answerLine": "720",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 26869,
+      "promptTokens": 13762,
+      "completionTokens": 114,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 3141,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 13762,
+          "completionTokens": 114,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "r01-sweep-2",
+      "type": "number",
+      "arm": "folded_key",
+      "autoExpand": true,
+      "question": "svc-alpha 的 max_retries 是多少？",
+      "expected": "720",
+      "answerLine": "720答案：720",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 9149,
+      "promptTokens": 20409,
+      "completionTokens": 407,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 2,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:r01-b01",
+        "digest:r01-b02"
+      ],
+      "exhausted": false,
+      "elapsedMs": 24385,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 5989,
+          "completionTokens": 182,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:r01-b01",
+              "target": true,
+              "known": true
+            },
+            {
+              "name": "read_memory",
+              "key": "digest:r01-b02",
+              "target": false,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 14420,
+          "completionTokens": 225,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "r01-sweep-4",
+      "type": "number",
+      "arm": "full",
+      "autoExpand": true,
+      "question": "svc-alpha 的 max_retries 是多少？",
+      "expected": "720",
+      "answerLine": "720",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 44795,
+      "promptTokens": 21952,
+      "completionTokens": 61,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 2883,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 21952,
+          "completionTokens": 61,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "r01-sweep-4",
+      "type": "number",
+      "arm": "folded_key",
+      "autoExpand": true,
+      "question": "svc-alpha 的 max_retries 是多少？",
+      "expected": "720",
+      "answerLine": "720答案：720",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 9336,
+      "promptTokens": 28848,
+      "completionTokens": 442,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 4,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:r01-b01",
+        "digest:r01-b02",
+        "digest:r01-b03",
+        "digest:r01-b04"
+      ],
+      "exhausted": false,
+      "elapsedMs": 9868,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 6080,
+          "completionTokens": 241,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:r01-b01",
+              "target": true,
+              "known": true
+            },
+            {
+              "name": "read_memory",
+              "key": "digest:r01-b02",
+              "target": false,
+              "known": true
+            },
+            {
+              "name": "read_memory",
+              "key": "digest:r01-b03",
+              "target": false,
+              "known": true
+            },
+            {
+              "name": "read_memory",
+              "key": "digest:r01-b04",
+              "target": false,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 22768,
+          "completionTokens": 201,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "r01-sweep-8",
+      "type": "number",
+      "arm": "full",
+      "autoExpand": true,
+      "question": "svc-alpha 的 max_retries 是多少？",
+      "expected": "720",
+      "answerLine": "720",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 80614,
+      "promptTokens": 38338,
+      "completionTokens": 60,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 4906,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 38338,
+          "completionTokens": 60,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "r01-sweep-8",
+      "type": "number",
+      "arm": "folded_key",
+      "autoExpand": true,
+      "question": "svc-alpha 的 max_retries 是多少？",
+      "expected": "720",
+      "answerLine": "720答案：720",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 9708,
+      "promptTokens": 25145,
+      "completionTokens": 372,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 3,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:r01-b01",
+        "digest:r01-b02",
+        "digest:r01-b03"
+      ],
+      "exhausted": false,
+      "elapsedMs": 21554,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 6268,
+          "completionTokens": 173,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:r01-b01",
+              "target": true,
+              "known": true
+            },
+            {
+              "name": "read_memory",
+              "key": "digest:r01-b02",
+              "target": false,
+              "known": true
+            },
+            {
+              "name": "read_memory",
+              "key": "digest:r01-b03",
+              "target": false,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 18877,
+          "completionTokens": 199,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "r01-sweep-16",
+      "type": "number",
+      "arm": "full",
+      "autoExpand": true,
+      "question": "svc-alpha 的 max_retries 是多少？",
+      "expected": "720",
+      "answerLine": "720",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 152312,
+      "promptTokens": 71114,
+      "completionTokens": 202,
+      "tokensEstimated": false,
+      "modelCalls": 1,
+      "toolCalls": 0,
+      "targetDrill": false,
+      "anyDrill": false,
+      "drilledKeys": [],
+      "exhausted": false,
+      "elapsedMs": 4626,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 71114,
+          "completionTokens": 202,
+          "toolCalls": []
+        }
+      ]
+    },
+    {
+      "taskId": "r01-sweep-16",
+      "type": "number",
+      "arm": "folded_key",
+      "autoExpand": true,
+      "question": "svc-alpha 的 max_retries 是多少？",
+      "expected": "720",
+      "answerLine": "720答案：720",
+      "correct": true,
+      "hallucinated": false,
+      "reason": "ok",
+      "contextChars": 10474,
+      "promptTokens": 25861,
+      "completionTokens": 378,
+      "tokensEstimated": false,
+      "modelCalls": 2,
+      "toolCalls": 3,
+      "targetDrill": true,
+      "anyDrill": true,
+      "drilledKeys": [
+        "digest:r01-b01",
+        "digest:r01-b02",
+        "digest:r01-b03"
+      ],
+      "exhausted": false,
+      "elapsedMs": 9398,
+      "calls": [
+        {
+          "round": 1,
+          "promptTokens": 6652,
+          "completionTokens": 196,
+          "toolCalls": [
+            {
+              "name": "read_memory",
+              "key": "digest:r01-b01",
+              "target": true,
+              "known": true
+            },
+            {
+              "name": "read_memory",
+              "key": "digest:r01-b02",
+              "target": false,
+              "known": true
+            },
+            {
+              "name": "read_memory",
+              "key": "digest:r01-b03",
+              "target": false,
+              "known": true
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "promptTokens": 19209,
+          "completionTokens": 182,
+          "toolCalls": []
+        }
+      ]
+    }
+  ]
+}

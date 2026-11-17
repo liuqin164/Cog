@@ -78,3 +78,57 @@ synthetic and small; at three stubs and ~1k characters the folded arm can cost
 more billed prompt tokens than the full transcript, which is a warning about
 selectivity, not a long-context cost model. Cache economics and the context
 sweet spot belong to #259 and #258.
+
+## #294: real scale and the fold-enable threshold (2026-11-17)
+
+`--corpus real` reruns the three-arm design at the scale #294 names: eight
+tasks, **246 turns and six tool outputs of ~9k characters each** (≈2.5k provider
+tokens per output, 58.6k characters per task). Each output is a config dump from
+a near-identically named service; only one carries the target value, and the
+stub is the dump's first line, which names the service but not the value.
+
+Two commands:
+
+```bash
+bun eval/fold-drill/run.ts --corpus real --arms full,folded_key --out-dir eval/fold-drill/real
+bun eval/fold-drill/run.ts --corpus sweep --arms full,folded_key --out-dir eval/fold-drill/real/sweep
+```
+
+`full` carries the whole transcript in one call; `folded_key` folds all six tool
+outputs to digest stubs and lets the model drill (the drill returns the whole
+output). At this scale:
+
+| arm | correct | hallucinated | avg prompt tokens | avg model calls | avg tool calls |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| full | 8/8 | 0 | 30,140 | 1.00 | 0.00 |
+| folded_key | 8/8 | 0 | 27,989 | 2.00 | 3.75 |
+
+Folding saved **7.1%** of prompt tokens and cost nothing in accuracy. It saved
+so little because the model read 3.75 of the 6 blocks: every drill returns a
+whole ~2.5k-token output, and every round re-bills the growing context. That is
+the real behaviour of "fold the transcript, drill the original", not a summary
+stub.
+
+The sweep grows one task from 1 to 16 folded outputs (240 turns each):
+
+| folded blocks | full prompt tokens | folded prompt tokens | drills | delta |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 9,667 | 16,127 | 1 | +67% |
+| 2 | 13,762 | 20,409 | 2 | +48% |
+| 4 | 21,952 | 28,848 | 4 | +31% |
+| 8 | 38,338 | 25,145 | 3 | −34% |
+| 16 | 71,114 | 25,861 | 3 | −64% |
+
+**Fold-enable threshold: fold only when the transcript would exceed ~30,000
+provider prompt tokens** (the measured crossover sits between 22k at 4 blocks
+and 38k at 8). Below it, the stub, the extra round and the drilled original cost
+31–67% more than simply carrying the transcript; above it, the folded prompt
+stays roughly flat because only the needed blocks are read. Accuracy was 100%
+in both arms at every size, so this is a cost/capacity threshold, not a
+correctness one — consistent with #256's ruling that folding is a capacity
+measure, not a money saver.
+
+Bound: one model, one sample per cell, synthetic corpora. At 16 outputs
+(152k characters, ~71k provider tokens) the full transcript still fits the
+model's 1M window, so this sweep locates the *cost* crossover, not the point
+where the context stops fitting. Cache economics are #259's.

@@ -30,6 +30,7 @@ import {
   type CorpusStats,
 } from './check.ts';
 import { TASKS, autoExpandMatches, turnText } from './corpus.ts';
+import { REAL_TASKS, SWEEP_TASKS, validateRealCorpus } from './real-corpus.ts';
 import type { Arm, DetailType, FoldTask } from './types.ts';
 
 const DEFAULT_BASE_URL = 'http://127.0.0.1:3425/v1';
@@ -41,7 +42,16 @@ const baseUrl = resolveBaseUrl(process.env.MG_BASE_URL ?? argument('base-url') ?
 const model = argument('model') ?? process.env.MG_MODEL ?? DEFAULT_MODEL;
 const apiKey = process.env.MG_API_KEY ?? 'magpie';
 const outDir = resolve(argument('out-dir') ?? import.meta.dir);
-const limit = Number(argument('limit') ?? TASKS.length);
+const corpusName = argument('corpus') ?? 'small';
+if (corpusName !== 'small' && corpusName !== 'real' && corpusName !== 'sweep') {
+  throw new Error('--corpus must be "small", "real" or "sweep"');
+}
+const CORPUS: FoldTask[] = corpusName === 'real' ? REAL_TASKS : corpusName === 'sweep' ? SWEEP_TASKS : TASKS;
+const arms: Arm[] = argument('arms')
+  ? (argument('arms')!.split(',') as Arm[]).filter((arm) => (ARMS as readonly string[]).includes(arm))
+  : [...ARMS];
+if (arms.length === 0) throw new Error('--arms must name at least one of full, folded_key, folded_auto');
+const limit = Number(argument('limit') ?? CORPUS.length);
 const dryRun = process.argv.includes('--dry-run');
 const reportOnly = process.argv.includes('--report-only');
 
@@ -330,7 +340,7 @@ async function runTask(task: FoldTask, arm: Arm): Promise<RunResult> {
 }
 
 function summarize(runs: RunResult[]): ArmSummary[] {
-  return ARMS.map((arm) => {
+  return arms.map((arm) => {
     const subset = runs.filter((run) => run.arm === arm);
     return {
       arm,
@@ -349,7 +359,7 @@ function summarize(runs: RunResult[]): ArmSummary[] {
 
 function groupSummaries(runs: RunResult[]): GroupSummary[] {
   const groups: Array<GroupSummary['group']> = ['trigger_hit', 'trigger_miss'];
-  return ARMS.flatMap((arm) =>
+  return arms.flatMap((arm) =>
     groups.map((group) => {
       const subset = runs.filter(
         (run) => run.arm === arm && (group === 'trigger_hit' ? run.autoExpand : !run.autoExpand),
@@ -369,11 +379,16 @@ function groupSummaries(runs: RunResult[]): GroupSummary[] {
 function conclusion(summary: ArmSummary[]): string {
   const full = summary.find((entry) => entry.arm === 'full')!;
   const folded = summary.find((entry) => entry.arm === 'folded_key')!;
-  const auto = summary.find((entry) => entry.arm === 'folded_auto')!;
+  const auto = summary.find((entry) => entry.arm === 'folded_auto');
   const fullRate = full.tasks === 0 ? 0 : full.correct / full.tasks;
   const foldedRate = folded.tasks === 0 ? 0 : folded.correct / folded.tasks;
-  const autoRate = auto.tasks === 0 ? 0 : auto.correct / auto.tasks;
+  const autoRate = auto && auto.tasks > 0 ? auto.correct / auto.tasks : 0;
   const margin = 0.1;
+  if (!auto) {
+    return foldedRate >= fullRate - margin
+      ? 'Passive keys hold at this scale: the folded+key arm stays within 10 points of the full transcript and drills the target when it needs to.'
+      : 'Passive keys lose more than 10 points against the full transcript at this scale.';
+  }
   if (foldedRate >= fullRate - margin && folded.targetDrill / Math.max(1, folded.tasks) >= 0.8) {
     return 'Passive keys hold: the folded+key arm stays within 10 points of the full arm and drills the target in at least 80% of runs. Auto-expansion is not required for correctness on this corpus; it only removes drill calls on trigger-hit tasks, so treat it as a cost optimization rather than a safety gate.';
   }
@@ -384,6 +399,55 @@ function conclusion(summary: ArmSummary[]): string {
     return 'Both folded arms lose more than 10 points against the full transcript. Per the ticket failure route, narrow folding to tool output and do not fold conversation text in C.';
   }
   return 'Mixed result: the folded arms are close to the full arm but one threshold is unmet; read the table before choosing the C scope.';
+}
+
+/**
+ * The sweep's one product decision: at which transcript size does folding stop costing more
+ * than the full context? Points come from the per-task token sums, not from a fitted model.
+ */
+function thresholdLines(runs: RunResult[], sweep: boolean): string[] {
+  const points = [...new Set(runs.map((run) => run.taskId))]
+    .map((id) => {
+      const full = runs.find((run) => run.taskId === id && run.arm === 'full');
+      const folded = runs.find((run) => run.taskId === id && run.arm === 'folded_key');
+      const task = CORPUS.find((entry) => entry.id === id);
+      return full && folded
+        ? { id, blocks: task?.blocks ?? 0, full: full.promptTokens, folded: folded.promptTokens, correct: full.correct && folded.correct }
+        : null;
+    })
+    .filter((point): point is { id: string; blocks: number; full: number; folded: number; correct: boolean } => point !== null)
+    .sort((left, right) => left.full - right.full);
+  if (points.length < 2) return [];
+  const lines = ['', '## Fold-enable threshold', ''];
+  if (!sweep) {
+    const full = runs.filter((run) => run.arm === 'full');
+    const folded = runs.filter((run) => run.arm === 'folded_key');
+    const fullTokens = Math.round(average(full.map((run) => run.promptTokens)));
+    const foldedTokens = Math.round(average(folded.map((run) => run.promptTokens)));
+    const drilled = average(folded.map((run) => run.toolCalls));
+    lines.push(
+      `- At this scale (6 tool outputs, ~${fullTokens} full prompt tokens) folding saved **${((1 - foldedTokens / Math.max(1, fullTokens)) * 100).toFixed(1)}%**: ${fullTokens} → ${foldedTokens} tokens, because the model read ${drilled.toFixed(2)} of 6 blocks and every round re-bills the context.`,
+      '- The block-count sweep in `sweep/` locates the crossover; the threshold rule is stated there.',
+    );
+    return lines;
+  }
+  const lastLoss = [...points].reverse().find((point) => point.folded >= point.full);
+  const firstWin = points.find((point) => point.folded < point.full);
+  if (lastLoss && firstWin) {
+    const midpoint = Math.round((lastLoss.full + firstWin.full) / 2 / 1_000) * 1_000;
+    lines.push(
+      `- The crossover sits between **${lastLoss.full}** provider prompt tokens (${lastLoss.blocks} blocks, folded ${lastLoss.folded}) and **${firstWin.full}** (${firstWin.blocks} blocks, folded ${firstWin.folded}).`,
+      `- Recommended enable threshold: **fold only when the transcript would exceed ~${midpoint.toLocaleString('en-US')} provider prompt tokens**. Below it, the stub, the extra round and the drilled original cost more than the full transcript.`,
+      `- Above the crossover the folded prompt is roughly flat (${Math.min(...points.filter((point) => point.folded < point.full).map((point) => point.folded))}–${Math.max(...points.filter((point) => point.folded < point.full).map((point) => point.folded))} tokens) because the model drills only the blocks it needs; the saving grows with how much is folded and not read.`,
+    );
+  } else {
+    lines.push(firstWin
+      ? `- Folding was cheaper at the smallest measured point (${firstWin.blocks} blocks, ${firstWin.full} full vs ${firstWin.folded} folded tokens).`
+      : `- Folding was never cheaper on this sweep (best case ${points[0]!.folded} vs ${points[0]!.full} at the smallest transcript).`);
+  }
+  const accuracy = points.filter((point) => point.correct).length;
+  lines.push(`- Accuracy was unaffected at every point: ${accuracy}/${points.length} points had both arms correct, so this is a cost/capacity threshold, not a correctness one.`);
+  return lines;
 }
 
 function markdown(
@@ -403,13 +467,20 @@ function markdown(
     };
   };
   const lines: string[] = [];
-  lines.push('# Fold drill-down experiment — #254 B4');
+  lines.push(
+    corpusName === 'real'
+      ? '# Fold drill-down at real scale — #294'
+      : corpusName === 'sweep'
+        ? '# Fold threshold sweep — #294'
+        : '# Fold drill-down experiment — #254 B4',
+  );
   lines.push('');
   lines.push(`- base commit at run: \`${meta.head}\``);
   lines.push(`- run at: ${meta.generatedAt}`);
   lines.push(`- model: \`${meta.model}\` through \`${meta.baseUrl}\``);
   lines.push(`- tasks: ${meta.limit} per arm (${stats.byType.number} number, ${stats.byType.name} name, ${stats.byType.constraint} constraint, ${stats.byType.step} step)`);
-  lines.push(`- temperature: 0; task order fixed; one command: \`bun eval/fold-drill/run.ts\``);
+  lines.push(`- arms: ${arms.join(', ')}`);
+  lines.push(`- temperature: 0; task order fixed; one command: \`bun eval/fold-drill/run.ts --corpus ${corpusName}\``);
   lines.push('');
   lines.push('## Corpus');
   lines.push('');
@@ -433,27 +504,43 @@ function markdown(
   lines.push('| type | arm | n | target drill | correct | hallucinated |');
   lines.push('| --- | --- | ---: | ---: | ---: | ---: |');
   for (const type of DETAIL_TYPES) {
-    for (const arm of ARMS) {
+    for (const arm of arms) {
       const row = byType(type, arm);
       lines.push(
         `| ${type} | ${arm} | ${row.n} | ${percent(row.targetDrill, row.n)} | ${percent(row.correct, row.n)} | ${percent(row.hallucinated, row.n)} |`,
       );
     }
   }
-  lines.push('');
-  lines.push('## Auto-expansion trigger split');
-  lines.push('');
-  lines.push('| arm | group | n | target drill | correct | hallucinated |');
-  lines.push('| --- | --- | ---: | ---: | ---: | ---: |');
-  for (const row of groups) {
-    lines.push(
-      `| ${row.arm} | ${row.group} | ${row.tasks} | ${percent(row.targetDrill, row.tasks)} | ${percent(row.correct, row.tasks)} | ${percent(row.hallucinated, row.tasks)} |`,
-    );
+  if (arms.includes('folded_auto')) {
+    lines.push('');
+    lines.push('## Auto-expansion trigger split');
+    lines.push('');
+    lines.push('| arm | group | n | target drill | correct | hallucinated |');
+    lines.push('| --- | --- | ---: | ---: | ---: | ---: |');
+    for (const row of groups) {
+      lines.push(
+        `| ${row.arm} | ${row.group} | ${row.tasks} | ${percent(row.targetDrill, row.tasks)} | ${percent(row.correct, row.tasks)} | ${percent(row.hallucinated, row.tasks)} |`,
+      );
+    }
+  }
+  if (corpusName !== 'small') {
+    lines.push('');
+    lines.push('## Per task (the scale points)');
+    lines.push('');
+    lines.push('| task | scale | folded blocks | context chars | arm | prompt tokens (billed) | model calls | tool calls | correct |');
+    lines.push('| --- | --- | ---: | ---: | --- | ---: | ---: | ---: | --- |');
+    for (const run of runs) {
+      const task = CORPUS.find((entry) => entry.id === run.taskId);
+      lines.push(
+        `| ${run.taskId} | ${task?.scale ?? '—'} | ${task?.blocks ?? '—'} | ${run.contextChars} | ${run.arm} | ${run.promptTokens} | ${run.modelCalls} | ${run.toolCalls} | ${run.correct ? 'yes' : 'no'} |`,
+      );
+    }
   }
   lines.push('');
   lines.push('## Conclusion');
   lines.push('');
   lines.push(conclusion(summary));
+  if (corpusName !== 'small' && arms.includes('folded_key')) lines.push(...thresholdLines(runs, corpusName === 'sweep'));
   lines.push('');
   const foldedRuns = runs.filter((run) => run.arm === 'folded_key');
   const toolCounts = [1, 2, 3].map(
@@ -465,17 +552,19 @@ function markdown(
   const autoMisses = runs.filter((run) => run.arm === 'folded_auto' && !run.autoExpand);
   const fullSummary = summary.find((entry) => entry.arm === 'full')!;
   const foldedSummary = summary.find((entry) => entry.arm === 'folded_key')!;
-  const autoSummary = summary.find((entry) => entry.arm === 'folded_auto')!;
+  const autoSummary = summary.find((entry) => entry.arm === 'folded_auto');
   lines.push('## Reading');
   lines.push('');
   lines.push(
     `- Passive key: ${foldedSummary.targetDrill}/${foldedSummary.tasks} target drills. Of those runs, ${toolCounts.join(', ')} stubs. Trigger-hit tasks averaged ${average(hitRuns.map((run) => run.toolCalls)).toFixed(2)} reads; trigger-miss tasks averaged ${average(missRuns.map((run) => run.toolCalls)).toFixed(2)}.`,
   );
+  if (arms.includes('folded_auto')) {
+    lines.push(
+      `- Auto-expand: trigger-hit runs drilled the target ${autoHits.filter((run) => run.targetDrill).length}/${autoHits.length}; trigger-miss runs ${autoMisses.filter((run) => run.targetDrill).length}/${autoMisses.length}. Correctness was ${autoHits.filter((run) => run.correct).length}/${autoHits.length} on hits and ${autoMisses.filter((run) => run.correct).length}/${autoMisses.length} on misses.`,
+    );
+  }
   lines.push(
-    `- Auto-expand: trigger-hit runs drilled the target ${autoHits.filter((run) => run.targetDrill).length}/${autoHits.length}; trigger-miss runs ${autoMisses.filter((run) => run.targetDrill).length}/${autoMisses.length}. Correctness was ${autoHits.filter((run) => run.correct).length}/${autoHits.length} on hits and ${autoMisses.filter((run) => run.correct).length}/${autoMisses.length} on misses.`,
-  );
-  lines.push(
-    `- Cost: average billed prompt tokens were ${fullSummary.avgPromptTokens.toFixed(0)} (full), ${foldedSummary.avgPromptTokens.toFixed(0)} (folded+key) and ${autoSummary.avgPromptTokens.toFixed(0)} (folded+auto). At three stubs and ~1k characters, folding is not a token saving; the model reads most stubs.`,
+    `- Cost: average billed prompt tokens were ${fullSummary.avgPromptTokens.toFixed(0)} (full) and ${foldedSummary.avgPromptTokens.toFixed(0)} (folded+key)${autoSummary ? ` and ${autoSummary.avgPromptTokens.toFixed(0)} (folded+auto)` : ''}.`,
   );
   lines.push(
     `- Hallucination: ${runs.filter((run) => run.hallucinated).length}/${runs.length} runs. The model either read the original or had it auto-expanded, so this does not test hallucination from model-written summaries.`,
@@ -499,7 +588,11 @@ function markdown(
   lines.push('- The harness supplies the fold, the key and the drill action. It measures the model + context shape, not the product pipeline.');
   lines.push('- The folded stub is the kernel `SessionDigest` shape: entryId (key), an exact prefix quote of the ledger turn, and sourceRefs. The value is only in the omitted suffix.');
   lines.push('- Correctness is read from the required `答案：<value>` line. Hallucination is a detail value in the answer that does not occur in the task ledger: numbers, the corpus name pool, day/time tokens, and step action families. Chinese numerals and names outside the pool are not detected.');
-  lines.push('- The corpus is synthetic and small; this is a scope decision input, not a general long-context benchmark. The model is not deterministic even at temperature 0, so a re-run can move counts.');
+  lines.push(
+    corpusName === 'small'
+      ? '- The corpus is synthetic and small; this is a scope decision input, not a general long-context benchmark. The model is not deterministic even at temperature 0, so a re-run can move counts.'
+      : '- The corpus is synthetic but at the ticket scale: 240 turns and tool outputs of ~9k characters (roughly 2.5k provider tokens) per folded detail. Every cell is one model, temperature 0, one sample.',
+  );
   return `${lines.join('\n')}\n`;
 }
 
@@ -513,15 +606,15 @@ async function gatewayUp(): Promise<boolean> {
 }
 
 async function main(): Promise<void> {
-  const problems = validateCorpus(TASKS);
-  const stats = corpusStats(TASKS);
+  const problems = corpusName === 'small' ? validateCorpus(TASKS) : validateRealCorpus(CORPUS);
+  const stats = corpusStats(CORPUS);
   if (problems.length > 0) {
     console.error('fold-drill corpus check failed:');
     for (const problem of problems) console.error(`- ${problem}`);
     process.exit(1);
   }
   console.log(
-    `corpus ok: ${stats.tasks} tasks (${stats.byType.number} number, ${stats.byType.name} name, ${stats.byType.constraint} constraint, ${stats.byType.step} step)`,
+    `corpus (${corpusName}) ok: ${stats.tasks} tasks (${stats.byType.number} number, ${stats.byType.name} name, ${stats.byType.constraint} constraint, ${stats.byType.step} step)`,
   );
   console.log(
     `auto-expansion: ${stats.autoExpandHits} hit / ${stats.autoExpandMisses} miss; ${stats.avgTurns.toFixed(1)} turns, ${Math.round(stats.avgChars)} chars avg`,
@@ -558,12 +651,12 @@ async function main(): Promise<void> {
     process.exit(2);
   }
 
-  const selected = TASKS.slice(0, Math.min(limit, TASKS.length));
+  const selected = CORPUS.slice(0, Math.min(limit, CORPUS.length));
   const runs: RunResult[] = [];
-  const total = selected.length * ARMS.length;
+  const total = selected.length * arms.length;
   let done = 0;
   for (const task of selected) {
-    for (const arm of ARMS) {
+    for (const arm of arms) {
       const run = await runTask(task, arm);
       runs.push(run);
       done += 1;
