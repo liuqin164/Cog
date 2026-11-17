@@ -218,15 +218,23 @@ describe('upgrade gate on the lifecycle (requirement ②: 只从静默态升级)
     await shell.stop();
   });
 
-  test('an empty argument answers with usage instead of staging anything', async () => {
+  test('an empty argument means the next npm release, not a usage error', async () => {
     const dir = makeTempDir();
     const dataDir = join(dir, 'data');
-    const shell = makeShell(dir, undefined, { dataDir, dbPath: join(dataDir, 'memory.sqlite') });
+    let stagedSource: string | undefined;
+    const shell = makeShell(dir, undefined, { dataDir, dbPath: join(dataDir, 'memory.sqlite') }, {
+      stageUpgrade: (input) => {
+        stagedSource = input.source;
+        throw new Error('staging is the supervisor test\'s boundary');
+      },
+    });
     await shell.start();
 
     const reply = await shell.upgrade('   ');
 
-    expect(reply.text).toContain('用法');
+    expect(stagedSource).toBe('latest');
+    expect(reply.text).toContain('旁置安装失败');
+    expect(reply.text).not.toContain('用法');
     expect(existsSync(join(dataDir, 'app'))).toBe(false);
     await shell.stop();
   });
@@ -739,21 +747,23 @@ describe('handing off to the supervisor', () => {
     expect(spawned[0]!.command.join(' ')).toContain(join(dataDir, 'upgrade', 'request.json'));
   });
 
-  test('a systemd-started process leaves the cgroup even when no unit file was found', async () => {
+  test('an inherited INVOCATION_ID does not put a --skip-service supervisor in a transient unit', async () => {
     const dataDir = makeDataDir();
-    // `serviceMode` false, but this process was started by systemd: the supervisor still has to leave
-    // the unit's cgroup, or the stop it performs takes it down too (the box's 2026-11-14 failure).
+    // `serviceMode` false: no unit owns this resident. A transient unit would exit when the
+    // supervisor finishes and take the resident it just started with it (2026-11-17 rehearsal).
     const request = makeRequest(dataDir, treeOfThisProcess(), '/staged', { serviceMode: false });
     const runs: string[][] = [];
+    let detached = false;
     const previous = { invocation: process.env.INVOCATION_ID, notify: process.env.NOTIFY_SOCKET };
     process.env.INVOCATION_ID = 'test-invocation';
     try {
       const spawned = await spawnUpgradeSupervisor(request, '/tmp/request.json', {
         run: async (command, args) => { runs.push([command, ...args]); return result(0); },
-        spawnDetached: () => { throw new Error('must not take the detached path inside a unit'); },
+        spawnDetached: () => { detached = true; return 1234; },
       });
       expect(spawned.ok).toBe(true);
-      expect(runs[0]![0]).toBe('systemd-run');
+      expect(detached).toBe(true);
+      expect(runs).toEqual([]);
     } finally {
       if (previous.invocation === undefined) delete process.env.INVOCATION_ID;
       else process.env.INVOCATION_ID = previous.invocation;

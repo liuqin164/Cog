@@ -1,17 +1,19 @@
 /**
- * Stage a new tree beside the serving one: the "旁置" half.
+ * Stage a new version beside the serving one: the "旁置" half.
  *
- * The staged tree is a *copy* under `<dataDir>/app/versions/<version>`, never the tree the operator
- * pointed at and never the one being served. That is what makes the switch cheap and the rollback
- * trivial: the old tree is still on disk, unmodified, so putting the service back on it is one argv
- * change, not a rebuild.
+ * The release path installs the new `cogmem` package from npm under `<dataDir>/app/versions/npm-<version>`;
+ * a directory is still accepted for developers, as a copy under `<dataDir>/app/versions/<version>`.
+ * Neither is the tree being served, which is what makes the switch cheap and the rollback trivial: the
+ * old tree is still on disk, unmodified, so putting the service back on it is one argv change, not a
+ * rebuild.
  *
  * Dependencies are symlinked, not copied: `node_modules` is hundreds of megabytes and a prototype
  * upgrade has no business duplicating it. The cost is stated rather than hidden — a staged tree is
  * only valid while its source tree's dependencies are (see `shell/UPGRADE.md`).
  */
-import { cpSync, existsSync, mkdirSync, rmSync, symlinkSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { cpSync, existsSync, mkdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { join, resolve, sep } from 'node:path';
 
 import { looksLikeCogTree, readTreeVersion } from './paths.ts';
 import { upgradeVersionsDir } from './records.ts';
@@ -22,6 +24,8 @@ const EXCLUDED = new Set(['node_modules', '.git', 'dist', 'coverage', '.cogmem',
 export interface StageUpgradeInput {
   source: string;
   dataDir: string;
+  /** The bun that installs an npm stage; tests and the resident pass their own. */
+  bunPath?: string;
   /** The tree being served; staging onto it would delete the running code. */
   currentTree: string;
   /** Stage here instead of `<dataDir>/app/versions/<version>`; tests use it. */
@@ -44,9 +48,12 @@ export class UpgradeStageError extends Error {
 }
 
 export function stageUpgradeTree(input: StageUpgradeInput): StagedTree {
+  if (!existsSync(input.source)) return stageNpmPackage(input);
+  if (!statSync(input.source).isDirectory()) return stageNpmPackage(input);
+
   const source = resolve(input.source);
   if (!looksLikeCogTree(source)) {
-    throw new UpgradeStageError('not_a_cog_tree', `${source} has no shell/src/cli.ts and src/public.ts`);
+    throw new UpgradeStageError('not_a_cog_tree', `${source} has neither shell/src/cli.ts + src/public.ts nor dist/shell/cli.js + dist/public.js`);
   }
   const version = readTreeVersion(source);
   const target = resolve(input.targetDir ?? join(upgradeVersionsDir(input.dataDir), version));
@@ -92,4 +99,48 @@ export function stageUpgradeTree(input: StageUpgradeInput): StagedTree {
     linkedDeps.push(relative);
   }
   return { tree: target, version, linkedDeps };
+}
+
+/** `latest`, `5.0.1`, `cogmem@5.0.1`, a tarball path or a `file:`/`npm:` spec all mean "install it". */
+function npmSpec(source: string): string {
+  if (/^(?:cogmem@|npm:|file:|[./]|~|\/|[a-z]:[\\/])/iu.test(source) || source.endsWith('.tgz') || source.endsWith('.tar.gz')) return source;
+  return `cogmem@${source}`;
+}
+
+/**
+ * Install the published package into its own prefix. The package root is nested (`node_modules/cogmem`)
+ * because that is how its dependencies resolve; the prefix is what gets removed when a re-stage replaces
+ * an earlier attempt.
+ */
+function stageNpmPackage(input: StageUpgradeInput): StagedTree {
+  const spec = npmSpec(input.source);
+  const versions = upgradeVersionsDir(input.dataDir);
+  const staging = join(versions, `.staging-${process.pid}-${Date.now()}`);
+  mkdirSync(staging, { recursive: true, mode: 0o700 });
+  writeFileSync(join(staging, 'package.json'), `${JSON.stringify({ private: true }, null, 2)}\n`);
+  // Not `--ignore-scripts`: the staged package needs its dependencies' native installs (sharp) to run
+  // its own gate. The package's own `prepare` is a guarded no-op when `scripts/` is absent.
+  const installed = spawnSync(input.bunPath ?? process.execPath, ['add', spec], {
+    cwd: staging,
+    encoding: 'utf8',
+  });
+  if (installed.status !== 0) {
+    rmSync(staging, { recursive: true, force: true });
+    throw new UpgradeStageError('npm_install_failed', `bun add ${spec} exited ${installed.status}: ${(installed.stderr || installed.stdout).trim().slice(0, 400)}`);
+  }
+  const tree = join(staging, 'node_modules', 'cogmem');
+  if (!looksLikeCogTree(tree)) {
+    rmSync(staging, { recursive: true, force: true });
+    throw new UpgradeStageError('not_a_cog_package', `${spec} installed no runnable cogmem package at ${tree}`);
+  }
+  const version = readTreeVersion(tree);
+  const target = resolve(join(versions, `npm-${version}`));
+  const serving = resolve(input.currentTree);
+  if (serving === target || serving.startsWith(`${target}${sep}`)) {
+    rmSync(staging, { recursive: true, force: true });
+    throw new UpgradeStageError('target_is_serving_tree', `refusing to stage over the tree that is serving: ${serving} is under ${target}`);
+  }
+  rmSync(target, { recursive: true, force: true });
+  renameSync(staging, target);
+  return { tree: join(target, 'node_modules', 'cogmem'), version, linkedDeps: [] };
 }

@@ -1,0 +1,19 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": false,
+    "declarationMap": false,
+    "module": "ESNext",
+    "rootDir": "src",
+    "outDir": "../dist.next/shell",
+    "rewriteRelativeImportExtensions": true,
+    "types": ["bun-types"],
+    "paths": {
+      "cogmem": ["../dist.next/public.d.ts"],
+      "cogmem/internal": ["../dist.next/internal.d.ts"]
+    }
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts"]
+}

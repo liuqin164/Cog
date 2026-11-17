@@ -8,7 +8,8 @@
  * the spike's original headless wall.
  */
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 import { defaultShellConfig, type ShellConfig } from './config.ts';
@@ -93,12 +94,24 @@ async function waitForSocket(socketPath: string, timeoutMs = 20_000): Promise<bo
 }
 
 function spawnResident(parsed: Parsed, config: ShellConfig): void {
-  const cli = fileURLToPath(new URL('./cli.ts', import.meta.url));
+  // Source runs the .ts beside this file; the published build runs the emitted .js beside it.
+  const cli = fileURLToPath(new URL(import.meta.url.endsWith('.ts') ? './cli.ts' : './cli.js', import.meta.url));
+  // The installer's 0600 env file is what carries the model key, session id and rhythm; a resident
+  // started by a bare `cog` must read it exactly as the service unit's EnvironmentFile would.
+  const env: Record<string, string> = {};
+  try {
+    for (const line of readFileSync(join(config.dataDir, 'env'), 'utf8').split('\n')) {
+      const match = /^([A-Z0-9_]+)=(.*)$/u.exec(line);
+      if (match) env[match[1]!] = match[2]!;
+    }
+  } catch {
+    // A hand-run shell has no installer env file; process.env is the whole environment then.
+  }
   const child = spawn(process.execPath, ['run', cli, 'start', ...residentArgs(parsed)], {
     cwd: config.workspaceRoot,
     detached: true,
     stdio: 'ignore',
-    env: { ...process.env, COGMEM_SHELL_ATTACH: 'on' },
+    env: { ...process.env, ...env, COGMEM_SHELL_ATTACH: 'on' },
   });
   child.unref();
 }
@@ -138,7 +151,7 @@ async function main(): Promise<number> {
   if (!process.stdout.isTTY) return runLineMode(client, socketPath);
 
   client.close();
-  const { TuiApp } = await import('./tui/app.ts');
+  const { TuiApp } = await import(import.meta.url.endsWith('.ts') ? './tui/app.ts' : './tui/app.js');
   const app = new TuiApp({
     socketPath,
     historyPath: `${config.dataDir}/input-history.json`,
@@ -163,6 +176,8 @@ async function main(): Promise<number> {
 /** Non-TTY degradation (§0): a line in, a line out, no界面. */
 function runLineMode(client: AttachClient, socketPath: string): Promise<number> {
   const reader = createInterface({ input: process.stdin, terminal: false });
+  const upgrade = client.snapshot?.presence?.upgrade;
+  if (upgrade) process.stdout.write(`${upgrade.line}\n`);
   client.onEvent = (message) => {
     if (message.t !== 'event') return;
     if (message.name === 'message_end' && message.payload?.message?.role === 'assistant' && message.payload.message.content) {

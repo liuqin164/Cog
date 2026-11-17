@@ -17,8 +17,8 @@ This release is distributed through the npm registry. GitHub remains the source 
 ## Required Binaries
 
 - Two bins, and no command has one of its own:
-  - `cog` — the product's own entry point (`src/bin/cog.ts`). The companion shell is #167's
-    work; until it lands `cog` is the same dispatcher under the product's name.
+  - `cog` — the companion: attaches to the resident shell (or starts it) and opens the terminal
+    interface (`src/bin/cog.ts` hands off to `dist/shell/cog.js`).
   - `cogmem` — the management CLI.
 - `cogmem`
 - `cogmem init`

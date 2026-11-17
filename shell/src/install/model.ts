@@ -20,11 +20,8 @@ export interface ModelChoice {
   model: string;
 }
 
-export const MG_DEFAULT_MODEL = 'auto/deepseek-v4.1-flash';
-export const MG_DEFAULT_BASE_URL = 'http://127.0.0.1:3425/v1';
-
 export const MODEL_PRESETS: Record<ModelProviderKind, { label: string; baseUrl: string; model: string; needsKey: boolean }> = {
-  mg: { label: 'mg 网关（本机 magpie，OpenAI 兼容）', baseUrl: MG_DEFAULT_BASE_URL, model: MG_DEFAULT_MODEL, needsKey: false },
+  mg: { label: 'mg 网关（本机 magpie，OpenAI 兼容）', baseUrl: 'http://127.0.0.1:3425/v1', model: 'auto/deepseek-v4.1-flash', needsKey: false },
   openai_compatible: { label: '自填 OpenAI 兼容端点', baseUrl: '', model: '', needsKey: true },
 };
 

@@ -16,13 +16,32 @@
  * package export covers.
  */
 import { Database } from 'bun:sqlite';
+import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { redactSecretText } from 'cogmem';
 import { readMemoryUsage } from './memory.ts';
 
-const OBSERVATORY_MODULE = '../../src/observatory/MemoryObservatory.ts';
-const OBSERVATORY_ROUTES = '../../src/observatory/routes.ts';
-const OBSERVATORY_TOKEN = '../../src/observatory/token.ts';
+// Source: the kernel's TypeScript beside the checkout. Published: the compiled copy under dist/.
+const SOURCE_LAYOUT = import.meta.url.endsWith('.ts');
+const OBSERVATORY_MODULE = SOURCE_LAYOUT ? '../../src/observatory/MemoryObservatory.ts' : '../observatory/MemoryObservatory.js';
+const OBSERVATORY_ROUTES = SOURCE_LAYOUT ? '../../src/observatory/routes.ts' : '../observatory/routes.js';
+const OBSERVATORY_TOKEN = SOURCE_LAYOUT ? '../../src/observatory/token.ts' : '../observatory/token.js';
+
+/** The product manifest beside this module (`dist/shell` → package root). */
+function productVersion(): string {
+  let dir = dirname(fileURLToPath(import.meta.url));
+  for (let depth = 0; depth < 4; depth += 1) {
+    try {
+      const version = (JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as { version?: unknown }).version;
+      if (typeof version === 'string' && version !== '') return version;
+    } catch {
+      // Keep walking: src and dist sit at different depths.
+    }
+    dir = dirname(dir);
+  }
+  return 'unknown';
+}
 
 export interface HttpFaceOptions {
   port: number;
@@ -111,7 +130,7 @@ export async function startKernelHttpFace(kernel: unknown, options: HttpFaceOpti
         return Response.json({
           status: 'ok',
           service: 'cogmem-companion-shell',
-          version: '0.1.0-spike',
+          version: productVersion(),
           bind: options.hostname,
           port: httpServer.port ?? options.port,
           kernel: kernelHealth(),

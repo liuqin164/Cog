@@ -3,7 +3,7 @@ import { emitRefusalDocument } from './RefusalDocument.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { loadCogmemConfig, resolveCogmemConfigPath, type LoadedCogmemConfig } from '../config/CogmemConfig.js';
 import { appendUpdateTrace, type UpdateTraceEntry } from '../install/AutoUpgrade.js';
@@ -344,9 +344,102 @@ function usage(): string {
   ].join('\n');
 }
 
+/**
+ * The 5.0 form of `cogmem update`: a companion install upgrades through the resident's own
+ * `/upgrade`, the same path an attached `cog` uses. The full cycle — announcement, silent-state
+ * check, side-install from npm, pre-migration snapshot, gate, rollback, report — belongs to the
+ * shell supervisor; duplicating it here would be a second upgrade implementation.
+ */
+async function runCompanionUpgrade(dataDir: string, spec: string, json: boolean): Promise<void> {
+  const socket = join(dataDir, 'attach.sock');
+  if (!existsSync(socket)) {
+    throw new Error(`companion is installed at ${dataDir} but not running; start it with \`cog\` before \`cogmem update\``);
+  }
+  const here = dirname(fileURLToPath(import.meta.url));
+  const clientPath = [
+    join(here, '..', 'shell', 'attach', 'client.js'),
+    join(here, '..', '..', 'shell', 'src', 'attach', 'client.ts'),
+  ].find((path) => existsSync(path));
+  if (!clientPath) throw new Error('companion attach client is missing from this package; run `bun run build`');
+  const { AttachClient } = await import(pathToFileURL(clientPath).href) as {
+    AttachClient: new () => {
+      onEvent: (message: { t?: string; name?: string; payload?: { text?: unknown } }) => void;
+      connect(path: string, timeoutMs?: number): Promise<unknown>;
+      send(message: unknown): void;
+      close(): void;
+    };
+  };
+  const outcomePath = join(dataDir, 'upgrade', 'last.json');
+  const previousId = (() => {
+    try {
+      return (JSON.parse(readFileSync(outcomePath, 'utf8')) as { id?: string }).id;
+    } catch {
+      return undefined;
+    }
+  })();
+
+  const client = new AttachClient();
+  await client.connect(socket, 2_000);
+  const reply = await new Promise<string>((resolvePromise, rejectPromise) => {
+    const timer = setTimeout(() => rejectPromise(new Error('companion did not answer /upgrade in time')), 120_000);
+    client.onEvent = (message) => {
+      if (message.t !== 'event' || message.name !== 'companion_command_result') return;
+      clearTimeout(timer);
+      resolvePromise(typeof message.payload?.text === 'string' ? message.payload.text : '');
+    };
+    client.send({ t: 'command', name: 'upgrade', args: spec });
+  });
+  client.close();
+  if (/不能升级|没有开始|已经有一次/.test(reply)) {
+    process.stdout.write(json ? `${JSON.stringify({ status: 'refused', text: reply })}\n` : `${reply}\n`);
+    return;
+  }
+  if (!json) process.stdout.write(`${reply}\n`);
+
+  // The supervisor owns the cycle now. Wait for its durable outcome rather than assuming the
+  // announcement means success; a silent upgrade is the one outcome the contract forbids.
+  const deadline = Date.now() + 15 * 60_000;
+  for (;;) {
+    try {
+      const outcome = JSON.parse(readFileSync(outcomePath, 'utf8')) as {
+        id?: string;
+        status?: string;
+        fromVersion?: string;
+        toVersion?: string;
+        step?: string;
+        error?: string;
+        rollback?: string;
+        checks?: Array<{ ok?: boolean }>;
+      };
+      if (outcome.id !== previousId && outcome.status) {
+        if (json) {
+          process.stdout.write(`${JSON.stringify(outcome)}\n`);
+        } else {
+          const checks = outcome.checks?.length ?? 0;
+          process.stdout.write(
+            outcome.status === 'completed'
+              ? `升级完成：${outcome.fromVersion} → ${outcome.toVersion}；${checks} 项自检全过。\n`
+              : `升级未成功（${outcome.status}，卡在 ${outcome.step}）：${outcome.error ?? '未说明'}\n回滚：${outcome.rollback ?? '无'}\n`,
+          );
+        }
+        return;
+      }
+    } catch {
+      // No outcome yet, or one being written atomically.
+    }
+    if (Date.now() >= deadline) throw new Error('upgrade produced no outcome in 15 minutes (silent upgrade)');
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 1_000));
+  }
+}
+
 async function main(): Promise<void> {
   assertCliArgs(process.argv.slice(2), { usage: usage(), extraFlags: ['config', 'json', 'prefix', 'workspace', 'dry-run', 'yes', 'install-home', 'manager', 'from', 'local-dev', 'global', 'check-tools', 'no-gate', 'stage-only'] });
   const args = readArgs(process.argv.slice(2));
+  const companionData = join(homedir(), '.cogmem', 'companion');
+  if (!args.dryRun && !args.stageOnly && existsSync(join(companionData, 'install.json'))) {
+    await runCompanionUpgrade(companionData, args.from, args.json);
+    return;
+  }
   const resolvedSpec = args.from === 'latest'
     ? resolveLatestNpmSpec({ env: process.env })
     : args.from;

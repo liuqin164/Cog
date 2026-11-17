@@ -26,6 +26,7 @@ const COMMANDS: Record<string, string> = {
   episode: 'episode',
   dream: 'dream',
   cleanup: 'cleanup',
+  install: 'install',
 };
 
 function usage(): string {
@@ -51,6 +52,7 @@ function usage(): string {
     '  episode              append, import, inspect, seal, or repair conversation episodes',
     '  dream                conditionally process sealed episode backlog',
     '  cleanup              remove the managed launcher after its installation is gone',
+    '  install              install the resident companion (six steps, first wake self-check)',
     '',
     'JSON output: commands with --json emit cogmem.cli.v1. Object fields stay top-level, and arrays are named for what they hold: items (recall, prospective list), events (list, search), decisions (govern), episodes (episode list), statuses (compact), and nodes/edges/matchedFacets/nextActions/warnings on Atlas reads.',
     'Queue commands expose candidate, promoted, needs_confirmation, and beliefs at the top level. `dream status` and `dream night` nest the frame-stamp report as staleFrames: {checked, total, stale, truncated}. A tick that could not use the memory model carries semanticProcessorReason and, when the call threw, semanticProcessorError.',

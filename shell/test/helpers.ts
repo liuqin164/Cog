@@ -160,6 +160,7 @@ export interface TestShellOptions {
   tick?: boolean;
   /** The upgrade handoff is a process spawn in production; tests inject the answer. */
   upgradeSpawner?: CompanionShellOptions['upgradeSpawner'];
+  stageUpgrade?: CompanionShellOptions['stageUpgrade'];
 }
 
 /**
@@ -193,5 +194,6 @@ export function makeShell(dir: string, provider: ModelProvider | undefined, conf
     terminalInput: options.terminalInput,
     terminalOutput: options.terminalOutput,
     upgradeSpawner: options.upgradeSpawner,
+    stageUpgrade: options.stageUpgrade,
   });
 }

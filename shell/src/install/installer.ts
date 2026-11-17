@@ -19,7 +19,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { createMemoryKernel } from 'cogmem';
 import { DEFAULT_AUTONOMOUS_BUDGET, DEFAULT_DAILY_BUDGET, DEFAULT_MAX_IDLE_TURNS, DEFAULT_NIGHT_BUDGET, DEFAULT_WORK_BUDGET } from '../config.ts';
 import { DEFAULT_SOUL, readSoul, writeDefaultSoul } from './soul.ts';
-import { MG_DEFAULT_BASE_URL, MG_DEFAULT_MODEL, MODEL_PRESETS, modelEnv, probeModel, type ModelChoice, type ModelProviderKind } from './model.ts';
+import { MODEL_PRESETS, modelEnv, probeModel, type ModelChoice, type ModelProviderKind } from './model.ts';
 import { RouteStore, safeRouteName, type ModelRoute } from '../model/routes.ts';
 import {
   installService,
@@ -36,6 +36,7 @@ import { openProbeSession, type ProbeSession } from './attach.ts';
 import { createTerminalIO, type InstallIO, type TerminalStreams } from './io.ts';
 import { pluginsConfigPath, writePluginRegistry } from '../plugins/registry.ts';
 import { ensureEmbeddingModel, type EmbeddingEnsureResult, type EmbeddingProgress } from '../embedding/ensure.ts';
+import { cliEntry, cogEntry, defaultShellHome, isSourceShell } from './layout.ts';
 
 export const INSTALL_STEPS = ['preflight', 'place', 'model', 'rhythm', 'resident', 'awake'] as const;
 export type InstallStepId = (typeof INSTALL_STEPS)[number];
@@ -61,6 +62,10 @@ export interface InstallFlags {
   homeDir?: string;
   /** Where the shell package lives, when the entry point is not beside it. */
   shell?: string;
+  /** `--yes` has no model route of its own: the route must be named here. */
+  provider?: string;
+  baseUrl?: string;
+  model?: string;
   yes?: boolean;
   skipService?: boolean;
   uninstall?: boolean;
@@ -81,7 +86,7 @@ export interface InstallChoices {
   quietStartHour: number | null;
   quietEndHour: number | null;
   /** No api key here, ever: the key lives only in the 0600 env file. */
-  model: { provider: ModelProviderKind; baseUrl: string; model: string };
+  model: { provider: ModelProviderKind | ''; baseUrl: string; model: string };
 }
 
 export interface InstallState {
@@ -212,7 +217,7 @@ export class Installer {
       dreamEndHour: 5,
       quietStartHour: null,
       quietEndHour: null,
-      model: { provider: 'mg', baseUrl: MG_DEFAULT_BASE_URL, model: MG_DEFAULT_MODEL },
+      model: { provider: '', baseUrl: '', model: '' },
     };
     this.state = this.loadState();
     // Resumed choices win over the process defaults, so a re-run from another directory still points
@@ -294,6 +299,18 @@ export class Installer {
     }
     if (this.flags.uninstall) return this.uninstall();
 
+    // An unattended install cannot answer the route question later, so it is refused before the
+    // first step touches disk. mg is not a fallback; a missing flag is named here (#286).
+    if (this.flags.yes && !this.state.done.includes('model')) {
+      const missing = this.missingYesRoute()
+      if (missing.length > 0) {
+        this.io.say('安装没有开始：--yes 缺少模型路线参数。')
+        this.io.say(`缺项：${missing.join('、')}`)
+        this.io.say('非交互安装不会替你选路线；补齐 --provider、--base-url、--model 后重跑。mg 只是显式选项之一。')
+        return 1
+      }
+    }
+
     this.io.say('Cogmem 自有智能体安装引导（F21）');
     this.io.say(`平台：${this.choices.platform}（macOS / Linux；Windows 的服务化不在本轮）`);
     this.io.say('安全口径：所有服务面仅回环（127.0.0.1）；快照/数据目录 0700；模型钥匙只经安全输入进 0600 配置文件，不打印、不进日志。');
@@ -339,7 +356,8 @@ export class Installer {
     }
 
     this.io.say('\n安装完成：六步全过，首醒自检探针通过。');
-    this.io.say(`终端运行 cog 附着：${this.bunPath} run ${join(this.shellDir, 'src', 'cog.ts')} --data ${this.choices.dataDir} --workspace ${this.choices.workspaceRoot}`);
+    const open = isSourceShell(this.shellDir) ? `${this.bunPath} run ${cogEntry(this.shellDir)}` : 'cog';
+    this.io.say(`终端运行 ${open} 附着：--data ${this.choices.dataDir} --workspace ${this.choices.workspaceRoot} --http-port ${this.choices.httpPort}`);
     return 0;
   }
 
@@ -433,11 +451,11 @@ export class Installer {
   // ── Step 1: 落位 ──────────────────────────────────────────────────────────
 
   private async stepPlace(): Promise<StepResult> {
-    const cliEntry = join(this.shellDir, 'src', 'cli.ts');
-    if (!existsSync(cliEntry)) {
-      return { ok: false, message: `找不到壳程序：${cliEntry}`, hint: '在 spike 工作区里跑安装器，或用 --shell <dir> 指向壳的根目录。' };
+    const entry = cliEntry(this.shellDir);
+    if (!existsSync(entry)) {
+      return { ok: false, message: `找不到壳程序：${entry}`, hint: '用 --shell <dir> 指向源码树的 shell/ 或已安装 cogmem 包的根目录。' };
     }
-    if (!existsSync(join(this.shellDir, 'node_modules'))) {
+    if (isSourceShell(this.shellDir) && !existsSync(join(this.shellDir, 'node_modules'))) {
       this.io.say('装包：bun install --frozen-lockfile …');
       const install = await this.runner(this.bunPath, ['install', '--frozen-lockfile'], { cwd: this.shellDir, timeoutMs: 10 * 60_000 });
       if (install.code !== 0) {
@@ -518,31 +536,86 @@ export class Installer {
 
   // ── Step 2: 模型 ──────────────────────────────────────────────────────────
 
+  /** What `--yes` still needs. Flags only: a resumed value is not an explicit choice this run. */
+  private missingYesRoute(): string[] {
+    const missing: string[] = []
+    if (!this.flags.provider) missing.push('--provider')
+    else if (this.flags.provider !== 'mg' && this.flags.provider !== 'openai_compatible') {
+      missing.push(`--provider（当前值 ${this.flags.provider} 不是 mg / openai_compatible）`)
+    }
+    if (!this.flags.baseUrl?.trim()) missing.push('--base-url')
+    if (!this.flags.model?.trim()) missing.push('--model')
+    if (this.flags.provider === 'openai_compatible' && !(process.env.MG_API_KEY ?? process.env.COGMEM_MODEL_KEY ?? parseEnvFile(this.envPath).MG_API_KEY)) {
+      missing.push('模型钥匙（MG_API_KEY 或 COGMEM_MODEL_KEY 环境变量）')
+    }
+    return missing
+  }
+
   private async stepModel(): Promise<StepResult> {
-    let provider = this.choices.model.provider;
+    let provider: ModelProviderKind | '' = this.choices.model.provider;
     let baseUrl = this.choices.model.baseUrl;
     let model = this.choices.model.model;
     let routeName = 'custom';
-    let apiKey = parseEnvFile(this.envPath).MG_API_KEY ?? '';
+    const envKey = parseEnvFile(this.envPath).MG_API_KEY ?? process.env.MG_API_KEY ?? process.env.COGMEM_MODEL_KEY ?? '';
+    let apiKey = envKey;
 
-    if (!this.flags.yes) {
-      const picked = await this.io.ask('provider（mg=本机网关 / openai_compatible=自填端点）', {
-        default: provider,
+    // Flags win over a resumed choice, so a re-run can correct the route without editing state.
+    if (this.flags.provider !== undefined) provider = this.flags.provider as ModelProviderKind | '';
+    if (this.flags.baseUrl !== undefined) baseUrl = this.flags.baseUrl;
+    if (this.flags.model !== undefined) model = this.flags.model;
+
+    if (this.flags.yes) {
+      // No route is guessed for an unattended install. mg is one of the two explicit choices, not
+      // the fallback, because nobody else's machine runs the author's local gateway (#286).
+      const missing: string[] = [];
+      if (provider === '') missing.push('--provider');
+      else if (provider !== 'mg' && provider !== 'openai_compatible') {
+        return { ok: false, message: `未知 provider：${provider}`, hint: '--provider 取 mg 或 openai_compatible。' };
+      }
+      if (baseUrl.trim() === '') missing.push('--base-url');
+      if (model.trim() === '') missing.push('--model');
+      if (missing.length > 0) {
+        return {
+          ok: false,
+          message: `--yes 缺少模型路线参数：${missing.join('、')}`,
+          hint: '非交互安装不会替你选路线；补齐 --provider、--base-url、--model 后重跑。mg 只是显式选项之一。',
+        };
+      }
+      if (provider === 'openai_compatible' && apiKey === '') {
+        return {
+          ok: false,
+          message: '--yes 缺少模型钥匙：openai_compatible 需要 MG_API_KEY 或 COGMEM_MODEL_KEY 环境变量',
+          hint: '钥匙不从命令行参数读（会进 ps / shell 历史）；放进环境变量或安装器的安全输入。',
+        };
+      }
+    } else {
+      const picked = await this.io.ask('模型路线（mg=本机网关 / openai_compatible=自填端点；没有默认）', {
+        default: provider || undefined,
         choices: ['mg', 'openai_compatible'],
       });
-      provider = (picked === 'openai_compatible' ? 'openai_compatible' : 'mg') as ModelProviderKind;
-      baseUrl = await this.io.ask('base URL（OpenAI 兼容，通常以 /v1 结尾）', { default: provider === 'mg' ? MG_DEFAULT_BASE_URL : baseUrl || 'http://127.0.0.1:3425/v1' });
-      model = await this.io.ask('模型名（自由文本，不查目录）', { default: provider === 'mg' ? MG_DEFAULT_MODEL : model || MG_DEFAULT_MODEL });
-      if (MODEL_PRESETS[provider].needsKey) {
+      if (picked !== 'mg' && picked !== 'openai_compatible') {
+        return { ok: false, message: `没有选择模型路线：${picked || '（空）'}`, hint: '重跑本安装器，在第 3 步选择 mg 或 openai_compatible。' };
+      }
+      provider = picked;
+      const preset = MODEL_PRESETS[provider];
+      baseUrl = await this.io.ask('base URL（OpenAI 兼容，通常以 /v1 结尾）', { default: baseUrl || preset.baseUrl || undefined });
+      model = await this.io.ask('模型名（自由文本，不查目录）', { default: model || preset.model || undefined });
+      if (baseUrl.trim() === '' || model.trim() === '') {
+        return { ok: false, message: 'base URL 与模型名都不能为空', hint: '重跑本安装器，在第 3 步补齐这两项。' };
+      }
+      if (preset.needsKey) {
         routeName = safeRouteName(await this.io.ask('路线名（/model 切换用；mg 留给内置网关）', { default: routeName }));
-        apiKey = await this.io.askSecret('模型钥匙（安全输入，不回显、不入日志）: ');
+        apiKey = (await this.io.askSecret('模型钥匙（安全输入，不回显、不入日志）: ')) || apiKey;
+        if (apiKey === '') {
+          return { ok: false, message: '没有提供模型钥匙', hint: 'openai_compatible 端点需要钥匙；重跑本安装器，在第 3 步安全输入。' };
+        }
       } else {
         apiKey = apiKey || 'magpie';
         this.io.say('mg 网关在本机回环，无需真钥匙（用占位 magpie）。');
       }
-    } else if (apiKey === '') {
-      apiKey = 'magpie';
     }
+    if (provider === 'mg') apiKey = apiKey || 'magpie';
+    if (provider === '') return { ok: false, message: '没有选择模型路线', hint: '重跑本安装器，在第 3 步选择 mg 或 openai_compatible。' };
 
     this.choices.model = { provider, baseUrl, model };
     const choice: ModelChoice = { provider, baseUrl, apiKey, model };
@@ -803,11 +876,15 @@ export async function defaultFetchHealth(url: string): Promise<HealthPayload> {
 }
 
 export const INSTALL_USAGE = [
-  '用法: install [--data <dir>] [--workspace <dir>] [--project <id>] [--agent <id>]',
+  'Usage: cogmem install [--data <dir>] [--workspace <dir>] [--project <id>] [--agent <id>]',
   '              [--http-port <n>] [--service-name <name>] [--home <dir>] [--platform linux|darwin]',
+  '              [--provider mg|openai_compatible --base-url <url> --model <name>]',
   '              [--yes] [--skip-service] [--uninstall] [--help]',
   '  --data         数据目录（默认 ~/.cogmem/companion）',
-  '  --yes          非交互：取默认（mg 网关、系统时区、做梦 2:00-5:00）',
+  '  --provider     模型路线；与 --base-url、--model 一起构成 --yes 的必填路线',
+  '  --base-url     OpenAI 兼容端点（通常以 /v1 结尾）',
+  '  --model        模型名；钥匙放 MG_API_KEY 或 COGMEM_MODEL_KEY 环境变量，不放命令行',
+  '  --yes          非交互：必须显式给 --provider / --base-url / --model；系统时区、做梦 2:00-5:00',
   '  --skip-service 不注册用户服务，直接拉起进程（无 systemd/launchd 的沙箱）',
   '  --uninstall    停服务、摘单元；记忆库保留',
 ].join('\n');
@@ -833,6 +910,9 @@ export function parseInstallFlags(argv: string[]): InstallFlags {
     ['service-name', 'serviceName'],
     ['home', 'homeDir'],
     ['shell', 'shell'],
+    ['provider', 'provider'],
+    ['base-url', 'baseUrl'],
+    ['model', 'model'],
   ];
   for (const [name, key] of stringFlags) {
     const parsed = value(name);
@@ -852,7 +932,7 @@ export async function runInstallCli(argv: string[], streams?: TerminalStreams): 
     return 0;
   }
   const io = createTerminalIO(resolvedStreams);
-  const shellDir = resolve(flags.shell ?? fileURLToPath(new URL('../..', import.meta.url)));
+  const shellDir = resolve(flags.shell ?? defaultShellHome(fileURLToPath(new URL('.', import.meta.url))));
   const installer = new Installer({
     io,
     run: defaultRunner(),
@@ -868,4 +948,10 @@ export async function runInstallCli(argv: string[], streams?: TerminalStreams): 
   } finally {
     io.close();
   }
+}
+
+// `dist/shell/install/installer.js` is the published `cogmem install` entry; importing it in tests
+// or from `shell/bin/install` must not start an install.
+if (import.meta.main) {
+  process.exit(await runInstallCli(process.argv.slice(2)));
 }
