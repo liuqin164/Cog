@@ -45,6 +45,35 @@ archives there are complete plaintext copies of the database. A warning such as 
 local embedding model means a degraded install, not a failed one. `cogmem init` is not this
 installer: it initializes a bare kernel and is described below.
 
+### Vector provider
+
+The companion's semantic lane defaults to the local `Xenova/bge-base-zh-v1.5` model (768 dimensions).
+It can instead use Ollama or any OpenAI-compatible `/embeddings` endpoint:
+
+```bash
+cogmem install --yes \
+  --provider mg --base-url http://127.0.0.1:3425/v1 --model auto/deepseek-v4.1-flash \
+  --embedding-provider ollama \
+  --embedding-base-url http://127.0.0.1:11434 \
+  --embedding-model qwen3-embedding:0.6b
+```
+
+The installer writes the choice to the 0600 env file and probes the endpoint with one real
+embedding; a provider that cannot return a vector of the configured dimension stops the install.
+The keys are `COGMEM_EMBEDDING_PROVIDER` (`local` / `ollama` / `openai`),
+`COGMEM_EMBEDDING_BASE_URL`, `COGMEM_EMBEDDING_MODEL`, `COGMEM_EMBEDDING_DIMENSIONS` and
+`COGMEM_EMBEDDING_QUERY_PREFIX`. An OpenAI-compatible endpoint also needs
+`COGMEM_EMBEDDING_API_KEY`; that key is written only to the 0600 env file and never printed.
+
+The query prefix is part of the provider configuration because the bge-zh instruction is
+model-specific: local defaults to the model card's Chinese prefix, remote models default to an
+empty prefix. Set `COGMEM_EMBEDDING_QUERY_PREFIX=` to disable it explicitly.
+
+Switching model or dimension does not silently reuse old vectors. The resident keeps
+`semanticIndexEnabled()` false while the existing `ReEmbeddingPipeline` re-embeds the brain, and
+falls back to lexical recall with the same honest label if the provider fails. A remote install
+does not download the local 99 MiB model.
+
 ## 1. Why `cogmem init --yes` stops here
 
 Unattended, `init` settles four settings conservatively and warns about each one instead of

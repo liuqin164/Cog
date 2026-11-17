@@ -74,8 +74,8 @@ import {
   type UpgradeRequest,
 } from './upgrade/records.ts';
 import type { PresenceReport, StatusState, WorkState } from './tui/view.ts';
-import { XenovaEmbeddingProvider, type EmbeddingStatus } from './embedding/xenova.ts';
-import { EMBEDDING_DIMENSIONS, EMBEDDING_MODEL } from './embedding/model.ts';
+import type { EmbeddingStatus } from './embedding/model.ts';
+import { createEmbeddingProvider, resolveEmbeddingDimensions, type ShellEmbeddingProvider } from './embedding/provider.ts';
 
 /**
  * How long the resident gives the supervisor before the promise's due instant arrives. The report is
@@ -290,11 +290,13 @@ export class CompanionShell implements ShellControl, AttachShell {
   private readonly now: () => number;
   /** This process's native plugin load outcomes; `/plugins` and `/health` read it. */
   readonly pluginResults: PluginLoadResult[] = [];
-  private readonly embedding?: XenovaEmbeddingProvider;
+  private readonly embedding?: ShellEmbeddingProvider;
   /** Any host-supplied embedder, so the install's semantic probe is not limited to the local one. */
   private readonly embeddingProvider?: EmbeddingProvider;
   private readonly shellRegistry?: ShellModelRegistry;
   private reEmbedRunning = false;
+  /** A degraded provider must not claim the index; only a warm provider over a current index may. */
+  private embeddingReadyAllowed = false;
 
   constructor(private readonly options: CompanionShellOptions = {}) {
     this.config = defaultShellConfig(options.config);
@@ -322,10 +324,12 @@ export class CompanionShell implements ShellControl, AttachShell {
     // last seven nights without an extra config key (#196).
     const registry = options.modelRegistry ?? this.buildModelRegistry();
     this.shellRegistry = registry instanceof ShellModelRegistry ? registry : undefined;
-    const embeddingProvider = options.embeddingProvider
-      ?? (options.embedding ? new XenovaEmbeddingProvider(this.config.dataDir) : undefined);
+    const embedding = options.embedding && !options.embeddingProvider
+      ? createEmbeddingProvider(this.config.embedding, this.config.dataDir, (status) => this.onEmbeddingState(status))
+      : undefined;
+    const embeddingProvider = options.embeddingProvider ?? embedding;
     this.embeddingProvider = embeddingProvider;
-    this.embedding = embeddingProvider instanceof XenovaEmbeddingProvider ? embeddingProvider : undefined;
+    this.embedding = embedding;
     this.kernel = createMemoryKernel({
       dbPath: this.config.dbPath,
       projectTimeZone: this.config.timeZone,
@@ -450,7 +454,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       embedding: {
         role: 'embedding',
         provider: 'openai_compatible',
-        modelName: EMBEDDING_MODEL,
+        modelName: this.config.embedding.model,
         timeoutMs: 30_000,
       },
     }, {
@@ -666,29 +670,50 @@ export class CompanionShell implements ShellControl, AttachShell {
   private embeddingStatus(): EmbeddingStatus | { state: 'absent'; modelId: string; dimensions: number; detail: string } {
     return this.embedding?.status() ?? {
       state: 'absent',
-      modelId: EMBEDDING_MODEL,
-      dimensions: EMBEDDING_DIMENSIONS,
+      modelId: this.config.embedding.model,
+      dimensions: resolveEmbeddingDimensions(this.config.embedding),
       detail: 'embedding host not enabled for this process',
     };
+  }
+
+  private setEmbeddingReady(ready: boolean): void {
+    if (this.shellRegistry) this.shellRegistry.embeddingReady = ready;
+  }
+
+  private onEmbeddingState(status: EmbeddingStatus): void {
+    if (status.state === 'degraded') this.setEmbeddingReady(false);
+    else if (status.state === 'active' && this.embeddingReadyAllowed) this.setEmbeddingReady(true);
+  }
+
+  /** Only a warm provider over a current index may claim the semantic lane. */
+  private markEmbeddingReady(): void {
+    this.embeddingReadyAllowed = true;
+    this.setEmbeddingReady(true);
   }
 
   private async warmEmbedding(): Promise<void> {
     if (!this.embedding) return;
     try {
       await this.embedding.warm();
-      if (this.shellRegistry) this.shellRegistry.embeddingReady = true;
+      const status = this.embedding.status();
+      const stale = this.kernel.getHealthStatus().hasStaleVectors;
+      // A fresh index is ready now. A model or dimension change keeps the lane lexical until the
+      // full re-embed finishes, rather than reporting a current index over old vectors.
+      if (!stale) this.markEmbeddingReady();
       this.trace.append('embedding_ready', {
-        modelId: EMBEDDING_MODEL,
-        dimensions: EMBEDDING_DIMENSIONS,
-        loadMs: this.embedding.status().loadMs ?? null,
+        modelId: status.modelId,
+        dimensions: status.dimensions,
+        loadMs: status.loadMs ?? null,
       });
-      await this.reEmbedExisting();
+      const reEmbedded = await this.reEmbedExisting();
+      if (reEmbedded && !this.kernel.getHealthStatus().hasStaleVectors) this.markEmbeddingReady();
+      else if (stale) this.setEmbeddingReady(false);
     } catch (error) {
       // A missing model, a failed download or a broken ONNX file all land here. The companion keeps
       // answering with lexical recall; health and this trace record why.
       const message = error instanceof Error ? error.message : String(error);
       this.trace.append('embedding_unavailable', {
-        modelId: EMBEDDING_MODEL,
+        modelId: this.config.embedding.model,
         message,
       });
       // The service log is inherited stdout/stderr; the trace is the durable record. Say it on both
@@ -715,38 +740,46 @@ export class CompanionShell implements ShellControl, AttachShell {
    * is idempotent and checkpoints its cursor, so a second run is a no-op and a killed run resumes.
    * Batches are yielded between passes so a recall never waits for a whole brain.
    */
-  private async reEmbedExisting(): Promise<void> {
-    if (this.reEmbedRunning) return;
+  private async reEmbedExisting(): Promise<boolean> {
+    if (this.reEmbedRunning) return false;
     this.reEmbedRunning = true;
-    const projectId = this.config.projectId;
+    const projects = new Set<string>([this.config.projectId]);
+    const modelId = this.embeddingProvider?.modelId;
+    if (modelId) {
+      for (const projectId of this.kernel.neuronEmbeddingStore.listProjectsWithStaleVectors(modelId)) projects.add(projectId);
+    }
     let processed = 0;
+    let ok = true;
     try {
-      for (let pass = 0; pass < 1_000; pass += 1) {
-        const result = await this.kernel.reEmbed(projectId);
-        processed += result.processed;
-        if (result.processed === 0 && result.remaining === 0) {
-          this.trace.append('re_embed_skipped', { projectId });
-          break;
+      for (const projectId of projects) {
+        for (let pass = 0; pass < 1_000; pass += 1) {
+          const result = await this.kernel.reEmbed(projectId);
+          processed += result.processed;
+          if (result.processed === 0 && result.remaining === 0) {
+            this.trace.append('re_embed_skipped', { projectId });
+            break;
+          }
+          this.trace.append('re_embed_progress', {
+            projectId,
+            processed: result.processed,
+            remaining: result.remaining,
+            totalProcessed: processed,
+          });
+          if (result.remaining === 0) break;
+          await new Promise((resolve) => setTimeout(resolve, 0));
         }
-        this.trace.append('re_embed_progress', {
-          projectId,
-          processed: result.processed,
-          remaining: result.remaining,
-          totalProcessed: processed,
-        });
-        if (result.remaining === 0) break;
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        this.trace.append('re_embed_completed', { projectId, processed });
       }
-      this.trace.append('re_embed_completed', { projectId, processed });
     } catch (error) {
+      ok = false;
       this.trace.append('re_embed_failed', {
-        projectId,
         processed,
         message: error instanceof Error ? error.message : String(error),
       });
     } finally {
       this.reEmbedRunning = false;
     }
+    return ok && !this.kernel.getHealthStatus().hasStaleVectors;
   }
 
   private async startPlugins(): Promise<void> {

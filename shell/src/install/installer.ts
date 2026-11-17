@@ -37,7 +37,15 @@ import { createTerminalIO, type InstallIO, type TerminalStreams } from './io.ts'
 import { pluginsConfigPath, writePluginRegistry } from '../plugins/registry.ts';
 import { ensureEmbeddingModel, type EmbeddingEnsureResult, type EmbeddingProgress } from '../embedding/ensure.ts';
 import { cliEntry, cogEntry, defaultShellHome, isSourceShell } from './layout.ts';
-import { EMBEDDING_DIMENSIONS } from '../embedding/model.ts';
+import {
+  EMBEDDING_DIMENSIONS,
+  EMBEDDING_MODEL,
+  EMBEDDING_QUERY_PREFIX,
+  REMOTE_EMBEDDING_DEFAULTS,
+  type EmbeddingConfig,
+  type EmbeddingProviderKind,
+} from '../embedding/model.ts';
+import { probeEmbedding, resolveEmbeddingDimensions, type EmbeddingProbeResult } from '../embedding/provider.ts';
 
 export const INSTALL_STEPS = ['preflight', 'place', 'model', 'rhythm', 'resident', 'awake'] as const;
 export type InstallStepId = (typeof INSTALL_STEPS)[number];
@@ -67,6 +75,12 @@ export interface InstallFlags {
   provider?: string;
   baseUrl?: string;
   model?: string;
+  /** The vector provider is independent of the chat route (#313). Local is the default. */
+  embeddingProvider?: string;
+  embeddingBaseUrl?: string;
+  embeddingModel?: string;
+  embeddingDimensions?: string;
+  embeddingQueryPrefix?: string;
   yes?: boolean;
   skipService?: boolean;
   uninstall?: boolean;
@@ -88,6 +102,8 @@ export interface InstallChoices {
   quietEndHour: number | null;
   /** No api key here, ever: the key lives only in the 0600 env file. */
   model: { provider: ModelProviderKind | ''; baseUrl: string; model: string };
+  /** No key here either; `COGMEM_EMBEDDING_API_KEY` lives only in the 0600 env file. */
+  embedding: { provider: EmbeddingProviderKind; baseUrl: string; model: string; dimensions: number };
 }
 
 export interface InstallState {
@@ -111,6 +127,8 @@ export interface InstallerHooks {
   probe?: typeof probeModel;
   /** Tests stub the 99 MiB download; production uses the real Hugging Face fetch. */
   ensureEmbedding?: (dataDir: string, onProgress?: (progress: EmbeddingProgress) => void) => Promise<EmbeddingEnsureResult>;
+  /** Tests stub the remote endpoint; production makes one real embedding call. */
+  probeEmbedding?: (config: EmbeddingConfig, apiKey: string) => Promise<EmbeddingProbeResult>;
   fetchHealth?: (url: string) => Promise<HealthPayload>;
   /** The first-wake probe's channel to the running resident: its attach control socket. */
   openProbe?: (socketPath: string) => Promise<ProbeSession>;
@@ -222,6 +240,7 @@ export class Installer {
       quietStartHour: null,
       quietEndHour: null,
       model: { provider: '', baseUrl: '', model: '' },
+      embedding: { provider: 'local', baseUrl: '', model: EMBEDDING_MODEL, dimensions: EMBEDDING_DIMENSIONS },
     };
     this.state = this.loadState();
     // Resumed choices win over the process defaults, so a re-run from another directory still points
@@ -290,8 +309,12 @@ export class Installer {
   }
 
   /** The env file is the one place the model key lives. Mode 0600, merged, never printed. */
-  private writeEnvFile(patch: Record<string, string>): void {
-    const merged = { ...parseEnvFile(this.envPath), ...patch };
+  private writeEnvFile(patch: Record<string, string | undefined>): void {
+    const merged: Record<string, string> = { ...parseEnvFile(this.envPath) };
+    for (const [key, value] of Object.entries(patch)) {
+      if (value === undefined) delete merged[key];
+      else merged[key] = value;
+    }
     writeFileSync(this.envPath, serializeEnvFile(merged), { mode: 0o600 });
     chmodSync(this.envPath, 0o600);
   }
@@ -557,21 +580,6 @@ export class Installer {
     }
     this.io.say(`默认 soul：v${row.version}，${Buffer.byteLength(row.content)} 字节，逐字读回一致`);
 
-    // The embedding model is an optional capability, so a failed download is reported and the
-    // install continues: recall degrades to words instead of the install failing.
-    this.io.say('embedding 模型：检查本机 bge-base-zh-v1.5（约 99 MiB，缺失则从 Hugging Face 下载）…');
-    let lastFile = '';
-    const embedding = await (this.hooks.ensureEmbedding ?? ensureEmbeddingModel)(this.choices.dataDir, (progress) => {
-      if (progress.status !== 'progress' || !progress.file || progress.file === lastFile) return;
-      lastFile = progress.file;
-      this.io.say(`  下载 ${progress.file} ${Math.round(progress.progress ?? 0)}%`);
-    });
-    if (embedding.ok) {
-      this.io.say(`embedding 模型：就位（${embedding.downloaded ? '本次下载' : '已有'}）`);
-    } else {
-      this.io.say(`embedding 模型：未就位（${embedding.detail}）`);
-      this.io.say('  安装继续；召回降级为词面（lexical），健康页会显示 embedding 降级。');
-    }
     return { ok: true };
   }
 
@@ -679,7 +687,159 @@ export class Installer {
       this.io.say(`自定义路线「${route.name}」已写入 ${this.routesPath}（0600，钥匙只在这里）并设为当前路线。`);
       this.io.say('内置 mg 网关路线原样保留，随时可用 /model 切回。');
     }
+    return this.stepEmbedding();
+  }
+
+  /**
+   * The vector provider is a separate choice from the chat route (#313). Local is the default and
+   * keeps the existing 99 MiB supply step; a remote endpoint is probed now, before the resident is
+   * registered, so a provider that cannot return a vector stops the install instead of degrading it.
+   */
+  private async stepEmbedding(): Promise<StepResult> {
+    let provider = this.choices.embedding.provider;
+    let baseUrl = this.choices.embedding.baseUrl;
+    let model = this.choices.embedding.provider === 'local' ? '' : this.choices.embedding.model;
+    let modelExplicit = this.choices.embedding.provider !== 'local';
+    let dimensions = this.choices.embedding.provider === 'local' ? undefined : this.choices.embedding.dimensions;
+
+    if (this.flags.embeddingProvider !== undefined) {
+      if (this.flags.embeddingProvider !== 'local' && this.flags.embeddingProvider !== 'ollama' && this.flags.embeddingProvider !== 'openai') {
+        return {
+          ok: false,
+          message: `未知向量 provider：${this.flags.embeddingProvider}`,
+          hint: '--embedding-provider 取 local、ollama 或 openai。',
+        };
+      }
+      provider = this.flags.embeddingProvider;
+    }
+    if (this.flags.embeddingBaseUrl !== undefined) baseUrl = this.flags.embeddingBaseUrl;
+    if (this.flags.embeddingModel !== undefined) {
+      model = this.flags.embeddingModel;
+      modelExplicit = true;
+    }
+    if (this.flags.embeddingDimensions !== undefined) {
+      const parsed = Number(this.flags.embeddingDimensions);
+      if (!Number.isInteger(parsed) || parsed <= 0) {
+        return { ok: false, message: `无效的向量维度：${this.flags.embeddingDimensions}`, hint: '--embedding-dimensions 必须是正整数。' };
+      }
+      dimensions = parsed;
+    }
+
+    if (!this.flags.yes) {
+      const picked = await this.io.ask('向量 provider（local=本机 bge / ollama / openai；默认 local）', {
+        default: provider,
+        choices: ['local', 'ollama', 'openai'],
+      });
+      if (picked !== 'local' && picked !== 'ollama' && picked !== 'openai') {
+        return { ok: false, message: `未知向量 provider：${picked || '（空）'}`, hint: '重跑本安装器，在第 3 步选择 local、ollama 或 openai。' };
+      }
+      provider = picked;
+      if (provider !== 'local') {
+        const defaults = REMOTE_EMBEDDING_DEFAULTS[provider];
+        baseUrl = await this.io.ask('向量 base URL', { default: baseUrl || defaults.baseUrl });
+        model = await this.io.ask('向量模型名', { default: model || defaults.model });
+        modelExplicit = true;
+      }
+    }
+
+    if (provider === 'local') {
+      this.choices.embedding = { provider, baseUrl: '', model: EMBEDDING_MODEL, dimensions: EMBEDDING_DIMENSIONS };
+      this.writeEnvFile({
+        COGMEM_EMBEDDING_PROVIDER: undefined,
+        COGMEM_EMBEDDING_BASE_URL: undefined,
+        COGMEM_EMBEDDING_MODEL: undefined,
+        COGMEM_EMBEDDING_DIMENSIONS: undefined,
+        COGMEM_EMBEDDING_QUERY_PREFIX: this.flags.embeddingQueryPrefix,
+        COGMEM_EMBEDDING_API_KEY: undefined,
+      });
+      await this.ensureLocalEmbeddingModel();
+      return { ok: true };
+    }
+
+    const defaults = REMOTE_EMBEDDING_DEFAULTS[provider];
+    baseUrl = baseUrl.trim() || defaults.baseUrl;
+    model = modelExplicit ? model.trim() : '';
+    if (model === '') {
+      return {
+        ok: false,
+        message: `--yes 缺少向量模型名：${provider} 需要 --embedding-model`,
+        hint: '非交互安装不会替你选向量模型；补齐 --embedding-model 后重跑。',
+      };
+    }
+
+    const queryPrefix = this.flags.embeddingQueryPrefix ?? '';
+    const config: EmbeddingConfig = {
+      provider,
+      baseUrl,
+      model,
+      ...(dimensions === undefined ? {} : { dimensions }),
+      queryPrefix,
+    };
+    const expected = resolveEmbeddingDimensions(config);
+    config.dimensions = expected;
+
+    let apiKey = '';
+    if (provider === 'openai') {
+      const stored = parseEnvFile(this.envPath).COGMEM_EMBEDDING_API_KEY;
+      apiKey = this.flags.yes
+        ? stored ?? process.env.COGMEM_EMBEDDING_API_KEY ?? ''
+        : (await this.io.askSecret('向量 API 钥匙（安全输入，不回显、不入日志）: ')) || stored || process.env.COGMEM_EMBEDDING_API_KEY || '';
+      if (apiKey === '') {
+        return {
+          ok: false,
+          message: '没有提供向量 API 钥匙：openai 兼容端点需要 COGMEM_EMBEDDING_API_KEY',
+          hint: '钥匙不从命令行参数读（会进 ps / shell 历史）；放进环境变量或安装器的安全输入。',
+        };
+      }
+    }
+
+    this.io.say(`向量探针：向 ${provider} 打一发真实 embedding（模型 ${model}）…`);
+    const probe = await (this.hooks.probeEmbedding ?? probeEmbedding)(config, apiKey);
+    if (!probe.ok) {
+      return {
+        ok: false,
+        message: `向量探针失败：${probe.detail}`,
+        hint: '端点必须能按 OpenAI/Ollama 协议返回向量，且维度与配置一致；修好后重跑本安装器。',
+      };
+    }
+    const probedDimensions = probe.dimensions ?? expected;
+    if (probedDimensions !== expected) {
+      return {
+        ok: false,
+        message: `向量维度不一致：探针返回 ${probedDimensions}，配置期望 ${expected}`,
+        hint: '核对 --embedding-dimensions 或模型自身的输出维度。',
+      };
+    }
+
+    this.choices.embedding = { provider, baseUrl, model, dimensions: probedDimensions };
+    this.writeEnvFile({
+      COGMEM_EMBEDDING_PROVIDER: provider,
+      COGMEM_EMBEDDING_BASE_URL: baseUrl,
+      COGMEM_EMBEDDING_MODEL: model,
+      COGMEM_EMBEDDING_DIMENSIONS: String(probedDimensions),
+      COGMEM_EMBEDDING_QUERY_PREFIX: queryPrefix === '' ? undefined : queryPrefix,
+      COGMEM_EMBEDDING_API_KEY: provider === 'openai' ? apiKey : undefined,
+    });
+    this.io.say(`向量配置已写入 ${this.envPath}（0600；provider=${provider}，${probedDimensions} 维）`);
+    if (provider === 'openai') this.io.say('向量钥匙只写入 0600 env 文件，不出现在任何输出里。');
     return { ok: true };
+  }
+
+  /** The local model's 99 MiB supply; a failure degrades recall, it does not stop the install. */
+  private async ensureLocalEmbeddingModel(): Promise<void> {
+    this.io.say('embedding 模型：检查本机 bge-base-zh-v1.5（约 99 MiB，缺失则从 Hugging Face 下载）…');
+    let lastFile = '';
+    const embedding = await (this.hooks.ensureEmbedding ?? ensureEmbeddingModel)(this.choices.dataDir, (progress) => {
+      if (progress.status !== 'progress' || !progress.file || progress.file === lastFile) return;
+      lastFile = progress.file;
+      this.io.say(`  下载 ${progress.file} ${Math.round(progress.progress ?? 0)}%`);
+    });
+    if (embedding.ok) {
+      this.io.say(`embedding 模型：就位（${embedding.downloaded ? '本次下载' : '已有'}）`);
+    } else {
+      this.io.say(`embedding 模型：未就位（${embedding.detail}）`);
+      this.io.say('  安装继续；召回降级为词面（lexical），健康页会显示 embedding 降级。');
+    }
   }
 
   /** Upsert a named route and make it the active one; the file is 0600 and never printed. */
@@ -869,8 +1029,9 @@ export class Installer {
       text: error instanceof Error ? error.message : String(error),
     }));
     after.close();
-    if (!embedded.ok || embedded.dimensions !== EMBEDDING_DIMENSIONS) {
-      const detail = embedded.ok ? `维度 ${embedded.dimensions ?? '?'}，期望 ${EMBEDDING_DIMENSIONS}` : embedded.text;
+    const expectedDimensions = this.choices.embedding.dimensions;
+    if (!embedded.ok || embedded.dimensions !== expectedDimensions) {
+      const detail = embedded.ok ? `维度 ${embedded.dimensions ?? '?'}，期望 ${expectedDimensions}` : embedded.text;
       const warning = `语义召回未就绪：${detail}；当前只走词法召回，/health 的 embedding 状态与 shell-events 可查。`;
       this.io.say(`语义探针：未通过（${detail}）`);
       return { ok: true, warnings: [warning] };
@@ -937,11 +1098,17 @@ export const INSTALL_USAGE = [
   'Usage: cogmem install [--data <dir>] [--workspace <dir>] [--project <id>] [--agent <id>]',
   '              [--http-port <n>] [--service-name <name>] [--home <dir>] [--platform linux|darwin]',
   '              [--provider mg|openai_compatible --base-url <url> --model <name>]',
+  '              [--embedding-provider local|ollama|openai --embedding-base-url <url> --embedding-model <name>]',
   '              [--yes] [--skip-service] [--uninstall] [--help]',
   '  --data         数据目录（默认 ~/.cogmem/companion）',
   '  --provider     模型路线；与 --base-url、--model 一起构成 --yes 的必填路线',
   '  --base-url     OpenAI 兼容端点（通常以 /v1 结尾）',
   '  --model        模型名；钥匙放 MG_API_KEY 或 COGMEM_MODEL_KEY 环境变量，不放命令行',
+  '  --embedding-provider 向量 provider：local（默认，本机 bge）/ ollama / openai',
+  '  --embedding-base-url 向量端点；ollama 填主机，openai 填 OpenAI 兼容 base URL',
+  '  --embedding-model     向量模型名；钥匙放 COGMEM_EMBEDDING_API_KEY 环境变量，不放命令行',
+  '  --embedding-dimensions 覆盖向量维度；默认取所选模型的内置维度',
+  '  --embedding-query-prefix query 前缀；默认 bge-zh 用模型前缀，远程模型为空',
   '  --yes          非交互：必须显式给 --provider / --base-url / --model；系统时区、做梦 2:00-5:00',
   '  --skip-service 不注册用户服务，直接拉起进程（无 systemd/launchd 的沙箱）',
   '  --uninstall    停服务、摘单元；记忆库保留',
@@ -971,6 +1138,11 @@ export function parseInstallFlags(argv: string[]): InstallFlags {
     ['provider', 'provider'],
     ['base-url', 'baseUrl'],
     ['model', 'model'],
+    ['embedding-provider', 'embeddingProvider'],
+    ['embedding-base-url', 'embeddingBaseUrl'],
+    ['embedding-model', 'embeddingModel'],
+    ['embedding-dimensions', 'embeddingDimensions'],
+    ['embedding-query-prefix', 'embeddingQueryPrefix'],
   ];
   for (const [name, key] of stringFlags) {
     const parsed = value(name);
