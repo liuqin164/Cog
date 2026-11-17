@@ -41,7 +41,9 @@ for (const row of rows) {
   const [name, status, conclusion] = row.split('\t');
   const external = /Workers Builds/i.test(name ?? '');
   console.log(`${(conclusion || status || 'unknown').padEnd(10)} ${name}${external ? '  (external, not this repo\'s CI)' : ''}`);
-  if (!external) gating.push({ name: name ?? '', conclusion: conclusion ?? '' });
+  // #311: publish.yml rehearsals run on the same commit. They are release checks, not the push
+  // gate, so only `verify` gates here — matching the contract in this file's docstring.
+  if (!external && /^verify$/i.test(name ?? '')) gating.push({ name: name ?? '', conclusion: conclusion ?? '' });
 }
 
 const running = gating.filter((run) => run.conclusion === '' || run.conclusion === undefined);
