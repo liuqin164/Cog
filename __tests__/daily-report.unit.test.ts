@@ -4,6 +4,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { buildDailyReport, renderDailyReport } from '../src/daily/DailyReport.js';
+import { LATEST_SCHEMA_VERSION } from '../src/migrations/v3_7_4/FinalSchema.js';
 import { makeTempDir } from './helpers/tmp.js';
 
 const DATE = '2026-11-17';
@@ -15,7 +16,7 @@ function seed(dir: string): void {
     CREATE TABLE memory_events (event_type TEXT, occurred_at INTEGER, project_id TEXT, payload_json TEXT);
     CREATE TABLE episode_dream_runs (run_id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, status TEXT NOT NULL, candidate_ids_json TEXT NOT NULL, error TEXT);
     CREATE TABLE _meta (key TEXT PRIMARY KEY, value TEXT);
-    INSERT INTO _meta VALUES ('schema_version', '32');
+    INSERT INTO _meta VALUES ('schema_version', '${LATEST_SCHEMA_VERSION}');
   `);
   const insertFeedback = db.prepare('INSERT INTO memory_events (event_type, occurred_at, project_id, payload_json) VALUES (?, ?, ?, ?)');
   insertFeedback.run('SURFACING_FEEDBACK_RECORDED', NOON, 'companion', JSON.stringify({ outcome: 'ignored' }));

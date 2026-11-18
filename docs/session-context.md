@@ -28,6 +28,12 @@ below and fails when code and contract disagree. Version: `SESSION_CONTEXT_CONTR
    the sweet-spot corpus. It is an estimate of provider tokens, not a tokenizer. The old
    `ceil(chars / 4)` 6,000 was ~13,600 provider tokens on that corpus; the built-in route's 10,800
    is the new-unit value that keeps the same measured provider-token budget.
+   The digest is a **rotating window** over the newest `SESSION_DIGEST_MAX_TURNS` (512) turns
+   (#322), not monotonic growth over the whole session. Older turns leave the per-turn view and stay
+   in the ledger: `recall` still pages and searches them. The choice is mechanical rotation rather
+   than a model-written summary: it costs no model call on the hot path and keeps the anchor
+   discipline by construction. Its price is that a fact older than the window is reached by
+   `recall`, not by the digest lane; `SessionDigest.truncated` says when that happened.
 
 ## What this face does not do
 
@@ -45,15 +51,22 @@ between assemblies at the same budget.
 |---|---|---|---|
 | `pinned` | 60 | yes | trimmed last, item by item; never paraphrased |
 | `profile` | 50 | yes | trimmed after the other lanes are pointers |
-| `digest` | 30 | no | becomes a browse-only pointer |
+| `digest` | 10 | no | becomes a browse-only pointer |
 | `working_set` | 20 | no | becomes a browse-only pointer |
-| `recall` | 10 | no | becomes a browse-only pointer |
+| `recall` | 45 | no | becomes a browse-only pointer last |
 | `tail` | 40 | no | becomes a browse-only pointer |
 
 The render order and the fill order are deliberately different. `tail` renders last because new
-turns append there, but it outranks the digest and the recall lane: the recent verbatim words are
-the continuity anchor. `pinned` and `profile` lead both lists because they are the prefix a provider
-can cache.
+turns append there, but it outranks the digest and the working set: the recent verbatim words are
+the continuity anchor. `recall` is sacrificed last because it is the lane the product exists for;
+the digest is sacrificed first because it only grows. `pinned` and `profile` lead both lists because
+they are the prefix a provider can cache.
+
+After the downgrade pass, freed budget is **backfilled** (#316): a lane that became a pointer is
+given back its newest items, highest-priority lane first, until the assembly is within `targetTokens`
+again. A partly restored lane reports `status: "included"`, keeps the pointer for the items that did
+not fit in its text, and records a `trimmed` decision whose `browseIds` name them. The result is a
+request that stays near the bandwidth it was given instead of collapsing to the pointer's size.
 
 ## Constraints never fold (#255)
 

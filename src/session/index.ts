@@ -1,4 +1,5 @@
 export {
+  SESSION_DIGEST_MAX_TURNS,
   SESSION_LEDGER_MAX_TURNS,
   readSessionTurns,
   readSessionToolCalls,

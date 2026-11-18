@@ -2,6 +2,38 @@
 
 ## 5.0.0 (unreleased)
 
+- **A long session no longer collapses to a ninth of its budget and stays there (#316).** Over budget it
+  still downgrades from the lowest lane priority and never drops a protected constraint (#255), but
+  `recall` is now the last foldable lane sacrificed and the digest is sacrificed first. The freed
+  budget is then backfilled, highest-priority lane first and newest item first: the surviving lanes
+  are re-rendered with the items that now fit, the omitted ids stay in `browseIds`, and a partly
+  restored lane reports `status: "included"` with one `trimmed` decision (`tokensBefore` is the full
+  lane) whose `browseIds` list is its browse pointer. Backfill reuses the existing lanes and the existing
+  `renderLane`/`renderBrowseStub` pair; there is no second state machine. Re-measured on the #346
+  30-day scorecard: `recall_lane_included` 238/600 → **600/600 (100%)**, post-first-cut
+  `min_budget_utilization` → **99.4%** (threshold ≥50%), `max_request_tokens` stayed **6,000/6,000**.
+  The 120/300/1,000-turn assembler probes are now 99.5% / 99.4% / 99.4% with recall and working set present.
+  **Nothing is removed this round**; no module, dependency, table, column or bin is added. The
+  numbers re-baseline when #318's estimator calibration changes. User-visible effect, in one line:
+  month three of a conversation still carries the recent conversation verbatim and its recall lane,
+  instead of a 9% pointer-only stub.
+
+- **A session's digest now rotates instead of only growing (#322).** Every per-turn assembly compiles
+  the newest `SESSION_DIGEST_MAX_TURNS` (512) turns; older turns leave the context view and stay in the
+  ledger, where `recall` still pages and searches them. The chosen mechanism is mechanical rotation,
+  not a model-written summary: the digest stays a verbatim index by construction, the hot path still
+  has no model call, and there is no new table or compaction state to keep consistent. Its price is
+  stated plainly — a fact older than the window is reached by `recall`, not by the digest lane, and
+  `SessionDigest.truncated` says when the window cut the read. The missing read path is paid for with one
+  additive index, `idx_memory_events_session_time` on `memory_events(project_id, session_id, occurred_at,
+  COALESCE(global_seq,0), event_id)`; `readSessionTurns` now compares the plain columns, so
+  `EXPLAIN QUERY PLAN` searches that index and no longer type-times the whole ledger. Schema version
+  32 → 33. Measured on a real 10,000-turn file at a 6,000-token target: `assemble` p50 **11 ms**
+  (≤30 ms), budget utilisation **99%** (≥50%); the oldest turn is outside the digest window and is
+  still found by `recallSession` keyword. **Nothing is removed or merged this round**; the
+  complexity budget is one additive index and one constant in exchange for bounding the per-turn
+  document.
+
 - **`bash` now keeps the shell's secrets, not only its files (#288).** The sandbox is no longer a read-only bind of `/`: it sees only the system directories a command needs (`/usr`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/etc`) plus the workspace, with fresh `/tmp` and `/var/tmp` tmpfs mounts. The operator's home is not mounted, and the data dir is masked by an empty read-only mount (the default `<workspace>/.cogmem-shell` included), so `memory.sqlite`, budgets, routes and the CLI config are unreadable and unwritable from bash. The child inherits only an allowlist (`PATH`, locale, `TZ`, `TERM`, ...), never API keys or tokens, and `HOME` is `/tmp`. The network namespace is unshared, so a page fetched by `web_fetch` cannot ask bash to `curl` a secret out; the bash tool description and `/status` say so, and the plugin traces `bash_sandbox_network`. **The network allowlist is empty this round:** package installs and other networked work run in the operator's own terminal, because a host-level allowlist needs a proxy the sandbox does not have; no confirmation prompt is needed when no bash call can reach the network. **What pays for it:** no new module, dependency, table or bin; the sandbox invocation loses `--ro-bind / /`, the read-only data-dir bind, the read-write `web-cache` bind, inherited `process.env` and the shared network, and gains one allowlist and one mask. `shell/test/bash-sandbox.test.ts` adds the red-team discriminators: the data dir is unreadable, the operator home is absent and `HOME=/tmp`, an injected secret does not reach the child, and `curl` cannot resolve or connect. User-visible effect, in one line: a web-injected instruction can no longer read `~/.ssh`, the shell's memory or an API key from bash, and it cannot send anything out.
 
 - **`web_fetch` now connects to the address it checked, not a second DNS answer (#289).** Validation resolved the hostname, checked every address, and then handed the hostname to `fetch`, which resolved it again; a DNS server that answered public first and loopback second could reach the observatory. The fetch path now keeps the original hostname for the `Host` header and TLS SNI/verification but pins the socket to the validated address through a custom `lookup` (`node:http`/`https`), and every redirect hop validates and pins its own address. A pinned connection failure is a named `fetch_failed`, never a silent retry through the hostname. **What pays for it:** no new module, dependency, table or bin; `web_fetch` uses the standard library's HTTP client instead of the global fetch, and the validated-address result replaces the URL-only return. `shell/test/web-plugin.test.ts` pins the first-public/second-loopback answer (one lookup, the public pin), the `Host` header and address of a pinned request, and the named failure. User-visible effect, in one line: a hostname whose DNS answer changes between validation and connection can no longer be used to reach a loopback or private service.

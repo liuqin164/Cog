@@ -18,7 +18,7 @@ import {
 import { tableExists } from '../../utils/Values.js';
 
 /** The release schema version this build creates and accepts. */
-export const LATEST_SCHEMA_VERSION = 32;
+export const LATEST_SCHEMA_VERSION = 33;
 
 /**
  * Create the 4.0 schema in a database that has none.

@@ -15,6 +15,13 @@ import type { MemoryEventRole } from '../types/index.js';
 /** The most turns one assembly reads. Beyond it the digest says it is truncated rather than lying. */
 export const SESSION_LEDGER_MAX_TURNS = 5000;
 
+/**
+ * The newest turns the digest lane compiles (#322). Older turns leave the per-turn view rather than
+ * growing it without bound; they stay in the ledger and `recallSession` reaches them unchanged, so
+ * the session rotates its *context* window without rotating the identity it is stored under.
+ */
+export const SESSION_DIGEST_MAX_TURNS = 512;
+
 export interface SessionTurn {
   eventId: string;
   projectId: string;
@@ -88,9 +95,9 @@ const TURN_COLUMNS = `
  */
 const LANE_SQL = `
   event_type = 'RAW_EVENT_RECORDED'
-  AND COALESCE(project_id, '') = ?
-  AND COALESCE(session_id, '') = ?
-  AND COALESCE(source_id, '') = ?
+  AND project_id = ?
+  AND session_id = ?
+  AND source_id = ?
   AND json_valid(payload_json)
   AND json_extract(payload_json, '$.metadata.captureLane') = 'conversation'
 `;

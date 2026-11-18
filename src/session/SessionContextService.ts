@@ -15,7 +15,7 @@ import { TraceStore } from '../observability/TraceStore.js';
 import { TraceWriter } from '../observability/TraceWriter.js';
 import { buildSessionDigest, type SessionDigest } from './SessionDigest.js';
 import { requireSessionText } from './SessionErrors.js';
-import { readSessionTurns, type SessionTurn } from './SessionLedger.js';
+import { readSessionTurns, SESSION_DIGEST_MAX_TURNS, type SessionTurn } from './SessionLedger.js';
 import { recallSession, type SessionRecallInput, type SessionRecallPage } from './SessionRecall.js';
 import {
   assembleSessionContext,
@@ -54,7 +54,7 @@ export class SessionContextService {
   /** The mechanical digest and the verbatim tail. No model is called. */
   digest(input: SessionDigestInput): SessionDigest {
     const { projectId, agentId, sessionId } = requireScope(input);
-    const read = readSessionTurns(this.db, { projectId, agentId, sessionId });
+    const read = readSessionTurns(this.db, { projectId, agentId, sessionId, limit: SESSION_DIGEST_MAX_TURNS });
     return buildSessionDigest(read.turns, { sessionId, tailTurns: input.tailTurns, truncated: read.truncated });
   }
 
@@ -66,7 +66,7 @@ export class SessionContextService {
   /** The per-turn projection: lanes in frozen order, fitted to `targetTokens`. */
   assemble(input: AssembleSessionContextInput): SessionContextAssembly {
     const { projectId, agentId, sessionId } = requireScope(input);
-    const read = readSessionTurns(this.db, { projectId, agentId, sessionId });
+    const read = readSessionTurns(this.db, { projectId, agentId, sessionId, limit: SESSION_DIGEST_MAX_TURNS });
     const digest = buildSessionDigest(read.turns, { sessionId, tailTurns: input.tailTurns, truncated: read.truncated });
     const openLoops = [...(input.openLoops ?? []), ...this.openLoops({ projectId, agentId, sessionId })];
     const protectedIds = [
