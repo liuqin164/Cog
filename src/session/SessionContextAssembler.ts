@@ -218,7 +218,7 @@ export function assembleSessionContext(input: AssembleSessionContextInput, diges
         tokensBefore: before,
         tokensAfter: lane.tokens,
         omittedItems: expanded.length,
-        browseIds: expanded.slice(0, BROWSE_ID_LIMIT).map((item) => item.id),
+        browseIds: expanded.slice(-BROWSE_ID_LIMIT).map((item) => item.id),
       });
       total = lanes.reduce((sum, entry) => sum + entry.tokens, 0);
       continue;
@@ -237,7 +237,7 @@ export function assembleSessionContext(input: AssembleSessionContextInput, diges
         tokensBefore: before,
         tokensAfter: lane.tokens,
         omittedItems: omitted.length,
-        browseIds: omitted.slice(0, BROWSE_ID_LIMIT).map((item) => item.id),
+        browseIds: omitted.slice(-BROWSE_ID_LIMIT).map((item) => item.id),
       });
       total = lanes.reduce((sum, entry) => sum + entry.tokens, 0);
       continue;
@@ -251,7 +251,7 @@ export function assembleSessionContext(input: AssembleSessionContextInput, diges
       tokensBefore: before,
       tokensAfter: sessionTokens(after),
       omittedItems: lane.items.length,
-      browseIds: lane.items.slice(0, BROWSE_ID_LIMIT).map((item) => item.id),
+      browseIds: lane.items.slice(-BROWSE_ID_LIMIT).map((item) => item.id),
     });
     lane.browseIds = lane.items.map((item) => item.id);
     lane.items = [];
@@ -495,16 +495,17 @@ function renderRecallLane(items: SessionContextItem[]): string {
  * A downgraded lane's pointer: the item count plus one drill-down key per browse id that resolves
  * to a ledger event. `read mem:<eventId>` consumes the key directly (#252); an id with no event
  * behind it prints no key rather than a pointer that goes nowhere. The key list keeps the trace's
- * existing 20-id bound, and the header keeps the full count.
+ * existing 20-id bound but takes the newest ids — the turns that just slid out of view — and the
+ * header keeps the full count and says which segment the keys cover (#317).
  */
 export function renderBrowseStub(lane: SessionContextLaneName, ids: readonly string[]): string {
   if (ids.length === 0) return '';
   const keys = ids
     .map(browseEventId)
     .filter((id): id is string => id !== undefined)
-    .slice(0, BROWSE_ID_LIMIT);
+    .slice(-BROWSE_ID_LIMIT);
   return [
-    `[${lane}: browse-only, ${ids.length} item(s)]`,
+    `[${lane}: browse-only, ${ids.length} item(s); keys: newest ${keys.length} of ${ids.length}]`,
     ...keys.map((id) => '  anchorEvent=' + serializeUntrustedMemory(id, 160)),
   ].join('\n');
 }

@@ -73,7 +73,7 @@ describe('context continuity', () => {
       await shell.submit('第二轮：部署窗口是周二');
       await shell.submit('第三轮：继续');
       const third = asText(provider.calls[2].messages);
-      expect(third).toContain('[tail: browse-only, 4 item(s)]');
+      expect(third).toContain('[tail: browse-only, 4 item(s); keys: newest 4 of 4]');
       expect(third).not.toContain('第二轮：部署窗口是周二');
     } finally {
       await shell.stop();

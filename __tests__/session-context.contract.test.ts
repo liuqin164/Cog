@@ -14,10 +14,13 @@ import {
   SESSION_CONTEXT_STABLE_LANES,
   SESSION_DIGEST_ENTRY_FIELDS,
   SESSION_RECALL_MODES,
+  assembleSessionContext,
+  buildSessionDigest,
   digestAnchors,
   readSessionTurns,
   renderBrowseStub,
   sessionTokens,
+  type SessionTurn,
 } from '../src/session/index.js';
 import { makeTempDir } from './helpers/tmp.js';
 
@@ -322,15 +325,53 @@ describe('the assembly stays inside the target and explains every cut (#191 prim
     expect(recall.text).toContain('whyMatched=raw_ledger_text_fallback');
   });
 
-  test('a downgraded stub renders its browse ids as read mem: keys, bounded to 20 (#276)', () => {
+  test('a downgraded stub renders its browse ids as read mem: keys, newest 20 (#276, #317)', () => {
     const ids = Array.from({ length: 25 }, (_, index) => `evt-${index}`);
     const stub = renderBrowseStub('recall', ids);
-    expect(stub).toContain('[recall: browse-only, 25 item(s)]');
+    expect(stub).toContain('[recall: browse-only, 25 item(s); keys: newest 20 of 25]');
     expect(stub.match(/anchorEvent=evt-\d+/g)).toHaveLength(20);
-    expect(stub).toContain('anchorEvent=evt-0');
+    expect(stub).toContain('anchorEvent=evt-24');
+    expect(stub).toContain('anchorEvent=evt-5');
+    expect(stub).not.toContain('anchorEvent=evt-4');
     // The digest's entry id names the same ledger row, and a working-set id names none.
     expect(renderBrowseStub('digest', ['digest:evt-7'])).toContain('anchorEvent=evt-7');
-    expect(renderBrowseStub('working_set', ['working:0'])).toBe('[working_set: browse-only, 1 item(s)]');
+    expect(renderBrowseStub('working_set', ['working:0'])).toBe('[working_set: browse-only, 1 item(s); keys: newest 0 of 1]');
+  });
+
+  test('a 292-entry digest stub keeps the keys of the turns that just slid out of view (#317)', () => {
+    const ids = Array.from({ length: 292 }, (_, index) => `digest:evt-${String(index).padStart(6, '0')}`);
+    const stub = renderBrowseStub('digest', ids);
+    expect(stub).toContain('[digest: browse-only, 292 item(s); keys: newest 20 of 292]');
+    expect(stub).toContain('anchorEvent=evt-000291');
+    expect(stub).toContain('anchorEvent=evt-000272');
+    expect(stub).not.toContain('anchorEvent=evt-000000');
+  });
+
+  test('the decision trace names the newest evicted ids, not the oldest (#317)', () => {
+    const turns: SessionTurn[] = Array.from({ length: 30 }, (_, index) => ({
+      eventId: `evt-${String(index).padStart(6, '0')}`,
+      projectId: PROJECT,
+      sessionId: 's-browse',
+      threadId: 't-browse',
+      turnId: `run:${index}`,
+      agentId: AGENT,
+      speaker: index % 2 === 0 ? 'owner' : 'agent',
+      role: index % 2 === 0 ? 'user' : 'assistant',
+      channel: 'terminal',
+      text: `第 ${index} 轮：继续整理会话上下文。`,
+      occurredAt: T0 + index * 1000,
+      globalSeq: index,
+    }));
+    const digest = buildSessionDigest(turns, { sessionId: 's-browse', tailTurns: 8 });
+    const assembly = assembleSessionContext({
+      projectId: PROJECT,
+      agentId: AGENT,
+      sessionId: 's-browse',
+      targetTokens: 40,
+    }, digest);
+    const decision = assembly.decisionTrace.find((entry) => entry.lane === 'digest')!;
+    expect(decision.browseIds).toContain(digest.entries.at(-1)!.entryId);
+    expect(decision.browseIds).not.toContain(digest.entries[0]!.entryId);
   });
 
   test('a downgrade is readable from trace_events, not only from the return value', () => {
