@@ -148,7 +148,7 @@ export class TuiView {
     workspace: process.cwd(),
     showWorkspace: true,
     contextTokens: 0,
-    contextSweetSpot: 6_000,
+    contextSweetSpot: 10_800,
     costTokens: 0,
     timeZone: 'UTC',
   };

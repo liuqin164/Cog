@@ -157,9 +157,28 @@ export interface SessionContextAssembly {
   autoExpanded: readonly string[];
 }
 
-/** Four characters to a token, the estimate the context cortex and the evidence pack use. */
+/**
+ * A character-class estimate, not a tokenizer (#318).
+ *
+ * `chars / 4` is a fair unit for English and source code but undercounts Chinese by about 2.3×:
+ * on the project's own sweet-spot corpus, 24,006 characters cost 13,021 provider prompt tokens
+ * (0.542 tokens/char) while `chars / 4` called it 6,002. The measured cost per class with
+ * `auto/deepseek-v4.1-flash` is 0.24–0.25 tokens/char for ASCII prose and code, 0.58–0.60 for
+ * Chinese prose, and 0.50 for the `中文` bigram. We charge ASCII 0.25 and every other code point
+ * 0.64: the upper end of the measured Chinese range, so a mixed request is estimated at ~0.81 of
+ * the provider's count rather than ~0.44. No tokenizer dependency is added.
+ */
+const ASCII_TOKENS_PER_CHAR = 0.25;
+const NON_ASCII_TOKENS_PER_CHAR = 0.64;
+
 export function sessionTokens(text: string): number {
-  return Math.ceil(text.length / 4);
+  let ascii = 0;
+  let nonAscii = 0;
+  for (const char of text) {
+    if (char.codePointAt(0)! < 128) ascii += 1;
+    else nonAscii += 1;
+  }
+  return Math.ceil(ascii * ASCII_TOKENS_PER_CHAR + nonAscii * NON_ASCII_TOKENS_PER_CHAR);
 }
 
 const BROWSE_ID_LIMIT = 20;

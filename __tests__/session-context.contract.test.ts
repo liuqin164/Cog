@@ -120,6 +120,54 @@ describe('the contract document and the frozen lists agree', () => {
   });
 });
 
+describe('the token estimate tracks provider tokens by character class (#318)', () => {
+  test('Chinese is no longer charged at a quarter token per character', () => {
+    // Measured through the eval gateway with `auto/deepseek-v4.1-flash` (temperature 0, delta over
+    // an empty request): '中文'.repeat(500) is 499 provider prompt tokens. The old ceil(chars / 4)
+    // said 250, a 2.0x undercount.
+    const chinese = '中文'.repeat(500);
+    expect(Math.abs(sessionTokens(chinese) - 499) / 499).toBeLessThanOrEqual(0.3);
+    expect(sessionTokens(chinese)).toBeGreaterThan(Math.ceil(chinese.length / 4) * 2);
+  });
+
+  test('ASCII source code stays within 10% of the measured count', () => {
+    // The same probe measured this 1,115-character TypeScript sample at 275 prompt tokens.
+    const ascii = [
+      'export function estimateTokens(message: AgentMessage): number {',
+      '  let chars = message.content.length;',
+      '  for (const call of message.toolCalls ?? []) {',
+      '    chars += call.toolName.length + JSON.stringify(call.input ?? {}).length;',
+      '  }',
+      '  if (message.toolsAdded) chars += JSON.stringify(message.toolsAdded).length;',
+      '  if (message.toolsRemoved) chars += JSON.stringify(message.toolsRemoved).length;',
+      '  return Math.ceil(chars / 4);',
+      '}',
+      '',
+      'export function estimateMessagesTokens(messages: readonly AgentMessage[]): number {',
+      '  let tokens = 0;',
+      '  for (const message of messages) tokens += estimateTokens(message);',
+      '  return tokens;',
+      '}',
+      '',
+      'export function accountRequest(input: {',
+      '  messages: readonly AgentMessage[];',
+      '  systemPrompt: string;',
+      '  tools: readonly ToolDeclaration[];',
+      '}): ContextAccount {',
+      '  const byRole: ContextAccount["byRole"] = { user: 0, assistant: 0, tool: 0, system: 0 };',
+      '  let messageTokens = 0;',
+      '  for (const message of input.messages) {',
+      '    const tokens = estimateTokens(message);',
+      '    messageTokens += tokens;',
+      '    byRole[message.role] += tokens;',
+      '  }',
+      '  return { messageTokens, messages: input.messages.length, byRole };',
+      '}',
+    ].join('\n');
+    expect(Math.abs(sessionTokens(ascii) - 275) / 275).toBeLessThanOrEqual(0.1);
+  });
+});
+
 describe('the digest is a verbatim index, not a summary (#191 primitive 1)', () => {
   test('an early decision survives a long session word for word, with its anchors', () => {
     const digest = backend.sessionDigest({ projectId: PROJECT, agentId: AGENT, sessionId: SESSION, tailTurns: 8 });

@@ -53,9 +53,15 @@ export interface ShellConfig {
   /**
    * The built-in route's context sweet spot (spec §6's "甜点带宽"). C3 (#258) fills the per-model
    * value into a route; until then this is the fallback every route without a `targetTokens` uses.
-   * The current 6_000 is provisional, not a validated constant: #258 measured a flat curve through
-   * 48k for `auto/deepseek-v4.1-flash` and is waiting on a second model and a coverage arm. The
-   * unit is the assembler's `ceil(chars / 4)` estimate, not the provider's token count.
+   * The curve is flat through 48k for `auto/deepseek-v4.1-flash`; a second model and a coverage arm
+   * are still open.
+   *
+   * The unit changed in #318 from `ceil(chars / 4)` to the assembler's character-class estimate
+   * (ASCII 0.25 token/char, non-ASCII 0.64). The old 6_000 fit ~24,000 characters of the sweet-spot
+   * corpus and the provider charged ~13,355 prompt tokens for them; 6_000 in the new unit fits only
+   * ~12,400 characters (~6,700 provider tokens), roughly half. 10_800 is the new-unit value that
+   * keeps the measured ~13,400-provider-token budget on that corpus, so the number moved with the
+   * ruler instead of the budget shrinking.
    */
   contextSweetSpot: number;
   /** Recent turns kept verbatim in every request's tail lane (#245). */
@@ -294,7 +300,7 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
     dailyBudget: overrides.dailyBudget ?? daily,
     nightBudget: overrides.nightBudget ?? night,
     maxIdleTurns,
-    contextSweetSpot: overrides.contextSweetSpot ?? 6_000,
+    contextSweetSpot: overrides.contextSweetSpot ?? 10_800,
     tailTurns: overrides.tailTurns ?? tailTurnsFromEnv(),
     // The install's rhythm step is what fills these; the literals stay the fallback for a hand-run
     // shell that was never installed.

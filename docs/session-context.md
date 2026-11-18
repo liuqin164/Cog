@@ -23,9 +23,11 @@ below and fails when code and contract disagree. Version: `SESSION_CONTEXT_CONTR
 3. **Assembly.** One turn's context, fitted to `targetTokens` (the caller reads that number from the
    model configuration; it is not a kernel constant). Lanes are rendered in a fixed order; over
    budget, the lowest-priority lane becomes a pointer to text the caller can still browse. Every
-   downgrade is recorded. The unit is the assembler's own `ceil(chars / 4)` estimate, not the
-   provider's token count; #258 measured about 2.2 provider tokens per unit on a Chinese corpus.
-   The built-in route's 6,000 is provisional pending that curve's review.
+   downgrade is recorded. The unit is the assembler's character-class estimate (#318): ASCII costs
+   0.25 token/char and every other code point 0.64, measured against `auto/deepseek-v4.1-flash` on
+   the sweet-spot corpus. It is an estimate of provider tokens, not a tokenizer. The old
+   `ceil(chars / 4)` 6,000 was ~13,600 provider tokens on that corpus; the built-in route's 10,800
+   is the new-unit value that keeps the same measured provider-token budget.
 
 ## What this face does not do
 
