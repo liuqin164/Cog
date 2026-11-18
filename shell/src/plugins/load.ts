@@ -11,7 +11,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { PluginQuarantinedError, type NativePlugin, type PluginHost } from './host.ts';
+import type { NativePlugin, PluginHost } from './host.ts';
 
 export interface PluginLoadResult {
   spec: string;
@@ -28,11 +28,6 @@ export interface PluginLoadResult {
 interface LoadOptions {
   cwd: string;
   trace?: { append(kind: string, record?: Record<string, unknown>, now?: number): void };
-  /**
-   * A spec whose install is still being proven (#291). Its `apply` failure is isolated instead of
-   * failing the whole host, so the boot-time applier can undo the change and keep the resident up.
-   */
-  quarantine?: (spec: string) => boolean;
 }
 
 const ENTRY_FILES = ['index.ts', 'index.js', 'index.mjs', 'index.tsx'];
@@ -84,19 +79,6 @@ function isNativePlugin(value: unknown): value is NativePlugin {
   return plugin !== null && typeof plugin === 'object' && typeof plugin.name === 'string' && typeof plugin.apply === 'function';
 }
 
-function quarantinable(plugin: NativePlugin): NativePlugin {
-  return {
-    ...plugin,
-    apply: (async (ctx, config) => {
-      try {
-        return await plugin.apply(ctx, config);
-      } catch (error) {
-        throw new PluginQuarantinedError(plugin.name, error);
-      }
-    }) as NativePlugin['apply'],
-  };
-}
-
 /**
  * Import and register every spec. Registration happens before `host.start()`; the returned tools and
  * commands are filled by the caller once the host has run each plugin's `apply`.
@@ -110,7 +92,7 @@ export async function loadNativePlugins(host: PluginHost, specs: readonly string
       if (!isNativePlugin(module.default)) {
         throw new Error('plugin_invalid: the default export must be a NativePlugin with name and apply');
       }
-      host.register(options.quarantine?.(spec) ? quarantinable(module.default) : module.default);
+      host.register(module.default);
       results.push({
         spec,
         status: 'loaded',

@@ -17,6 +17,20 @@
   companion still remembers and presents how work gets done, but it no longer runs a practice as a
   fixed tool sequence without the model; every turn is model-driven again.
 
+- **Self-change is gone: there is no agent path that installs code into its own process (#338).**
+  The two tools, `propose_self_change` and `apply_self_change`, recorded and then installed a plugin
+  proposal from inside a run; neither tool was called in the two real archives. This removes them
+  together with the hygiene gate (`shell/src/hygiene.ts`), the applier and its snapshots
+  (`shell/src/self-change.ts`), their plugin (`shell/src/plugins/hygiene.ts`), the `hygiene` service slot,
+  the question-suspension `approvalId`, the pending-install quarantine path in the plugin loader and
+  host, and the `<dataDir>/self-change-applies` / `self-plugins` directories. `propose_soul_edit` is
+  untouched and remains a draft-only tool: the owner's save in the star-sea editor is still the only
+  soul write. The default tool whitelist drops from 13 to **11**. Tests removed with the feature:
+  `shell/test/hygiene.test.ts`, `shell/test/self-change-apply.test.ts`, and the five
+  `shell/test/fixtures/hygiene/` fixtures. User-visible effect, in one line:
+  an owner-approved proposal can no longer rewrite the running companion's plugin registry or
+  restart it, while persona drafts keep the same review path.
+
 - **A long session no longer collapses to a ninth of its budget and stays there (#316).** Over budget it
   still downgrades from the lowest lane priority and never drops a protected constraint (#255), but
   `recall` is now the last foldable lane sacrificed and the digest is sacrificed first. The freed
