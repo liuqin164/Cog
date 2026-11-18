@@ -12,6 +12,9 @@ leaves the scratch database under `.cogmem/recall-baseline/run-*`; `--out-dir`,
 `--model` and `--cache-dir` are the other knobs. `--keep` is only for inspecting
 a run; the default removes the scratch tree.
 
+The #343 ablation reuses this corpus to measure the legacy compiled lane on and off:
+`bun eval/recall-ablation/run.ts` (see `eval/recall-ablation/README.md`).
+
 ## Corpus
 
 `corpus.ts` holds 20 memory targets and 10 practice targets, each with a Chinese

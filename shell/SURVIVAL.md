@@ -43,6 +43,22 @@ about what happens between and around those events.
 Record the six results, the head commit and the 48-hour window on #235 before starting the
 seven-day run. Any failure means the seven-day clock has not started.
 
+## Continuity scorecard (#346) vs the 48-hour soak (#235)
+
+The two suites ask different questions and both are needed:
+
+- **#235 / `test/soak-fake-clock.test.ts` is the bounds suite.** It asserts that time does not make
+  the resident do more work than the events that arrived: idle ticks start no run, one message
+  stays one run, a promise runs once, and the ledger/user lane do not grow. Its failures are caps.
+- **#346 / `eval/continuity/run.ts` is the content-quality scorecard.** It asserts that the context
+  still carries what the owner needs: the recall lane is present, the budget is used rather than
+  collapsed, forget is real on disk, the night catches up, a due promise is not repeated forever,
+  a pause resumes the same work, and a kill keeps the open assignment. Its failures are metrics.
+
+The scorecard is not a PR gate yet. Run it with `bun eval/continuity/run.ts` from the repository
+root; `--report-only` exits 0 so a baseline can be recorded. Its current red scenarios are the
+baseline #316/#327 (plus the measured #330/#331 side findings), not a reason to tune a threshold.
+
 ## Start
 
 ```sh

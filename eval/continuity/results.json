@@ -1,0 +1,156 @@
+{
+  "head": "eb7d61e5",
+  "runAt": "2026-11-18T02:01:46.635Z",
+  "bun": "1.3.14",
+  "platform": "linux",
+  "arch": "arm64",
+  "results": [
+    {
+      "name": "30-day long session (#316)",
+      "metrics": [
+        {
+          "key": "recall_lane_included",
+          "value": "238/600 (39.7%)",
+          "pass": false,
+          "threshold": ">= 90% of turns"
+        },
+        {
+          "key": "max_request_tokens",
+          "value": "5999 / 6000",
+          "pass": true,
+          "threshold": "<= target bandwidth"
+        },
+        {
+          "key": "min_budget_utilization",
+          "value": "10.4%",
+          "pass": false,
+          "threshold": ">= 50% of target"
+        }
+      ],
+      "pass": false,
+      "durationMs": 241612.834874
+    },
+    {
+      "name": "forget (#332/#331)",
+      "metrics": [
+        {
+          "key": "pre_forget_recall",
+          "value": "hit",
+          "pass": true,
+          "threshold": "the seeded fact is recallable"
+        },
+        {
+          "key": "post_forget_recall",
+          "value": "empty",
+          "pass": true,
+          "threshold": "empty"
+        },
+        {
+          "key": "post_forget_disk_hits",
+          "value": "4 file(s)",
+          "pass": false,
+          "threshold": "0 files",
+          "detail": "/data/checkpoint.json, /data/checkpoint.json.prev, /data/memory.sqlite, /data/shell-events.jsonl"
+        }
+      ],
+      "pass": false,
+      "durationMs": 520.3352739999827
+    },
+    {
+      "name": "night catch-up (#327)",
+      "metrics": [
+        {
+          "key": "dream_complete_after_missed_window",
+          "value": "0",
+          "pass": false,
+          "threshold": "1"
+        },
+        {
+          "key": "dream_catchup_trace",
+          "value": "0",
+          "pass": false,
+          "threshold": ">= 1"
+        },
+        {
+          "key": "snapshots_after_missed_window",
+          "value": "0",
+          "pass": false,
+          "threshold": ">= 1"
+        }
+      ],
+      "pass": false,
+      "durationMs": 528.9964529999997
+    },
+    {
+      "name": "emergence feedback (#330)",
+      "metrics": [
+        {
+          "key": "first_due_surfacing",
+          "value": "1",
+          "pass": true,
+          "threshold": "exactly 1"
+        },
+        {
+          "key": "surfacings_after_three_ignored",
+          "value": "4",
+          "pass": false,
+          "threshold": "<= 3 (the fourth waits or is suppressed)",
+          "detail": "per tick: 1, 1, 1, 1"
+        }
+      ],
+      "pass": false,
+      "durationMs": 914.62242900001
+    },
+    {
+      "name": "budget pause and resume (#228)",
+      "metrics": [
+        {
+          "key": "budget_stop_is_a_pause",
+          "value": "budget_exceeded",
+          "pass": true,
+          "threshold": "SUSPENDED / budget"
+        },
+        {
+          "key": "resume_keeps_the_assignment",
+          "value": "read {\"path\":\"missing.txt\"}",
+          "pass": true,
+          "threshold": "the second request carries the stop"
+        },
+        {
+          "key": "resume_completes",
+          "value": "已批准：追加 6004 token / 4 回合，原地续跑。",
+          "pass": true,
+          "threshold": "IDLE and the assignment closed"
+        }
+      ],
+      "pass": true,
+      "durationMs": 582.2014510000008
+    },
+    {
+      "name": "SIGKILL recovery (#331)",
+      "metrics": [
+        {
+          "key": "state_after_sigkill",
+          "value": "IDLE",
+          "pass": true,
+          "threshold": "IDLE"
+        },
+        {
+          "key": "assignment_survives_sigkill",
+          "value": "把这份报告整理完，然后等我确认",
+          "pass": true,
+          "threshold": "the open assignment text is back"
+        },
+        {
+          "key": "away_queue_survives_sigkill",
+          "value": "1",
+          "pass": true,
+          "threshold": "1 entry",
+          "detail": "fixture saw away=1"
+        }
+      ],
+      "pass": true,
+      "durationMs": 1538.085091999994
+    }
+  ]
+}
