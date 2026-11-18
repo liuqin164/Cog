@@ -813,9 +813,7 @@ export class CompanionShell implements ShellControl, AttachShell {
         this.lastContextMetrics = {
           folds: assembly.decisionTrace.length,
           drills: this.drillsSinceAssembly,
-          // shortcut: #253 owns deterministic auto-expansion and its trace field; this is a real
-          // zero until that lands, not a missing field. Read its count here when it merges.
-          autoExpands: 0,
+          autoExpands: assembly.autoExpanded.length,
         };
         this.drillsSinceAssembly = 0;
         this.emitStatus();
@@ -2813,6 +2811,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     contextMetrics: () => this.lastContextMetrics,
     promptCache: () => this.promptCache,
     lastDream: () => this.lastDreamProduct(),
+    contextTools: () => this.executableToolNames(),
     commitments: () => this.commitments(),
     candidateQueue: () => this.candidateQueue(),
     whyReport: () => this.whyReport(),

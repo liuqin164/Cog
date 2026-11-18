@@ -62,3 +62,98 @@ describe('context projection metrics (#268)', () => {
     }
   }, 30_000);
 });
+
+/** #352 regression: /context autoExpands reads the real assembly.autoExpanded length. */
+describe('autoExpands in /context reflects assembly (#352)', () => {
+  test('autoExpands > 0 when a stub is expanded, 0 when nothing matches', async () => {
+    const ORIGINAL = '团队把「上传失败」的重试上限定为 12,500 次，由「小明」负责。';
+    const provider = new ScriptedProvider([{ text: '重试上限是 12,500 次。', toolCalls: [] }]);
+    const shell = makeShell(makeTempDir(), provider, { dream: NO_DREAM });
+    await shell.start();
+    try {
+      // Seed a recall stub from another session
+      await shell.backend.rememberTurnWithResult({
+        agentId: shell.config.agentId,
+        projectId: shell.config.projectId,
+        sessionId: 'seeded-elsewhere',
+        turnId: 'seed-auto-expand',
+        userText: ORIGINAL,
+        assistantText: '记下了。',
+        ingestMode: 'immediate_compile',
+      });
+
+      // First message: names the stub -> auto-expansion happens
+      await shell.submit('上传失败的重试上限是多少？');
+
+      let ctxText = (await shell.runCommand('context')).text;
+      expect(ctxText).toMatch(/自动展开 \d+ 次/u);
+      const firstMatch = ctxText.match(/自动展开 (\d+) 次/u);
+      expect(firstMatch).not.toBeNull();
+      expect(Number(firstMatch![1])).toBeGreaterThan(0);
+
+      // Second message: unrelated -> no expansion
+      await shell.submit('把那个上限再说一遍');
+
+      ctxText = (await shell.runCommand('context')).text;
+      expect(ctxText).toContain('自动展开 0 次');
+    } finally {
+      await shell.stop();
+    }
+  }, 30_000);
+});
+
+/** #333 regression: tools load full set regardless of message content (no task-dependent filtering). */
+describe('tools load full set, independent of message content (#333)', () => {
+  test('casual message and task-like message both load the same 8 tools', async () => {
+    const provider = new ScriptedProvider([{ text: '收到。', toolCalls: [] }]);
+    const shell = makeShell(makeTempDir(), provider, { dream: NO_DREAM });
+    await shell.start();
+    try {
+      // Casual message
+      await shell.submit('你好，今天天气怎么样？');
+      const casualCtx = (await shell.runCommand('context')).text;
+      const casualTools = casualCtx.match(/已装载工具：(.+)/);
+      expect(casualTools).not.toBeNull();
+      const casualToolList = casualTools![1].split('、').sort().join('、');
+
+      // Task-like message
+      await shell.submit('请帮我写一个 bash 脚本来备份文件');
+      const taskCtx = (await shell.runCommand('context')).text;
+      const taskTools = taskCtx.match(/已装载工具：(.+)/);
+      expect(taskTools).not.toBeNull();
+      const taskToolList = taskTools![1].split('、').sort().join('、');
+
+      // Both should load the same tools
+      expect(taskToolList).toBe(casualToolList);
+      expect(casualToolList).toContain('read');
+      expect(casualToolList).toContain('write');
+      expect(casualToolList).toContain('edit');
+      expect(casualToolList).toContain('bash');
+      expect(casualToolList).toContain('propose_command');
+      expect(casualToolList).toContain('ask_user');
+      expect(casualToolList).toContain('declare_task');
+      expect(casualToolList).toContain('propose_soul_edit');
+    } finally {
+      await shell.stop();
+    }
+  }, 30_000);
+
+  test('no tools-by-task module exists in codebase', async () => {
+    // This test documents that the old task-dependent tool loading was removed
+    // The tools-by-task.ts file was deleted in round 121 (commit 3ac05d0f)
+    // and the shell now loads all registered tools for every request
+    const provider = new ScriptedProvider([{ text: '收到。', toolCalls: [] }]);
+    const shell = makeShell(makeTempDir(), provider, { dream: NO_DREAM });
+    await shell.start();
+    try {
+      await shell.submit('任意消息');
+      const ctx = (await shell.runCommand('context')).text;
+      const toolsLine = ctx.match(/已装载工具：(.+)/);
+      expect(toolsLine).not.toBeNull();
+      // 8 tools = 4 builtins + 4 interaction tools
+      expect(toolsLine![1].split('、')).toHaveLength(8);
+    } finally {
+      await shell.stop();
+    }
+  }, 30_000);
+});
