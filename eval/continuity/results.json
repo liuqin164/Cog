@@ -1,6 +1,6 @@
 {
-  "head": "e1ec1aa2",
-  "runAt": "2026-11-18T06:39:56.313Z",
+  "head": "c5e7356b",
+  "runAt": "2026-11-18T07:28:34.185Z",
   "bun": "1.3.14",
   "platform": "linux",
   "arch": "arm64",
@@ -29,7 +29,7 @@
         }
       ],
       "pass": true,
-      "durationMs": 214698.311509
+      "durationMs": 281386.345835
     },
     {
       "name": "forget (#332/#331)",
@@ -55,7 +55,7 @@
         }
       ],
       "pass": false,
-      "durationMs": 481.7010780000128
+      "durationMs": 1312.210923000006
     },
     {
       "name": "night catch-up (#327)",
@@ -80,7 +80,7 @@
         }
       ],
       "pass": false,
-      "durationMs": 392.3098240000254
+      "durationMs": 708.3798580000293
     },
     {
       "name": "emergence feedback (#330)",
@@ -100,7 +100,7 @@
         }
       ],
       "pass": false,
-      "durationMs": 729.0667930000054
+      "durationMs": 1260.625447999977
     },
     {
       "name": "budget pause and resume (#228)",
@@ -125,7 +125,7 @@
         }
       ],
       "pass": true,
-      "durationMs": 414.25131600000896
+      "durationMs": 584.7344220000086
     },
     {
       "name": "SIGKILL recovery (#331)",
@@ -151,7 +151,7 @@
         }
       ],
       "pass": true,
-      "durationMs": 819.6028510000033
+      "durationMs": 947.6197110000066
     }
   ]
 }
