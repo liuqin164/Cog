@@ -20,7 +20,7 @@ describe('recall drill-down keys (#251 B1)', () => {
       await shell.backend.rememberTurnWithResult({
         agentId: shell.config.agentId,
         projectId: shell.config.projectId,
-        sessionId: shell.config.sessionId,
+        sessionId: 'seeded-elsewhere',
         turnId: 'seed-b1',
         userText: seed,
         assistantText: '记下了。',

@@ -47,7 +47,8 @@ describe('the six-lane assembly (#249 A5)', () => {
       await shell.backend.rememberTurnWithResult({
         agentId: shell.config.agentId,
         projectId: shell.config.projectId,
-        sessionId: shell.config.sessionId,
+        // Long-term memory, not this session: the current session is the tail lane (#321).
+        sessionId: 'seeded-elsewhere',
         turnId: 'seed-1',
         userText: '部署窗口是周二凌晨两点，周五绝对不能部署',
         assistantText: '记下了。',
@@ -115,7 +116,7 @@ describe('the six-lane assembly (#249 A5)', () => {
       const recorded = await shell.backend.rememberTurnWithResult({
         agentId: shell.config.agentId,
         projectId: shell.config.projectId,
-        sessionId: shell.config.sessionId,
+        sessionId: 'seeded-elsewhere',
         turnId: 'seed-276',
         userText: seed,
         assistantText: '记下了。',
@@ -238,6 +239,26 @@ describe('the six-lane assembly (#249 A5)', () => {
       expect(provider.calls[1]!.systemPrompt).toBe(provider.calls[0]!.systemPrompt);
       expect(provider.calls[0]!.systemPrompt).toContain('now: 2026-11-18T21:59Z');
       expect(provider.calls[0]!.systemPrompt).not.toContain('.861');
+    } finally {
+      await shell.stop();
+    }
+  }, 30_000);
+
+  test('the current session is not recalled back as long-term memory (#321)', async () => {
+    const provider = new ScriptedProvider([
+      { text: '记下了。', toolCalls: [] },
+      { text: '就是你刚才说的那个。', toolCalls: [] },
+    ]);
+    const shell = makeShell(makeTempDir('lanes-exclude-session-'), provider, { dream: NO_DREAM });
+    await shell.start();
+    try {
+      await shell.submit('记住：本会话口令是蓝鸟。');
+      await shell.submit('刚才的口令是什么？');
+
+      const recall = shell.currentStatus().contextLanes!.lanes.find((lane) => lane.lane === 'recall')!;
+      // The turn is in the tail lane already; recalling it from the same session would say it twice.
+      expect(recall.items).toBe(0);
+      expect(recall.status).toBe('empty');
     } finally {
       await shell.stop();
     }

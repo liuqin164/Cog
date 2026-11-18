@@ -853,7 +853,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       },
       recallLimit: 3,
     }));
-    this.host.register(recallPlugin({ agentId: this.config.agentId, projectId: this.config.projectId, limit: 3 }));
+    this.host.register(recallPlugin({ agentId: this.config.agentId, projectId: this.config.projectId, sessionId: this.config.sessionId, limit: 3 }));
     this.host.register(soulEditPlugin());
     this.host.register(dreamPlugin({
       agentId: this.config.agentId,

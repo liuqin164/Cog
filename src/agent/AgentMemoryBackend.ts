@@ -415,6 +415,8 @@ export type RecallSuppressionReason =
   | 'entry_social'
   | 'no_discriminative_hit'
   | 'grey_below_floor'
+  // A real (non-probe) question with no content character or word in common with the entry (#321).
+  | 'below_relevance_floor'
   // Occasion scope (#162): private/high material outside `private`, or third-party material in
   // `public`. Both name themselves rather than vanishing.
   | 'occasion_private_tier'
@@ -1423,7 +1425,11 @@ export class KernelAgentMemoryBackend {
       return { result: { ...empty, decisionTrace: trace, semanticIndex: this.kernel.semanticIndexEnabled() }, suppressedIds: [] };
     }
     const result = this.withProfileItems(query, this.withoutSupersededByProfile(query, this.recallCore(query)));
-    const gated = this.gateSocialEntries(result.items ?? [], query, forensic);
+    // The compiler can infer a quote request from the question's words (「原话」) even when the caller
+    // did not set `intent`. The gates already honour that intent in the raw lane; the general floor must
+    // honour it too, or it discards the exact source row the quote request exists to find (#321).
+    const quoteIntent = forensic || FORENSIC_SOCIAL_EXEMPT_INTENTS.has(String(result.queryPlan?.intent ?? ''));
+    const gated = this.gateSocialEntries(result.items ?? [], query, quoteIntent);
     // The secret mark is enforced here, and not only in the raw lane's scope test (#142). Measured while fixing
     // this: with the event withheld from the raw lane, the same turn still came back as an item from another
     // lane — text and `sourceContext.event.text` both — so a caller received the key with
@@ -1667,9 +1673,12 @@ export class KernelAgentMemoryBackend {
     if (forensic) return { items, suppressed: [], suppressedIds: [] };
     const { frequent, rare } = this.queryTermFrequencies(query);
     const measurable = frequent.size > 0 && rare.size > 0;
-    const grey = classifySocialTurn(String(query.query ?? '')) === 'grey';
+    const queryText = String(query.query ?? '');
+    const grey = classifySocialTurn(queryText) === 'grey';
+    const hasContentCue = contentCues(queryText).length > 0;
     const kept: AgentRecallItem[] = [];
-    const entrySocialIds: string[] = [], noDiscriminativeHitIds: string[] = [], belowFloorIds: string[] = [];
+    const entrySocialIds: string[] = [], belowFloorIds: string[] = [];
+    const belowRelevanceFloorIds: string[] = [];
     for (const item of items) {
       const text = String(item.text ?? '');
       if (isSocialTurn(text)) { entrySocialIds.push(item.id); continue; }
@@ -1684,8 +1693,18 @@ export class KernelAgentMemoryBackend {
         const onlyCommonWords = overlapIsOnlySmallTalk(overlap, frequent);
         if (onlyCommonWords) {
           if (grey) { belowFloorIds.push(item.id); continue; }
-          if (item.sourceType === 'raw_ledger') { noDiscriminativeHitIds.push(item.id); continue; }
+          // A real question gets the same rule as the grey one: a match made only of pleasantries
+          // is not a match, whichever lane produced the item (#321).
+          belowRelevanceFloorIds.push(item.id);
+          continue;
         }
+      }
+      // Defence 4 for real questions: a lexical retrieve is allowed to be weak, but not unrelated.
+      // One content character, latin word or number in common is the floor; the neutral pronouns and
+      // particles below are what a question says about itself, not about what it is asking (#321).
+      if (hasContentCue && contentCueOverlap(queryText, text).length === 0) {
+        belowRelevanceFloorIds.push(item.id);
+        continue;
       }
       kept.push(item);
     }
@@ -1693,8 +1712,8 @@ export class KernelAgentMemoryBackend {
     // if-chains here would be the same fact written twice (#187).
     const removals: Array<{ reason: RecallSuppressionReason; ids: string[] }> = [
       { reason: 'entry_social', ids: entrySocialIds },
-      { reason: 'no_discriminative_hit', ids: noDiscriminativeHitIds },
       { reason: 'grey_below_floor', ids: belowFloorIds },
+      { reason: 'below_relevance_floor', ids: belowRelevanceFloorIds },
     ];
     const dropped = removals.filter((removal) => removal.ids.length > 0);
     return {
@@ -3374,6 +3393,36 @@ export function overlapIsOnlySmallTalk(overlap: string[], frequent: Set<string>)
  */
 export function discriminativeProbes(text: string): string[] {
   return discriminativeProbesOf(text);
+}
+
+/**
+ * Characters a question says about itself rather than about the thing it asks for. This is
+ * deliberately short: the floor is one shared content unit, and every extra "neutral" character
+ * makes malformed recall easier to let through.
+ */
+const RELEVANCE_FLOOR_NEUTRAL = new Set([
+  ...'我你他她它们您咱的得地了着过这那哪那个些把帮更什么怎吗呢吧啊',
+]);
+
+/**
+ * The content units a question carries: Han characters minus the neutral set above, latin words of
+ * two characters or more, and numbers. A unit that appears in an item's own text is evidence the item
+ * is about the question, however weak; no unit at all is what an unrelated old fact looks like (#321).
+ */
+export function contentCues(text: string): string[] {
+  const cues = new Set<string>();
+  for (const character of text) {
+    if (/\p{Script=Han}/u.test(character) && !RELEVANCE_FLOOR_NEUTRAL.has(character) && !isFillerProbe(character)) cues.add(character);
+  }
+  for (const word of text.match(/[A-Za-z][A-Za-z0-9_-]{1,}/g) ?? []) cues.add(word.toLowerCase());
+  for (const digits of text.match(/\d+/g) ?? []) cues.add(digits);
+  return [...cues];
+}
+
+/** The content units the question and the entry share; the general relevance floor is length 1. */
+export function contentCueOverlap(query: string, text: string): string[] {
+  const haystack = text.toLowerCase();
+  return contentCues(query).filter((cue) => haystack.includes(cue));
 }
 
 /**
