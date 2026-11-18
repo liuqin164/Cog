@@ -223,4 +223,23 @@ describe('the six-lane assembly (#249 A5)', () => {
       await shell.stop();
     }
   }, 30_000);
+
+  test('two provider requests in one run carry the same system-prompt bytes (#320)', async () => {
+    const at = Date.UTC(2026, 10, 18, 21, 59, 21, 861);
+    const provider = new ScriptedProvider([
+      { text: '', toolCalls: [{ toolCallId: 'c1', toolName: 'bash', input: { command: 'echo hi' } }] },
+      { text: '收到。', toolCalls: [] },
+    ]);
+    const shell = makeShell(makeTempDir('lanes-clock-'), provider, { dream: NO_DREAM }, { now: () => at });
+    await shell.start();
+    try {
+      await shell.submit('看一眼时间');
+      expect(provider.calls).toHaveLength(2);
+      expect(provider.calls[1]!.systemPrompt).toBe(provider.calls[0]!.systemPrompt);
+      expect(provider.calls[0]!.systemPrompt).toContain('now: 2026-11-18T21:59Z');
+      expect(provider.calls[0]!.systemPrompt).not.toContain('.861');
+    } finally {
+      await shell.stop();
+    }
+  }, 30_000);
 });

@@ -248,10 +248,21 @@ export const CORE_COMMANDS: readonly CoreCommand[] = [
         : [`目标带宽 ${host.config().contextSweetSpot} token，尚无车道组装记录：发一条消息后再看。`];
       const metrics = host.contextMetrics();
       if (lanes && metrics) lines.push(contextMetricsLine(metrics));
+      const toolOutput = host.contextToolOutput?.();
+      if (toolOutput && toolOutput.toolOutputTokens >= 0) {
+        const total = host.contextTokens();
+        const share = total > 0 ? Math.round((toolOutput.toolOutputTokens / total) * 100) : 0;
+        const folded = toolOutput.foldedResults > 0 ? `；折叠 ${toolOutput.foldedResults} 条` : '';
+        lines.push(`本轮工具输出 ${toolOutput.toolOutputTokens} token（占请求 ${share}%${folded}）`);
+        if (toolOutput.requestBudgetTokens !== undefined) {
+          lines.push(`整请求预算 ${toolOutput.requestBudgetTokens} token（原始工具输出 ${toolOutput.rawTokens} token）`);
+        }
+      }
       const cache = host.promptCache();
       // Only a provider-reported account earns a line. With nothing reported there is none, because
       // "0%" is a claim the provider never made.
       if (cache) lines.push(`provider 实报 prompt 缓存命中 ${cache.percent}%（命中 ${cache.hit} / 未命中 ${cache.miss} token）。`);
+      else lines.push('provider 缓存：上游未回报缓存字段。');
       return { text: lines.join('\n') };
     },
   },

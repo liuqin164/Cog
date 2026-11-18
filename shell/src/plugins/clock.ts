@@ -15,6 +15,8 @@ export interface ClockConfig {
   timeZone: string;
   idleWakeIntervalMs: number;
   dreamWindow: { startHour: number; endHour: number };
+  /** The process clock; injected so a test can cross a minute boundary on purpose. */
+  now?: () => number;
 }
 
 export interface TimeContext {
@@ -32,7 +34,7 @@ export interface TimeContext {
 }
 
 export class ClockService {
-  constructor(private readonly machine: StateMachine, private readonly config: ClockConfig, private clock: () => number = Date.now) {}
+  constructor(private readonly machine: StateMachine, private readonly config: ClockConfig, private clock: () => number = config.now ?? Date.now) {}
 
   now(): number {
     return this.clock();
@@ -68,10 +70,12 @@ export class ClockService {
   timeContextBlock(at = this.now()): string {
     const context = this.timeContext(at);
     const silence = context.silentForMs === undefined ? 'no recorded contact yet' : formatDuration(context.silentForMs);
-    const next = context.nextWakeAt === undefined ? 'none scheduled' : `${new Date(context.nextWakeAt).toISOString()} (${context.nextWakeReason})`;
+    const next = context.nextWakeAt === undefined ? 'none scheduled' : `${minuteIso(context.nextWakeAt)} (${context.nextWakeReason})`;
     return [
       '<time-context>',
-      `now: ${context.iso} (${context.timeZone}, ${context.weekday} ${context.dayPart})`,
+      // Minute precision, not milliseconds (#320): a prompt cache matches on bytes, so a clock that
+      // ticks inside the turn changes the prefix on every request. The model still has the minute.
+      `now: ${minuteIso(context.now)} (${context.timeZone}, ${context.weekday} ${context.dayPart})`,
       `local date: ${context.localDate}`,
       `since last contact: ${silence}`,
       `next wake intent: ${next}`,
@@ -138,7 +142,12 @@ export function clockPlugin(config: ClockConfig): NativePlugin {
     provide: ['clock'],
     apply(ctx) {
       const machine = ctx.getService<StateMachine>('stateMachine');
-      ctx.provide('clock', new ClockService(machine, config));
+      ctx.provide('clock', new ClockService(machine, config, config.now));
     },
   };
+}
+
+/** ISO-8601 truncated to the minute, in UTC, with the `Z` the model already reads. */
+function minuteIso(at: number): string {
+  return `${new Date(Math.floor(at / 60_000) * 60_000).toISOString().slice(0, 16)}Z`;
 }

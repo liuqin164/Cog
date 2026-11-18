@@ -143,7 +143,7 @@ describe('the run lands the provider account next to round 17s estimate', () => 
 });
 
 describe('no reported usage is no measurement, on every face', () => {
-  test('no usage: no trace record, no status ratio, no /context line, no footer segment', async () => {
+  test('no usage: no trace record, no status ratio, no invented /context ratio, no footer segment', async () => {
     const endpoint = startFake(reply());
     const dir = makeTempDir();
     const shell = makeShell(dir, undefined, { model: { baseUrl: endpoint.baseUrl, apiKey: 'sk-test', model: 'test-model', timeoutMs: 3_000 } });
@@ -155,7 +155,9 @@ describe('no reported usage is no measurement, on every face', () => {
       expect(shell.trace.read().filter((record) => record.kind === 'provider_usage')).toHaveLength(0);
       expect(shell.currentStatus().promptCache).toBeNull();
       const replyText = (await shell.runCommand('context')).text;
-      expect(replyText).not.toContain('缓存');
+      // Nothing reported is said as nothing reported; it is never rendered as a 0% hit (#320).
+      expect(replyText).toContain('上游未回报缓存字段');
+      expect(replyText).not.toContain('prompt 缓存命中');
     } finally {
       await shell.stop();
       endpoint.stop();
