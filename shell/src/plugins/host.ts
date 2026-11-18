@@ -107,8 +107,6 @@ export interface ToolExecuteInput {
   args: any;
   signal?: AbortSignal;
   ctx: any;
-  /** True only while a workflow's no-side-effect rehearsal runs the step. */
-  dryRun?: boolean;
 }
 
 /**
@@ -131,12 +129,6 @@ export interface ToolDefinition {
    * an effect is not, and a tool that knows it is idempotent says so.
    */
   replay?: 'never' | 'safe';
-  /**
-   * The no-side-effect half of a tool: validate the arguments and say what would happen, without
-   * touching the workspace or the network. A workflow that names a tool without this cannot be
-   * dry-run, so it cannot be promoted — the rehearsal is a gate, not a formality.
-   */
-  rehearse?(input: ToolExecuteInput): Promise<ToolResult | ToolOutcome | string> | ToolResult | ToolOutcome | string;
   execute(input: ToolExecuteInput): Promise<ToolResult | ToolOutcome | string> | ToolResult | ToolOutcome | string;
 }
 

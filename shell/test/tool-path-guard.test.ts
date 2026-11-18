@@ -121,9 +121,6 @@ describe('a symlink cannot carry a host tool out of the workspace (#302)', () =>
       expect(read.output).toContain('path_in_data_dir');
       expect(read.output).not.toContain('sk-live');
 
-      const rehearse = () =>
-        host.tools.get('read')!.rehearse!({ toolCallId: 'c2', args: { path: 'state/env' }, ctx: { runId: 'r' } });
-      expect(rehearse).toThrow(/path_in_data_dir/);
     });
   });
 

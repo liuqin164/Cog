@@ -147,7 +147,7 @@ The correction is global, not local to this book (#242). The `PROFILE_ENTRY_CORR
 `previousValue` and `previousSourceRefs`. The old belief or fact is superseded in its own store (a
 status update of a derived table, never a rewrite of a ledger row), and a correction belief carrying
 the new value is appended, so the Atlas projection and the default belief lane stop reading the old
-value as current. Procedure entries, workflows and intentions that were derived from the replaced
+value as current. Procedure entries and intentions that were derived from the replaced
 claim are updated or explicitly marked stale; the written contracts of those faces define the
 mechanics.
 

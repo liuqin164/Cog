@@ -2,6 +2,21 @@
 
 ## 5.0.0 (unreleased)
 
+- **The deterministic workflow executor is gone; the procedure book stays (#338).** Since the
+  first commit of `ProcedureWorkflows` the two real archives recorded zero `list_workflows`,
+  `propose_workflow` and `veto_workflow` calls across the whole workflow layer. This removes
+  the execution book (`src/procedure/ProcedureWorkflows.ts`), the shell service and its three
+  model tools (`shell/src/plugins/workflows.ts`), the workflow fallback path inside `executeRun`,
+  the observatory page and JSON route, the rehearsal hook on the plain tools, and the three default
+  whitelist names. The tool whitelist drops from 16 to 13 here (then 11/8 as the other two #338
+  items land) — **the count is 16 → 13 for this commit**. The compiled procedure book
+  (`ProcedureCompiler`, its entries/recall/assembly and `/correct` propagation) is untouched and
+  remains the way an established practice is presented; only the frozen execution form is removed.
+  Tests removed with the feature: `shell/test/workflows.test.ts` (12) and
+  `__tests__/procedure-workflows.contract.test.ts` (25). User-visible effect, in one line: the
+  companion still remembers and presents how work gets done, but it no longer runs a practice as a
+  fixed tool sequence without the model; every turn is model-driven again.
+
 - **A long session no longer collapses to a ninth of its budget and stays there (#316).** Over budget it
   still downgrades from the lowest lane priority and never drops a protected constraint (#255), but
   `recall` is now the last foldable lane sacrificed and the digest is sacrificed first. The freed

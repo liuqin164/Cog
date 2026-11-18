@@ -144,27 +144,6 @@ export interface ObservatoryHealth {
 }
 
 /**
- * One row of the workflow ledger, as the page reads it. The page groups by `entryId` and keeps the
- * latest row, exactly like the kernel's own `list`; the whole history is here because a proposal,
- * its dry-run verdict, activation and demotion are the audit a reader wants beside the state.
- */
-export interface ObservatoryWorkflowRow {
-  eventId: string;
-  eventType: string;
-  occurredAt: number;
-  payload: Record<string, unknown>;
-}
-
-export interface ObservatoryWorkflows {
-  source: 'live';
-  generatedAt: number;
-  projectId: string | null;
-  /** Every project that has at least one workflow row, busiest first. */
-  projects: string[];
-  workflows: ObservatoryWorkflowRow[];
-}
-
-/**
  * Which database and which identity a page is looking at. All three views take the same pair, because
  * they are one scope: switching projects or agents switches it for the map, the timeline and the
  * recall list together.
@@ -772,47 +751,6 @@ export class MemoryObservatory {
       from,
       to,
       histogram: this.histogramFor(events, agent),
-    };
-  }
-
-  /**
-   * The procedure workflow book, read off the same zero-write connection. It is a ledger query, not
-   * a second book: the latest row per entry is the state and the rows behind it are the audit.
-   */
-  workflows(view: ObservatoryView = {}): ObservatoryWorkflows {
-    const rows = this.db.query(`
-      SELECT event_id, event_type, occurred_at, payload_json, project_id
-      FROM memory_events
-      WHERE event_type LIKE 'PROCEDURE_WORKFLOW_%'
-      ORDER BY COALESCE(global_seq, 0) ASC, occurred_at ASC, event_id ASC
-    `).all() as Array<{
-      event_id: string;
-      event_type: string;
-      occurred_at: number;
-      payload_json: string;
-      project_id: string | null;
-    }>;
-    const counts = new Map<string, number>();
-    for (const row of rows) {
-      if (row.project_id) counts.set(row.project_id, (counts.get(row.project_id) ?? 0) + 1);
-    }
-    const projects = [...counts.entries()]
-      .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
-      .map(([projectId]) => projectId);
-    const projectId = view.projectId?.trim() || projects[0] || null;
-    return {
-      source: 'live',
-      generatedAt: Date.now(),
-      projectId,
-      projects,
-      workflows: rows
-        .filter((row) => row.project_id === projectId)
-        .map((row) => ({
-          eventId: row.event_id,
-          eventType: row.event_type,
-          occurredAt: row.occurred_at,
-          payload: parseJsonObject(row.payload_json),
-        })),
     };
   }
 

@@ -48,8 +48,6 @@ const STATIC_FILES: Record<string, { file: string; type: string }> = {
   '/observatory/': { file: 'index.html', type: 'text/html; charset=utf-8' },
   '/observatory/index.html': { file: 'index.html', type: 'text/html; charset=utf-8' },
   '/observatory/app.js': { file: 'app.js', type: 'text/javascript; charset=utf-8' },
-  '/observatory/workflows': { file: 'workflows.html', type: 'text/html; charset=utf-8' },
-  '/observatory/workflows/': { file: 'workflows.html', type: 'text/html; charset=utf-8' },
   '/observatory/three.bundle.js': { file: 'three.bundle.js', type: 'text/javascript; charset=utf-8' },
   '/observatory/three.LICENSE': { file: 'three.LICENSE', type: 'text/plain; charset=utf-8' },
   '/observatory/demo.json': { file: 'demo.json', type: 'application/json; charset=utf-8' },
@@ -347,9 +345,6 @@ export function createObservatoryRoutes(
           to: url.searchParams.get('to') ?? undefined,
         }), 200, acceptEncoding);
       }
-      if (url.pathname === '/observatory/workflows.json') {
-        return jsonResponse(observatory.workflows({ projectId: project }), 200, acceptEncoding);
-      }
       if (url.pathname === '/observatory/recalls') {
         const limit = Number(url.searchParams.get('limit') ?? '50');
         return jsonResponse(observatory.recalls({ projectId: project, agent, limit: Number.isFinite(limit) ? limit : 50 }), 200, acceptEncoding);
@@ -373,7 +368,7 @@ export function createObservatoryRoutes(
 
     return jsonResponse({
       error: 'not_found',
-      endpoints: ['/snapshot', '/node/:id', '/timeline', '/workflows', '/workflows.json', '/recalls', '/recalls/:recallId', '/health', '/events', '/soul', '/soul/rollback'],
+      endpoints: ['/snapshot', '/node/:id', '/timeline', '/recalls', '/recalls/:recallId', '/health', '/events', '/soul', '/soul/rollback'],
     }, 404, acceptEncoding);
   };
 }

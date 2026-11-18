@@ -2,13 +2,13 @@
  * Mount optional tool schemas only for the task that needs them (#267).
  *
  * The shell's four basic tools and the interaction tools the system prompt names are always
- * declared. Three groups are not: web, workflows, and self-change. They are the expensive schemas
+ * declared. Two groups are not: web and self-change. They are the expensive schemas
  * (self-change alone is ~900 tokens) and most turns never call them, so a request carries them only
  * when the newest user line, the open assignment, or a recent call names that work.
  *
  * No state is added: the set is recomputed from the messages at every request. The agent loop's
  * existing `toolsAdded` / `toolsRemoved` declaration turns a change into one system line, so the
- * model is told what it may call rather than discovering it by failure. A tool outside these three
+ * model is told what it may call rather than discovering it by failure. A tool outside these two
  * groups is never hidden — a third-party plugin keeps its schema.
  */
 import type { AgentMessage } from '../state/agent-loop.ts';
@@ -28,11 +28,6 @@ const GROUPS: readonly OptionalGroup[] = [
     name: 'web',
     tools: ['web_search', 'web_fetch', 'web_recall'],
     cue: /搜索|网页|联网|上网|最新消息|新闻|\b(?:web|search|online|http|url)\b/iu,
-  },
-  {
-    name: 'workflows',
-    tools: ['list_workflows', 'propose_workflow', 'veto_workflow'],
-    cue: /工作流|workflow|编排|多步|自动运行|定时任务/iu,
   },
   {
     name: 'self-change',

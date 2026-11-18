@@ -104,7 +104,7 @@ import { ProfileCompiler } from './profile/index.js';
 import { SurfacingCandidates, SurfacingFeedback } from './surfacing/index.js';
 import { OccasionScope } from './occasion/index.js';
 import { DeliveryRouter } from './delivery/index.js';
-import { ProcedureCompiler, ProcedureWorkflows } from './procedure/index.js';
+import { ProcedureCompiler } from './procedure/index.js';
 import { CommitmentBook } from './commitment/index.js';
 import { IntentionBook } from './intention/index.js';
 import { SoulService } from './soul/index.js';
@@ -444,8 +444,6 @@ export interface MaintenanceTickResult {
     activationDecay: ActivationDecayResult;
     /** Conversations the tick judged over: their episodes are sealed for Dream (#87). */
     episodeSealing: { idleGapMs: number; idleBefore: number; sealedEpisodes: number };
-    /** Workflows whose source practice was corrected; their frozen steps stay, the status changes. */
-    workflowsMarkedStale: number;
     memoryAtlasRefresh: { documents: number; actions: number; refreshed: boolean; /** This tick was told not to run the pass. */ skipped?: boolean; errors?: Array<{ projectId: string; error: string }> };
     memoryAtlasActivationDecay: number;
     memoryAtlasAccessPruned: number;
@@ -690,12 +688,6 @@ export class MemoryKernel {
    * from imported guides, recalled by task description. Contract: `docs/procedure-compilation.md`.
    */
   readonly procedures: ProcedureCompiler;
-  /**
-   * The execution layer over the procedure book: an established practice promoted into a
-   * deterministic workflow, with its proposal, dry-run, veto and demotion rows. The compiler's
-   * semantics are unchanged; this book never writes a `PROCEDURE_ENTRY_*` row.
-   */
-  readonly workflows: ProcedureWorkflows;
   /**
    * The commitment book: promises said out loud, their due instants, their completion evidence and
    * the announce-once / ask-once marks. Contract: `docs/commitments.md`.
@@ -1129,7 +1121,6 @@ export class MemoryKernel {
           recordedAt: entry.recordedAt,
         })),
     });
-    this.workflows = new ProcedureWorkflows({ events: this.eventStore, procedures: this.procedures });
     // The commitment book (#193). Its state is its ledger; recognition is deterministic.
     this.commitments = new CommitmentBook({ events: this.eventStore });
     // The intention ledger (#216). It consumes F16's audit read for conversion and F2's register
@@ -3681,8 +3672,6 @@ export class MemoryKernel {
         'memory', 'map', ...(projectId !== undefined ? ['--project', projectId] : []), '--json'
       ], `${hotspots.length} activation hotspots remain after decay.`));
     }
-    const workflowsMarkedStale = projectId ? this.workflows.reconcileStale({ projectId, now: ranAt }) : 0;
-
     return {
       version: 'maintenance_tick.v1',
       projectId,
@@ -3703,7 +3692,6 @@ export class MemoryKernel {
       executed: {
         activationDecay,
         episodeSealing,
-        workflowsMarkedStale,
         memoryAtlasRefresh,
         memoryAtlasActivationDecay,
         memoryAtlasAccessPruned,

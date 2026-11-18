@@ -271,17 +271,6 @@ export type MemoryEventType =
   | 'PROCEDURE_ENTRY_COMPILED'
   | 'PROCEDURE_ENTRY_RETIRED'
   | 'PROCEDURE_BOOK_RECOMPILED'
-  // The workflow book (#228, item 4): the execution layer over an established practice. A PROPOSED
-  // row is the draft, the later rows are its dry-run verdict, activation, veto, executions and the
-  // demotion that proposes revocation. These are not `PROCEDURE_ENTRY_*` rows: the compiler's
-  // semantics and the entry itself are untouched.
-  | 'PROCEDURE_WORKFLOW_PROPOSED'
-  | 'PROCEDURE_WORKFLOW_DRY_RUN'
-  | 'PROCEDURE_WORKFLOW_ACTIVATED'
-  | 'PROCEDURE_WORKFLOW_VETOED'
-  | 'PROCEDURE_WORKFLOW_EXECUTED'
-  | 'PROCEDURE_WORKFLOW_DEMOTED'
-  | 'PROCEDURE_WORKFLOW_STALE'
   // The commitment book (F16 of #193): an OPENED row is the promise, later rows are its state,
   // its announce-once marks and its close.
   | 'COMMITMENT_OPENED'
