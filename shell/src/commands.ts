@@ -14,6 +14,7 @@
  */
 import { readSoul } from './install/soul.ts';
 import { contextMetricsLine, laneReportLines, type ContextMetrics, type LaneAssemblyView } from './state/session-lanes.ts';
+import type { ToolOutputAccount } from './state/context-budget.ts';
 
 export type CommandSurface = 'palette' | 'resident' | 'tui';
 
@@ -29,6 +30,8 @@ export interface CommandHost {
   config(): { dbPath: string; agentId: string; contextSweetSpot: number };
   lifecycle(): { state: string; seq: number; costDayTokens: number; sandbox: 'on' | 'off' };
   contextTokens(): number;
+  /** The newest request's tool-output account (#319); `undefined` before the first request. */
+  contextToolOutput?(): ToolOutputAccount | undefined;
   /** The newest six-lane assembly; `undefined` before the first request of the process. */
   contextLanes(): LaneAssemblyView | undefined;
   /** The projection counts behind that assembly (#268); `undefined` with no assembly. */

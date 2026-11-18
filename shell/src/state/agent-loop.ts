@@ -11,7 +11,7 @@
 import type { EventBus } from '../bus.ts';
 import type { TraceLog } from '../trace.ts';
 import { ContextProjection } from './projection.ts';
-import { accountRequest, ContextCalibrator, type ContextAccount } from './context-budget.ts';
+import { accountRequest, ContextCalibrator, fitRequestToBudget, type ContextAccount, type ToolOutputAccount } from './context-budget.ts';
 import { DEFAULT_RETRY_POLICY, planFailure, sleepAbortable, type RetryPolicy } from './retry.ts';
 
 /**
@@ -313,7 +313,13 @@ export interface AgentRuntimeOptions {
    * no message event carries, and the system prompt and tool schemas are part of the request too.
    * The trace keeps the breakdown, so a later compaction can be read against what it replaced.
    */
-  onContextAssembled?: (account: ContextAccount) => void;
+  onContextAssembled?: (account: ContextAccount, toolOutput?: ToolOutputAccount) => void;
+  /**
+   * The stated ceiling for one whole request: system prompt plus tool schemas plus every message,
+   * tool output included (#319). The lane assembler only fits the lanes it built; the results the
+   * model itself appends are fitted here. Omitted means the tool-output cap alone applies.
+   */
+  requestBudget?: () => number;
   /**
    * The lane composition behind this request, carried into the `context_assembled` trace (#249).
    * Optional so the loop's own unit tests stay free of the shell's lane view.
@@ -530,11 +536,19 @@ export class AgentRuntime {
         for (let attempt = 0; ; ) {
           const draft: AgentMessage = { role: 'assistant', content: '' };
           const attemptMessages = await this.projectMessages(handlerMessages ?? context.project(), input.runId);
+          // The lane assembler fits the lanes it built; these are the results the model itself asked
+          // for, appended after it, so the request boundary is the only place that can cap them (#319).
+          const fitted = fitRequestToBudget({
+            messages: attemptMessages,
+            systemPrompt: request.systemPrompt,
+            tools: request.tools ?? this.options.tools.list(),
+            budgetTokens: this.options.requestBudget?.(),
+          });
           // The request is measured once it is final: after `transformContext`, so a block it injected
           // (the recall context) is part of the number instead of invisible to it.
-          const estimated = accountRequest({ messages: attemptMessages, systemPrompt: request.systemPrompt, tools: request.tools ?? this.options.tools.list() });
+          const estimated = accountRequest({ messages: fitted.messages, systemPrompt: request.systemPrompt, tools: request.tools ?? this.options.tools.list() });
           const account = this.calibrator.calibrate(request.model, estimated);
-          this.options.onContextAssembled?.(account);
+          this.options.onContextAssembled?.(account, fitted.toolOutput);
           this.options.trace?.append('context_assembled', {
             runId: input.runId,
             turnIndex,
@@ -542,6 +556,7 @@ export class AgentRuntime {
             ...account,
             estimatedTokens: estimated.totalTokens,
             calibrationFactor: this.calibrator.factor(request.model),
+            toolOutput: fitted.toolOutput,
             ...(this.options.contextLanes ? { lanes: this.options.contextLanes() } : {}),
             ...(this.options.contextMetrics ? { metrics: this.options.contextMetrics() } : {}),
           }, this.clock());
@@ -551,7 +566,7 @@ export class AgentRuntime {
               // A copy, so each attempt sees the context as of that call. Handing the live array over
               // let a provider that keeps its input (and this suite's scripted provider) observe
               // messages pushed after the call — steering a later turn consumed looked already sent.
-              messages: [...attemptMessages],
+              messages: [...fitted.messages],
               tools: request.tools ?? this.options.tools.list(),
               systemPrompt: request.systemPrompt,
               model: request.model,
