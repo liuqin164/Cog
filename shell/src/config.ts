@@ -291,7 +291,8 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
     // cage violation.
     budgets: overrides.budgets ?? {
       ...autonomous,
-      toolWhitelist: ['read', 'write', 'edit', 'bash', 'propose_command', 'propose_soul_edit', 'ask_user', 'declare_task', 'web_search', 'web_fetch', 'web_recall'],
+      // The web plugin is opt-in; it adds its three names when its spec is registered (#338).
+      toolWhitelist: ['read', 'write', 'edit', 'bash', 'propose_command', 'propose_soul_edit', 'ask_user', 'declare_task'],
     },
     workBudget: overrides.workBudget ?? work,
     dailyBudget: overrides.dailyBudget ?? daily,

@@ -44,7 +44,15 @@ plugin (`{ name, inject?, provide?, apply }`, the host's own API in `src/plugins
 
 ## Web tools (#225)
 
-The resident registers three read-only tools from `src/plugins/web.ts`:
+Web access is an optional plugin, not part of the default resident. `/plugins` does not list it
+and `web_search`, `web_fetch` and `web_recall` do not exist until the owner registers it:
+
+```text
+/plugins add cogmem/web
+```
+
+After the restart it registers the same three read-only tools from `src/plugins/web.ts` and adds
+their three names to the cage's whitelist:
 
 - **`web_search`** — Exa's free MCP endpoint first, DuckDuckGo's HTML endpoint as fallback; either
   can be disabled. Results over 30,000 characters are cached and paged with `web_recall`.
@@ -54,7 +62,8 @@ The resident registers three read-only tools from `src/plugins/web.ts`:
 - **`web_recall`** — read a cached `responseId` by `offset`/`limit` (at most 30,000 characters per
   page) or `findText`. Cache entries expire after one hour.
 
-The optional `<dataDir>/web.json` turns either backend off; a missing file leaves both on:
+Search needs `<dataDir>/web.json`; a missing file leaves both search backends off, so a fresh
+opt-in never sends a query anywhere until the owner enables one:
 
 ```json
 { "search": { "exa": { "enabled": true }, "duckduckgo": { "enabled": true } } }

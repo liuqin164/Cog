@@ -63,6 +63,8 @@ export interface WebPluginOptions {
   allowLoopback?: boolean;
 }
 
+const WEB_TOOL_NAMES = ['web_search', 'web_fetch', 'web_recall'] as const;
+
 export interface WebConfig {
   search: {
     exa: { enabled: boolean };
@@ -837,3 +839,28 @@ export function webPlugin(options: WebPluginOptions): NativePlugin {
     },
   };
 }
+
+interface ShellService {
+  readonly config: { readonly dataDir: string };
+}
+
+interface CageService {
+  allowTools(names: readonly string[]): void;
+}
+
+/**
+ * The opt-in plugin a user registers with `/plugins add cogmem/web`. It is not registered by the
+ * resident itself: without this spec the three tools do not exist, and its allowance is not in the
+ * cage whitelist. Registering it adds both at once.
+ */
+const defaultWebPlugin: NativePlugin = {
+  name: 'web',
+  inject: ['shell', 'cage'],
+  apply(ctx) {
+    const dataDir = ctx.getService<ShellService>('shell').config.dataDir;
+    ctx.getService<CageService>('cage').allowTools(WEB_TOOL_NAMES);
+    return webPlugin({ dataDir }).apply(ctx, {});
+  },
+};
+
+export default defaultWebPlugin;

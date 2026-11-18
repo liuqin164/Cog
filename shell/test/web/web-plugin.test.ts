@@ -6,10 +6,9 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { defaultShellConfig } from '../src/config.ts';
-import { PluginHost } from '../src/plugins/host.ts';
-import { fetchPinned, webPlugin, type LookupAddress, type WebPluginOptions } from '../src/plugins/web.ts';
-import { makeTempDir } from './helpers.ts';
+import { PluginHost } from '../../src/plugins/host.ts';
+import { fetchPinned, webPlugin, type LookupAddress, type WebPluginOptions } from '../../src/plugins/web.ts';
+import { ScriptedProvider, makeShell, makeTempDir } from '../helpers.ts';
 
 const ARTICLE_HTML = `<!doctype html><html><head><title>Fixture Article</title></head><body>
   <nav><a href="/">Navigation link that must not be extracted</a></nav>
@@ -358,9 +357,24 @@ describe('web_search backends', () => {
   });
 });
 
-test('the three web tools are in the default whitelist', () => {
-  const whitelist = defaultShellConfig({ dataDir: makeTempDir() }).budgets.toolWhitelist ?? [];
-  expect(whitelist).toContain('web_search');
-  expect(whitelist).toContain('web_fetch');
-  expect(whitelist).toContain('web_recall');
+test('the web tools are opt-in and exist only when the web plugin is registered', async () => {
+  const names = ['web_search', 'web_fetch', 'web_recall'];
+  const plain = makeShell(makeTempDir('web-default-'), new ScriptedProvider([{ text: 'ok', toolCalls: [] }]));
+  await plain.start();
+  try {
+    for (const name of names) expect(plain.host.tools.has(name)).toBe(false);
+  } finally {
+    await plain.stop();
+  }
+
+  const spec = join(import.meta.dir, '../../src/plugins/web.ts');
+  const enabled = makeShell(makeTempDir('web-opt-in-'), new ScriptedProvider([{ text: 'ok', toolCalls: [] }]), { plugins: [spec] });
+  await enabled.start();
+  try {
+    for (const name of names) expect(enabled.host.tools.has(name)).toBe(true);
+    const cage = enabled.host.getService<{ toolAllowed(name: string): boolean }>('cage');
+    for (const name of names) expect(cage.toolAllowed(name)).toBe(true);
+  } finally {
+    await enabled.stop();
+  }
 });

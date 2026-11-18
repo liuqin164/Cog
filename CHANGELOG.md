@@ -31,6 +31,20 @@
   an owner-approved proposal can no longer rewrite the running companion's plugin registry or
   restart it, while persona drafts keep the same review path.
 
+- **Web access is now an opt-in plugin instead of part of every resident (#338).** The three tools
+  `web_search`, `web_fetch` and `web_recall` are unchanged, but the resident no longer registers them
+  at startup and the per-task schema filter that carried them is gone. They exist only after the
+  owner registers `cogmem/web` with `/plugins add`, which also adds their names to the cage's
+  whitelist. `/plugins` does not list the plugin and the three names are absent from the tool surface
+  on a default install; an explicitly registered plugin has the same tests and behaviour as before.
+  The web cache config file is still `<dataDir>/web.json`; a missing file leaves both search backends
+  off, and both disabled returns the existing `web_search_unavailable`. The default tool whitelist
+  drops from 11 to **8** names, and the default registered tool surface is those same eight tools
+  (`read`, `write`, `edit`, `bash`, `propose_command`, `propose_soul_edit`, `ask_user`,
+  `declare_task`). Removed with the default registration: the per-task `tools-by-task` filter and its
+  test. User-visible effect, in one line: a fresh companion has no web access or web tool schemas in
+  its prompt until the owner opts in with one command.
+
 - **A long session no longer collapses to a ninth of its budget and stays there (#316).** Over budget it
   still downgrades from the lowest lane priority and never drops a protected constraint (#255), but
   `recall` is now the last foldable lane sacrificed and the digest is sacrificed first. The freed
