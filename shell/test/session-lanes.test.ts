@@ -223,4 +223,37 @@ describe('the six-lane assembly (#249 A5)', () => {
       await shell.stop();
     }
   }, 30_000);
+
+  test('every verbatim tail turn names its speaker, and a continuation line stays indented (#324)', async () => {
+    const provider = new ScriptedProvider([{ text: '收到。', toolCalls: [] }]);
+    const shell = makeShell(makeTempDir('lanes-speaker-'), provider, { dream: NO_DREAM, tailTurns: 8 });
+    await shell.start();
+    try {
+      const turns = [
+        { speaker: 'owner', text: '帮我看一下 page.txt 讲了什么' },
+        { speaker: 'agent', text: '我读一下这个文件。\n读完了，是一篇文章。' },
+        { speaker: 'other', text: '我们聊聊咖啡豆配给方案吧' },
+      ] as const;
+      for (const [index, turn] of turns.entries()) {
+        await shell.backend.captureConversationTurn({
+          projectId: shell.config.projectId,
+          agentId: shell.config.agentId,
+          sessionId: shell.config.sessionId,
+          channel: 'terminal',
+          speaker: turn.speaker,
+          text: turn.text,
+          occurredAt: 1_700_000_000_000 + index * 1000,
+        });
+      }
+      await shell.submit('继续');
+
+      const tail = laneBlock(asText(provider.calls.at(-1)!.messages), 'tail');
+      expect(tail).toContain('- owner: 帮我看一下 page.txt 讲了什么');
+      expect(tail).toContain('- agent: 我读一下这个文件。\n  读完了，是一篇文章。');
+      expect(tail).toContain('- other: 我们聊聊咖啡豆配给方案吧');
+      expect(tail.split('\n').filter((line) => line.startsWith('- '))).toHaveLength(turns.length);
+    } finally {
+      await shell.stop();
+    }
+  }, 30_000);
 });

@@ -26,6 +26,7 @@ import { ImportanceSignalDetector } from '../engine/ImportanceSignalDetector.js'
 import { digestAnchors, type SessionDigest, type SessionDigestEntry } from './SessionDigest.js';
 import { sessionError } from './SessionErrors.js';
 import { serializeUntrustedMemory } from '../agent/UntrustedMemorySerializer.js';
+import type { ConversationSpeaker } from '../conversation/index.js';
 
 /** The lane order, frozen by `docs/session-context.md`. */
 export const SESSION_CONTEXT_LANES = ['pinned', 'profile', 'digest', 'working_set', 'recall', 'tail'] as const;
@@ -63,6 +64,8 @@ export interface SessionContextItem {
   id: string;
   text: string;
   sourceRefs?: string[];
+  /** The ledger row's speaker, when the item came from a conversation turn (#324). */
+  speaker?: ConversationSpeaker;
   /** The ledger event this item is anchored to, when it has one (`evt-…`). */
   anchorEvent?: string;
   /** The kernel's read command for the anchor's original text. */
@@ -297,8 +300,8 @@ export function assembleSessionContext(input: AssembleSessionContextInput, diges
     const room = () => input.targetTokens - total + lane.tokens;
     let start = items.length;
     if (browseStub !== '' && sessionTokens(browseStub) <= room()) {
-      const fixed = textTokenUnits(renderLane(lane.lane, [{ id: '', text: 'x' }])) - textTokenUnits('- x');
-      const line = items.map((item) => textTokenUnits('- ' + item.text.replace(/\n/gu, '\n  ')));
+      const fixed = textTokenUnits(renderLane(lane.lane, [{ id: '', text: 'x' }])) - textTokenUnits(renderItemLine({ id: '', text: 'x' }));
+      const line = items.map((item) => textTokenUnits(renderItemLine(item)));
       const stub = textTokenUnits(browseStub);
       let body = 0;
       for (let index = items.length - 1; index >= 0; index -= 1) {
@@ -384,6 +387,7 @@ function buildLanes(input: AssembleSessionContextInput, digest: SessionDigest): 
     digest: digest.entries.map((entry) => ({
       id: entry.entryId,
       text: entry.text,
+      speaker: entry.speaker,
       sourceRefs: entry.sourceRefs,
       // Only a task-exit stub carries its key into the lane (#263). An ordinary digest entry's
       // `sourceRefs[0]` is still the row it quotes; the stub is the one that must stay drillable
@@ -392,7 +396,7 @@ function buildLanes(input: AssembleSessionContextInput, digest: SessionDigest): 
     })),
     working_set: workingItems,
     recall: [...(input.recall ?? [])],
-    tail: digest.tail.map((turn) => ({ id: turn.eventId, text: turn.text, sourceRefs: [turn.eventId] })),
+    tail: digest.tail.map((turn) => ({ id: turn.eventId, text: turn.text, speaker: turn.speaker, sourceRefs: [turn.eventId] })),
   };
   itemsByLane.working_set = [...workingItems, ...expandStubs(input, itemsByLane, protectedIds)];
   const lanes: SessionContextLane[] = SESSION_CONTEXT_LANES.map((lane) => {
@@ -498,7 +502,7 @@ function renderLane(lane: SessionContextLaneName, items: SessionContextItem[]): 
   if (items.length === 0) return '';
   if (lane === 'recall') return renderRecallLane(items);
   if (lane === 'digest') return renderDigestLane(items);
-  return [`[${lane}]`, ...items.map((item) => `- ${item.text}`)].join('\n');
+  return [`[${lane}]`, ...items.map(renderItemLine)].join('\n');
 }
 
 /**
@@ -508,10 +512,20 @@ function renderLane(lane: SessionContextLaneName, items: SessionContextItem[]): 
 function renderDigestLane(items: SessionContextItem[]): string {
   const lines = ['[digest]'];
   for (const item of items) {
-    lines.push(`- ${item.text.replace(/\n/gu, '\n  ')}`);
+    lines.push(renderItemLine(item));
     if (item.anchorEvent) lines.push('  anchorEvent=' + serializeUntrustedMemory(item.anchorEvent, 160));
   }
   return lines.join('\n');
+}
+
+/**
+ * A tail or digest line names who spoke (#324). The speaker is the ledger's own frozen value, so
+ * the model can tell the owner's words from another person's and its own; line breaks stay indented
+ * so a multi-line turn reads as one item rather than as a new lane structure.
+ */
+function renderItemLine(item: SessionContextItem): string {
+  const speaker = item.speaker === undefined ? '' : `${item.speaker}: `;
+  return `- ${speaker}${item.text.replace(/\n/gu, '\n  ')}`;
 }
 
 /**
