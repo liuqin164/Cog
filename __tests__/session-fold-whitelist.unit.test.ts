@@ -77,7 +77,9 @@ describe('a constraint is never folded (#255)', () => {
     expect(digest.browseIds).toContain(processEntryId);
     const decision = assembly.decisionTrace.find((entry) => entry.lane === 'digest')!;
     expect(decision.action).toBe('trimmed');
-    expect(decision.browseIds).toContain(processEntryId);
+    // The lane keeps every omitted id; the trace keeps the newest 20, the segment a reader can
+    // still reach from the request (#317).
+    expect(decision.browseIds).toEqual(digest.browseIds.slice(-20));
   });
 
   test('a correction turn stays verbatim through the episode classifier\'s existing marker', async () => {

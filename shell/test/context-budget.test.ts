@@ -24,8 +24,8 @@ function runtime(bus: EventBus, provider: ScriptedProvider, onContextAssembled?:
   });
 }
 
-describe('context accounting (Pi chars/4 estimate, compaction.js:201-252)', () => {
-  test('text is chars/4 rounded up, tool-call arguments are counted', () => {
+describe('context accounting (character-class estimate, #318)', () => {
+  test('ASCII is 4 chars/token, tool-call arguments are counted, Chinese is charged by its class', () => {
     expect(estimateTokens({ role: 'user', content: 'abcd' })).toBe(1);
     expect(estimateTokens({ role: 'user', content: 'abcde' })).toBe(2);
     expect(estimateTokens({ role: 'tool', content: 'x'.repeat(8), toolCallId: 'c1', toolName: 'echo' })).toBe(2);
@@ -33,6 +33,8 @@ describe('context accounting (Pi chars/4 estimate, compaction.js:201-252)', () =
     expect(estimateTokens({ role: 'assistant', content: 'hi', toolCalls: [{ toolCallId: 'c1', toolName: 'echo', input: { value: 1 } }] })).toBe(5);
     expect(estimateTokens({ role: 'system', content: '', toolsAdded: ['a', 'b'] })).toBe(3);
     expect(estimateMessagesTokens([{ role: 'user', content: 'abcd' }, { role: 'assistant', content: 'abcd' }])).toBe(2);
+    // 1,000 Chinese characters are 640 estimated tokens, not the 250 chars/4 reported (#318).
+    expect(estimateTokens({ role: 'user', content: '中文'.repeat(500) })).toBe(640);
   });
 
   test('the account is the request sum: system prompt, tool schemas, messages, per role', () => {

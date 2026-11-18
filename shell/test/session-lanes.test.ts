@@ -86,7 +86,8 @@ describe('the six-lane assembly (#249 A5)', () => {
       const tail = view.lanes.find((lane) => lane.lane === 'tail')!;
       expect(tail.status).toBe('downgraded');
       expect(tail.browseIds.length).toBeGreaterThan(0);
-      expect(asText(provider.calls.at(-1)!.messages)).toContain(`[tail: browse-only, ${tail.browseIds.length} item(s)]`);
+      const covered = Math.min(20, tail.browseIds.length);
+      expect(asText(provider.calls.at(-1)!.messages)).toContain(`[tail: browse-only, ${tail.browseIds.length} item(s); keys: newest ${covered} of ${tail.browseIds.length}]`);
       expect(view.decisionTrace.some((decision) => decision.lane === 'tail' && decision.action === 'downgraded' && decision.browseIds.length > 0)).toBe(true);
 
       // The pointer is honest: the ids the lane left behind resolve to the ledger's exact text.
@@ -131,6 +132,45 @@ describe('the six-lane assembly (#249 A5)', () => {
       const read = await shell.host.tools.invoke('read', { toolCallId: 'c1', input: { path: `mem:${key}` } }, { runId: 'r' });
       expect(read.isError).toBe(false);
       expect(read.output).toBe(seed);
+    } finally {
+      await shell.stop();
+    }
+  }, 30_000);
+
+  test('a long session\'s digest pointer reaches the newest evicted turn, not the oldest (#317)', async () => {
+    const provider = new ScriptedProvider([{ text: '收到。', toolCalls: [] }]);
+    const shell = makeShell(makeTempDir('lanes-newest-key-'), provider, { dream: NO_DREAM, contextSweetSpot: 300 });
+    await shell.start();
+    try {
+      const texts: string[] = [];
+      for (let index = 0; index < 71; index += 1) {
+        const text = `第 ${index} 轮：继续整理会话上下文，检查第 ${index} 项。`;
+        texts.push(text);
+        await shell.backend.captureConversationTurn({
+          projectId: shell.config.projectId,
+          agentId: shell.config.agentId,
+          sessionId: shell.config.sessionId,
+          channel: 'terminal',
+          speaker: index % 2 === 0 ? 'owner' : 'agent',
+          text,
+          occurredAt: 1_700_000_000_000 + index * 1000,
+        });
+      }
+      await shell.submit('第 72 轮：继续');
+
+      const request = asText(provider.calls.at(-1)!.messages);
+      const header = request.indexOf('[digest: browse-only');
+      expect(header).toBeGreaterThanOrEqual(0);
+      const rest = request.slice(header);
+      const nextLane = rest.indexOf('\n[');
+      const block = nextLane < 0 ? rest : rest.slice(0, nextLane);
+      const keys = [...block.matchAll(/anchorEvent=(evt-\S+)/g)].map((match) => match[1]!);
+      expect(keys.length).toBe(20);
+      const newest = keys.at(-1)!;
+
+      const read = await shell.host.tools.invoke('read', { toolCallId: 'c1', input: { path: `mem:${newest}` } }, { runId: 'r' });
+      expect(read.isError).toBe(false);
+      expect(read.output).toBe(texts[62]);
     } finally {
       await shell.stop();
     }

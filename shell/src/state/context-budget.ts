@@ -13,11 +13,13 @@
  * omits tool schemas because the provider's usage already pays for them. When the provider reports
  * the prompt it actually charged, that number calibrates the next request's estimate: a tokenizer
  * that counts twice as many tokens as chars/4 must not leave the budget gauge half the real size.
+ *
+ * The first estimate is the kernel's character-class estimate (#318), not chars/4: ASCII costs
+ * 0.25 token/char and non-ASCII 0.64, so a Chinese request no longer reports about half its real
+ * prompt size. The calibrator still anchors on the provider's report afterwards.
  */
 import type { AgentMessage } from './agent-loop.ts';
-
-/** Pi's conservative heuristic (`compaction.js:201`), calibrated against provider usage below. */
-const CHARS_PER_TOKEN = 4;
+import { sessionTokens } from 'cogmem';
 
 /** A reported/estimated deviation smaller than this is measurement noise, not a tokenizer change. */
 export const CONTEXT_CALIBRATION_THRESHOLD = 0.2;
@@ -48,13 +50,13 @@ export interface ContextCalibration {
 
 /** Pi's `estimateTokens` for the shell's message shape: content, tool-call arguments, loadout deltas. */
 export function estimateTokens(message: AgentMessage): number {
-  let chars = message.content.length;
+  let text = message.content;
   for (const call of message.toolCalls ?? []) {
-    chars += call.toolName.length + JSON.stringify(call.input ?? {}).length;
+    text += call.toolName + JSON.stringify(call.input ?? {});
   }
-  if (message.toolsAdded) chars += JSON.stringify(message.toolsAdded).length;
-  if (message.toolsRemoved) chars += JSON.stringify(message.toolsRemoved).length;
-  return Math.ceil(chars / CHARS_PER_TOKEN);
+  if (message.toolsAdded) text += JSON.stringify(message.toolsAdded);
+  if (message.toolsRemoved) text += JSON.stringify(message.toolsRemoved);
+  return sessionTokens(text);
 }
 
 export function estimateMessagesTokens(messages: readonly AgentMessage[]): number {
@@ -76,9 +78,9 @@ export function accountRequest(input: {
     messageTokens += tokens;
     byRole[message.role] += tokens;
   }
-  const systemTokens = Math.ceil(input.systemPrompt.length / CHARS_PER_TOKEN);
+  const systemTokens = sessionTokens(input.systemPrompt);
   const toolTokens = input.tools.reduce(
-    (sum, tool) => sum + Math.ceil(JSON.stringify({ name: tool.name, description: tool.description, parameters: tool.parameters }).length / CHARS_PER_TOKEN),
+    (sum, tool) => sum + sessionTokens(JSON.stringify({ name: tool.name, description: tool.description, parameters: tool.parameters })),
     0,
   );
   return {
@@ -92,7 +94,7 @@ export function accountRequest(input: {
 }
 
 /**
- * The provider's reported prompt count divided by the chars/4 estimate, kept per model. The first
+ * The provider's reported prompt count divided by the weighted estimate, kept per model. The first
  * request of a model runs at factor 1; after a report deviates by more than the threshold, the next
  * request is measured through the new factor. A within-threshold report leaves the factor alone, so
  * a single noisy turn does not move the budget.
