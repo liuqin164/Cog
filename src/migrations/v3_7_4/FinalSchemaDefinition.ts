@@ -1848,6 +1848,8 @@ export const FINAL_AUXILIARY_OBJECTS: readonly FinalSchemaObject[] = [
 
   { type: "index", name: "idx_memory_events_type_time", table: "memory_events", sql: `CREATE INDEX idx_memory_events_type_time ON memory_events(event_type,occurred_at DESC)` },
 
+  { type: "index", name: "idx_memory_events_session_time", table: "memory_events", sql: `CREATE INDEX idx_memory_events_session_time ON memory_events(project_id,session_id,occurred_at,COALESCE(global_seq,0),event_id)` },
+
   { type: "index", name: "idx_memory_events_global_seq", table: "memory_events", sql: `CREATE INDEX idx_memory_events_global_seq ON memory_events(global_seq)` },
 
   { type: "index", name: "idx_memory_events_thread_order", table: "memory_events", sql: `CREATE INDEX idx_memory_events_thread_order ON memory_events(project_scope,thread_id,thread_seq,event_ordinal,global_seq)` },

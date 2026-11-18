@@ -39,10 +39,10 @@ export type SessionContextLaneName = (typeof SESSION_CONTEXT_LANES)[number];
 export const SESSION_CONTEXT_LANE_PRIORITY: Readonly<Record<SessionContextLaneName, number>> = {
   pinned: 60,
   profile: 50,
+  recall: 45,
   tail: 40,
-  digest: 30,
   working_set: 20,
-  recall: 10,
+  digest: 10,
 };
 
 /** Lanes whose rendered bytes must not change between assemblies: the provider's cache prefix. */
@@ -172,13 +172,17 @@ const ASCII_TOKENS_PER_CHAR = 0.25;
 const NON_ASCII_TOKENS_PER_CHAR = 0.64;
 
 export function sessionTokens(text: string): number {
+  return Math.ceil(textTokenUnits(text));
+}
+
+function textTokenUnits(text: string): number {
   let ascii = 0;
   let nonAscii = 0;
   for (const char of text) {
     if (char.codePointAt(0)! < 128) ascii += 1;
     else nonAscii += 1;
   }
-  return Math.ceil(ascii * ASCII_TOKENS_PER_CHAR + nonAscii * NON_ASCII_TOKENS_PER_CHAR);
+  return ascii * ASCII_TOKENS_PER_CHAR + nonAscii * NON_ASCII_TOKENS_PER_CHAR;
 }
 
 const BROWSE_ID_LIMIT = 20;
@@ -190,6 +194,7 @@ export function assembleSessionContext(input: AssembleSessionContextInput, diges
   const mergedDigest = mergeTaskStubs(digest, input.digestStubs ?? []);
   const lanes = buildLanes(input, mergedDigest);
   const decisions: SessionContextDecision[] = [];
+  const evicted = new Map<SessionContextLaneName, { items: SessionContextItem[]; tokensBefore: number }>();
   let total = lanes.reduce((sum, lane) => sum + lane.tokens, 0);
 
   // Downgrade from the lowest priority up. A downgraded lane keeps its ids and loses its text.
@@ -242,17 +247,9 @@ export function assembleSessionContext(input: AssembleSessionContextInput, diges
       total = lanes.reduce((sum, entry) => sum + entry.tokens, 0);
       continue;
     }
-    const stub = renderBrowseStub(lane.lane, lane.items.map((item) => item.id));
+    const stub = renderBrowseStub(lane.lane, lane.items.map((item) => item.id), browseKeys(lane.items));
     const after = sessionTokens(stub) <= input.targetTokens - (total - before) ? stub : '';
-    decisions.push({
-      lane: lane.lane,
-      action: 'downgraded',
-      reason: 'budget_exceeded',
-      tokensBefore: before,
-      tokensAfter: sessionTokens(after),
-      omittedItems: lane.items.length,
-      browseIds: lane.items.slice(-BROWSE_ID_LIMIT).map((item) => item.id),
-    });
+    evicted.set(lane.lane, { items: lane.items, tokensBefore: before });
     lane.browseIds = lane.items.map((item) => item.id);
     lane.items = [];
     lane.status = 'downgraded';
@@ -285,6 +282,65 @@ export function assembleSessionContext(input: AssembleSessionContextInput, diges
       browseIds: [dropped!.id],
     });
     total = lanes.reduce((sum, entry) => sum + entry.tokens, 0);
+  }
+
+  // A downgrade is not the end of the turn: everything the earlier passes freed is handed back to
+  // the surviving content, highest lane priority first, newest item first (#316). The lanes and the
+  // renderer above are the only machinery; there is no second state to keep in sync, and no lane
+  // can grow past `targetTokens`. A lane that is only partly restored keeps its browse-only pointer
+  // for the ids it left behind, so the pointer still names text the caller can fetch.
+  for (const lane of [...lanes]
+    .filter((entry) => evicted.has(entry.lane))
+    .sort((left, right) => right.priority - left.priority || SESSION_CONTEXT_LANES.indexOf(left.lane) - SESSION_CONTEXT_LANES.indexOf(right.lane))) {
+    const { items, tokensBefore } = evicted.get(lane.lane)!;
+    const browseStub = renderBrowseStub(lane.lane, items.map((item) => item.id), browseKeys(items));
+    const room = () => input.targetTokens - total + lane.tokens;
+    let start = items.length;
+    if (browseStub !== '' && sessionTokens(browseStub) <= room()) {
+      const fixed = textTokenUnits(renderLane(lane.lane, [{ id: '', text: 'x' }])) - textTokenUnits('- x');
+      const line = items.map((item) => textTokenUnits('- ' + item.text.replace(/\n/gu, '\n  ')));
+      const stub = textTokenUnits(browseStub);
+      let body = 0;
+      for (let index = items.length - 1; index >= 0; index -= 1) {
+        const next = body + (start === items.length ? fixed : ASCII_TOKENS_PER_CHAR) + line[index]!;
+        if (Math.ceil(next + ASCII_TOKENS_PER_CHAR + stub) > room()) break;
+        body = next;
+        start = index;
+      }
+    }
+    if (start === items.length) {
+      decisions.push({
+        lane: lane.lane,
+        action: 'downgraded',
+        reason: 'budget_exceeded',
+        tokensBefore,
+        tokensAfter: lane.tokens,
+        omittedItems: items.length,
+        browseIds: items.slice(-BROWSE_ID_LIMIT).map((item) => item.id),
+      });
+      continue;
+    }
+    const included = items.slice(start);
+    const omitted = items.slice(0, start);
+    const pointer = omitted.length > 0
+      ? renderBrowseStub(lane.lane, omitted.map((item) => item.id), browseKeys(omitted))
+      : '';
+    const text = [renderLane(lane.lane, included), pointer].filter(Boolean).join('\n');
+    lane.items = included;
+    lane.text = text;
+    lane.tokens = sessionTokens(text);
+    lane.browseIds = omitted.map((item) => item.id);
+    lane.status = 'included';
+    total = lanes.reduce((sum, entry) => sum + entry.tokens, 0);
+    decisions.push({
+      lane: lane.lane,
+      action: 'trimmed',
+      reason: 'budget_exceeded',
+      tokensBefore,
+      tokensAfter: lane.tokens,
+      omittedItems: omitted.length,
+      browseIds: omitted.slice(-BROWSE_ID_LIMIT).map((item) => item.id),
+    });
   }
 
   const ordered = SESSION_CONTEXT_LANES.map((name) => lanes.find((lane) => lane.lane === name)!);
@@ -494,20 +550,41 @@ function renderRecallLane(items: SessionContextItem[]): string {
 /**
  * A downgraded lane's pointer: the item count plus one drill-down key per browse id that resolves
  * to a ledger event. `read mem:<eventId>` consumes the key directly (#252); an id with no event
- * behind it prints no key rather than a pointer that goes nowhere. The key list keeps the trace's
+ * behind it prints no key rather than a pointer that goes nowhere. A lane-local id
+ * (`procedure:<entry>`) resolves through the item's own `anchorEvent`/`sourceRefs` first, so a
+ * pointer that has a ledger row is not dropped just because its lane names it differently (#316).
+ * The key list keeps the trace's
  * existing 20-id bound but takes the newest ids — the turns that just slid out of view — and the
  * header keeps the full count and says which segment the keys cover (#317).
  */
-export function renderBrowseStub(lane: SessionContextLaneName, ids: readonly string[]): string {
+export function renderBrowseStub(
+  lane: SessionContextLaneName,
+  ids: readonly string[],
+  keys: readonly string[] = ids.map(browseEventId).filter((id): id is string => id !== undefined),
+): string {
   if (ids.length === 0) return '';
-  const keys = ids
-    .map(browseEventId)
-    .filter((id): id is string => id !== undefined)
-    .slice(-BROWSE_ID_LIMIT);
+  const newest = keys.slice(-BROWSE_ID_LIMIT);
   return [
-    `[${lane}: browse-only, ${ids.length} item(s); keys: newest ${keys.length} of ${ids.length}]`,
-    ...keys.map((id) => '  anchorEvent=' + serializeUntrustedMemory(id, 160)),
+    `[${lane}: browse-only, ${ids.length} item(s); keys: newest ${newest.length} of ${ids.length}]`,
+    ...newest.map((id) => '  anchorEvent=' + serializeUntrustedMemory(id, 160)),
   ].join('\n');
+}
+
+/**
+ * A lane item's id is its lane-local name, not always a ledger id (`working:0`, `procedure:<entry>`).
+ * The drill-down key is the id itself when it already names a row, else the item's anchor or first
+ * source ref. One key per item keeps the header's item count and key count comparable.
+ */
+function browseKey(item: SessionContextItem): string | undefined {
+  const own = browseEventId(item.id);
+  if (own !== undefined) return own;
+  const anchor = item.anchorEvent === undefined ? undefined : browseEventId(item.anchorEvent);
+  if (anchor !== undefined) return anchor;
+  return (item.sourceRefs ?? []).map(browseEventId).find((id) => id !== undefined);
+}
+
+function browseKeys(items: readonly SessionContextItem[]): string[] {
+  return items.map(browseKey).filter((id): id is string => id !== undefined);
 }
 
 /** The digest's frozen `entryId` is `digest:<eventId>`; both shapes name the same ledger row. */

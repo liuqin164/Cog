@@ -43,7 +43,7 @@ function packageJson(): {
 }
 
 describe('core release metadata', () => {
-  test('5.0.0 release metadata keeps schema 32', () => {
+  test('5.0.0 release metadata keeps schema 33', () => {
     const manifest = packageJson();
     const readme = readText(join(coreRoot, 'README.md'));
     const contributing = readText(join(coreRoot, 'CONTRIBUTING.md'));
@@ -67,10 +67,10 @@ describe('core release metadata', () => {
     expect(changelog).toContain('## 4.1.0');
     expect(checklist).toContain('# Cog 5.0.0 Release Checklist');
     // 4.0 ships no ordered migration list (ADR-0007): one schema, created
-    // directly. What is worth pinning is that the schema is 0032 and that the
+    // directly. What is worth pinning is that the schema is 0033 and that the
     // number the identity check writes agrees with it.
-    expect(LATEST_SCHEMA_VERSION).toBe(32);
-    expect(readdirSync(join(coreRoot, 'src', 'migrations')).some((file) => file.startsWith('0033_'))).toBe(false);
+    expect(LATEST_SCHEMA_VERSION).toBe(33);
+    expect(readdirSync(join(coreRoot, 'src', 'migrations')).some((file) => file.startsWith('0034_'))).toBe(false);
     expect(checklist).toContain('npm publish --provenance --access public');
   });
 

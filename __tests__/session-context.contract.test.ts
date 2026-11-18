@@ -276,12 +276,16 @@ describe('the assembly stays inside the target and explains every cut (#191 prim
       expect(decision.reason).toBe('budget_exceeded');
       expect(decision.action === 'downgraded' || decision.action === 'trimmed').toBe(true);
     }
-    const downgraded = new Set(assembly.decisionTrace.map((decision) => decision.lane));
-    expect(downgraded.has('recall')).toBe(true);
-    // A downgraded lane is a pointer, not a lane trimmed item by item: the ids stay browseable.
+    const changed = new Set(assembly.decisionTrace.map((decision) => decision.lane));
+    expect(changed.has('digest')).toBe(true);
+    // #316: the digest is sacrificed first; this turn's recall survives verbatim.
     const recallLane = assembly.lanes.find((lane) => lane.lane === 'recall')!;
-    expect(recallLane.status).toBe('downgraded');
-    expect(recallLane.browseIds.length).toBeGreaterThan(0);
+    expect(recallLane.status).toBe('included');
+    expect(recallLane.items.length).toBeGreaterThan(0);
+    // The lane that lost its text is a pointer: its ids stay browseable.
+    const digestLane = assembly.lanes.find((lane) => lane.lane === 'digest')!;
+    expect(digestLane.status).toBe('downgraded');
+    expect(digestLane.browseIds.length).toBeGreaterThan(0);
   });
 
   test('the stable lanes render the same bytes across assemblies at the same budget', () => {
@@ -336,6 +340,26 @@ describe('the assembly stays inside the target and explains every cut (#191 prim
     // The digest's entry id names the same ledger row, and a working-set id names none.
     expect(renderBrowseStub('digest', ['digest:evt-7'])).toContain('anchorEvent=evt-7');
     expect(renderBrowseStub('working_set', ['working:0'])).toBe('[working_set: browse-only, 1 item(s); keys: newest 0 of 1]');
+  });
+
+  test('a working-set pointer resolves through its ledger refs, not only its lane-local id (#316)', () => {
+    const assembly = assembleSessionContext({
+      projectId: PROJECT,
+      agentId: AGENT,
+      sessionId: 's-pointer',
+      targetTokens: 40,
+      pinned: ['x'],
+      openLoops: [{
+        id: 'procedure:proc-1',
+        text: '发布 npm 包: 跑测试 → bun run build → 打标签 → 等 CI 通过之后再推送，失败就回滚。'.repeat(4),
+        anchorEvent: 'evt-proc-1',
+        sourceRefs: ['evt-proc-1'],
+      }],
+    }, { sessionId: 's-pointer', entries: [], tail: [], truncated: false });
+    const working = assembly.lanes.find((lane) => lane.lane === 'working_set')!;
+    expect(working.status).toBe('downgraded');
+    expect(working.browseIds).toEqual(['procedure:proc-1']);
+    expect(working.text).toContain('anchorEvent=evt-proc-1');
   });
 
   test('a 292-entry digest stub keeps the keys of the turns that just slid out of view (#317)', () => {

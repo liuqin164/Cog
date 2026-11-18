@@ -145,6 +145,7 @@ async function longSession(): Promise<Metric[]> {
     await shell.submit('记住：我的项目代号是青岚。');
     const included: boolean[] = [];
     const utilization: number[] = [];
+    const afterFirstCut: number[] = [];
     let maxUsed = 0;
     let target = 6_000;
     for (let day = 0; day < LONG_SESSION_DAYS; day += 1) {
@@ -159,11 +160,18 @@ async function longSession(): Promise<Metric[]> {
         target = view?.targetTokens ?? target;
         maxUsed = Math.max(maxUsed, view?.usedTokens ?? 0);
         utilization.push((view?.usedTokens ?? 0) / Math.max(1, view?.targetTokens ?? target));
+        if ((view?.decisionTrace.length ?? 0) > 0) {
+          afterFirstCut.push((view?.usedTokens ?? 0) / Math.max(1, view?.targetTokens ?? target));
+        }
       }
       if ((day + 1) % 5 === 0) process.stderr.write(`[continuity] long session: day ${day + 1}/${LONG_SESSION_DAYS}\n`);
     }
     const hits = included.filter(Boolean).length;
-    const minUtilization = Math.min(...utilization);
+    // #316 is about the state *after* a downgrade: the first turn has only the seed and the first
+    // reply, so its utilisation says nothing about backfill (#358). Measure the turns the controller
+    // actually cut; keep the whole-series minimum in the detail so the warm-up is still visible.
+    const minUtilization = afterFirstCut.length > 0 ? Math.min(...afterFirstCut) : Math.min(...utilization);
+    const minWarmup = Math.min(...utilization);
     return [
       metric(
         'recall_lane_included',
@@ -176,7 +184,8 @@ async function longSession(): Promise<Metric[]> {
         'min_budget_utilization',
         `${(100 * minUtilization).toFixed(1)}%`,
         minUtilization >= 0.5,
-        '>= 50% of target',
+        '>= 50% of target after the first cut',
+        `whole run min ${(100 * minWarmup).toFixed(1)}%, ${afterFirstCut.length} turn(s) after the first cut`,
       ),
     ];
   } finally {
