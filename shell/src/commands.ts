@@ -267,8 +267,8 @@ export const CORE_COMMANDS: readonly CoreCommand[] = [
       // "0%" is a claim the provider never made.
       if (cache) lines.push(`provider 实报 prompt 缓存命中 ${cache.percent}%（命中 ${cache.hit} / 未命中 ${cache.miss} token）。`);
       else lines.push('provider 缓存：上游未回报缓存字段。');
-        const tools = host.contextTools();
-        if (tools.length > 0) lines.push(`已装载工具：${tools.join('、')}`);
+      const tools = host.contextTools();
+      if (tools.length > 0) lines.push(`已装载工具：${tools.join('、')}`);
       return { text: lines.join('\n') };
     },
   },

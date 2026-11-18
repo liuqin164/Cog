@@ -40,7 +40,6 @@ describe('context projection metrics (#268)', () => {
       expect(metrics.folds).toBe(lanes.decisionTrace.length);
       expect(metrics.folds).toBeGreaterThan(0);
       expect(metrics.drills).toBe(1);
-      // #253 is still in flight; this is the reserved field reading a real zero.
       expect(metrics.autoExpands).toBe(0);
       const text = (await shell.runCommand('context')).text;
       expect(text).toContain(`本轮折叠 ${metrics.folds} 次`);
