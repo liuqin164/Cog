@@ -47,7 +47,8 @@ describe('the six-lane assembly (#249 A5)', () => {
       await shell.backend.rememberTurnWithResult({
         agentId: shell.config.agentId,
         projectId: shell.config.projectId,
-        sessionId: shell.config.sessionId,
+        // Long-term memory, not this session: the current session is the tail lane (#321).
+        sessionId: 'seeded-elsewhere',
         turnId: 'seed-1',
         userText: '部署窗口是周二凌晨两点，周五绝对不能部署',
         assistantText: '记下了。',
@@ -115,7 +116,7 @@ describe('the six-lane assembly (#249 A5)', () => {
       const recorded = await shell.backend.rememberTurnWithResult({
         agentId: shell.config.agentId,
         projectId: shell.config.projectId,
-        sessionId: shell.config.sessionId,
+        sessionId: 'seeded-elsewhere',
         turnId: 'seed-276',
         userText: seed,
         assistantText: '记下了。',
@@ -219,6 +220,45 @@ describe('the six-lane assembly (#249 A5)', () => {
       const digest = shell.currentStatus().contextLanes!.lanes.find((lane) => lane.lane === 'digest')!;
       expect(digest.status).toBe('included');
       expect(digest.items).toBeGreaterThan(0);
+    } finally {
+      await shell.stop();
+    }
+  }, 30_000);
+
+  test('two provider requests in one run carry the same system-prompt bytes (#320)', async () => {
+    const at = Date.UTC(2026, 10, 18, 21, 59, 21, 861);
+    const provider = new ScriptedProvider([
+      { text: '', toolCalls: [{ toolCallId: 'c1', toolName: 'bash', input: { command: 'echo hi' } }] },
+      { text: '收到。', toolCalls: [] },
+    ]);
+    const shell = makeShell(makeTempDir('lanes-clock-'), provider, { dream: NO_DREAM }, { now: () => at });
+    await shell.start();
+    try {
+      await shell.submit('看一眼时间');
+      expect(provider.calls).toHaveLength(2);
+      expect(provider.calls[1]!.systemPrompt).toBe(provider.calls[0]!.systemPrompt);
+      expect(provider.calls[0]!.systemPrompt).toContain('now: 2026-11-18T21:59Z');
+      expect(provider.calls[0]!.systemPrompt).not.toContain('.861');
+    } finally {
+      await shell.stop();
+    }
+  }, 30_000);
+
+  test('the current session is not recalled back as long-term memory (#321)', async () => {
+    const provider = new ScriptedProvider([
+      { text: '记下了。', toolCalls: [] },
+      { text: '就是你刚才说的那个。', toolCalls: [] },
+    ]);
+    const shell = makeShell(makeTempDir('lanes-exclude-session-'), provider, { dream: NO_DREAM });
+    await shell.start();
+    try {
+      await shell.submit('记住：本会话口令是蓝鸟。');
+      await shell.submit('刚才的口令是什么？');
+
+      const recall = shell.currentStatus().contextLanes!.lanes.find((lane) => lane.lane === 'recall')!;
+      // The turn is in the tail lane already; recalling it from the same session would say it twice.
+      expect(recall.items).toBe(0);
+      expect(recall.status).toBe('empty');
     } finally {
       await shell.stop();
     }

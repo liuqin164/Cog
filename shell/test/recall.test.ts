@@ -14,7 +14,7 @@ describe('recall inside the loop', () => {
       await shell.backend.rememberTurnWithResult({
         agentId: shell.config.agentId,
         projectId: shell.config.projectId,
-        sessionId: shell.config.sessionId,
+        sessionId: 'seeded-elsewhere',
         turnId: 'seed-recall',
         userText: 'zebraplan8811 是下周的计划代号',
         assistantText: '记下了：zebraplan8811。',
@@ -47,7 +47,7 @@ describe('recall inside the loop', () => {
       await shell.backend.rememberTurnWithResult({
         agentId: shell.config.agentId,
         projectId: shell.config.projectId,
-        sessionId: shell.config.sessionId,
+        sessionId: 'seeded-elsewhere',
         turnId: 'seed-prepare-recall',
         userText: 'quartzbeacon4417 是今晚的口令',
         assistantText: '记下了：quartzbeacon4417。',

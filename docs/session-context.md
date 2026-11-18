@@ -175,6 +175,21 @@ item the caller marked — stays in `working_set` verbatim. A stub whose quoted 
 constraint is itself marked `protected` by the same rule, so budget pressure trims around it rather
 than folding it.
 
+## The whole request (#319)
+
+The six lanes fit the material the assembler builds; they do not see the tool results the model
+appends afterwards. Those results are part of the request the provider is charged for, so the agent
+loop fits them at the request boundary: the whole request is bounded to the route's target, and
+inside it tool output may take at most `TOOL_OUTPUT_TOKEN_LIMIT` (4,000 in the character-class unit),
+one result at most `TOOL_RESULT_TOKEN_LIMIT` (2,000), and the newest results are kept first when both caps cannot be
+met. An oversized result keeps its head and gains a deterministic stub naming the original length and
+its `read` key when the call has one (`mem:<eventId>`, a workspace path, or the bash output file);
+older results collapse to that stub. The transcript and the append-only projection log keep the full
+text: this is a request re-assembly, not deletion and not a second fold mechanism.
+
+`context_assembled` reports `totalTokens`, `toolOutputTokens` and the `toolOutput` account separately;
+`/context` prints the tool-output line and the stated whole-request budget beside the lane budget.
+
 ## Digest entry fields (frozen)
 
 | Field | Means |

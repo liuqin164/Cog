@@ -79,18 +79,19 @@ async function backendWithCompiledPleasantry(): Promise<{ memory: KernelAgentMem
   return { memory: new KernelAgentMemoryBackend(kernel), close: () => kernel.close() };
 }
 
-test('defence 4: the floor applies to every lane for a grey query, and to raw hits for a real one', async () => {
+test('defence 4: the floor applies to every lane, grey query and real one alike', async () => {
   const { memory, close } = await backendWithCompiledPleasantry();
   try {
     const grey = memory.recall({ query: '好的收到，嗯先', projectId: 'p', agentId: 'a' });
     expect((grey.decisionTrace?.suppressed ?? []).some((entry) => entry.reason === 'grey_below_floor')).toBe(true);
     expect(grey.items.map((item) => item.text).join('\n')).not.toContain('说明一下这个流程');
 
-    // Same corpus, same overlap, but a real question: the compiled item is not the raw lane's, so the
-    // raw-lane rule leaves it alone. That difference is the wiring this test exists to pin.
+    // Same corpus, same pleasantry on both sides, but a real question. The compiled item shares only
+    // small talk with it, so it is below the general floor too (#321).
     const real = memory.recall({ query: '好的收到，归档保留期几年', projectId: 'p', agentId: 'a' });
-    expect(real.items.map((item) => item.text).join('\n')).toContain('说明一下这个流程');
+    expect(real.items.map((item) => item.text).join('\n')).not.toContain('说明一下这个流程');
     expect((real.decisionTrace?.suppressed ?? []).some((entry) => entry.reason === 'grey_below_floor')).toBe(false);
+    expect((real.decisionTrace?.suppressed ?? []).some((entry) => entry.reason === 'below_relevance_floor')).toBe(true);
   } finally {
     close();
   }

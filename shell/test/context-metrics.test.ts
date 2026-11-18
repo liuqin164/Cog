@@ -52,6 +52,11 @@ describe('context projection metrics (#268)', () => {
       expect(text).toContain(`本轮折叠 ${metrics.folds} 次`);
       expect(text).toContain('下钻 1 次');
       expect(text).toContain('自动展开 0 次');
+      // The tool lane is its own line, and the whole request states the budget it is fitted to (#319).
+      expect(text).toMatch(/本轮工具输出 \d+ token（占请求 \d+%(?:；折叠 \d+ 条)?）/u);
+      expect(text).toContain('整请求预算 10 token');
+      // A scripted provider reports no cache fields; the line says so instead of claiming 0% (#320).
+      expect(text).toContain('上游未回报缓存字段');
     } finally {
       await shell.stop();
     }

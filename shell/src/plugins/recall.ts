@@ -12,6 +12,8 @@ import type { NativePlugin } from './host.ts';
 export interface RecallPluginConfig {
   agentId: string;
   projectId: string;
+  /** The current session; its turns are the tail lane, not long-term memory (#321). */
+  sessionId?: string;
   limit: number;
 }
 
@@ -24,7 +26,13 @@ export function recallPlugin(config: RecallPluginConfig): NativePlugin {
       const backend = ctx.getService<KernelAgentMemoryBackend>('memory');
       ctx.provide('recall', {
         recallFor(query: string, limit = config.limit) {
-          return backend.recall({ agentId: config.agentId, projectId: config.projectId, query, limit });
+          return backend.recall({
+            agentId: config.agentId,
+            projectId: config.projectId,
+            query,
+            limit,
+            ...(config.sessionId === undefined ? {} : { excludeSessionId: config.sessionId }),
+          });
         },
       });
     },

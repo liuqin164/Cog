@@ -36,6 +36,8 @@ export interface ContextAccount {
   systemTokens: number;
   toolTokens: number;
   messageTokens: number;
+  /** The part of `messageTokens` that is tool output, the request's unbounded lane (#319). */
+  toolOutputTokens: number;
   /** How many messages the projection holds, for the trace to say what the number is made of. */
   messages: number;
   byRole: Record<AgentMessage['role'], number>;
@@ -88,9 +90,178 @@ export function accountRequest(input: {
     systemTokens,
     toolTokens,
     messageTokens,
+    toolOutputTokens: byRole.tool,
     messages: input.messages.length,
     byRole,
   };
+}
+
+/** One tool result's cap, in the character-class unit (`sessionTokens`, #318). */
+export const TOOL_RESULT_TOKEN_LIMIT = 2_000;
+/** All in-run tool output's cap; the rest of the lane budget is not available to it (#319). */
+export const TOOL_OUTPUT_TOKEN_LIMIT = 4_000;
+
+export interface ToolOutputAccount {
+  /** The stated whole-request ceiling; absent when the caller did not state one. */
+  requestBudgetTokens?: number;
+  /** The raw tool output before folding, so a report can say what the ceiling removed. */
+  rawTokens: number;
+  /** The tool output the request now carries (bodies plus fold stubs). */
+  toolOutputTokens: number;
+  /** How many tool results were truncated or replaced by a stub. */
+  foldedResults: number;
+  /** The whole request after fitting, measured against `requestBudgetTokens` when stated. */
+  totalTokens: number;
+  overBudgetTokens: number;
+}
+
+export interface FittedRequest {
+  messages: AgentMessage[];
+  toolOutput: ToolOutputAccount;
+}
+
+/**
+ * Bind a request's tool output to a stated size (#319).
+ *
+ * Lane assembly runs before the loop, so it cannot see the results the model itself appends. This is
+ * the request-boundary rule: the newest results keep their place (the model is still working on them),
+ * older ones become a stub, and anything past the two caps is cut at the head. Nothing is deleted — the
+ * transcript and its `context_edit`-compatible shape keep the full text; only this request's copy is
+ * re-assembled. Deterministic because it reads only message order, content and the call inputs already
+ * in the transcript.
+ */
+export function fitRequestToBudget(input: {
+  messages: readonly AgentMessage[];
+  systemPrompt: string;
+  tools: readonly ToolDeclaration[];
+  budgetTokens?: number;
+  perResultTokens?: number;
+  toolOutputTokens?: number;
+}): FittedRequest {
+  const perResult = input.perResultTokens ?? TOOL_RESULT_TOKEN_LIMIT;
+  const turnLimit = input.toolOutputTokens ?? TOOL_OUTPUT_TOKEN_LIMIT;
+  const budget = input.budgetTokens;
+  const indexes = input.messages
+    .map((message, index) => message.role === 'tool' ? index : -1)
+    .filter((index) => index >= 0);
+  let rawTokens = 0;
+  for (const index of indexes) rawTokens += estimateTokens(input.messages[index]!);
+  if (indexes.length === 0) {
+    return {
+      messages: [...input.messages],
+      toolOutput: {
+        ...(budget === undefined ? {} : { requestBudgetTokens: budget }),
+        rawTokens: 0,
+        toolOutputTokens: 0,
+        foldedResults: 0,
+        totalTokens: accountRequest(input).totalTokens,
+        overBudgetTokens: 0,
+      },
+    };
+  }
+
+  const calls = new Map<string, unknown>();
+  for (const message of input.messages) {
+    for (const call of message.toolCalls ?? []) calls.set(call.toolCallId, call.input);
+  }
+  const stubs = new Map<number, { content: string; tokens: number }>();
+  for (const index of indexes) {
+    const message = input.messages[index]!;
+    const content = foldStub(message, calls.get(message.toolCallId ?? ''));
+    stubs.set(index, { content, tokens: sessionTokens(content) });
+  }
+  const nonTool = accountRequest({
+    messages: input.messages.filter((message) => message.role !== 'tool'),
+    systemPrompt: input.systemPrompt,
+    tools: input.tools,
+  });
+  const stubOverhead = [...stubs.values()].reduce((sum, stub) => sum + stub.tokens, 0);
+  const bodyLimit = Math.max(0, turnLimit - stubOverhead);
+  const ceiling = budget === undefined ? bodyLimit : Math.max(0, budget - nonTool.totalTokens - stubOverhead);
+  let headRoom = Math.min(bodyLimit, ceiling);
+
+  const contents = new Map<number, string>();
+  let folded = 0;
+  // Newest first: the result the model just asked for is the one still in play.
+  for (const index of [...indexes].reverse()) {
+    const message = input.messages[index]!;
+    const raw = estimateTokens(message);
+    const allow = Math.max(0, Math.min(perResult, headRoom));
+    if (raw <= allow) {
+      headRoom -= raw;
+      continue;
+    }
+    const stub = stubs.get(index)!;
+    // A tiny result is smaller than its own stub. Rewriting it would grow the request; leave it.
+    if (stub.tokens >= raw) continue;
+    const head = headToTokens(message.content, allow - stub.tokens);
+    contents.set(index, head.length === 0 ? stub.content : `${head}${stub.content}`);
+    headRoom -= Math.min(raw, sessionTokens(head));
+    folded += 1;
+  }
+
+  const messages = input.messages.map((message, index) => {
+    const content = contents.get(index);
+    return content === undefined ? message : { ...message, content };
+  });
+  const final = accountRequest({ messages, systemPrompt: input.systemPrompt, tools: input.tools });
+  return {
+    messages,
+    toolOutput: {
+      ...(budget === undefined ? {} : { requestBudgetTokens: budget }),
+      rawTokens,
+      toolOutputTokens: final.toolOutputTokens,
+      foldedResults: folded,
+      totalTokens: final.totalTokens,
+      overBudgetTokens: budget === undefined ? 0 : Math.max(0, final.totalTokens - budget),
+    },
+  };
+}
+
+function foldStub(message: AgentMessage, input: unknown): string {
+  const text = message.content;
+  const chars = [...text].length;
+  const tokens = estimateTokens(message);
+  const tool = message.toolName ?? 'tool';
+  const call = message.toolCallId ?? '?';
+  const key = foldKey(message, input);
+  const address = key === undefined
+    ? `key: tool_call:${call} (full text is not addressable from here)`
+    : `key: ${key} (re-read with the read tool)`;
+  const marker = `[tool output folded: ${tool} ${call}; ${address}]`;
+  // Below a few hundred tokens the counts cost more than they explain. Keep the marker compact so
+  // folding a short result or error cannot make the request larger than the result was (#319).
+  if (tokens < 400) return `\n\n${marker}`;
+  return `\n\n[tool output folded: ${tool} ${call}, ${chars} chars / ~${tokens} tokens; ${address}]`;
+}
+
+function foldKey(message: AgentMessage, input: unknown): string | undefined {
+  const path = input && typeof input === 'object' && 'path' in input
+    ? (input as { path?: unknown }).path
+    : undefined;
+  if (typeof path === 'string' && path.trim() !== '') return path.trim();
+  if (message.toolName === 'bash') {
+    const pointer = /full output: ([^\])]+)\]/u.exec(message.content);
+    if (pointer) return pointer[1]!.trim();
+  }
+  return undefined;
+}
+
+/**
+ * The head of `text` whose character-class estimate fits `budget`. Walks code points, so the cut
+ * cannot split a surrogate pair, and charges the same classes `sessionTokens` does.
+ */
+export function headToTokens(text: string, budget: number): string {
+  if (budget <= 0) return '';
+  let used = 0;
+  let end = 0;
+  for (const character of text) {
+    const cost = character.codePointAt(0)! < 128 ? 0.25 : 0.64;
+    if (Math.ceil(used + cost) > budget) break;
+    used += cost;
+    end += character.length;
+  }
+  return text.slice(0, end);
 }
 
 /**
@@ -118,6 +289,7 @@ export class ContextCalibrator {
       systemTokens,
       toolTokens,
       messageTokens,
+      toolOutputTokens: scale(account.toolOutputTokens),
       messages: account.messages,
       byRole: {
         user: scale(account.byRole.user),

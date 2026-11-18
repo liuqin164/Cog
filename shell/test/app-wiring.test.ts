@@ -101,7 +101,7 @@ describe('shell wiring', () => {
     await first.backend.rememberTurnWithResult({
       agentId: first.config.agentId,
       projectId: first.config.projectId,
-      sessionId: first.config.sessionId,
+      sessionId: 'seeded-elsewhere',
       turnId: 'continuity-seed',
       userText: '我常去街角那家蓝色遮阳篷的面包店买可颂',
       assistantText: '记下了：蓝色遮阳篷的面包店。',

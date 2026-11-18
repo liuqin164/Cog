@@ -34,7 +34,7 @@ describe('ordinary remember and recall do not need a CLI (#277)', () => {
     await first.backend.rememberTurnWithResult({
       agentId: first.config.agentId,
       projectId: first.config.projectId,
-      sessionId: first.config.sessionId,
+      sessionId: 'seeded-elsewhere',
       turnId: 'coffee-277',
       userText: '咖啡只喝黑咖啡，不加糖。',
       assistantText: '记下了：只喝黑咖啡。',

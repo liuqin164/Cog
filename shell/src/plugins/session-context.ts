@@ -58,6 +58,9 @@ export function sessionContextPlugin(config: SessionContextPluginConfig): Native
                 agentId: config.agentId,
                 projectId: config.projectId,
                 query,
+                // The tail lane already carries this session verbatim. A recall hit from it
+                // would be the same words twice, not a memory (#321).
+                excludeSessionId: config.sessionId,
                 limit: config.recallLimit ?? 3,
               }).items.map(toContextItem)
             : [];

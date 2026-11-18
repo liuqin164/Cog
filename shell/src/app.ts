@@ -44,6 +44,7 @@ import { dreamPlugin } from './plugins/dream.ts';
 import { emergencePlugin } from './plugins/emergence.ts';
 import { terminalPlugin, TerminalChannel, type ShellControl } from './channels/terminal.ts';
 import { AgentRuntime, type AgentMessage, type ModelProvider, type RunSummary, type TurnUsage } from './state/agent-loop.ts';
+import type { ToolOutputAccount } from './state/context-budget.ts';
 import { classifyEndpointFailure } from './state/retry.ts';
 import { laneAssemblyView, type ContextMetrics } from './state/session-lanes.ts';
 import { SecretRedactor, startKernelHttpFace, type HttpFaceHandle } from './kernel-host.ts';
@@ -210,6 +211,8 @@ export class CompanionShell implements ShellControl, AttachShell {
   private modelRouter?: ModelRouter;
   /** The request-side estimate, calibrated by the provider's reported prompt count. */
   private contextTokenEstimate = 0;
+  /** The newest request's tool-output account (#319), shown beside the lane budget. */
+  private lastToolOutput?: ToolOutputAccount;
   /** The newest six-lane assembly; `/context` and the TUI read this, not a second accounting. */
   private lastLaneAssembly?: SessionContextAssembly;
   /** The projection actions that produced it (#268); reset when the next assembly is recorded. */
@@ -799,7 +802,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       if (this.modelRouter.storeError) this.trace.append('model_routes_load_failed', { message: this.modelRouter.storeError });
       provider = modelRouterPlugin(this.modelRouter);
     }
-    this.host.register(clockPlugin({ timeZone: this.config.timeZone, idleWakeIntervalMs: this.config.idleWakeIntervalMs, dreamWindow: { startHour: this.config.dream.windowStartHour, endHour: this.config.dream.windowEndHour } }));
+    this.host.register(clockPlugin({ timeZone: this.config.timeZone, idleWakeIntervalMs: this.config.idleWakeIntervalMs, dreamWindow: { startHour: this.config.dream.windowStartHour, endHour: this.config.dream.windowEndHour }, now: this.now }));
     this.host.register(provider, this.config.model);
     this.host.register(cagePlugin(this.config.budgets, this.trace, { ...this.config.workBudget, toolWhitelist: this.config.budgets.toolWhitelist }));
     this.host.register(builtinToolsPlugin(), {
@@ -853,7 +856,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       },
       recallLimit: 3,
     }));
-    this.host.register(recallPlugin({ agentId: this.config.agentId, projectId: this.config.projectId, limit: 3 }));
+    this.host.register(recallPlugin({ agentId: this.config.agentId, projectId: this.config.projectId, sessionId: this.config.sessionId, limit: 3 }));
     this.host.register(soulEditPlugin());
     this.host.register(dreamPlugin({
       agentId: this.config.agentId,
@@ -930,10 +933,14 @@ export class CompanionShell implements ShellControl, AttachShell {
       // The context gauge is the measured request, not a running total of message events: the system
       // prompt, the tool schemas and a `transformContext`-injected recall block are all part of what
       // the model was charged for, and none of them is a message this process emits.
-      onContextAssembled: (account) => {
+      onContextAssembled: (account, toolOutput) => {
         this.contextTokenEstimate = account.totalTokens;
+        this.lastToolOutput = toolOutput;
         this.emitStatus();
       },
+      // One stated whole-request ceiling, the same number the lanes are fitted to. The tool cap
+      // is a ceiling inside it, not an extra allowance on top of it (#319, #318's unit).
+      requestBudget: () => this.targetTokens(),
       contextLanes: () => (this.lastLaneAssembly ? laneAssemblyView(this.lastLaneAssembly) : undefined),
       contextMetrics: () => this.lastContextMetrics,
     });
@@ -2910,6 +2917,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     config: () => this.config,
     lifecycle: () => ({ state: this.machine.state, seq: this.machine.seq, costDayTokens: this.machine.runtime.costDayTokens ?? 0, sandbox: this.sandboxState() }),
     contextTokens: () => this.contextTokenEstimate,
+    contextToolOutput: () => this.lastToolOutput,
     contextLanes: () => (this.lastLaneAssembly ? laneAssemblyView(this.lastLaneAssembly) : undefined),
     contextMetrics: () => this.lastContextMetrics,
     promptCache: () => this.promptCache,

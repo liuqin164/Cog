@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { EventBus } from '../src/bus.ts';
 import { AgentRuntime, type ToolInvoker } from '../src/state/agent-loop.ts';
-import { accountRequest, estimateMessagesTokens, estimateTokens, type ContextAccount } from '../src/state/context-budget.ts';
+import { accountRequest, estimateMessagesTokens, estimateTokens, fitRequestToBudget, TOOL_RESULT_TOKEN_LIMIT, type ContextAccount } from '../src/state/context-budget.ts';
 import { RunCage } from '../src/plugins/cage.ts';
 import { makeShell, makeTempDir, ScriptedProvider } from './helpers.ts';
 
@@ -90,3 +90,90 @@ describe('context accounting (character-class estimate, #318)', () => {
     }
   });
 });
+
+describe('the whole request carries the tool-output budget (#319)', () => {
+  test('a 40 KB result is re-assembled to its 2k-token head plus a key the model can read', () => {
+    const raw = 'x'.repeat(40_000);
+    const fitted = fitRequestToBudget({
+      messages: [
+        { role: 'user', content: 'read it' },
+        { role: 'assistant', content: '', toolCalls: [{ toolCallId: 'c1', toolName: 'read', input: { path: 'mem:evt-42' } }] },
+        { role: 'tool', content: raw, toolCallId: 'c1', toolName: 'read' },
+      ],
+      systemPrompt: 'SYS',
+      tools: [],
+      budgetTokens: 12_000,
+    });
+
+    const result = fitted.messages.find((message) => message.role === 'tool')!;
+    expect(result.toolCallId).toBe('c1');
+    expect(result.toolName).toBe('read');
+    expect(estimateTokens(result)).toBeLessThanOrEqual(TOOL_RESULT_TOKEN_LIMIT);
+    expect(result.content).toContain('tool output folded');
+    expect(result.content).toContain('mem:evt-42');
+    expect(result.content.length).toBeLessThan(raw.length);
+    expect(fitted.toolOutput.rawTokens).toBeGreaterThan(9_000);
+    expect(fitted.toolOutput.toolOutputTokens).toBeLessThanOrEqual(TOOL_RESULT_TOKEN_LIMIT);
+    expect(fitted.toolOutput.foldedResults).toBe(1);
+    expect(fitted.toolOutput.totalTokens).toBeLessThanOrEqual(12_000);
+  });
+
+  test('the newest result keeps its head; an older one is cut to the remaining budget', () => {
+    const fitted = fitRequestToBudget({
+      messages: [
+        { role: 'assistant', content: '', toolCalls: [{ toolCallId: 'old', toolName: 'bash', input: { command: 'cat old' } }] },
+        { role: 'tool', content: 'a'.repeat(20_000), toolCallId: 'old', toolName: 'bash' },
+        { role: 'assistant', content: '', toolCalls: [{ toolCallId: 'new', toolName: 'bash', input: { command: 'cat new' } }] },
+        { role: 'tool', content: 'b'.repeat(20_000), toolCallId: 'new', toolName: 'bash' },
+      ],
+      systemPrompt: 'SYS',
+      tools: [],
+      budgetTokens: 6_000,
+    });
+
+    const old = fitted.messages.find((message) => message.toolCallId === 'old')!;
+    const newest = fitted.messages.find((message) => message.toolCallId === 'new')!;
+    // The old result does not fit after the newest one, so its body is shorter than it was.
+    expect(estimateTokens(old)).toBeLessThan(5_000);
+    expect(old.content).toContain('tool output folded');
+    expect(old.content).toContain('tool_call:old');
+    expect(newest.content.startsWith('b')).toBe(true);
+    expect(estimateTokens(newest)).toBeLessThanOrEqual(TOOL_RESULT_TOKEN_LIMIT);
+    expect(newest.content).toContain('tool_call:new');
+    expect(fitted.toolOutput.foldedResults).toBe(2);
+    expect(fitted.toolOutput.totalTokens).toBeLessThanOrEqual(6_000);
+  });
+
+  test('the provider receives the folded result, not the 40 KB body', async () => {
+    const bus = new EventBus();
+    const raw = 'x'.repeat(40_000);
+    const definition = { name: 'dump', description: 'return 40 KB', parameters: { type: 'object' }, source: 'test' };
+    const provider = new ScriptedProvider([
+      { text: '', toolCalls: [{ toolCallId: 'c1', toolName: 'dump', input: {} }] },
+      { text: 'done', toolCalls: [] },
+    ]);
+    const seen: ContextAccount[] = [];
+    const runtime = new AgentRuntime({
+      bus,
+      tools: {
+        list: () => [definition],
+        invoke: async (name, call) => ({ toolCallId: call.toolCallId, toolName: name, output: raw, isError: false }),
+      },
+      provider,
+      budget: new RunCage({ maxTurnsPerRun: 10, maxTokensPerRun: 10_000, toolWhitelist: null }),
+      systemPrompt: () => 'SYS',
+      requestBudget: () => 12_000,
+      onContextAssembled: (account) => seen.push(account),
+    });
+
+    await runtime.run({ runId: 'r', sessionId: 's', userText: 'dump it' });
+
+    const toolMessage = provider.calls[1]!.messages.find((message) => message.role === 'tool')!;
+    expect(estimateTokens(toolMessage)).toBeLessThanOrEqual(TOOL_RESULT_TOKEN_LIMIT);
+    expect(toolMessage.content).toContain('tool output folded');
+    expect(toolMessage.content).toContain('tool_call:c1');
+    expect(seen.at(-1)!.toolOutputTokens).toBeLessThanOrEqual(TOOL_RESULT_TOKEN_LIMIT);
+    expect(seen.at(-1)!.totalTokens).toBeLessThanOrEqual(12_000);
+  });
+});
+

@@ -69,7 +69,7 @@ describe('a named stub is expanded before the provider request (#253)', () => {
     await shell.start();
     try {
       await seedOutsideSession(shell);
-      await shell.submit('今天午饭吃什么？');
+      await shell.submit('把那个上限再说一遍');
 
       const request = asText(provider.calls[0]!.messages);
       expect(request).toContain('<COGMEM_RECALL_CONTEXT');

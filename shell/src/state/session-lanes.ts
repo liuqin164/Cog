@@ -91,7 +91,7 @@ export function laneAssemblyView(assembly: SessionContextAssembly): LaneAssembly
 export function laneReportLines(view: LaneAssemblyView, requestTokens?: number): string[] {
   const lines = [`目标带宽 ${view.targetTokens} token，车道估算 ${view.usedTokens} token`];
   if (requestTokens !== undefined && requestTokens > 0) {
-    lines.push(`请求估算约 ${Math.round(requestTokens)} token（含工具声明，chars/4 口径；provider 实报时校准）`);
+    lines.push(`请求估算约 ${Math.round(requestTokens)} token（含工具声明，字符类别口径；provider 实报时校准）`);
   }
   for (const lane of view.lanes) {
     const browse = lane.browseIds.length > 0 ? ` · 可浏览 ${lane.browseIds.length} 条` : '';

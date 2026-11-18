@@ -53,7 +53,7 @@ describe('the model is told that capture and recall are already done (#277)', ()
       await shell.backend.rememberTurnWithResult({
         agentId: shell.config.agentId,
         projectId: shell.config.projectId,
-        sessionId: shell.config.sessionId,
+        sessionId: 'seeded-elsewhere',
         turnId: 'seed-277',
         userText: '部署窗口是周二凌晨两点',
         assistantText: '记下了。',
