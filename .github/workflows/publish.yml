@@ -96,6 +96,7 @@ jobs:
         run: |
           cd shell
           bun install --frozen-lockfile
+          bun run typecheck
           bun test test
 
       # Same post-suite process check as ci.yml (#244): a leaked server passes every test.
