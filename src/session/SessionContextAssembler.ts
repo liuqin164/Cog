@@ -25,7 +25,7 @@
 import { ImportanceSignalDetector } from '../engine/ImportanceSignalDetector.js';
 import { digestAnchors, type SessionDigest, type SessionDigestEntry } from './SessionDigest.js';
 import { sessionError } from './SessionErrors.js';
-import { serializeUntrustedMemory } from '../agent/UntrustedMemorySerializer.js';
+import { serializeUntrustedLaneText, serializeUntrustedMemory } from '../agent/UntrustedMemorySerializer.js';
 import type { ConversationSpeaker } from '../conversation/index.js';
 
 /** The lane order, frozen by `docs/session-context.md`. */
@@ -525,7 +525,7 @@ function renderDigestLane(items: SessionContextItem[]): string {
  */
 function renderItemLine(item: SessionContextItem): string {
   const speaker = item.speaker === undefined ? '' : `${item.speaker}: `;
-  return `- ${speaker}${item.text.replace(/\n/gu, '\n  ')}`;
+  return `- ${speaker}${serializeUntrustedLaneText(item.text).replace(/\n/gu, '\n  ')}`;
 }
 
 /**
@@ -550,7 +550,7 @@ function renderRecallLane(items: SessionContextItem[]): string {
     '[recall]',
   ];
   for (const item of items) {
-    lines.push(`- ${item.text}`);
+    lines.push(`- ${serializeUntrustedLaneText(item.text)}`);
     const keys: string[] = [];
     if (item.anchorEvent) keys.push('anchorEvent=' + serializeUntrustedMemory(item.anchorEvent, 160));
     if (item.whyMatched) keys.push('whyMatched=' + serializeUntrustedMemory(item.whyMatched, 180));
