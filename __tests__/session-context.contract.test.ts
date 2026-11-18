@@ -276,12 +276,16 @@ describe('the assembly stays inside the target and explains every cut (#191 prim
       expect(decision.reason).toBe('budget_exceeded');
       expect(decision.action === 'downgraded' || decision.action === 'trimmed').toBe(true);
     }
-    const downgraded = new Set(assembly.decisionTrace.map((decision) => decision.lane));
-    expect(downgraded.has('recall')).toBe(true);
-    // A downgraded lane is a pointer, not a lane trimmed item by item: the ids stay browseable.
+    const changed = new Set(assembly.decisionTrace.map((decision) => decision.lane));
+    expect(changed.has('digest')).toBe(true);
+    // #316: the digest is sacrificed first; this turn's recall survives verbatim.
     const recallLane = assembly.lanes.find((lane) => lane.lane === 'recall')!;
-    expect(recallLane.status).toBe('downgraded');
-    expect(recallLane.browseIds.length).toBeGreaterThan(0);
+    expect(recallLane.status).toBe('included');
+    expect(recallLane.items.length).toBeGreaterThan(0);
+    // The lane that lost its text is a pointer: its ids stay browseable.
+    const digestLane = assembly.lanes.find((lane) => lane.lane === 'digest')!;
+    expect(digestLane.status).toBe('downgraded');
+    expect(digestLane.browseIds.length).toBeGreaterThan(0);
   });
 
   test('the stable lanes render the same bytes across assemblies at the same budget', () => {
