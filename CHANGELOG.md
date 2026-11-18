@@ -9,7 +9,10 @@
   are re-rendered with the items that now fit, the omitted ids stay in `browseIds`, and a partly
   restored lane reports `status: "included"` with one `trimmed` decision (`tokensBefore` is the full
   lane) whose `browseIds` list is its browse pointer. Backfill reuses the existing lanes and the existing
-  `renderLane`/`renderBrowseStub` pair; there is no second state machine. Re-measured on the #346
+  `renderLane`/`renderBrowseStub` pair; there is no second state machine. A lane-local browse id
+  (`procedure:<entryId>`) resolves to its drill-down key through the item's own `anchorEvent` or
+  `sourceRefs`, so a working-set pointer is no longer dropped merely because its id is not `evt-…`;
+  an `assignment:` or `wake:` item with no ledger row still prints no fabricated key. Re-measured on the #346
   30-day scorecard: `recall_lane_included` 238/600 → **600/600 (100%)**, post-first-cut
   `min_budget_utilization` → **99.4%** (threshold ≥50%), `max_request_tokens` stayed **6,000/6,000**.
   The 120/300/1,000-turn assembler probes are now 99.5% / 99.4% / 99.4% with recall and working set present.

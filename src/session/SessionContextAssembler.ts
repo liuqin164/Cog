@@ -247,7 +247,7 @@ export function assembleSessionContext(input: AssembleSessionContextInput, diges
       total = lanes.reduce((sum, entry) => sum + entry.tokens, 0);
       continue;
     }
-    const stub = renderBrowseStub(lane.lane, lane.items.map((item) => item.id));
+    const stub = renderBrowseStub(lane.lane, lane.items.map((item) => item.id), browseKeys(lane.items));
     const after = sessionTokens(stub) <= input.targetTokens - (total - before) ? stub : '';
     evicted.set(lane.lane, { items: lane.items, tokensBefore: before });
     lane.browseIds = lane.items.map((item) => item.id);
@@ -293,7 +293,7 @@ export function assembleSessionContext(input: AssembleSessionContextInput, diges
     .filter((entry) => evicted.has(entry.lane))
     .sort((left, right) => right.priority - left.priority || SESSION_CONTEXT_LANES.indexOf(left.lane) - SESSION_CONTEXT_LANES.indexOf(right.lane))) {
     const { items, tokensBefore } = evicted.get(lane.lane)!;
-    const browseStub = renderBrowseStub(lane.lane, items.map((item) => item.id));
+    const browseStub = renderBrowseStub(lane.lane, items.map((item) => item.id), browseKeys(items));
     const room = () => input.targetTokens - total + lane.tokens;
     let start = items.length;
     if (browseStub !== '' && sessionTokens(browseStub) <= room()) {
@@ -323,7 +323,7 @@ export function assembleSessionContext(input: AssembleSessionContextInput, diges
     const included = items.slice(start);
     const omitted = items.slice(0, start);
     const pointer = omitted.length > 0
-      ? renderBrowseStub(lane.lane, omitted.map((item) => item.id))
+      ? renderBrowseStub(lane.lane, omitted.map((item) => item.id), browseKeys(omitted))
       : '';
     const text = [renderLane(lane.lane, included), pointer].filter(Boolean).join('\n');
     lane.items = included;
@@ -550,20 +550,41 @@ function renderRecallLane(items: SessionContextItem[]): string {
 /**
  * A downgraded lane's pointer: the item count plus one drill-down key per browse id that resolves
  * to a ledger event. `read mem:<eventId>` consumes the key directly (#252); an id with no event
- * behind it prints no key rather than a pointer that goes nowhere. The key list keeps the trace's
+ * behind it prints no key rather than a pointer that goes nowhere. A lane-local id
+ * (`procedure:<entry>`) resolves through the item's own `anchorEvent`/`sourceRefs` first, so a
+ * pointer that has a ledger row is not dropped just because its lane names it differently (#316).
+ * The key list keeps the trace's
  * existing 20-id bound but takes the newest ids — the turns that just slid out of view — and the
  * header keeps the full count and says which segment the keys cover (#317).
  */
-export function renderBrowseStub(lane: SessionContextLaneName, ids: readonly string[]): string {
+export function renderBrowseStub(
+  lane: SessionContextLaneName,
+  ids: readonly string[],
+  keys: readonly string[] = ids.map(browseEventId).filter((id): id is string => id !== undefined),
+): string {
   if (ids.length === 0) return '';
-  const keys = ids
-    .map(browseEventId)
-    .filter((id): id is string => id !== undefined)
-    .slice(-BROWSE_ID_LIMIT);
+  const newest = keys.slice(-BROWSE_ID_LIMIT);
   return [
-    `[${lane}: browse-only, ${ids.length} item(s); keys: newest ${keys.length} of ${ids.length}]`,
-    ...keys.map((id) => '  anchorEvent=' + serializeUntrustedMemory(id, 160)),
+    `[${lane}: browse-only, ${ids.length} item(s); keys: newest ${newest.length} of ${ids.length}]`,
+    ...newest.map((id) => '  anchorEvent=' + serializeUntrustedMemory(id, 160)),
   ].join('\n');
+}
+
+/**
+ * A lane item's id is its lane-local name, not always a ledger id (`working:0`, `procedure:<entry>`).
+ * The drill-down key is the id itself when it already names a row, else the item's anchor or first
+ * source ref. One key per item keeps the header's item count and key count comparable.
+ */
+function browseKey(item: SessionContextItem): string | undefined {
+  const own = browseEventId(item.id);
+  if (own !== undefined) return own;
+  const anchor = item.anchorEvent === undefined ? undefined : browseEventId(item.anchorEvent);
+  if (anchor !== undefined) return anchor;
+  return (item.sourceRefs ?? []).map(browseEventId).find((id) => id !== undefined);
+}
+
+function browseKeys(items: readonly SessionContextItem[]): string[] {
+  return items.map(browseKey).filter((id): id is string => id !== undefined);
 }
 
 /** The digest's frozen `entryId` is `digest:<eventId>`; both shapes name the same ledger row. */

@@ -101,7 +101,9 @@ repeating a summary. An item with no resolvable event id prints no key rather th
 A lane downgraded to its browse-only pointer renders the same `evt-…` keys for the ids it left
 behind, one `anchorEvent=` line each, so `read mem:<eventId>` still resolves the text when the lane
 itself no longer fits. The key list is bounded to 20 — the trace's existing limit — and the header
-keeps the lane's full item count.
+keeps the lane's full item count. A lane-local id is resolved through the item's own `anchorEvent`
+or `sourceRefs` first: `procedure:<entryId>` prints its ledger row's key, while an `assignment:` or
+`wake:` item that carries no ledger row prints none rather than a fabricated one.
 
 ## Auto-expansion (#253)
 

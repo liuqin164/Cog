@@ -342,6 +342,26 @@ describe('the assembly stays inside the target and explains every cut (#191 prim
     expect(renderBrowseStub('working_set', ['working:0'])).toBe('[working_set: browse-only, 1 item(s); keys: newest 0 of 1]');
   });
 
+  test('a working-set pointer resolves through its ledger refs, not only its lane-local id (#316)', () => {
+    const assembly = assembleSessionContext({
+      projectId: PROJECT,
+      agentId: AGENT,
+      sessionId: 's-pointer',
+      targetTokens: 40,
+      pinned: ['x'],
+      openLoops: [{
+        id: 'procedure:proc-1',
+        text: '发布 npm 包: 跑测试 → bun run build → 打标签 → 等 CI 通过之后再推送，失败就回滚。'.repeat(4),
+        anchorEvent: 'evt-proc-1',
+        sourceRefs: ['evt-proc-1'],
+      }],
+    }, { sessionId: 's-pointer', entries: [], tail: [], truncated: false });
+    const working = assembly.lanes.find((lane) => lane.lane === 'working_set')!;
+    expect(working.status).toBe('downgraded');
+    expect(working.browseIds).toEqual(['procedure:proc-1']);
+    expect(working.text).toContain('anchorEvent=evt-proc-1');
+  });
+
   test('a 292-entry digest stub keeps the keys of the turns that just slid out of view (#317)', () => {
     const ids = Array.from({ length: 292 }, (_, index) => `digest:evt-${String(index).padStart(6, '0')}`);
     const stub = renderBrowseStub('digest', ids);
