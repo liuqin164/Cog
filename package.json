@@ -18,6 +18,9 @@
     "./internal": {
       "import": "./dist/internal.js",
       "types": "./dist/internal.d.ts"
+    },
+    "./web": {
+      "import": "./dist/shell/plugins/web.js"
     }
   },
   "bin": {

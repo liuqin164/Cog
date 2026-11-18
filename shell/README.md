@@ -44,7 +44,15 @@ plugin (`{ name, inject?, provide?, apply }`, the host's own API in `src/plugins
 
 ## Web tools (#225)
 
-The resident registers three read-only tools from `src/plugins/web.ts`:
+Web access is an optional plugin, not part of the default resident. `/plugins` does not list it
+and `web_search`, `web_fetch` and `web_recall` do not exist until the owner registers it:
+
+```text
+/plugins add cogmem/web
+```
+
+After the restart it registers the same three read-only tools from `src/plugins/web.ts` and adds
+their three names to the cage's whitelist:
 
 - **`web_search`** — Exa's free MCP endpoint first, DuckDuckGo's HTML endpoint as fallback; either
   can be disabled. Results over 30,000 characters are cached and paged with `web_recall`.
@@ -54,7 +62,8 @@ The resident registers three read-only tools from `src/plugins/web.ts`:
 - **`web_recall`** — read a cached `responseId` by `offset`/`limit` (at most 30,000 characters per
   page) or `findText`. Cache entries expire after one hour.
 
-The optional `<dataDir>/web.json` turns either backend off; a missing file leaves both on:
+Search needs `<dataDir>/web.json`; a missing file leaves both search backends off, so a fresh
+opt-in never sends a query anywhere until the owner enables one:
 
 ```json
 { "search": { "exa": { "enabled": true }, "duckduckgo": { "enabled": true } } }
@@ -133,9 +142,9 @@ existing brain once that provider exists.
 ## Self-modification (#236)
 
 When the companion writes or installs its own plugin, it is changing the thing that runs it. The
-shape is fixed before the pipeline (#228 item 5) exists: **one self-change is one small diff that
-`git revert` can undo, with its own test gate and its own acceptance point.** A long session is not
-the unit of self-modification; a commit is.
+shape is fixed: **one self-change is one small diff that `git revert` can undo, with its own test
+gate and its own acceptance point.** A long session is not the unit of self-modification; a commit
+is.
 
 The measurement behind this is on #236. Across 94 completed T3/Codex turns (51 sessions, 2026-11-14
 to 11-16, one model), 46 (48.9%) ended without a clean visible final answer: 18 conversation recaps
@@ -157,9 +166,6 @@ So the rule is about the thread, not the token count:
   user-visible effect), not one acceptance at the end of a batch.
 - **Fresh thread after an abnormal ending** — a recap or thinking-only ending is a signal to start a
   new thread with the todo list, not to continue the one that produced it.
-
-External-content rules still wait for the user's approval (#228 item 5); this section fixes only the
-shape of the change.
 
 ## `install`: the F21 bootstrap (#203)
 
@@ -333,13 +339,6 @@ numbers.
 - `src/proposals.ts` — command proposals (spec §7): the registry the agent's tool records into, and the
   one execution entry `executeProposal`, gated on a user-confirmation event. The shell's `confirmProposal`
   is its only caller, and it dispatches through `runCommand`, never a second dispatcher.
-- `src/hygiene.ts` — the self-written/skill/plugin/rule gate (#228 item 5): size, shape, secret and
-  hidden-character checks, a deterministic score, the #236 small-diff cap, and the rule that a plugin
-  proposal or an external-sourced rule waits for the owner through the existing question suspension.
-  `propose_self_change` still only records; `src/self-change.ts` is the separate applier (#291) that
-  takes an owner-approved plugin proposal, snapshots `plugins.json` and the target files, writes and
-  registers it, and restores the snapshot on the next boot if the plugin did not load. A rule or skill
-  proposal has no apply path, and a proposal without the owner's approval is refused.
 - `src/model/routes.ts` / `router.ts` — the named-route store (`0600`), the redaction helpers, and the
   switchable provider the resident's `model` service is.
 - `src/channels/terminal.ts` — the self-owned terminal channel (line mode, for `--no-terminal`-off residents).

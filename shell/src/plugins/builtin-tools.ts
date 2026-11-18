@@ -357,16 +357,6 @@ function definitions(
       description: 'Read a UTF-8 text file inside the workspace, or a ledger event by mem:<eventId>. Output is capped at 256 KiB.',
       replay: 'safe',
       parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
-      rehearse({ args }) {
-        const requested = asString(args, 'path');
-        const eventId = memoryEventId(requested);
-        if (eventId !== undefined) {
-          if (!ledger.kernel) throw new Error('memory_unavailable: this shell has no kernel attached');
-          return `would read memory event ${eventId}`;
-        }
-        const path = insideWorkspace(workspaceRoot, requested, dataDir);
-        return `would read ${path}`;
-      },
       execute({ args }) {
         const requested = asString(args, 'path');
         const eventId = memoryEventId(requested);
@@ -385,13 +375,6 @@ function definitions(
         type: 'object',
         properties: { path: { type: 'string' }, content: { type: 'string' } },
         required: ['path', 'content'],
-      },
-      rehearse({ args }) {
-        const requested = asString(args, 'path');
-        refuseMemoryWrite(requested, 'write', ledger.trace);
-        const path = insideWorkspace(workspaceRoot, requested, dataDir);
-        const content = asString(args, 'content', false);
-        return `would write ${Buffer.byteLength(content)} bytes to ${path}`;
       },
       execute({ args }) {
         const requested = asString(args, 'path');
@@ -412,14 +395,6 @@ function definitions(
         properties: { path: { type: 'string' }, old_string: { type: 'string' }, new_string: { type: 'string' } },
         required: ['path', 'old_string', 'new_string'],
       },
-      rehearse({ args }) {
-        const requested = asString(args, 'path');
-        refuseMemoryWrite(requested, 'edit', ledger.trace);
-        const path = insideWorkspace(workspaceRoot, requested, dataDir);
-        asString(args, 'old_string');
-        asString(args, 'new_string', false);
-        return `would edit ${path}`;
-      },
       execute({ args }) {
         const requested = asString(args, 'path');
         refuseMemoryWrite(requested, 'edit', ledger.trace);
@@ -439,11 +414,6 @@ function definitions(
       replay: 'never',
       description: 'Run a bash command in the workspace, 30s timeout by default. It runs with no network access and sees only system directories and the workspace: the shell data directory and the operator home are not mounted, and only a small variable allowlist reaches the child. stdout/stderr are combined; the last 2000 lines or 50 KiB (whichever is hit first) are returned, and the full text is written under .cogmem-shell/bash-output/ and named in the result. A non-zero exit is an error. The optional `timeout` is in seconds.',
       parameters: { type: 'object', properties: { command: { type: 'string' }, timeout: { type: 'number' } }, required: ['command'] },
-      rehearse({ args }) {
-        const command = asString(args, 'command');
-        resolveBashTimeoutMs(args);
-        return `would run: ${command}`;
-      },
       execute({ args, signal }) {
         const command = asString(args, 'command');
         const timeoutMs = resolveBashTimeoutMs(args);

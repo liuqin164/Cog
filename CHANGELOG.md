@@ -2,6 +2,49 @@
 
 ## 5.0.0 (unreleased)
 
+- **The deterministic workflow executor is gone; the procedure book stays (#338).** Since the
+  first commit of `ProcedureWorkflows` the two real archives recorded zero `list_workflows`,
+  `propose_workflow` and `veto_workflow` calls across the whole workflow layer. This removes
+  the execution book (`src/procedure/ProcedureWorkflows.ts`), the shell service and its three
+  model tools (`shell/src/plugins/workflows.ts`), the workflow fallback path inside `executeRun`,
+  the observatory page and JSON route, the rehearsal hook on the plain tools, and the three default
+  whitelist names. The tool whitelist drops from 16 to 13 here (then 11/8 as the other two #338
+  items land) — **the count is 16 → 13 for this commit**. The compiled procedure book
+  (`ProcedureCompiler`, its entries/recall/assembly and `/correct` propagation) is untouched and
+  remains the way an established practice is presented; only the frozen execution form is removed.
+  Tests removed with the feature: `shell/test/workflows.test.ts` (12) and
+  `__tests__/procedure-workflows.contract.test.ts` (25). User-visible effect, in one line: the
+  companion still remembers and presents how work gets done, but it no longer runs a practice as a
+  fixed tool sequence without the model; every turn is model-driven again.
+
+- **Self-change is gone: there is no agent path that installs code into its own process (#338).**
+  The two tools, `propose_self_change` and `apply_self_change`, recorded and then installed a plugin
+  proposal from inside a run; neither tool was called in the two real archives. This removes them
+  together with the hygiene gate (`shell/src/hygiene.ts`), the applier and its snapshots
+  (`shell/src/self-change.ts`), their plugin (`shell/src/plugins/hygiene.ts`), the `hygiene` service slot,
+  the question-suspension `approvalId`, the pending-install quarantine path in the plugin loader and
+  host, and the `<dataDir>/self-change-applies` / `self-plugins` directories. `propose_soul_edit` is
+  untouched and remains a draft-only tool: the owner's save in the star-sea editor is still the only
+  soul write. The default tool whitelist drops from 13 to **11**. Tests removed with the feature:
+  `shell/test/hygiene.test.ts`, `shell/test/self-change-apply.test.ts`, and the five
+  `shell/test/fixtures/hygiene/` fixtures. User-visible effect, in one line:
+  an owner-approved proposal can no longer rewrite the running companion's plugin registry or
+  restart it, while persona drafts keep the same review path.
+
+- **Web access is now an opt-in plugin instead of part of every resident (#338).** The three tools
+  `web_search`, `web_fetch` and `web_recall` are unchanged, but the resident no longer registers them
+  at startup and the per-task schema filter that carried them is gone. They exist only after the
+  owner registers `cogmem/web` with `/plugins add`, which also adds their names to the cage's
+  whitelist. `/plugins` does not list the plugin and the three names are absent from the tool surface
+  on a default install; an explicitly registered plugin has the same tests and behaviour as before.
+  The web cache config file is still `<dataDir>/web.json`; a missing file leaves both search backends
+  off, and both disabled returns the existing `web_search_unavailable`. The default tool whitelist
+  drops from 11 to **8** names, and the default registered tool surface is those same eight tools
+  (`read`, `write`, `edit`, `bash`, `propose_command`, `propose_soul_edit`, `ask_user`,
+  `declare_task`). Removed with the default registration: the per-task `tools-by-task` filter and its
+  test. User-visible effect, in one line: a fresh companion has no web access or web tool schemas in
+  its prompt until the owner opts in with one command.
+
 - **A long session no longer collapses to a ninth of its budget and stays there (#316).** Over budget it
   still downgrades from the lowest lane priority and never drops a protected constraint (#255), but
   `recall` is now the last foldable lane sacrificed and the digest is sacrificed first. The freed

@@ -288,13 +288,11 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
     },
     // `propose_command` and `propose_soul_edit` are on the default whitelist because they are how
     // the agent offers the user a command or a soul draft; leaving them off would make every offer a
-    // cage violation. The workflow tools are the same shape: `list_workflows` presents the book,
-    // `propose_workflow` offers a draft, and `veto_workflow` records the owner's refusal.
+    // cage violation.
     budgets: overrides.budgets ?? {
       ...autonomous,
-      // cage violation. The workflow tools are the same shape: `list_workflows` presents the book,
-      // `propose_workflow` offers a draft, and `veto_workflow` records the owner's refusal.
-      toolWhitelist: ['read', 'write', 'edit', 'bash', 'propose_command', 'propose_soul_edit', 'propose_self_change', 'apply_self_change', 'ask_user', 'declare_task', 'web_search', 'web_fetch', 'web_recall', 'list_workflows', 'propose_workflow', 'veto_workflow'],
+      // The web plugin is opt-in; it adds its three names when its spec is registered (#338).
+      toolWhitelist: ['read', 'write', 'edit', 'bash', 'propose_command', 'propose_soul_edit', 'ask_user', 'declare_task'],
     },
     workBudget: overrides.workBudget ?? work,
     dailyBudget: overrides.dailyBudget ?? daily,

@@ -7,7 +7,7 @@ import { makeTempDir } from './helpers/tmp.js';
 
 /**
  * #242: one correction is global. The probe found the profile book updated while the procedure book,
- * workflow, intention, Atlas and default recall kept presenting the replaced value as current.
+ * intention, Atlas and default recall kept presenting the replaced value as current.
  *
  * Both cases below correct through the same kernel face the shell's `/correct` calls
  * (`kernel.profile.correct`), then run the system's own triggers. The assertions name each derived
@@ -107,7 +107,7 @@ describe('a corrected preference reaches every subsequent read', () => {
 });
 
 describe('a corrected practice cannot leave an old plan current', () => {
-  test('release: procedure, workflow, intention, Atlas and assembly are new or explicitly stale', () => {
+  test('release: procedure, intention, Atlas and assembly are new or explicitly stale', () => {
     const projectId = 'correction-release';
     const oldValue = '发布前先跑测试';
     const newValue = '发布前不跑测试';
@@ -136,15 +136,6 @@ describe('a corrected practice cannot leave an old plan current', () => {
     kernel.procedures.compile({ projectId, now: T0 + 200 });
     const procedure = kernel.procedures.entries({ projectId })[0]!;
     expect(procedure.status).toBe('current');
-
-    const workflow = kernel.workflows.propose({
-      projectId,
-      entryId: procedure.entryId,
-      steps: [{ tool: 'bash', args: { command: 'bun test' }, success: { type: 'not_error' } }],
-      now: T0 + 300,
-    });
-    kernel.workflows.dryRun({ projectId, entryId: workflow.entryId, passed: true, reason: 'rehearsed', now: T0 + 310 });
-    expect(kernel.workflows.activate({ projectId, entryId: workflow.entryId, now: T0 + 320 }).status).toBe('active');
 
     kernel.recordRawEvent({
       projectId,
@@ -188,14 +179,6 @@ describe('a corrected practice cannot leave an old plan current', () => {
     expect(assembly.items.some((item) => item.kind === 'procedure')).toBe(false);
     expect(assembly.items.some((item) => item.kind === 'preference' && item.text.includes(newValue))).toBe(true);
     expect(assembly.text).not.toContain(oldValue);
-
-    const staleWorkflow = kernel.workflows.list({ projectId })[0]!;
-    expect(staleWorkflow.status).toBe('stale');
-    expect(staleWorkflow.staleReason).toBe('source_corrected');
-    expect(staleWorkflow.steps).toEqual(workflow.steps);
-    expect(kernel.workflows.match({ projectId, task: '帮我发布 npm 包' })).toBeUndefined();
-    expect(tick.executed.workflowsMarkedStale).toBe(1);
-    expect(kernel.workflows.audit({ projectId }).some((row) => row.eventType === 'PROCEDURE_WORKFLOW_STALE')).toBe(true);
 
     const intention = kernel.intentions.list({ projectId })[0]!;
     expect(intention.status).toBe('stale');

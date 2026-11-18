@@ -63,7 +63,7 @@ describe('/correct propagates through the system triggers', () => {
     }
   });
 
-  test('release: procedure, workflow and intention are new or stale after /correct', async () => {
+  test('release: procedure and intention are new or stale after /correct', async () => {
     const shell = await startedShell(makeTempDir());
     const projectId = shell.config.projectId;
     const oldValue = '发布前先跑测试';
@@ -95,14 +95,6 @@ describe('/correct propagates through the system triggers', () => {
       shell.kernel.profile.compile({ projectId, now: base + 100 });
       shell.kernel.procedures.compile({ projectId, now: base + 200 });
       const procedure = shell.kernel.procedures.entries({ projectId })[0]!;
-      const workflow = shell.kernel.workflows.propose({
-        projectId,
-        entryId: procedure.entryId,
-        steps: [{ tool: 'bash', args: { command: 'bun test' }, success: { type: 'not_error' } }],
-        now: base + 300,
-      });
-      shell.kernel.workflows.dryRun({ projectId, entryId: workflow.entryId, passed: true, reason: 'rehearsed', now: base + 310 });
-      shell.kernel.workflows.activate({ projectId, entryId: workflow.entryId, now: base + 320 });
       shell.kernel.recordRawEvent({
         projectId,
         threadId: 'release-intention',
@@ -121,7 +113,6 @@ describe('/correct propagates through the system triggers', () => {
       shell.kernel.runMaintenanceTick({ projectId, now: base + 700 });
 
       expect(shell.kernel.procedures.entries({ projectId })[0]!.status).toBe('stale');
-      expect(shell.kernel.workflows.list({ projectId })[0]!.status).toBe('stale');
       expect(shell.kernel.intentions.list({ projectId })[0]!.status).toBe('stale');
       const assembly = shell.kernel.procedures.assembleTask({ projectId, task: '帮我发布 npm 包', now: base + 800 });
       expect(assembly.text).not.toContain(oldValue);

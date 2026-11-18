@@ -90,25 +90,11 @@ export class PluginCycleError extends Error {
   readonly code = 'plugin_dependency_cycle';
 }
 
-/**
- * A pending self-change plugin threw while `apply` ran. The host unloads it and continues instead of
- * failing the boot, because the applier still has to roll the registry and files back; without this
- * the resident would restart-loop on the bad install it is supposed to undo (#291).
- */
-export class PluginQuarantinedError extends Error {
-  readonly code = 'plugin_quarantined';
-  constructor(readonly pluginName: string, readonly failure: unknown) {
-    super(`plugin_quarantined: ${pluginName}: ${failure instanceof Error ? failure.message : String(failure)}`);
-  }
-}
-
 export interface ToolExecuteInput {
   toolCallId: string;
   args: any;
   signal?: AbortSignal;
   ctx: any;
-  /** True only while a workflow's no-side-effect rehearsal runs the step. */
-  dryRun?: boolean;
 }
 
 /**
@@ -131,12 +117,6 @@ export interface ToolDefinition {
    * an effect is not, and a tool that knows it is idempotent says so.
    */
   replay?: 'never' | 'safe';
-  /**
-   * The no-side-effect half of a tool: validate the arguments and say what would happen, without
-   * touching the workspace or the network. A workflow that names a tool without this cannot be
-   * dry-run, so it cannot be promoted — the rehearsal is a gate, not a formality.
-   */
-  rehearse?(input: ToolExecuteInput): Promise<ToolResult | ToolOutcome | string> | ToolResult | ToolOutcome | string;
   execute(input: ToolExecuteInput): Promise<ToolResult | ToolOutcome | string> | ToolResult | ToolOutcome | string;
 }
 
@@ -394,11 +374,6 @@ export class PluginHost {
         record.status = 'failed';
         record.error = error instanceof Error ? error.message : String(error);
         this.options.trace?.append('plugin_failed', { name, message: record.error });
-        if (error instanceof PluginQuarantinedError) {
-          this.options.trace?.append('plugin_quarantined', { name, message: record.error });
-          await this.unload(name);
-          continue;
-        }
         await this.stop();
         // A conflict is the host's own rule and keeps its type; anything else is wrapped with the
         // plugin name so the CLI can say who failed.

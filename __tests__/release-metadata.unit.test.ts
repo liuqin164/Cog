@@ -33,7 +33,7 @@ function packageJson(): {
   name: string;
   version: string;
   scripts: Record<string, string>;
-  exports: Record<string, { import: string; types: string }>;
+  exports: Record<string, { import: string; types?: string }>;
   bin: Record<string, string>;
   files: string[];
   packageManager?: string;
@@ -174,12 +174,12 @@ describe('core release metadata', () => {
     expect(files.filter((file) => file.startsWith('dist/'))).toEqual([]);
   });
 
-  test('package exposes stable public exports and keeps internal on explicit subpath only', () => {
+  test('package exposes stable public exports and keeps internal and optional plugins on explicit subpaths', () => {
     const manifest = packageJson();
 
     expect(manifest.main).toBe('./dist/public.js');
     expect(manifest.types).toBe('./dist/public.d.ts');
-    expect(Object.keys(manifest.exports).sort()).toEqual(['.', './internal']);
+    expect(Object.keys(manifest.exports).sort()).toEqual(['.', './internal', './web']);
     expect(manifest.exports['.']).toEqual({
       import: './dist/public.js',
       types: './dist/public.d.ts',
@@ -188,6 +188,7 @@ describe('core release metadata', () => {
       import: './dist/internal.js',
       types: './dist/internal.d.ts',
     });
+    expect(manifest.exports['./web']).toEqual({ import: './dist/shell/plugins/web.js' });
   });
 
   test('type command aliases the existing typecheck gate for Bun workspace filters', () => {

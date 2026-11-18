@@ -80,11 +80,8 @@ export interface Suspension {
     /** The arithmetic in one line, so the number is auditable instead of magic. */
     basis: string;
   };
-  /**
-   * Question kind: what was asked and a short reference to what it is about. `approvalId` names a
-   * hygiene proposal (#228 item 5) when the answer decides whether an external rule may take effect.
-   */
-  question?: { text: string; contextRef?: string; approvalId?: string };
+  /** Question kind: what was asked and a short reference to what it is about. */
+  question?: { text: string; contextRef?: string };
   /** Set when the owner's answer was delivered; cleared when the resumed run settles. */
   answeredAt?: number;
 }

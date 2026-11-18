@@ -86,6 +86,14 @@ export class RunCage implements RunBudget {
     return this.config.toolWhitelist.includes(name);
   }
 
+  /** An optional plugin adds its own tool names when it is explicitly registered. */
+  allowTools(names: readonly string[]): void {
+    if (this.config.toolWhitelist === null) return;
+    for (const name of names) {
+      if (!this.config.toolWhitelist.includes(name)) this.config.toolWhitelist.push(name);
+    }
+  }
+
   /** The registry-side half: every `beforeToolCall` is vetoed here, and the veto leaves a trace. */
   register(bus: EventBus): void {
     bus.on('beforeToolCall', (event: { toolName?: string; toolCallId?: string }) => {
