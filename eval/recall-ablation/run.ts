@@ -53,8 +53,8 @@ const ARMS: Arm[] = ['all_current', 'raw_atlas_compiled', 'raw_atlas'];
 const POLICIES: Record<Arm, { allowedLanes: string[]; preferredLanes: string[] } | undefined> = {
   raw_atlas: { allowedLanes: ['graph', 'raw_source'], preferredLanes: ['graph', 'raw_source'] },
   raw_atlas_compiled: {
-    allowedLanes: ['graph', 'compiled', 'raw_source'],
-    preferredLanes: ['graph', 'compiled', 'raw_source'],
+    allowedLanes: ['graph', 'raw_source'],
+    preferredLanes: ['graph', 'raw_source'],
   },
   all_current: undefined,
 };
@@ -325,7 +325,7 @@ function renderMarkdown(input: {
     '',
     '- Corpus: `eval/recall-baseline/corpus.ts` — 20 memory targets and 10 practice targets.',
     '- Memory seeds are written through `KernelAgentMemoryBackend.rememberTurnWithResult()`; practice seeds through `MemoryKernel.recordTaskEvent()` + `procedures.compile()`. No SQL inserts the corpus.',
-    '- `raw_atlas` uses `retrievalPolicy.allowedLanes = [graph, raw_source]`; `raw_atlas_compiled` states all three lanes; `all_current` omits the policy, which is the current `recall()` path.',
+    '- After #343 every arm measures the same raw-ledger + Atlas + binding-graph path. `raw_atlas` states those two lanes, `raw_atlas_compiled` states them explicitly with the retired token, and `all_current` omits the policy.',
     `- Each arm is warmed once, then measured over ${MEASURED_PASSES} passes of all 30 queries. Ranks are asserted stable across passes.`,
     '- No product code is changed. The scratch database and temporary files live under `.cogmem/`, which is gitignored.',
     '',
@@ -393,9 +393,9 @@ function renderMarkdown(input: {
   const offAll = metric(allRanks(off.memory, off.procedure));
   const delta5 = ((100 * offAll.recall5) / offAll.n) - ((100 * currentAll.recall5) / currentAll.n);
   lines.push(
-    `- Turning the compiled lane off moved all-corpus recall@5 by ${delta5 >= 0 ? '+' : ''}${delta5.toFixed(1)} points ` +
+    `- The compiled lane was deleted (#343), so the arms differ only by policy spelling; all-corpus recall@5 moved ${delta5 >= 0 ? '+' : ''}${delta5.toFixed(1)} points ` +
       `(${percent(currentAll.recall5, currentAll.n)} → ${percent(offAll.recall5, offAll.n)}).`,
-    '- This is a measurement, not a keep/delete decision. The decision belongs to Ryu in #343 after these numbers land.',
+    '- The deletion was decided by Ryu in #343; this run is the post-deletion regression measurement.',
     '',
   );
   return lines.join('\n');

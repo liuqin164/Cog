@@ -188,7 +188,7 @@ Then re-add the `/*! … */` header, copy it to `src/observatory/web/three.bundl
 
 The recall page reads decisions that a real recall already stored (#187). The producer is the default
 lane itself: `KernelAgentMemoryBackend.recall()` is where the CLI,
-`recallPack()` and explain's re-run all arrive, so one row is written there per recall rather than at
+explain's re-run all arrive, so one row is written there per recall rather than at
 each call site. `RecallDecisionTrace` owns the payload, and it carries ids, reasons and the lane:
 the question, the lane that answered, why, the ids the recall returned, and the ids each gate
 withheld with the reason it withheld them. An item's text is never in a row — a secret-marked turn is

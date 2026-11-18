@@ -42,8 +42,6 @@ test('InstalledBatchProcessor emits source and ingest progress events', async ()
     expect(events.map((event) => event.stage)).toContain('source:parsed');
     expect(events.map((event) => event.stage)).toContain('source:ingest:start');
     expect(events.map((event) => event.stage)).toContain('source:ingest:complete');
-    expect(events.map((event) => event.stage)).toContain('offline:start');
-    expect(events.map((event) => event.stage)).toContain('offline:complete');
   } finally {
     cursorStore.close();
   }

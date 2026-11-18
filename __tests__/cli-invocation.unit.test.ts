@@ -415,7 +415,6 @@ test('the JSON contract in --help names the array keys the commands actually emi
     ['memory.ts', ['graph-search', '--project', 'p', '--query', 'x', '--config', config]],
     ['episode.ts', ['list', '--project', 'p', '--config', config]],
     ['prospective.ts', ['list', '--project', 'p', '--config', config]],
-    ['compact.ts', ['--dry-run', '--config', config]],
   ];
   const undocumented: string[] = [];
   for (const [file, args] of cases) {

@@ -300,15 +300,6 @@ describe('compile-done', () => {
     expect(seen[0]!.payload).toMatchObject({ kind: 'dream', runId: result.runId, skipped: true });
   });
 
-  test('a finished offline consolidation is announced', async () => {
-    const seen: KernelEvent[] = [];
-    const subscription = kernel.events.subscribe({ types: ['compile-done'] }, (event) => seen.push(event));
-    await kernel.consolidate({ projectId: 'alpha' });
-    subscription.unsubscribe();
-    expect(seen.length).toBe(1);
-    expect(seen[0]!.projectId).toBe('alpha');
-    expect(seen[0]!.payload).toMatchObject({ kind: 'consolidation' });
-  });
 });
 
 describe('the host API face is the same stream', () => {

@@ -57,10 +57,10 @@ function peakRssBytes(): number {
 async function waitForEmbeddings(kernel: ReturnType<typeof createMemoryKernel>, expected: number): Promise<void> {
   const deadline = Date.now() + 120_000;
   while (Date.now() < deadline) {
-    if (kernel.neuronEmbeddingStore.getProgress().total >= expected) return;
+    if (kernel.eventEmbeddingStore.getProgress().completed >= expected) return;
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
   }
-  throw new Error(`embeddings did not settle: ${kernel.neuronEmbeddingStore.getProgress().total}/${expected}`);
+  throw new Error(`embeddings did not settle: ${kernel.eventEmbeddingStore.getProgress().completed}/${expected}`);
 }
 
 async function main(): Promise<void> {
@@ -100,7 +100,6 @@ async function main(): Promise<void> {
   const semanticIndex = kernel.semanticIndexEnabled();
 
   const memoryEventToSeed = new Map<string, string>();
-  const neuronToSeed = new Map<string, string>();
   const neuronIds = new Set<string>();
   for (const [index, seed] of shuffled(MEMORY_SEEDS).entries()) {
     const result = await backend.rememberTurnWithResult({
@@ -113,7 +112,6 @@ async function main(): Promise<void> {
     });
     if (!result.compiledNeuronId || result.duplicate) throw new Error(`memory seed ${seed.id} did not compile: ${result.reason}`);
     neuronIds.add(result.compiledNeuronId);
-    neuronToSeed.set(result.compiledNeuronId, seed.id);
     memoryEventToSeed.set(result.rawEventIds[0]!, seed.id);
   }
   await waitForEmbeddings(kernel, MEMORY_SEEDS.length);
@@ -137,12 +135,8 @@ async function main(): Promise<void> {
     return [entry.entryId, seed?.id ?? '?'];
   }));
 
-  const firstPass = await kernel.reEmbed(MEMORY_PROJECT);
-  const secondPass = await kernel.reEmbed(MEMORY_PROJECT);
-
   const queryStarted = performance.now();
   const memoryRanks = new Map<string, number | null>();
-  const evidenceRanks = new Map<string, number | null>();
   for (const seed of MEMORY_SEEDS) {
     const result = backend.recall({
       agentId: AGENT_ID,
@@ -158,19 +152,6 @@ async function main(): Promise<void> {
       return eventId ? (memoryEventToSeed.get(eventId) ?? '?') : '?';
     });
     memoryRanks.set(seed.id, rankOf(order, seed.id));
-    // The kernel's own evidence lane (`BrainRecall`), which does consult the vector index. The
-    // shell's `recall()` sits above it and can return `universe_navigation` first; keeping both
-    // numbers is what makes that difference visible instead of averaged away.
-    const evidence = kernel.evidenceFor(seed.query, {
-      projectId: MEMORY_PROJECT,
-      limit: MEMORY_SEEDS.length,
-      includeRawEvidence: true,
-      now: EVAL_NOW,
-      timeZone: 'UTC',
-      localDateNow: '2026-11-16',
-    });
-    const evidenceOrder = evidence.rawEvidence.map((neuron) => neuronToSeed.get(neuron.id) ?? '?');
-    evidenceRanks.set(seed.id, rankOf(evidenceOrder, seed.id));
   }
   const procedureRanks = new Map<string, number | null>();
   for (const seed of PROCEDURE_SEEDS) {
@@ -189,7 +170,6 @@ async function main(): Promise<void> {
     return { n: ranks.size, recall1: one / ranks.size, recall5: five / ranks.size };
   };
   const memory = metric(memoryRanks);
-  const evidence = metric(evidenceRanks);
   const procedure = metric(procedureRanks);
   const all = { n: 30, recall1: (memory.recall1 * 20 + procedure.recall1 * 10) / 30, recall5: (memory.recall5 * 20 + procedure.recall5 * 10) / 30 };
   const rssMb = Math.round(process.memoryUsage().rss / 1048576);
@@ -203,9 +183,7 @@ async function main(): Promise<void> {
     semanticIndex,
     loadMs,
     queryMs,
-    reEmbed: { first: firstPass, second: secondPass },
     metrics: { memory, procedure, all },
-    evidenceLane: evidence,
     rssMb,
     peakMb,
     misses: {
@@ -221,12 +199,10 @@ async function main(): Promise<void> {
     '',
     `- model: \`${EMBEDDING_MODEL}\` (${EMBEDDING_DIMENSIONS}d), semanticIndex=${semanticIndex}`,
     `- load: ${loadMs} ms; 30 queries: ${queryMs} ms; RSS ${rssMb} MiB; peak ${peakMb} MiB`,
-    `- reEmbed: first ${firstPass.processed} processed / ${firstPass.remaining} remaining; second ${secondPass.processed} / ${secondPass.remaining}`,
     '',
     '| corpus | recall@1 | recall@5 |',
     '| --- | ---: | ---: |',
     `| memory (n=${memory.n}) | ${pct(memory.recall1)} | ${pct(memory.recall5)} |`,
-    `| memory — kernel evidence lane (n=${evidence.n}) | ${pct(evidence.recall1)} | ${pct(evidence.recall5)} |`,
     `| procedure (n=${procedure.n}) | ${pct(procedure.recall1)} | ${pct(procedure.recall5)} |`,
     `| all (n=30) | ${pct(all.recall1)} | ${pct(all.recall5)} |`,
     '',

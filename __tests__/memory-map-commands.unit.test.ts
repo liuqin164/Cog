@@ -194,7 +194,7 @@ describe('memory_map.v1 data lane routes name something callable', () => {
       expect(missing).toEqual([]);
       // Guard the guard: a parser that silently matched nothing would pass.
       expect(checked.length).toBeGreaterThanOrEqual(12);
-      expect(checked).toContain('agent_recall_pack.recallPack');
+      expect(checked).toContain('agent_recall_pack.recall');
       expect(checked).toContain('memory_atlas.graphExplore');
     });
   });

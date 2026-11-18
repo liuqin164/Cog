@@ -74,7 +74,7 @@ export function parseCliArgs(argv: readonly string[], options: CliParseOptions):
  * Answer `--help` here rather than in each entry point.
  *
  * The checker already allowed the flag; nothing acted on it, so five commands answered
- * `--help` by doing their work (`update` ran an update check, `compact`, `prospective` and
+ * `--help` by doing their work (`update` ran an update check, `prospective` and
  * `strategy` opened a database). Each entry point that
  * fixed this added its own branch, which is twenty-two chances to forget — one place every
  * entry point already routes through is where it belongs.

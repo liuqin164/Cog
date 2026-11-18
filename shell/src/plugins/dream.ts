@@ -34,7 +34,6 @@ export interface DreamResult {
   sourceRefs: MemorySourceRef[];
   summary: string;
   dreamEventId?: string;
-  compiledNeuronId?: string;
   kernelNightRan: boolean;
   kernelNightSkippedReason?: string;
 }
@@ -93,22 +92,11 @@ export class DreamService {
       },
       timestamp: now,
     });
-    const neuron = await kernel.ingest({
-      content: summary,
-      projectId,
-      source: agentId,
-      sourceType: 'rule_extraction',
-      type: 'semantic_consolidation',
-      sourceRefs: refs,
-      tags: ['companion', 'dream', `local_date:${localDate}`],
-      createdAt: now,
-    });
     this.options.trace?.append('dream_integrated', {
       localDate,
       eventCount: events.length,
       sourceRefCount: refs.length,
       dreamEventId: dreamEvent.eventId,
-      compiledNeuronId: neuron.id,
       kernelNightRan,
     });
     return {
@@ -117,7 +105,6 @@ export class DreamService {
       sourceRefs: refs,
       summary,
       dreamEventId: dreamEvent.eventId,
-      compiledNeuronId: neuron.id,
       kernelNightRan,
       kernelNightSkippedReason,
     };

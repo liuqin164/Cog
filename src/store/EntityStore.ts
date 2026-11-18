@@ -604,10 +604,13 @@ export class EntityStore {
     mentionType?: EntityMentionRecord['mentionType'];
     createdAt?: number;
   }): EntityMentionRecord {
-    const neuronScope = input.neuronId ? this.requireLiveNeuronScope(input.neuronId) : undefined;
-    const projectId = neuronScope ?? input.projectId;
-    if (projectId === undefined) throw new Error('entity_mention_project_scope_required');
-    if (input.projectId !== undefined && input.projectId !== projectId) throw new Error('entity_mention_project_scope_mismatch');
+    const neuronScope = input.neuronId && this.hasTable('memory_events')
+      ? this.requireLiveNeuronScope(input.neuronId)
+      : undefined;
+    const projectId = neuronScope ?? input.projectId ?? '';
+    if (neuronScope !== undefined && input.projectId !== undefined && input.projectId !== neuronScope) {
+      throw new Error('entity_mention_project_scope_mismatch');
+    }
     this.assertEntityVisibleInProject(input.entityId, projectId, input.neuronId);
     const record: EntityMentionRecord = {
       mentionId: `ement-${randomUUID()}`,
@@ -825,8 +828,10 @@ export class EntityStore {
     sourceNeuronId: string;
     createdAt?: number;
   }): EntityAttributeRecord {
-    const projectId = this.requireLiveNeuronScope(input.sourceNeuronId);
-    this.assertEntityVisibleInProject(input.entityId, projectId, input.sourceNeuronId);
+    if (this.hasTable('memory_events')) {
+      const projectId = this.requireLiveNeuronScope(input.sourceNeuronId);
+      this.assertEntityVisibleInProject(input.entityId, projectId, input.sourceNeuronId);
+    }
     const now = input.createdAt ?? Date.now();
     const record: EntityAttributeRecord = {
       attributeId: `eattr-${randomUUID()}`,
@@ -860,13 +865,12 @@ export class EntityStore {
   }
 
   listAttributes(entityId: string, attributeKey?: string, projectId?: string): EntityAttributeRecord[] {
-    const hasNeurons = this.hasTable('neurons');
     const scopeClause = projectId === undefined
       ? ''
-      : hasNeurons
-        ? ` AND (source_neuron_id IN (SELECT id FROM neurons WHERE COALESCE(project_id,'')=?) OR (source_neuron_id IS NULL AND EXISTS (SELECT 1 FROM entity_instances e WHERE e.instance_id=entity_attributes.entity_id AND json_extract(e.metadata_json,'$.projectId')=?)))`
+      : this.hasTable('memory_events')
+        ? ` AND (source_neuron_id IN (SELECT event_id FROM memory_events WHERE COALESCE(project_id,'')=?) OR (source_neuron_id IS NULL AND EXISTS (SELECT 1 FROM entity_instances e WHERE e.instance_id=entity_attributes.entity_id AND json_extract(e.metadata_json,'$.projectId')=?)))`
         : ` AND source_neuron_id IS NULL AND EXISTS (SELECT 1 FROM entity_instances e WHERE e.instance_id=entity_attributes.entity_id AND json_extract(e.metadata_json,'$.projectId')=?)`;
-    const scopeParams = projectId === undefined ? [] : hasNeurons ? [projectId, projectId] : [projectId];
+    const scopeParams = projectId === undefined ? [] : this.hasTable('memory_events') ? [projectId, projectId] : [projectId];
     const rows = attributeKey
       ? this.db.prepare(`
           SELECT * FROM entity_attributes
@@ -902,7 +906,7 @@ export class EntityStore {
     return this.db.transaction(() => {
       if (!this.isExclusiveToProject(input.sourceEntityId, input.projectId)
         || !this.isExclusiveToProject(input.targetEntityId, input.projectId)) throw new Error('entity_relation_project_scope_mismatch');
-      if (input.sourceNeuronId && this.requireLiveNeuronScope(input.sourceNeuronId) !== input.projectId) {
+      if (input.sourceNeuronId && this.hasTable('memory_events') && this.requireLiveNeuronScope(input.sourceNeuronId) !== input.projectId) {
         throw new Error('entity_relation_project_scope_mismatch');
       }
       const createdAt = input.createdAt ?? Date.now();
@@ -945,7 +949,9 @@ export class EntityStore {
     createdAt?: number;
   }): PendingEntityResolutionRecord {
     const now = input.createdAt ?? Date.now();
-    const projectScope = this.requireLiveNeuronScope(input.contextNeuronId);
+    const projectScope = this.hasTable('memory_events')
+      ? this.requireLiveNeuronScope(input.contextNeuronId)
+      : '';
     const record: PendingEntityResolutionRecord = {
       pendingId: `eper-${randomUUID()}`,
       referenceText: input.referenceText,
@@ -1130,8 +1136,8 @@ export class EntityStore {
   private requireLiveNeuronScope(neuronId: string): string {
     const row = this.db.prepare(`
       SELECT COALESCE(project_id,'') AS project_id
-      FROM neurons
-      WHERE id=? AND is_deleted=0
+      FROM memory_events
+      WHERE event_id=?
     `).get(neuronId) as { project_id: string } | null;
     if (!row) throw new Error('entity_provenance_neuron_not_live');
     return row.project_id;

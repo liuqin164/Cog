@@ -96,11 +96,9 @@ newest-first, and the order does not change between runs.
 | `events` | Ledger rows removed from the window. |
 | `derivedEntries` | Compiled-book rows outside the window whose `sourceRefs` cite it. |
 | `entryVersions` | Every version removed from the affected entry streams. |
-| `neurons` | Neurons sourced from a removed event. |
-| `facts` | Facts attached to a removed neuron. |
-| `synapses` | Synapses touching a removed neuron. |
-| `beliefs` | Beliefs sourced from a removed event or neuron. |
-| `entityMentions` | Mentions attached to a removed neuron. |
+| `facts` | Facts attached to a removed event. |
+| `beliefs` | Beliefs sourced from a removed event. |
+| `entityMentions` | Mentions attached to a removed event. |
 | `episodes` | Episodes overlapping the window. |
 | `frames` | Frames belonging to a removed episode. |
 

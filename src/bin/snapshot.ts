@@ -94,7 +94,7 @@ assertCliArgs(process.argv.slice(2), { usage: USAGE, extraFlags: ['config', 'db'
     const importer = new SnapshotImporter({
       // Use the dimension declared in config rather than instantiating a VectorStore
       // (which would try to load hnswlib-node and emit a noisy warning when unavailable).
-      expectedEmbeddingDimension: optionalPositiveIntegerArg(args, 'dimension') ?? loaded?.options.vectorDimension ?? config.vector.dimension,
+      expectedEmbeddingDimension: optionalPositiveIntegerArg(args, 'dimension') ?? config.vector.dimension,
     });
     const result = await importer.import(snapshotPath, dbPath, {
       dryRun: args['dry-run'] === true,

@@ -80,7 +80,7 @@ describe('one Workspace is one private scope', () => {
     // own scope. A `|| 'openclaw'` fallback is the defect this guard exists for: it
     // reads and writes a scope named after a host the product no longer integrates.
     const offenders: string[] = [];
-    for (const file of ['src/bin/memory.ts', 'src/bin/explain-recall.ts', 'src/bin/import-support.ts']) {
+    for (const file of ['src/bin/memory.ts', 'src/bin/import-support.ts']) {
       if (/\|\|\s*'(openclaw|hermes)'/.test(readFileSync(join(coreRoot, file), 'utf8'))) offenders.push(file);
     }
     expect(offenders).toEqual([]);

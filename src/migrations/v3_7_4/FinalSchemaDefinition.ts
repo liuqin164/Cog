@@ -43,75 +43,6 @@ export const FINAL_TABLES: readonly FinalSchemaObject[] = [
         status TEXT NOT NULL
       )` },
 
-  { type: "table", name: "neurons", table: "neurons", sql: `CREATE TABLE neurons (
-        id TEXT PRIMARY KEY,
-        content TEXT NOT NULL,
-        prev_hash TEXT NOT NULL,
-        self_hash TEXT NOT NULL,
-        timestamp INTEGER NOT NULL,
-        spatial_x REAL NOT NULL,
-        spatial_y REAL NOT NULL,
-        spatial_z REAL NOT NULL,
-        vector_blob BLOB,
-        project_id TEXT,
-        topic_path TEXT,
-        file_id TEXT,
-        file_path TEXT,
-        type TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-        last_activated INTEGER,
-        activation_count INTEGER NOT NULL DEFAULT 0,
-        aaak_summary TEXT,
-        status TEXT NOT NULL DEFAULT 'active',
-        tags TEXT,
-        file_size INTEGER,
-        mime_type TEXT,
-        original_name TEXT,
-        blob_path TEXT,
-        confidence REAL NOT NULL DEFAULT 1.0,
-        source_type TEXT,
-        source_event_id TEXT,
-        importance_level TEXT NOT NULL DEFAULT 'normal',
-        is_pinned INTEGER NOT NULL DEFAULT 0 CHECK (is_pinned IN (0, 1)),
-        stability REAL NOT NULL DEFAULT 1.0,
-        repetitions INTEGER NOT NULL DEFAULT 0,
-        procedural_link_json TEXT,
-        community_id TEXT,
-        last_reinforced_at INTEGER,
-        is_deleted INTEGER NOT NULL DEFAULT 0 CHECK (is_deleted IN (0, 1))
-      )` },
-
-  { type: "table", name: "synapses", table: "synapses", sql: `CREATE TABLE synapses (
-        source_id TEXT NOT NULL,
-        target_id TEXT NOT NULL,
-        project_id TEXT NOT NULL DEFAULT '',
-        type TEXT NOT NULL,
-        weight REAL NOT NULL,
-        created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-        updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-        PRIMARY KEY (source_id, target_id, type)
-      )` },
-
-  { type: "table", name: "anchors", table: "anchors", sql: `CREATE TABLE anchors (
-        id TEXT PRIMARY KEY,
-        neuron_count INTEGER NOT NULL,
-        created_at INTEGER NOT NULL,
-        prev_anchor_id TEXT,
-        summary_hash TEXT NOT NULL,
-        project_id TEXT,
-        version TEXT NOT NULL
-      )` },
-
-  { type: "table", name: "neurons_fts", table: "neurons_fts", sql: `CREATE VIRTUAL TABLE neurons_fts USING fts5(
-        id UNINDEXED,
-        content,
-        aaak_summary,
-        project_id UNINDEXED,
-        file_path UNINDEXED,
-        tokenize='unicode61'
-      )` },
-
   { type: "table", name: "memory_events_fts", table: "memory_events_fts", sql: `CREATE VIRTUAL TABLE memory_events_fts USING fts5(
         event_id UNINDEXED,
         text,
@@ -135,18 +66,6 @@ export const FINAL_TABLES: readonly FinalSchemaObject[] = [
   { type: "table", name: "memory_event_fts_state", table: "memory_event_fts_state", sql: `CREATE TABLE memory_event_fts_state (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
-      )` },
-
-  { type: "table", name: "vector_projection_state", table: "vector_projection_state", sql: `CREATE TABLE vector_projection_state (
-        projection_name TEXT PRIMARY KEY,
-        last_event_id TEXT,
-        last_event_time INTEGER,
-        last_global_seq INTEGER,
-        last_rebuild_at INTEGER,
-        last_full_count INTEGER NOT NULL DEFAULT 0,
-        last_checksum TEXT,
-        status TEXT NOT NULL DEFAULT 'idle',
-        metadata_json TEXT
       )` },
 
   { type: "table", name: "event_sequence_counters", table: "event_sequence_counters", sql: `CREATE TABLE event_sequence_counters (
@@ -572,118 +491,6 @@ export const FINAL_TABLES: readonly FinalSchemaObject[] = [
           created_at INTEGER NOT NULL
         )` },
 
-  { type: "table", name: "topology_projection_state", table: "topology_projection_state", sql: `CREATE TABLE topology_projection_state (
-        project_id TEXT PRIMARY KEY,
-        projection_version INTEGER NOT NULL DEFAULT 1,
-        status TEXT NOT NULL CHECK(status IN ('dirty','building','clean','failed')),
-        time_zone TEXT,
-        updated_at INTEGER NOT NULL,
-        error TEXT
-      , source_revision INTEGER NOT NULL DEFAULT 0)` },
-
-  { type: "table", name: "topology_time_rebuild_jobs", table: "topology_time_rebuild_jobs", sql: `CREATE TABLE topology_time_rebuild_jobs (
-        project_id TEXT PRIMARY KEY,
-        generation TEXT NOT NULL UNIQUE,
-        time_zone TEXT NOT NULL,
-        status TEXT NOT NULL CHECK(status IN ('building','ready','failed')),
-        cursor_created_at INTEGER,
-        cursor_neuron_id TEXT,
-        neuron_count INTEGER NOT NULL DEFAULT 0,
-        updated_at INTEGER NOT NULL,
-        error TEXT
-      , source_revision INTEGER NOT NULL DEFAULT 0, publish_token TEXT, publish_lease_until INTEGER)` },
-
-  { type: "table", name: "topology_time_rebuild_buckets", table: "topology_time_rebuild_buckets", sql: `CREATE TABLE topology_time_rebuild_buckets (
-        generation TEXT NOT NULL,
-        bucket_id TEXT NOT NULL,
-        project_id TEXT NOT NULL,
-        time_zone TEXT NOT NULL,
-        bucket_type TEXT NOT NULL,
-        bucket_start INTEGER NOT NULL,
-        bucket_end INTEGER NOT NULL,
-        label TEXT NOT NULL,
-        PRIMARY KEY(generation,bucket_id),
-        FOREIGN KEY(generation) REFERENCES topology_time_rebuild_jobs(generation)
-          ON UPDATE CASCADE ON DELETE CASCADE
-      )` },
-
-  { type: "table", name: "topology_time_rebuild_entries", table: "topology_time_rebuild_entries", sql: `CREATE TABLE topology_time_rebuild_entries (
-        generation TEXT NOT NULL,
-        bucket_id TEXT NOT NULL,
-        neuron_id TEXT NOT NULL,
-        project_id TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        PRIMARY KEY(generation,bucket_id,neuron_id),
-        FOREIGN KEY(generation) REFERENCES topology_time_rebuild_jobs(generation)
-          ON UPDATE CASCADE ON DELETE CASCADE
-      )` },
-
-  { type: "table", name: "topology_time_rebuild_active_neurons", table: "topology_time_rebuild_active_neurons", sql: `CREATE TABLE topology_time_rebuild_active_neurons (
-        generation TEXT NOT NULL,
-        neuron_id TEXT NOT NULL,
-        project_id TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        title TEXT NOT NULL,
-        PRIMARY KEY(generation,neuron_id),
-        FOREIGN KEY(generation) REFERENCES topology_time_rebuild_jobs(generation)
-          ON UPDATE CASCADE ON DELETE CASCADE
-      )` },
-
-  { type: "table", name: "topology_source_revisions", table: "topology_source_revisions", sql: `CREATE TABLE topology_source_revisions (
-        project_id TEXT PRIMARY KEY,
-        revision INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0),
-        updated_at INTEGER NOT NULL
-      )` },
-
-  { type: "table", name: "topology_time_rebuild_cognitive_nodes", table: "topology_time_rebuild_cognitive_nodes", sql: `CREATE TABLE topology_time_rebuild_cognitive_nodes (
-        generation TEXT NOT NULL,
-        node_id TEXT NOT NULL,
-        node_type TEXT NOT NULL,
-        node_key TEXT NOT NULL,
-        title TEXT NOT NULL,
-        project_id TEXT NOT NULL,
-        source_neuron_id TEXT,
-        metadata_json TEXT,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
-        PRIMARY KEY(generation,node_id),
-        FOREIGN KEY(generation) REFERENCES topology_time_rebuild_jobs(generation)
-          ON UPDATE CASCADE ON DELETE CASCADE
-      )` },
-
-  { type: "table", name: "topology_time_rebuild_cognitive_edges", table: "topology_time_rebuild_cognitive_edges", sql: `CREATE TABLE topology_time_rebuild_cognitive_edges (
-        generation TEXT NOT NULL,
-        edge_id TEXT NOT NULL,
-        source_node_id TEXT NOT NULL,
-        target_node_id TEXT NOT NULL,
-        edge_type TEXT NOT NULL,
-        weight REAL NOT NULL,
-        project_id TEXT NOT NULL,
-        metadata_json TEXT,
-        created_at INTEGER NOT NULL,
-        PRIMARY KEY(generation,edge_id),
-        FOREIGN KEY(generation) REFERENCES topology_time_rebuild_jobs(generation)
-          ON UPDATE CASCADE ON DELETE CASCADE
-      )` },
-
-  { type: "table", name: "topology_time_rebuild_adjacency", table: "topology_time_rebuild_adjacency", sql: `CREATE TABLE topology_time_rebuild_adjacency (
-        generation TEXT NOT NULL,
-        project_id TEXT NOT NULL,
-        time_zone TEXT NOT NULL,
-        source_bucket_id TEXT NOT NULL,
-        adjacent_bucket_id TEXT NOT NULL,
-        bucket_type TEXT NOT NULL,
-        weight REAL NOT NULL,
-        created_at INTEGER NOT NULL,
-        PRIMARY KEY(generation,source_bucket_id,adjacent_bucket_id),
-        FOREIGN KEY(generation) REFERENCES topology_time_rebuild_jobs(generation)
-          ON UPDATE CASCADE ON DELETE CASCADE
-      )` },
-
-  { type: "table", name: "vector_write_outbox", table: "vector_write_outbox", sql: `CREATE TABLE vector_write_outbox (
-        neuron_id TEXT PRIMARY KEY, vector_json TEXT NOT NULL, created_at INTEGER NOT NULL
-      )` },
-
   { type: "table", name: "ingestion_source_cursors", table: "ingestion_source_cursors", sql: `CREATE TABLE ingestion_source_cursors (
     project_scope TEXT NOT NULL DEFAULT '', source_id TEXT NOT NULL, source_path TEXT NOT NULL,
     source_type TEXT NOT NULL, project_id TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1,
@@ -925,55 +732,6 @@ export const FINAL_TABLES: readonly FinalSchemaObject[] = [
         weight REAL NOT NULL DEFAULT 1.0,
         created_at INTEGER NOT NULL,
         PRIMARY KEY (belief_id, neuron_id, event_id, evidence_type)
-      )` },
-
-  { type: "table", name: "vector_index", table: "vector_index", sql: `CREATE TABLE vector_index (
-        neuron_id TEXT PRIMARY KEY,
-        dimensions INTEGER NOT NULL,
-        vector_blob BLOB NOT NULL,
-        updated_at INTEGER NOT NULL
-      )` },
-
-  { type: "table", name: "project_branches", table: "project_branches", sql: `CREATE TABLE project_branches (
-        branch_id TEXT PRIMARY KEY,
-        project_id TEXT NOT NULL,
-        branch_key TEXT NOT NULL,
-        branch_kind TEXT NOT NULL,
-        title TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
-        UNIQUE(project_id, branch_key)
-      )` },
-
-  { type: "table", name: "branch_links", table: "branch_links", sql: `CREATE TABLE branch_links (
-        parent_branch_id TEXT NOT NULL,
-        child_branch_id TEXT NOT NULL,
-        project_id TEXT NOT NULL DEFAULT '',
-        relation_type TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        UNIQUE(parent_branch_id, child_branch_id, relation_type)
-      )` },
-
-  { type: "table", name: "branch_entries", table: "branch_entries", sql: `CREATE TABLE branch_entries (
-        branch_id TEXT NOT NULL,
-        project_id TEXT NOT NULL DEFAULT '',
-        neuron_id TEXT,
-        unit_id TEXT,
-        belief_id TEXT,
-        fact_id TEXT,
-        event_id TEXT,
-        created_at INTEGER NOT NULL,
-        UNIQUE(branch_id, neuron_id, unit_id, belief_id, fact_id, event_id)
-      )` },
-
-  { type: "table", name: "topology_membership", table: "topology_membership", sql: `CREATE TABLE topology_membership (
-        neuron_id TEXT NOT NULL,
-        project_id TEXT,
-        dimension_type TEXT NOT NULL,
-        dimension_key TEXT NOT NULL,
-        title TEXT,
-        created_at INTEGER NOT NULL,
-        UNIQUE(neuron_id, dimension_type, dimension_key)
       )` },
 
   { type: "table", name: "interaction_units", table: "interaction_units", sql: `CREATE TABLE interaction_units (
@@ -1226,15 +984,6 @@ export const FINAL_TABLES: readonly FinalSchemaObject[] = [
         FOREIGN KEY(run_id) REFERENCES deep_write_runs(run_id)
       )` },
 
-  { type: "table", name: "working_memory_deltas", table: "working_memory_deltas", sql: `CREATE TABLE working_memory_deltas (
-        delta_id TEXT PRIMARY KEY,
-        project_id TEXT,
-        neuron_id TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        consumed INTEGER NOT NULL DEFAULT 0 CHECK (consumed IN (0, 1)),
-        payload TEXT
-      )` },
-
   { type: "table", name: "pipeline_checkpoints", table: "pipeline_checkpoints", sql: `CREATE TABLE pipeline_checkpoints (
         projectId TEXT NOT NULL PRIMARY KEY,
         nextStep TEXT NOT NULL,
@@ -1298,63 +1047,6 @@ export const FINAL_TABLES: readonly FinalSchemaObject[] = [
         FOREIGN KEY(frame_id) REFERENCES memory_frames(frame_id) ON DELETE CASCADE
       )` },
 
-  { type: "table", name: "time_buckets", table: "time_buckets", sql: `CREATE TABLE "time_buckets" (
-      bucket_id TEXT PRIMARY KEY,
-      project_id TEXT NOT NULL DEFAULT '',
-      time_zone TEXT NOT NULL DEFAULT 'UTC',
-      bucket_type TEXT NOT NULL,
-      bucket_start INTEGER NOT NULL,
-      bucket_end INTEGER NOT NULL,
-      label TEXT NOT NULL,
-      UNIQUE(project_id,time_zone,bucket_type,bucket_start,bucket_end)
-    )` },
-
-  { type: "table", name: "temporal_adjacency", table: "temporal_adjacency", sql: `CREATE TABLE temporal_adjacency (
-      project_id TEXT NOT NULL DEFAULT '',
-      time_zone TEXT NOT NULL DEFAULT 'UTC',
-      source_bucket_id TEXT NOT NULL,
-      adjacent_bucket_id TEXT NOT NULL,
-      bucket_type TEXT NOT NULL,
-      weight REAL NOT NULL,
-      created_at INTEGER NOT NULL,
-      UNIQUE(project_id,time_zone,source_bucket_id,adjacent_bucket_id)
-    )` },
-
-  { type: "table", name: "cognitive_nodes", table: "cognitive_nodes", sql: `CREATE TABLE "cognitive_nodes" (
-      node_id TEXT PRIMARY KEY,
-      node_type TEXT NOT NULL,
-      node_key TEXT NOT NULL,
-      title TEXT NOT NULL,
-      project_id TEXT NOT NULL DEFAULT '',
-      source_neuron_id TEXT,
-      metadata_json TEXT,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      UNIQUE(project_id,node_type,node_key)
-    )` },
-
-  { type: "table", name: "cognitive_edges", table: "cognitive_edges", sql: `CREATE TABLE "cognitive_edges" (
-      edge_id TEXT PRIMARY KEY,
-      source_node_id TEXT NOT NULL,
-      target_node_id TEXT NOT NULL,
-      edge_type TEXT NOT NULL,
-      weight REAL NOT NULL,
-      project_id TEXT NOT NULL DEFAULT '',
-      metadata_json TEXT,
-      created_at INTEGER NOT NULL,
-      UNIQUE(project_id,source_node_id,target_node_id,edge_type)
-    )` },
-
-  { type: "table", name: "time_bucket_entries", table: "time_bucket_entries", sql: `CREATE TABLE "time_bucket_entries"(bucket_id TEXT NOT NULL,neuron_id TEXT,unit_id TEXT,belief_id TEXT,fact_id TEXT,event_id TEXT,project_id TEXT NOT NULL DEFAULT '',created_at INTEGER NOT NULL,UNIQUE(bucket_id,neuron_id,unit_id,belief_id,fact_id,event_id))` },
-
-  { type: "table", name: "task_branches", table: "task_branches", sql: `CREATE TABLE "task_branches"(task_id TEXT PRIMARY KEY,project_id TEXT NOT NULL DEFAULT '',task_key TEXT NOT NULL,title TEXT NOT NULL,status TEXT NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,UNIQUE(project_id,task_key))` },
-
-  { type: "table", name: "task_branch_entries", table: "task_branch_entries", sql: `CREATE TABLE "task_branch_entries"(task_id TEXT NOT NULL,project_id TEXT NOT NULL DEFAULT '',neuron_id TEXT,unit_id TEXT,belief_id TEXT,fact_id TEXT,event_id TEXT,created_at INTEGER NOT NULL)` },
-
-  { type: "table", name: "event_clusters", table: "event_clusters", sql: `CREATE TABLE "event_clusters"(cluster_id TEXT PRIMARY KEY,project_id TEXT NOT NULL DEFAULT '',cluster_key TEXT NOT NULL,cluster_type TEXT NOT NULL,title TEXT NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,UNIQUE(project_id,cluster_key))` },
-
-  { type: "table", name: "event_cluster_entries", table: "event_cluster_entries", sql: `CREATE TABLE "event_cluster_entries"(cluster_id TEXT NOT NULL,project_id TEXT NOT NULL DEFAULT '',neuron_id TEXT,unit_id TEXT,belief_id TEXT,fact_id TEXT,event_id TEXT,created_at INTEGER NOT NULL)` },
-
   { type: "table", name: "entity_aliases", table: "entity_aliases", sql: `CREATE TABLE entity_aliases (
     alias_id TEXT PRIMARY KEY, entity_id TEXT NOT NULL, project_id TEXT NOT NULL DEFAULT '',
     alias_text TEXT NOT NULL, normalized_alias TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
@@ -1385,10 +1077,15 @@ export const FINAL_TABLES: readonly FinalSchemaObject[] = [
     created_at INTEGER NOT NULL DEFAULT (unixepoch()*1000), UNIQUE(project_scope,stream_id,event_version)
   )` },
 
-  { type: "table", name: "neuron_embeddings", table: "neuron_embeddings", sql: `CREATE TABLE neuron_embeddings (
-    neuron_id TEXT NOT NULL, project_id TEXT, model_id TEXT NOT NULL, dimensions INTEGER NOT NULL,
-    vector_blob BLOB NOT NULL, status TEXT NOT NULL DEFAULT 'done', retry_count INTEGER NOT NULL DEFAULT 0,
-    updated_at INTEGER NOT NULL, PRIMARY KEY(neuron_id,model_id), FOREIGN KEY(neuron_id) REFERENCES neurons(id) ON DELETE CASCADE
+  { type: "table", name: "memory_event_embeddings", table: "memory_event_embeddings", sql: `CREATE TABLE memory_event_embeddings (
+    event_id TEXT NOT NULL,
+    model_id TEXT NOT NULL,
+    dimensions INTEGER NOT NULL,
+    vector_blob BLOB NOT NULL,
+    project_id TEXT,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY(event_id,model_id),
+    FOREIGN KEY(event_id) REFERENCES memory_events(event_id) ON DELETE CASCADE
   )` },
 
   { type: "table", name: "pending_entity_resolution_quarantine", table: "pending_entity_resolution_quarantine", sql: `CREATE TABLE pending_entity_resolution_quarantine (
@@ -1423,36 +1120,13 @@ export const FINAL_TABLES: readonly FinalSchemaObject[] = [
 
 ] as const;
 
+
 export const FINAL_AUXILIARY_OBJECTS: readonly FinalSchemaObject[] = [
   { type: "index", name: "idx_facts_subject_predicate", table: "facts", sql: `CREATE INDEX idx_facts_subject_predicate
         ON facts(subject, predicate_family, valid_from DESC)` },
 
   { type: "index", name: "idx_facts_entity_id", table: "facts", sql: `CREATE INDEX idx_facts_entity_id
         ON facts(entity_id, valid_from DESC)` },
-
-  { type: "index", name: "idx_neurons_temporal", table: "neurons", sql: `CREATE INDEX idx_neurons_temporal ON neurons(timestamp)` },
-
-  { type: "index", name: "idx_neurons_project", table: "neurons", sql: `CREATE INDEX idx_neurons_project ON neurons(project_id)` },
-
-  { type: "index", name: "idx_neurons_type_project_created", table: "neurons", sql: `CREATE INDEX idx_neurons_type_project_created ON neurons(type, project_id, created_at DESC)` },
-
-  { type: "index", name: "idx_neurons_status", table: "neurons", sql: `CREATE INDEX idx_neurons_status ON neurons(status, last_activated DESC)` },
-
-  { type: "index", name: "idx_neurons_stability", table: "neurons", sql: `CREATE INDEX idx_neurons_stability ON neurons(stability DESC)` },
-
-  { type: "index", name: "idx_neurons_repetitions", table: "neurons", sql: `CREATE INDEX idx_neurons_repetitions ON neurons(repetitions DESC)` },
-
-  { type: "index", name: "idx_neurons_not_deleted", table: "neurons", sql: `CREATE INDEX idx_neurons_not_deleted ON neurons(is_deleted, updated_at DESC)` },
-
-  { type: "index", name: "idx_synapses_source", table: "synapses", sql: `CREATE INDEX idx_synapses_source ON synapses(source_id)` },
-
-  { type: "index", name: "idx_synapses_target", table: "synapses", sql: `CREATE INDEX idx_synapses_target ON synapses(target_id)` },
-
-  { type: "index", name: "idx_neurons_topic_path", table: "neurons", sql: `CREATE INDEX idx_neurons_topic_path ON neurons(project_id, topic_path)` },
-
-  { type: "index", name: "idx_neurons_pinned", table: "neurons", sql: `CREATE INDEX idx_neurons_pinned ON neurons(is_pinned) WHERE is_pinned = 1` },
-
-  { type: "index", name: "idx_synapses_project_source", table: "synapses", sql: `CREATE INDEX idx_synapses_project_source ON synapses(project_id, source_id)` },
 
   { type: "index", name: "idx_memory_governance_operations_plan", table: "memory_governance_operations", sql: `CREATE INDEX idx_memory_governance_operations_plan
         ON memory_governance_operations(plan_id, created_at)` },
@@ -1613,12 +1287,6 @@ export const FINAL_AUXILIARY_OBJECTS: readonly FinalSchemaObject[] = [
   { type: "index", name: "idx_memory_atlas_alias_supports_reduction", table: "memory_atlas_alias_supports", sql: `CREATE INDEX idx_memory_atlas_alias_supports_reduction
         ON memory_atlas_alias_supports(project_id, alias_id, source_authority, status, confidence)` },
 
-  { type: "index", name: "idx_topology_time_rebuild_entries_neuron", table: "topology_time_rebuild_entries", sql: `CREATE INDEX idx_topology_time_rebuild_entries_neuron
-        ON topology_time_rebuild_entries(generation,created_at,neuron_id)` },
-
-  { type: "index", name: "idx_topology_time_rebuild_active_neurons", table: "topology_time_rebuild_active_neurons", sql: `CREATE INDEX idx_topology_time_rebuild_active_neurons
-        ON topology_time_rebuild_active_neurons(generation,created_at,neuron_id)` },
-
   { type: "index", name: "idx_ingestion_processed_source_window", table: "ingestion_processed_records", sql: `CREATE INDEX idx_ingestion_processed_source_window
     ON ingestion_processed_records(project_scope,source_id,content_window_start,content_window_end,processed_at DESC)` },
 
@@ -1655,56 +1323,6 @@ export const FINAL_AUXILIARY_OBJECTS: readonly FinalSchemaObject[] = [
   { type: "index", name: "idx_beliefs_canonical", table: "beliefs", sql: `CREATE INDEX idx_beliefs_canonical ON beliefs(canonical_key, status, valid_from DESC)` },
 
   { type: "index", name: "idx_beliefs_subject_predicate", table: "beliefs", sql: `CREATE INDEX idx_beliefs_subject_predicate ON beliefs(subject, predicate, status, valid_from DESC)` },
-
-  { type: "index", name: "idx_vector_index_dimensions", table: "vector_index", sql: `CREATE INDEX idx_vector_index_dimensions
-        ON vector_index(dimensions)` },
-
-  { type: "index", name: "idx_project_branches_project", table: "project_branches", sql: `CREATE INDEX idx_project_branches_project
-        ON project_branches(project_id, updated_at DESC)` },
-
-  { type: "index", name: "idx_topology_membership_project", table: "topology_membership", sql: `CREATE INDEX idx_topology_membership_project
-        ON topology_membership(project_id, dimension_type, created_at DESC)` },
-
-  { type: "index", name: "idx_topology_membership_dimension", table: "topology_membership", sql: `CREATE INDEX idx_topology_membership_dimension
-        ON topology_membership(dimension_type, dimension_key, created_at DESC)` },
-
-  { type: "index", name: "idx_branch_entries_reference_unique", table: "branch_entries", sql: `CREATE UNIQUE INDEX idx_branch_entries_reference_unique
-        ON branch_entries(branch_id,COALESCE(neuron_id,''),COALESCE(unit_id,''),COALESCE(belief_id,''),COALESCE(fact_id,''),COALESCE(event_id,''))` },
-
-  { type: "trigger", name: "trg_project_branch_scope_immutable", table: "project_branches", sql: `CREATE TRIGGER trg_project_branch_scope_immutable
-      BEFORE UPDATE OF project_id,branch_key ON project_branches
-      WHEN NEW.project_id<>OLD.project_id OR NEW.branch_key<>OLD.branch_key
-      BEGIN SELECT RAISE(ABORT,'project_branch_identity_conflict'); END` },
-
-  { type: "trigger", name: "trg_branch_link_scope_insert", table: "branch_links", sql: `CREATE TRIGGER trg_branch_link_scope_insert
-      BEFORE INSERT ON branch_links
-      WHEN NOT EXISTS (
-        SELECT 1 FROM project_branches p JOIN project_branches c
-          ON p.project_id=c.project_id
-        WHERE p.branch_id=NEW.parent_branch_id AND c.branch_id=NEW.child_branch_id
-          AND p.project_id=COALESCE(NEW.project_id,'')
-      )
-      BEGIN SELECT RAISE(ABORT,'topology_branch_link_project_scope_mismatch'); END` },
-
-  { type: "trigger", name: "trg_branch_link_scope_update", table: "branch_links", sql: `CREATE TRIGGER trg_branch_link_scope_update
-      BEFORE UPDATE ON branch_links
-      WHEN NOT EXISTS (
-        SELECT 1 FROM project_branches p JOIN project_branches c
-          ON p.project_id=c.project_id
-        WHERE p.branch_id=NEW.parent_branch_id AND c.branch_id=NEW.child_branch_id
-          AND p.project_id=COALESCE(NEW.project_id,'')
-      )
-      BEGIN SELECT RAISE(ABORT,'topology_branch_link_project_scope_mismatch'); END` },
-
-  { type: "trigger", name: "trg_branch_entry_parent_scope_insert", table: "branch_entries", sql: `CREATE TRIGGER trg_branch_entry_parent_scope_insert
-      BEFORE INSERT ON branch_entries
-      WHEN NOT EXISTS (SELECT 1 FROM project_branches p WHERE p.branch_id=NEW.branch_id AND p.project_id=COALESCE(NEW.project_id,''))
-      BEGIN SELECT RAISE(ABORT,'topology_reference_project_scope_mismatch'); END` },
-
-  { type: "trigger", name: "trg_branch_entry_parent_scope_update", table: "branch_entries", sql: `CREATE TRIGGER trg_branch_entry_parent_scope_update
-      BEFORE UPDATE ON branch_entries
-      WHEN NOT EXISTS (SELECT 1 FROM project_branches p WHERE p.branch_id=NEW.branch_id AND p.project_id=COALESCE(NEW.project_id,''))
-      BEGIN SELECT RAISE(ABORT,'topology_reference_project_scope_mismatch'); END` },
 
   { type: "index", name: "idx_pending_bindings_status_time", table: "pending_bindings", sql: `CREATE INDEX idx_pending_bindings_status_time
         ON pending_bindings(status, updated_at DESC)` },
@@ -1793,12 +1411,6 @@ export const FINAL_AUXILIARY_OBJECTS: readonly FinalSchemaObject[] = [
   { type: "index", name: "idx_deep_write_candidates_status", table: "deep_write_candidates", sql: `CREATE INDEX idx_deep_write_candidates_status
         ON deep_write_candidates(status, candidate_type)` },
 
-  { type: "index", name: "idx_working_memory_deltas_created", table: "working_memory_deltas", sql: `CREATE INDEX idx_working_memory_deltas_created
-        ON working_memory_deltas(created_at ASC)` },
-
-  { type: "index", name: "idx_working_memory_deltas_project", table: "working_memory_deltas", sql: `CREATE INDEX idx_working_memory_deltas_project
-        ON working_memory_deltas(project_id, created_at ASC)` },
-
   { type: "index", name: "idx_memory_frames_project_status", table: "memory_frames", sql: `CREATE INDEX idx_memory_frames_project_status ON memory_frames(project_id, status, updated_at DESC)` },
 
   { type: "index", name: "idx_memory_frames_episode", table: "memory_frames", sql: `CREATE INDEX idx_memory_frames_episode ON memory_frames(project_id, episode_id, updated_at DESC)` },
@@ -1813,32 +1425,6 @@ export const FINAL_AUXILIARY_OBJECTS: readonly FinalSchemaObject[] = [
 
   { type: "index", name: "idx_memory_frames_one_active_episode", table: "memory_frames", sql: `CREATE UNIQUE INDEX idx_memory_frames_one_active_episode
         ON memory_frames(episode_id) WHERE status='active'` },
-
-  { type: "index", name: "idx_time_buckets_project_range", table: "time_buckets", sql: `CREATE INDEX idx_time_buckets_project_range ON time_buckets(project_id,time_zone,bucket_type,bucket_start,bucket_end)` },
-
-  { type: "index", name: "idx_temporal_adjacency_source", table: "temporal_adjacency", sql: `CREATE INDEX idx_temporal_adjacency_source ON temporal_adjacency(source_bucket_id,created_at DESC)` },
-
-  { type: "index", name: "idx_cognitive_nodes_type_project", table: "cognitive_nodes", sql: `CREATE INDEX idx_cognitive_nodes_type_project ON cognitive_nodes(node_type,project_id,updated_at DESC)` },
-
-  { type: "index", name: "idx_cognitive_nodes_title", table: "cognitive_nodes", sql: `CREATE INDEX idx_cognitive_nodes_title ON cognitive_nodes(title,updated_at DESC)` },
-
-  { type: "index", name: "idx_cognitive_edges_source", table: "cognitive_edges", sql: `CREATE INDEX idx_cognitive_edges_source ON cognitive_edges(source_node_id,created_at DESC)` },
-
-  { type: "index", name: "idx_cognitive_edges_target", table: "cognitive_edges", sql: `CREATE INDEX idx_cognitive_edges_target ON cognitive_edges(target_node_id,created_at DESC)` },
-
-  { type: "index", name: "idx_cognitive_edges_project", table: "cognitive_edges", sql: `CREATE INDEX idx_cognitive_edges_project ON cognitive_edges(project_id,edge_type,created_at DESC)` },
-
-  { type: "index", name: "idx_time_bucket_entries_bucket", table: "time_bucket_entries", sql: `CREATE INDEX idx_time_bucket_entries_bucket ON time_bucket_entries(bucket_id,created_at DESC)` },
-
-  { type: "index", name: "idx_time_bucket_entries_reference_unique", table: "time_bucket_entries", sql: `CREATE UNIQUE INDEX idx_time_bucket_entries_reference_unique ON time_bucket_entries(bucket_id,COALESCE(neuron_id,''),COALESCE(unit_id,''),COALESCE(belief_id,''),COALESCE(fact_id,''),COALESCE(event_id,''))` },
-
-  { type: "index", name: "idx_task_branch_entries_reference_unique", table: "task_branch_entries", sql: `CREATE UNIQUE INDEX idx_task_branch_entries_reference_unique ON task_branch_entries(task_id,COALESCE(neuron_id,''),COALESCE(unit_id,''),COALESCE(belief_id,''),COALESCE(fact_id,''),COALESCE(event_id,''))` },
-
-  { type: "index", name: "idx_task_branches_project", table: "task_branches", sql: `CREATE INDEX idx_task_branches_project ON task_branches(project_id,updated_at DESC)` },
-
-  { type: "index", name: "idx_event_cluster_entries_reference_unique", table: "event_cluster_entries", sql: `CREATE UNIQUE INDEX idx_event_cluster_entries_reference_unique ON event_cluster_entries(cluster_id,COALESCE(neuron_id,''),COALESCE(unit_id,''),COALESCE(belief_id,''),COALESCE(fact_id,''),COALESCE(event_id,''))` },
-
-  { type: "index", name: "idx_event_clusters_project", table: "event_clusters", sql: `CREATE INDEX idx_event_clusters_project ON event_clusters(project_id,updated_at DESC)` },
 
   { type: "index", name: "idx_entity_aliases_lookup", table: "entity_aliases", sql: `CREATE INDEX idx_entity_aliases_lookup ON entity_aliases(project_id,normalized_alias,updated_at DESC)` },
 
@@ -1856,32 +1442,18 @@ export const FINAL_AUXILIARY_OBJECTS: readonly FinalSchemaObject[] = [
 
   { type: "index", name: "idx_memory_events_parent", table: "memory_events", sql: `CREATE INDEX idx_memory_events_parent ON memory_events(parent_event_id)` },
 
-  { type: "index", name: "idx_memory_event_cjk_terms_seq", table: "memory_event_cjk_terms", sql: `CREATE INDEX idx_memory_event_cjk_terms_seq ON memory_event_cjk_terms(term,global_seq,event_id)` },
+  { type: "index", name: "idx_memory_event_embeddings_project", table: "memory_event_embeddings", sql: `CREATE INDEX idx_memory_event_embeddings_project ON memory_event_embeddings(project_id,model_id)` },
 
-  { type: "index", name: "idx_neuron_embeddings_project", table: "neuron_embeddings", sql: `CREATE INDEX idx_neuron_embeddings_project ON neuron_embeddings(project_id,model_id)` },
+  { type: "index", name: "idx_memory_event_cjk_terms_seq", table: "memory_event_cjk_terms", sql: `CREATE INDEX idx_memory_event_cjk_terms_seq ON memory_event_cjk_terms(term,global_seq,event_id)` },
 
   { type: "index", name: "idx_beliefs_project_canonical", table: "beliefs", sql: `CREATE INDEX idx_beliefs_project_canonical
     ON beliefs(project_id,canonical_key,status,valid_from DESC)` },
-
-  { type: "trigger", name: "synapses_scope_insert", table: "synapses", sql: `CREATE TRIGGER synapses_scope_insert BEFORE INSERT ON synapses
-    WHEN NOT EXISTS (
-    SELECT 1 FROM neurons a JOIN neurons b ON b.id=NEW.target_id
-    WHERE a.id=NEW.source_id AND a.is_deleted=0 AND b.is_deleted=0
-      AND COALESCE(a.project_id,'')=COALESCE(b.project_id,'')
-      AND NEW.project_id=COALESCE(a.project_id,'')) BEGIN SELECT RAISE(ABORT,'project_scope_mismatch'); END` },
-
-  { type: "trigger", name: "synapses_scope_update", table: "synapses", sql: `CREATE TRIGGER synapses_scope_update BEFORE UPDATE ON synapses
-    WHEN NOT EXISTS (
-    SELECT 1 FROM neurons a JOIN neurons b ON b.id=NEW.target_id
-    WHERE a.id=NEW.source_id AND a.is_deleted=0 AND b.is_deleted=0
-      AND COALESCE(a.project_id,'')=COALESCE(b.project_id,'')
-      AND NEW.project_id=COALESCE(a.project_id,'')) BEGIN SELECT RAISE(ABORT,'project_scope_mismatch'); END` },
 
   { type: "trigger", name: "belief_evidence_scope_insert", table: "belief_evidence", sql: `CREATE TRIGGER belief_evidence_scope_insert BEFORE INSERT ON belief_evidence
     WHEN (NEW.neuron_id IS NULL AND NEW.event_id IS NULL)
     OR NOT EXISTS (SELECT 1 FROM beliefs b WHERE b.id=NEW.belief_id)
     OR (NEW.neuron_id IS NOT NULL AND NOT EXISTS (
-      SELECT 1 FROM beliefs b JOIN neurons n ON n.id=NEW.neuron_id AND n.is_deleted=0
+      SELECT 1 FROM beliefs b JOIN memory_events n ON n.event_id=NEW.neuron_id
       WHERE b.id=NEW.belief_id AND COALESCE(b.project_id,'')=COALESCE(n.project_id,'')
     ))
     OR (NEW.event_id IS NOT NULL AND NOT EXISTS (
@@ -1893,7 +1465,7 @@ export const FINAL_AUXILIARY_OBJECTS: readonly FinalSchemaObject[] = [
     WHEN (NEW.neuron_id IS NULL AND NEW.event_id IS NULL)
     OR NOT EXISTS (SELECT 1 FROM beliefs b WHERE b.id=NEW.belief_id)
     OR (NEW.neuron_id IS NOT NULL AND NOT EXISTS (
-      SELECT 1 FROM beliefs b JOIN neurons n ON n.id=NEW.neuron_id AND n.is_deleted=0
+      SELECT 1 FROM beliefs b JOIN memory_events n ON n.event_id=NEW.neuron_id
       WHERE b.id=NEW.belief_id AND COALESCE(b.project_id,'')=COALESCE(n.project_id,'')
     ))
     OR (NEW.event_id IS NOT NULL AND NOT EXISTS (
@@ -1901,19 +1473,9 @@ export const FINAL_AUXILIARY_OBJECTS: readonly FinalSchemaObject[] = [
       WHERE b.id=NEW.belief_id AND COALESCE(b.project_id,'')=COALESCE(e.project_id,'')
     )) BEGIN SELECT RAISE(ABORT,'project_scope_mismatch'); END` },
 
-  { type: "trigger", name: "cognitive_node_source_insert", table: "cognitive_nodes", sql: `CREATE TRIGGER cognitive_node_source_insert BEFORE INSERT ON cognitive_nodes
-    WHEN NEW.source_neuron_id IS NOT NULL AND NOT EXISTS (
-    SELECT 1 FROM neurons n WHERE n.id=NEW.source_neuron_id AND n.is_deleted=0
-      AND COALESCE(n.project_id,'')=NEW.project_id) BEGIN SELECT RAISE(ABORT,'project_scope_mismatch'); END` },
-
-  { type: "trigger", name: "cognitive_node_source_update", table: "cognitive_nodes", sql: `CREATE TRIGGER cognitive_node_source_update BEFORE UPDATE ON cognitive_nodes
-    WHEN NEW.source_neuron_id IS NOT NULL AND NOT EXISTS (
-    SELECT 1 FROM neurons n WHERE n.id=NEW.source_neuron_id AND n.is_deleted=0
-      AND COALESCE(n.project_id,'')=NEW.project_id) BEGIN SELECT RAISE(ABORT,'project_scope_mismatch'); END` },
-
   { type: "trigger", name: "pending_entity_scope_insert", table: "pending_entity_resolution", sql: `CREATE TRIGGER pending_entity_scope_insert BEFORE INSERT ON pending_entity_resolution
     WHEN NEW.context_neuron_id IS NULL OR NOT EXISTS (
-    SELECT 1 FROM neurons n WHERE n.id=NEW.context_neuron_id AND n.is_deleted=0
+    SELECT 1 FROM memory_events n WHERE n.event_id=NEW.context_neuron_id
       AND COALESCE(n.project_id,'')=NEW.project_scope) OR (NEW.status='resolved' AND (
         NEW.resolved_entity_id IS NULL OR NOT EXISTS (
           SELECT 1 FROM entity_instances i WHERE i.instance_id=NEW.resolved_entity_id AND i.status='active'
@@ -1926,7 +1488,7 @@ export const FINAL_AUXILIARY_OBJECTS: readonly FinalSchemaObject[] = [
 
   { type: "trigger", name: "pending_entity_scope_update", table: "pending_entity_resolution", sql: `CREATE TRIGGER pending_entity_scope_update BEFORE UPDATE ON pending_entity_resolution
     WHEN NEW.context_neuron_id IS NULL OR NOT EXISTS (
-    SELECT 1 FROM neurons n WHERE n.id=NEW.context_neuron_id AND n.is_deleted=0
+    SELECT 1 FROM memory_events n WHERE n.event_id=NEW.context_neuron_id
       AND COALESCE(n.project_id,'')=NEW.project_scope) OR (NEW.status='resolved' AND (
         NEW.resolved_entity_id IS NULL OR NOT EXISTS (
           SELECT 1 FROM entity_instances i WHERE i.instance_id=NEW.resolved_entity_id AND i.status='active'

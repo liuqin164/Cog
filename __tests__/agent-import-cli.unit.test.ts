@@ -7,7 +7,6 @@ import { fileURLToPath } from 'node:url';
 import { createMemoryKernel } from '../src/factory.js';
 import { parseArgs, runOpenClawImport } from '../src/bin/import-support.js';
 import { KernelAgentMemoryBackend } from '../src/agent/index.js';
-import { explainRecallWithKernel } from '../src/recall/RecallExplanation.js';
 import { commandArguments, expectRunnableCommands } from './helpers/cli-invocation.js';
 import { makeTempDir } from './helpers/tmp.js';
 
@@ -130,9 +129,9 @@ test('OpenClaw import writes memory once and skips already imported records on r
   expect(secondParsed.skippedRecords).toBeGreaterThanOrEqual(firstParsed.recordsIngested);
 
   const kernel = createMemoryKernel({ dbPath });
-  const recalled = kernel.evidenceFor('Bluetooth provisioning project', {
+  const recalled = new KernelAgentMemoryBackend(kernel).recall({
     projectId: 'openclaw-test',
-    includeRawEvidence: true,
+    query: 'Bluetooth provisioning project',
   });
   const emptyEpisodes = kernel.factStore.getDatabase().prepare(`
     SELECT COUNT(*) AS count FROM memory_episodes e
@@ -140,7 +139,7 @@ test('OpenClaw import writes memory once and skips already imported records on r
       AND NOT EXISTS (SELECT 1 FROM memory_episode_events ee WHERE ee.episode_id = e.episode_id)
   `).get('openclaw-test') as { count: number };
   kernel.close();
-  expect(recalled.rawEvidence.some((item) => item.content.includes('BLE device provisioning'))).toBe(true);
+  expect(recalled.items.some((item) => item.text.includes('BLE device provisioning'))).toBe(true);
   expect(emptyEpisodes.count).toBe(0);
 });
 
@@ -285,80 +284,6 @@ test('OpenClaw migrated records are visible through KernelAgentMemoryBackend rec
   expect(recalled.items.some((item) => item.text.includes('BLE device provisioning'))).toBe(true);
 });
 
-test('OpenClaw legacy daily summary imports are searchable as bounded provenance support after dreaming', async () => {
-  const dir = makeTempDir('cogmem-openclaw-legacy-summary-');
-  const dbPath = join(dir, 'memory.db');
-  mkdirSync(join(dir, 'memory'));
-  writeFileSync(join(dir, 'memory', '2026-06-03-1310.md'), [
-    '# 2026-06-03',
-    '根据官方项目文档检查您的本地配置文件 (`~/.openclaw/openclaw.json`)，以下是符合建议的地方和可优化的地方：',
-    '',
-    '1. **优先级高**：添加会话重置和维护配置（防止会话文件无限增长）',
-    '2. **优先级中**：配置工具允许/禁止列表（明确安全边界）',
-    '3. **可选**：根据您的使用场景添加日志、沙箱或高级模型配置',
-    '',
-    '重启本地的hermes',
-  ].join('\n'));
-
-  const imported = await runCli([
-    'bun',
-    openClawImportBin,
-    'openclaw',
-    '--workspace',
-    dir,
-    '--db',
-    dbPath,
-    '--project',
-    'openclaw-test',
-    '--json',
-  ]);
-
-  expect(imported.stderr).toBe('');
-  expect(imported.exitCode).toBe(0);
-
-  const kernel = createMemoryKernel({ dbPath });
-  const importedSummary = kernel.memoryGraph.getAllNeurons()
-    .filter((item) => (
-      item.content.includes('重启本地的hermes')
-      && (item.metadata.tags || []).includes('source:openclaw_daily_memory')
-    ));
-  expect(importedSummary.length).toBeGreaterThan(0);
-  for (const item of importedSummary) {
-    expect(item.metadata.tags).toContain('reliability:imported_summary');
-    expect(item.metadata.tags).toContain('provenance:imported_summary');
-    expect(item.metadata.tags).toContain('governance:imported_summary_support');
-    expect(item.metadata.tags).toContain('memory_layer:summary_seed');
-  }
-
-  const memory = new KernelAgentMemoryBackend(kernel);
-  await kernel.runDreamCurator({ projectId: 'openclaw-test', limit: 20 });
-  const recalled = memory.recall({
-    agentId: 'openclaw',
-    projectId: 'openclaw-test',
-    query: 'OpenClaw 配置 重启 hermes',
-    limit: 5,
-  });
-  const explanation = explainRecallWithKernel(kernel, {
-    agentId: 'openclaw',
-    projectId: 'openclaw-test',
-    query: 'OpenClaw 配置 重启 hermes',
-    limit: 5,
-  });
-  kernel.close();
-
-  const importedItem = recalled.items.find((item) => item.text.includes('重启本地的hermes'));
-  expect(importedItem).toBeDefined();
-  expect(importedItem?.sourceType).toBe('imported_summary');
-  expect(importedItem?.canAnswerExactQuote).toBe(false);
-  expect(importedItem?.sourceContext?.event.text).toContain('重启本地的hermes');
-  expect(importedItem?.sourceContext?.locator.command).toContain('cogmem memory show --event');
-  expect(explanation.filteredEvidence?.some((item) => (
-    item.text?.includes('重启本地的hermes')
-    && item.reason === 'status_suppressed'
-    && item.governanceReason === 'imported_summary_support'
-  ))).toBe(true);
-});
-
 test('Hermes import migrates profile and session markdown into core memory', async () => {
   const dir = makeTempDir('cogmem-hermes-import-');
   const dbPath = join(dir, 'memory.db');
@@ -395,12 +320,12 @@ test('Hermes import migrates profile and session markdown into core memory', asy
   expect(parsed.recordsIngested).toBeGreaterThanOrEqual(2);
 
   const kernel = createMemoryKernel({ dbPath });
-  const recalled = kernel.evidenceFor('GATT configuration service', {
+  const recalled = new KernelAgentMemoryBackend(kernel).recall({
     projectId: 'hermes-test',
-    includeRawEvidence: true,
+    query: 'GATT configuration service',
   });
   kernel.close();
-  expect(recalled.rawEvidence.some((item) => item.content.includes('GATT configuration service'))).toBe(true);
+  expect(recalled.items.some((item) => item.text.includes('GATT configuration service'))).toBe(true);
 });
 
 test('Hermes import scans state.db messages and preserves original message timestamps', async () => {
@@ -607,63 +532,6 @@ test('Hermes import accepts repeated explicit session files for single or batch 
     join(dir, 'one.md'),
     join(dir, 'two.md'),
   ]);
-});
-
-test('agent import uses configured local OpenAI-compatible embedding endpoint during migration', async () => {
-  const dir = makeTempDir('cogmem-openclaw-quantized-embed-');
-  const workspace = join(dir, 'workspace');
-  const configDir = join(workspace, '.cogmem');
-  mkdirSync(join(workspace, 'memory'), { recursive: true });
-  mkdirSync(configDir, { recursive: true });
-  writeFileSync(join(workspace, 'memory', '2026-05-07.md'), 'User: local quantized embedding import remembered release notes.');
-
-  const endpoint = 'http://127.0.0.1:1/v1/embeddings';
-  const originalFetch = globalThis.fetch;
-  let embedCalls = 0;
-
-  try {
-    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-      const url = input instanceof Request ? input.url : String(input);
-      if (url !== endpoint) return originalFetch(input, init);
-      embedCalls += 1;
-      expect(init?.method).toBe('POST');
-      const body = JSON.parse(String(init?.body)) as { input: string; model: string };
-      expect(body.model).toBe('qwen3-embedding:0.6b');
-      return Response.json({
-        data: [{ embedding: Array.from({ length: 16 }, (_, index) => index / 16) }],
-      });
-    }) as typeof globalThis.fetch;
-    writeFileSync(join(configDir, 'config.toml'), [
-      '[core]',
-      'db_path = "memory.db"',
-      'vector_backend = "sqlite-vec"',
-      'vector_dimension = 16',
-      '',
-      '[embedding]',
-      'provider = "openai_compatible"',
-      'base_url = "http://127.0.0.1:1/v1"',
-      'model = "qwen3-embedding:0.6b"',
-    ].join('\n'));
-
-    await runOpenClawImport([
-      '--workspace',
-      workspace,
-      '--project',
-      'openclaw-quantized-test',
-      '--no-progress',
-    ]);
-
-    expect(embedCalls).toBeGreaterThanOrEqual(1);
-    const db = new Database(join(configDir, 'memory.db'), { readonly: true });
-    try {
-      const row = db.query('SELECT COUNT(*) AS count FROM neurons').get() as { count: number };
-      expect(row.count).toBeGreaterThanOrEqual(1);
-    } finally {
-      db.close();
-    }
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
 });
 
 test('OpenClaw import auto-discovers structured cogmem config instead of env files', async () => {
@@ -973,7 +841,7 @@ test('the package exposes two bins, and the migration commands come through the 
 
   // The commands those bins used to carry are still reachable, through the dispatcher.
   const source = readFileSync(join(coreRoot, 'src', 'bin', 'cogmem.ts'), 'utf8');
-  for (const command of ['explain-recall', 'import', 'memory', 'repair']) {
+  for (const command of ['import', 'memory', 'repair']) {
     expect({ command, present: new RegExp(`'?${command}'?:\\s*'`).test(source) }).toEqual({ command, present: true });
   }
 });

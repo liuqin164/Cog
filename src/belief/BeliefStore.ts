@@ -256,7 +256,7 @@ export class BeliefStore {
     const rows = this.db.prepare(`
       SELECT beliefs.*
       FROM beliefs
-      JOIN neurons source ON source.id=beliefs.source_neuron_id AND source.is_deleted=0
+      JOIN memory_events source ON source.event_id=COALESCE(beliefs.source_neuron_id, beliefs.source_event_id)
       WHERE beliefs.status = 'active'
         AND COALESCE(beliefs.project_id,'') = ?
         AND COALESCE(source.project_id,'') = ?
@@ -561,7 +561,7 @@ export class BeliefStore {
         if (!belief) throw new Error('belief_evidence_belief_not_found');
         if (!record.neuronId && !record.eventId) throw new Error('belief_evidence_source_required');
         if (record.neuronId) {
-          const neuron = this.db.prepare(`SELECT COALESCE(project_id,'') AS scope FROM neurons WHERE id=? AND is_deleted=0`)
+          const neuron = this.db.prepare(`SELECT COALESCE(project_id,'') AS scope FROM memory_events WHERE event_id=?`)
             .get(record.neuronId) as { scope: string } | null;
           if (!neuron || neuron.scope !== belief.scope) throw new Error('belief_evidence_project_scope_mismatch');
         }

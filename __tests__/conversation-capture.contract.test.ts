@@ -99,7 +99,6 @@ describe('a captured turn', () => {
     expect(record.role).toBe('user');
     expect(record.threadId).toBe('s-contract');
     expect(record.text).toBe('把发布窗口挪到周四。');
-    expect(record.compiledNeuronId).toBeTruthy();
     // The ledger row is the write: reading it back returns the same turn.
     expect(backend.listConversationTurns({ projectId: 'contract' }).map((turn) => turn.eventId)).toEqual([record.eventId]);
   });
@@ -215,10 +214,6 @@ describe('the same face under another identity', () => {
     expect(texts('scope-same')).toEqual([text, text]);
     expect(texts('scope-cross-a')).toEqual([text]);
     expect(texts('scope-cross-b')).toEqual([text]);
-    // The compiled half is on this face too, and it is the same string whatever the identity.
-    const compiled = (id: string) => kernel.memoryGraph.getNeuron(id)?.content;
-    expect(compiled(sameProjectA.compiledNeuronId!)).toBe(compiled(sameProjectB.compiledNeuronId!));
-    expect(compiled(crossProjectA.compiledNeuronId!)).toBe(compiled(crossProjectB.compiledNeuronId!));
     // One project's lane is not another's, even when the agent is the same.
     expect(backend.listConversationTurns({ projectId: 'scope-cross-a' }).map((turn) => turn.eventId))
       .not.toContain(crossProjectB.eventId);

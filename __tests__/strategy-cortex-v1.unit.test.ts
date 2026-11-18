@@ -99,7 +99,7 @@ describe('strategy cortex v1', () => {
 
     const withoutRaw = memory.recall({
       agentId: 'openclaw', projectId: 'brain', query: 'Needle policy phrase',
-      retrievalPolicy: { allowedLanes: ['graph', 'compiled'], preferredLanes: ['graph', 'compiled'] },
+      retrievalPolicy: { allowedLanes: ['graph'], preferredLanes: ['graph'] },
     });
     const withRaw = memory.recall({
       agentId: 'openclaw', projectId: 'brain', query: 'Needle policy phrase',

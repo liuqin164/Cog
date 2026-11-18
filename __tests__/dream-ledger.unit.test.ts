@@ -69,7 +69,6 @@ test('dream curator compiles raw backlog into governed candidates without hot ve
     assistantText: '明白，我会把它作为 agent-native memory kernel 的边界约束处理。',
     ingestMode: 'raw_then_dream',
   });
-  const vectorCountBefore = kernel.vectorStore.getCurrentCount();
 
   const result = await kernel.runDreamCurator({ projectId: 'demo', limit: 10 });
   const candidates = kernel.listDreamCandidates({ statuses: ['candidate'], limit: 20 });
@@ -80,7 +79,6 @@ test('dream curator compiles raw backlog into governed candidates without hot ve
   expect(result.candidateCount).toBeGreaterThanOrEqual(2);
   expect(candidateTypes).toContain('summary');
   expect(candidateTypes).toContain('preferences');
-  expect(kernel.vectorStore.getCurrentCount()).toBe(vectorCountBefore);
   expect(kernel.getDreamBacklogStatus('demo').undreamedRawCount).toBe(0);
   expect(candidates.every((candidate) => candidate.status === 'candidate')).toBe(true);
   expect(JSON.stringify(candidates)).toContain('"eventId"');
@@ -110,7 +108,6 @@ test('dream curator can use explicit memory-model generation to create governanc
     assistantText: '我会把它作为边界候选，等待治理层确认。',
     ingestMode: 'raw_then_dream',
   });
-  const vectorCountBefore = kernel.vectorStore.getCurrentCount();
 
   const result = await kernel.runDreamCurator({
     projectId: 'demo',
@@ -231,7 +228,6 @@ test('dream curator can use explicit memory-model generation to create governanc
   const modelCandidates = candidates.filter((candidate) => JSON.stringify(candidate.content).includes('"source":"llm_dream_curator_candidate"'));
   expect(modelCandidates.length).toBeGreaterThan(0);
   expect(modelCandidates.every((candidate) => JSON.stringify(candidate.content).includes('"sourceType":"llm_inference"'))).toBe(true);
-  expect(kernel.vectorStore.getCurrentCount()).toBe(vectorCountBefore);
   expect(JSON.stringify(candidates)).toContain('sourceAnchor');
   expect(JSON.stringify(candidates)).toContain('raw ledger');
 
@@ -300,7 +296,6 @@ test('dream curator proposes semantic tags, index decisions, and event relations
   expect(serialized).toContain('记忆黑盒');
   expect(serialized).toContain('shouldEmbed');
   expect(serialized).toContain('sourceAnchor');
-  expect(kernel.vectorStore.getCurrentCount()).toBe(0);
 
   kernel.close();
 });
@@ -347,7 +342,6 @@ test('dream governance promotes semantic organization candidates instead of lett
     targetEventId: expect.stringMatching(/^evt-/),
   });
   expect(kernel.countDreamCandidates({ projectId: 'demo', statuses: ['candidate'] })).toBe(0);
-  expect(kernel.vectorStore.getCurrentCount()).toBe(0);
 
   kernel.close();
 });

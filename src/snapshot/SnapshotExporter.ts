@@ -61,20 +61,7 @@ export class SnapshotExporter {
     const snapshotDb = new Database(dbPath);
     try {
       snapshotDb.exec(`PRAGMA secure_delete = ON`);
-      // #64: the TEMP TABLE below and the VACUUM after the deletes both need
-      // temporary space, and SQLite's default is a file in a directory this
-      // process may not be able to write — a read-only /tmp, or a container.
-      // Keeping it in memory means exporting a snapshot does not depend on that
-      // at all. The connection is thrown away with this call, so nothing else
-      // inherits the setting.
       snapshotDb.exec(`PRAGMA temp_store = MEMORY`);
-      snapshotDb.transaction(() => {
-        snapshotDb.exec(`CREATE TEMP TABLE forgotten_snapshot_neurons AS SELECT id FROM neurons WHERE is_deleted <> 0`);
-        snapshotDb.exec(`DELETE FROM neurons_fts WHERE id IN (SELECT id FROM forgotten_snapshot_neurons)`);
-        snapshotDb.exec(`DELETE FROM synapses WHERE source_id IN (SELECT id FROM forgotten_snapshot_neurons) OR target_id IN (SELECT id FROM forgotten_snapshot_neurons)`);
-        snapshotDb.exec(`DELETE FROM neurons WHERE id IN (SELECT id FROM forgotten_snapshot_neurons)`);
-        snapshotDb.exec(`DROP TABLE forgotten_snapshot_neurons`);
-      })();
       snapshotDb.exec(`VACUUM`);
     } catch (error) {
       // #64: VACUUM needs a temp file, and SQLite blames the database when it
@@ -82,7 +69,7 @@ export class SnapshotExporter {
       // the message.
       const tempFailure = describeSqliteTempDirectoryFailure('exporting a snapshot', error);
       if (tempFailure) throw tempFailure;
-      if (!(error instanceof Error) || !/no such table: neurons/i.test(error.message)) throw error;
+      throw error;
     } finally {
       snapshotDb.close();
     }
@@ -99,7 +86,7 @@ export class SnapshotExporter {
 
   private readNeuronCount(db: Database): number {
     try {
-      const row = db.prepare(`SELECT COUNT(*) AS count FROM neurons WHERE is_deleted = 0`).get() as { count?: number } | undefined;
+      const row = db.prepare(`SELECT COUNT(*) AS count FROM memory_events WHERE event_type = 'RAW_EVENT_RECORDED'`).get() as { count?: number } | undefined;
       return Number(row?.count ?? 0);
     } catch {
       return 0;

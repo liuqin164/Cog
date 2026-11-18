@@ -69,7 +69,6 @@ describe('the import bridge is idempotent', () => {
       const rowsAfterFirst = eventRows(dbPath);
       const totalAfterFirst = eventTotal(dbPath);
       expect(totalAfterFirst).toBeGreaterThan(0);
-      expect(readCount(dbPath, 'SELECT COUNT(*) AS n FROM neurons WHERE is_deleted = 0')).toBeGreaterThan(0);
 
       const second = await applyImport(kernel, request);
       expect(second.recordsParsed).toBe(4);

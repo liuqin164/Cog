@@ -16,11 +16,11 @@ test('Agent global scope executes the multidimensional graph lane instead of tre
   try {
     await kernel.ingest({ projectId: '', content: 'projectless graph lane evidence' });
     let multidimensionalCalls = 0;
-    const originalRecall = kernel.evidenceFor.bind(kernel);
-    (kernel as unknown as { evidenceFor: MemoryKernel['evidenceFor'] }).evidenceFor = ((query, options) => {
+    const originalRecall = kernel.searchAtlas.bind(kernel);
+    (kernel as unknown as { searchAtlas: MemoryKernel['searchAtlas'] }).searchAtlas = ((query, options) => {
       multidimensionalCalls += 1;
       return originalRecall(query, options);
-    }) as MemoryKernel['evidenceFor'];
+    }) as MemoryKernel['searchAtlas'];
     new KernelAgentMemoryBackend(kernel).recall({ agentId: 'global-agent', sessionId: 's', projectId: '', query: 'graph lane evidence', limit: 3 });
     expect(multidimensionalCalls).toBeGreaterThan(0);
   } finally { kernel.close(); }
@@ -323,38 +323,6 @@ test('action-history recall selects Hermes operation and suppresses unrelated co
     expect(result.atlasCards?.[0]?.displayTitle).toContain('Hermes');
     expect(result.items[0]?.sourceAnchor?.eventId).toBe(event.eventId);
     expect(result.items.map((item) => item.text).join('\n')).not.toContain('zombie process');
-  } finally {
-    kernel.close();
-  }
-});
-
-test('action-history compiled fallback requires entity and action match', async () => {
-  const kernel = createKernel();
-  try {
-    await kernel.ingest({
-      projectId: 'openclaw',
-      content: 'Hermes 的名字来自希腊神话，是众神的信使。',
-      tags: ['agent:openclaw'],
-    });
-    await kernel.ingest({
-      projectId: 'openclaw',
-      content: '用户要求启动本机安装的 Hermes。',
-      tags: ['agent:openclaw'],
-    });
-    const result = new KernelAgentMemoryBackend(kernel).recall({
-      agentId: 'openclaw',
-      projectId: 'openclaw',
-      sessionId: 'current',
-      query: '查查还记不记得我之前让你对Hermes做过什么',
-      retrievalPolicy: { allowedLanes: ['compiled'], preferredLanes: ['compiled'] },
-      limit: 5,
-    });
-    const text = result.items.map((item) => item.text).join('\n');
-    expect(text).toContain('启动本机安装的 Hermes');
-    // Entity alone is not enough: the fallback lists the project's action kinds, so a memory that names
-    // Hermes but does nothing with it stays out (#183).
-    expect(text).not.toContain('希腊神话');
-    expect(result.decisionTrace?.reason).toBe('action_history');
   } finally {
     kernel.close();
   }

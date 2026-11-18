@@ -2,6 +2,17 @@
 
 ## 5.0.0 (unreleased)
 
+- **The 3.x compiled substrate is gone (#343).** Capture no longer writes `INGESTED`,
+  `TOPOLOGY_COMPILED` or `COGNITIVE_GRAPH_COMPILED`; the `neurons`, `synapses`,
+  `topology_*` and `cognitive_nodes` families, their stores, compilers, retrievers
+  and CLIs are deleted. Recall is the raw ledger, the memory-binding graph,
+  Atlas cards and Frames — with vectors indexed over raw events, not a second memory
+  row. The A6 rule-only baseline improved from 30.0% to 40.0% memory recall@5 and
+  26.7% to 33.3% overall; the wired embedding path stayed at 95.0% memory /
+  93.3% overall. `/forget` no longer cascades through a neuron family it no longer
+  has. User-visible effect, in one line: an agent and `/forget` read and erase the
+  ledger the user actually wrote, with no compiled copy behind it.
+
 - **A long session no longer collapses to a ninth of its budget and stays there (#316).** Over budget it
   still downgrades from the lowest lane priority and never drops a protected constraint (#255), but
   `recall` is now the last foldable lane sacrificed and the digest is sacrificed first. The freed

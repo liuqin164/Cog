@@ -87,8 +87,8 @@ describe('a database 4.0 creates', () => {
     // this line is what keeps that equivalence from silently drifting: a
     // legitimate schema change updates it, and a projection or auxiliary object
     // that stopped installing fails here.
-    expect(rows.length).toBe(507);
-    expect(digest).toBe('b4db9f0f4d0a2880f3b75a8f01420838fa6d3ae8c6975530e909bf8446e1410c');
+    expect(rows.length).toBe(397);
+    expect(digest).toBe('d52851adf13fe07dccbe65218aefd0819c7bb8d1a780695dea9e7beecb324d05');
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -157,9 +157,9 @@ describe('a database 4.0 did not create', () => {
   test('a development schema newer than this release is refused by version', () => {
     const dir = tempDir();
     const path = join(dir, 'future.db');
-    writeLegacyDatabase(path, '0034');
+    writeLegacyDatabase(path, '0035');
 
-    expect(() => createMemoryKernel({ dbPath: path })).toThrow(/unsupported_development_schema:0034/);
+    expect(() => createMemoryKernel({ dbPath: path })).toThrow(/unsupported_development_schema:0035/);
     rmSync(dir, { recursive: true, force: true });
   });
 });

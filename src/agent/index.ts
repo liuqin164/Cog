@@ -4,8 +4,6 @@ export {
   type AgentRecallDecisionTrace,
   type AgentRecallEntityCard,
   type AgentRecallItem,
-  type AgentRecallPackResult,
-  type AgentRecallPackSlots,
   type AgentRecallQuery,
   type AgentRecallResult,
   type AgentRecallSourceAnchor,

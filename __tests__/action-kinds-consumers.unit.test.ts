@@ -78,7 +78,7 @@ test('the compiled action filter accepts a project-invented kind, named or infer
         projectId: PROJECT_ID,
         sessionId: 'current',
         query,
-        retrievalPolicy: { allowedLanes: ['compiled'], preferredLanes: ['compiled'] },
+        retrievalPolicy: { allowedLanes: ['raw_source', 'graph'], preferredLanes: ['raw_source', 'graph'] },
         limit: 5,
       });
       const text = result.items.map((item) => item.text).join('\n');

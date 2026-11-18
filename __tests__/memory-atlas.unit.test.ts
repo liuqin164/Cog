@@ -514,7 +514,7 @@ test('Atlas reinstalls a same-name no-op dirty trigger without rerunning the rel
   seeded.rebuildMemoryAtlas({ projectId: 'p' });
   seeded.close();
   const db = new Database(dbPath);
-  const tables = ['memory_entities', 'memory_edges', 'memory_action_frames', 'project_branches', 'cognitive_nodes', 'cognitive_edges'];
+  const tables = ['memory_entities', 'memory_edges', 'memory_action_frames'];
   const before = Object.fromEntries(tables.map((table) => [
     table,
     db.prepare(`SELECT * FROM ${table} ORDER BY 1`).all(),

@@ -13,7 +13,7 @@ Agent-facing recall is governed by default. `KernelAgentMemoryBackend.recall()` 
 `sourceAnchor` contains:
 
 - `eventId`: the memory event that recorded the semantic ingest.
-- `sourceEventType`: usually `INGESTED`.
+- `sourceEventType`: usually `RAW_EVENT_RECORDED`; the compiled neuron events were deleted in #343.
 - `sourceRefs`: raw event, source path, thread, line, turn, and ordinal anchors when available.
 - `context`: surrounding ledger context for the source event.
 

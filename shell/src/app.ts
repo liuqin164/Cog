@@ -297,7 +297,6 @@ export class CompanionShell implements ShellControl, AttachShell {
   /** Any host-supplied embedder, so the install's semantic probe is not limited to the local one. */
   private readonly embeddingProvider?: EmbeddingProvider;
   private readonly shellRegistry?: ShellModelRegistry;
-  private reEmbedRunning = false;
   /** A degraded provider must not claim the index; only a warm provider over a current index may. */
   private embeddingReadyAllowed = false;
 
@@ -699,18 +698,12 @@ export class CompanionShell implements ShellControl, AttachShell {
     try {
       await this.embedding.warm();
       const status = this.embedding.status();
-      const stale = this.kernel.getHealthStatus().hasStaleVectors;
-      // A fresh index is ready now. A model or dimension change keeps the lane lexical until the
-      // full re-embed finishes, rather than reporting a current index over old vectors.
-      if (!stale) this.markEmbeddingReady();
+      this.markEmbeddingReady();
       this.trace.append('embedding_ready', {
         modelId: status.modelId,
         dimensions: status.dimensions,
         loadMs: status.loadMs ?? null,
       });
-      const reEmbedded = await this.reEmbedExisting();
-      if (reEmbedded && !this.kernel.getHealthStatus().hasStaleVectors) this.markEmbeddingReady();
-      else if (stale) this.setEmbeddingReady(false);
     } catch (error) {
       // A missing model, a failed download or a broken ONNX file all land here. The companion keeps
       // answering with lexical recall; health and this trace record why.
@@ -743,48 +736,6 @@ export class CompanionShell implements ShellControl, AttachShell {
    * is idempotent and checkpoints its cursor, so a second run is a no-op and a killed run resumes.
    * Batches are yielded between passes so a recall never waits for a whole brain.
    */
-  private async reEmbedExisting(): Promise<boolean> {
-    if (this.reEmbedRunning) return false;
-    this.reEmbedRunning = true;
-    const projects = new Set<string>([this.config.projectId]);
-    const modelId = this.embeddingProvider?.modelId;
-    if (modelId) {
-      for (const projectId of this.kernel.neuronEmbeddingStore.listProjectsWithStaleVectors(modelId)) projects.add(projectId);
-    }
-    let processed = 0;
-    let ok = true;
-    try {
-      for (const projectId of projects) {
-        for (let pass = 0; pass < 1_000; pass += 1) {
-          const result = await this.kernel.reEmbed(projectId);
-          processed += result.processed;
-          if (result.processed === 0 && result.remaining === 0) {
-            this.trace.append('re_embed_skipped', { projectId });
-            break;
-          }
-          this.trace.append('re_embed_progress', {
-            projectId,
-            processed: result.processed,
-            remaining: result.remaining,
-            totalProcessed: processed,
-          });
-          if (result.remaining === 0) break;
-          await new Promise((resolve) => setTimeout(resolve, 0));
-        }
-        this.trace.append('re_embed_completed', { projectId, processed });
-      }
-    } catch (error) {
-      ok = false;
-      this.trace.append('re_embed_failed', {
-        processed,
-        message: error instanceof Error ? error.message : String(error),
-      });
-    } finally {
-      this.reEmbedRunning = false;
-    }
-    return ok && !this.kernel.getHealthStatus().hasStaleVectors;
-  }
-
   private async startPlugins(): Promise<void> {
     // An injected provider (tests, an embedding host) is used as-is and has no route table. The real
     // resident gets a router: the mg route from env plus whatever named routes the user stored.
