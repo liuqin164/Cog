@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CompanionShell } from '../src/app.ts';
 import type { CageConfig } from '../src/plugins/cage.ts';
-import { ScriptedProvider, makeShell, makeTempDir, seedOpenAssignment } from './helpers.ts';
+import { ScriptedProvider, makeShell, makeTempDir, seedOpenAssignment, waitUntil } from './helpers.ts';
 
 /** The cage axis is the whole point of these tests, so it stays a named argument. */
 function cageShell(dir: string, provider: ScriptedProvider, budgets: CageConfig) {
@@ -56,7 +56,10 @@ describe('the cage (budgets and whitelist at hook points)', () => {
 
   test('the token budget pauses the work run in SUSPENDED', async () => {
     const dir = makeTempDir();
-    const provider = new ScriptedProvider([{ text: 'expensive', toolCalls: [], usage: { input: 500_000, output: 1 } }]);
+    const provider = new ScriptedProvider([
+      { text: 'expensive', toolCalls: [], usage: { input: 500_000, output: 1 } },
+      { text: 'finished', toolCalls: [], usage: { input: 1, output: 1 } },
+    ]);
     const shell = cageShell(dir, provider, { maxTurnsPerRun: 5, maxTokensPerRun: 1_000, toolWhitelist: null });
     await shell.start();
     try {
@@ -64,6 +67,14 @@ describe('the cage (budgets and whitelist at hook points)', () => {
       expect(summary!.stopReason).toBe('budget_exceeded');
       expect(summary!.error).toContain('token_budget_exceeded');
       expect(shell.state).toBe('SUSPENDED');
+      expect(shell.machine.runtime.openAssignment).toBeUndefined();
+      const grant = shell.machine.runtime.suspension!.budget!.additionalTokens!;
+      const receipt = await shell.runCommand('continue');
+      expect(receipt.text).toContain('已批准');
+      await waitUntil(() => shell.state === 'IDLE');
+      expect(provider.calls).toHaveLength(2);
+      const records = shell.trace.read().filter((record) => record.kind === 'run_budget');
+      expect(records[1].maxTokensPerRun).toBe(1_000 + grant);
     } finally {
       await shell.stop();
     }

@@ -49,19 +49,14 @@ describe('context continuity', () => {
 
   test('an open assignment renders once in working_set, never in the system prompt', async () => {
     const provider = new ScriptedProvider([
-      { text: '第一句。', toolCalls: [] },
-      () => {
-        throw new Error('provider down');
-      },
+      { text: '好的。', toolCalls: [{ toolCallId: 'c1', toolName: 'declare_task', input: { action: 'start' } }] },
+      { text: '开始做。', toolCalls: [] },
     ]);
     const shell = makeShell(makeTempDir('continuity-one-assignment-'), provider, { dream: NO_DREAM });
     await shell.start();
     try {
       await shell.submit('要做的任务');
-      seedOpenAssignment(shell, '要做的任务');
-      await shell.submit('继续');
       expect(provider.calls).toHaveLength(2);
-      expect(shell.machine.runtime.openAssignment).toBeDefined();
       expect(shell.state).toBe('IDLE');
       for (const call of provider.calls) {
         expect((call.systemPrompt ?? '').match(/<open-assignment>/g) ?? []).toHaveLength(0);
@@ -162,20 +157,9 @@ describe('context continuity', () => {
     }
   }, 30_000);
 
-  const seedAssignment = (shell: Awaited<ReturnType<typeof makeShell>>, text: string) => {
-    shell.machine.updateRuntime({
-      openAssignment: {
-        id: 'assignment-seed',
-        origin: 'user_message',
-        text,
-        latestUserText: text,
-        startedAt: 1,
-      },
-    });
-  };
-
   test('A2: a new message attaches to the open assignment and keeps its handoff', async () => {
     const provider = new ScriptedProvider([
+      { text: '开始。', toolCalls: [{ toolCallId: 'c0', toolName: 'declare_task', input: { action: 'start' } }] },
       { text: '结论：迁移脚本从 step 3 开始改。', toolCalls: [{ toolCallId: 'c1', toolName: 'read', input: { path: 'missing.txt' } }], usage: { input: 25_000, output: 1 } },
       { text: '继续处理。', toolCalls: [{ toolCallId: 'c2', toolName: 'read', input: { path: 'missing.txt' } }], usage: { input: 25_000, output: 1 } },
     ]);
@@ -186,14 +170,14 @@ describe('context continuity', () => {
     });
     await shell.start();
     try {
-      seedAssignment(shell, '迁移脚本改到 step 3');
       await shell.submit('迁移脚本改到 step 3');
+      expect(shell.state).toBe('SUSPENDED');
       const before = shell.machine.runtime.openAssignment!;
       expect(before.stoppedStep).toBeDefined();
       expect(before.findings).toContain('step 3');
       await shell.submit('继续');
       expect(shell.state).toBe('SUSPENDED');
-      const prompt = asText(provider.calls[1].messages);
+      const prompt = asText(provider.calls[2].messages);
       const workingSet = laneBlock(prompt, 'working_set');
       expect(workingSet).toContain('user-assigned task: 迁移脚本改到 step 3');
       expect(workingSet).toContain('stopped at:');
@@ -202,6 +186,7 @@ describe('context continuity', () => {
       expect(after.id).toBe(before.id);
       expect(after.text).toBe('迁移脚本改到 step 3');
       expect(after.latestUserText).toBe('继续');
+      expect(shell.trace.read().some((record) => record.kind === 'assignment_attached' && record.assignmentId === before.id)).toBe(true);
     } finally {
       await shell.stop();
     }
@@ -220,7 +205,7 @@ describe('context continuity', () => {
     });
     await shell.start();
     try {
-      seedAssignment(shell, '迁移脚本改到 step 3');
+      seedOpenAssignment(shell, '迁移脚本改到 step 3');
       await shell.submit('迁移脚本改到 step 3');
       const before = shell.machine.runtime.openAssignment!;
       await shell.submit('换成任务 B：整理发布清单');
@@ -255,12 +240,12 @@ describe('context continuity', () => {
     });
     await shell.start();
     try {
-      seedAssignment(shell, '迁移脚本改到 step 3');
+      seedOpenAssignment(shell, '迁移脚本改到 step 3');
       await shell.submit('迁移脚本改到 step 3');
       await shell.submit('继续');
       expect(shell.state).toBe('IDLE');
       expect(asText(provider.calls[1].messages)).toContain('<open-assignment>');
-      expect(provider.calls[2].systemPrompt).not.toContain('<open-assignment>');
+      expect(asText(provider.calls[2].messages)).not.toContain('<open-assignment>');
       expect(shell.machine.runtime.openAssignment).toBeUndefined();
       expect(shell.trace.read().some((record) => record.kind === 'assignment_declared' && record.action === 'end')).toBe(true);
     } finally {

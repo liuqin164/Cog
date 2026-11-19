@@ -93,9 +93,6 @@ describe('the budget tiers (#222)', () => {
       expect(open.origin).toBe('user_message');
       expect(open.stoppedStep).toContain('read');
       expect(open.nextStep).toBeTruthy();
-      const resumed = asText(provider.calls[1].messages);
-      expect(laneBlock(resumed, 'working_set')).toContain('<open-assignment>');
-      expect(laneBlock(resumed, 'working_set')).toContain(open.nextStep!);
       expect(shell.trace.read().some((record) => record.kind === 'assignment_stopped')).toBe(true);
       // 3.5k spent on one turn at a 3k cap: the estimate is one more turn at the same rate.
       expect(shell.machine.runtime.suspension?.budget?.additionalTokens).toBe(3_501);
@@ -104,6 +101,9 @@ describe('the budget tiers (#222)', () => {
       const receipt = await shell.runCommand('continue');
       expect(receipt.text).toContain('已批准');
       await waitUntil(() => shell.state === 'IDLE');
+      const resumed = asText(provider.calls[1].messages);
+      expect(laneBlock(resumed, 'working_set')).toContain('<open-assignment>');
+      expect(laneBlock(resumed, 'working_set')).toContain(open.nextStep!);
       const records = budgetRecords(shell);
       expect(records).toHaveLength(2);
       expect(records[1].tier).toBe('work');

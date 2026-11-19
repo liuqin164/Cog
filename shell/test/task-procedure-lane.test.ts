@@ -75,7 +75,8 @@ describe('the start-of-task lane carries a produced practice (#261)', () => {
   test('B hits A\'s established practice whole; an unrelated task carries none of it', async () => {
     const provider = new ScriptedProvider([
       ...taskAScript,
-      { text: 'B 任务开始。', toolCalls: [] },
+      { text: 'B 任务开始。', toolCalls: [{ toolCallId: 'c7', toolName: 'declare_task', input: { action: 'start' } }] },
+      { text: '按做法做。', toolCalls: [] },
       { text: '整理读书笔记。', toolCalls: [] },
     ]);
     const shell = shellFor('task-procedure-lane-', provider);

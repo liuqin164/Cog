@@ -1405,6 +1405,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     trigger: 'message_received' | 'emergence_due',
     reason: string,
     dispatchTrigger: Trigger = trigger,
+    grant?: { tokens: number; turns: number },
   ): Promise<RunSummary> {
     const runId = `run-${this.now().toString(36)}-${randomUUID().slice(0, 8)}`;
     const origin = trigger === 'emergence_due' ? 'emergence' : 'user';
@@ -1412,7 +1413,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.runTier = tier;
     this.currentRunUserText = text;
     // The owner's grant widens this one run's cage and is spent when it settles (#228).
-    this.cage!.beginRun(runId, tier, tier === 'work' ? this.machine.runtime.openAssignment?.grant : undefined);
+    this.cage!.beginRun(runId, tier, tier === 'work' ? (grant ?? this.machine.runtime.openAssignment?.grant) : undefined);
     // A backed-off autonomous wake still runs (F7's surfacing decision is untouched) but it does not
     // inherit the work tier or the assignment, so it cannot keep retrying the same continuation.
     this.hideAssignmentContext = trigger === 'emergence_due' && tier === 'autonomous' && this.machine.runtime.openAssignment !== undefined;
@@ -2628,19 +2629,19 @@ export class CompanionShell implements ShellControl, AttachShell {
     });
     this.trace.append('suspension_approved', { id: suspension.id, assignmentId: assignment?.id ?? null, grant, basis: suspension.budget?.basis });
     setTimeout(() => {
-      void this.resumeSuspendedRun(suspension.userText ?? '').catch((error) =>
+      void this.resumeSuspendedRun(suspension.userText ?? '', grant).catch((error) =>
         this.trace.append('suspension_resume_failed', { assignmentId: assignment?.id ?? null, message: error instanceof Error ? error.message : String(error) }),
       );
     }, 0);
     return { text: `已批准：追加 ${grant.tokens} token / ${grant.turns} 回合，原地续跑。`, receipt: true };
   }
 
-  private async resumeSuspendedRun(userText: string): Promise<void> {
+  private async resumeSuspendedRun(userText: string, grant?: { tokens: number; turns: number }): Promise<void> {
     if (this.machine.state !== 'SUSPENDED') {
       this.trace.append('suspension_resume_skipped', { reason: `state:${this.machine.state}` });
       return;
     }
-    await this.executeRun(userText, 'message_received', 'budget_approved', 'budget_approved');
+    await this.executeRun(userText, 'message_received', 'budget_approved', 'budget_approved', grant);
   }
 
   /**
