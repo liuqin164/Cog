@@ -56,7 +56,7 @@ describe('context projection metrics (#268)', () => {
   }, 30_000);
 });
 describe('autoExpands in /context reflects assembly (#352)', () => {
-  test('autoExpands > 0 when a stub is expanded, 0 when nothing matches', async () => {
+  test('a raw fact arrives whole in the recall lane, so nothing is auto-expanded', async () => {
     const ORIGINAL = '团队把「上传失败」的重试上限定为 12,500 次，由「小明」负责。';
     const provider = new ScriptedProvider([{ text: '重试上限是 12,500 次。', toolCalls: [] }]);
     const shell = makeShell(makeTempDir(), provider, { dream: NO_DREAM });
@@ -72,14 +72,22 @@ describe('autoExpands in /context reflects assembly (#352)', () => {
         ingestMode: 'immediate_compile',
       });
       await shell.submit('上传失败的重试上限是多少？');
-      let ctxText = (await shell.runCommand('context')).text;
+      const recalled = shell.backend.recall({
+        agentId: shell.config.agentId,
+        projectId: shell.config.projectId,
+        query: '上传失败的重试上限是多少？',
+        excludeSessionId: shell.config.sessionId,
+        limit: 5,
+      });
+      expect(recalled.items.some((item) => item.text === ORIGINAL)).toBe(true);
+      const ctxText = (await shell.runCommand('context')).text;
       expect(ctxText).toMatch(/自动展开 \d+ 次/u);
       const firstMatch = ctxText.match(/自动展开 (\d+) 次/u);
       expect(firstMatch).not.toBeNull();
-      expect(Number(firstMatch![1])).toBeGreaterThan(0);
+      expect(Number(firstMatch![1])).toBe(0);
       await shell.submit('把那个上限再说一遍');
-      ctxText = (await shell.runCommand('context')).text;
-      expect(ctxText).toContain('自动展开 0 次');
+      const secondCtxText = (await shell.runCommand('context')).text;
+      expect(secondCtxText).toContain('自动展开 0 次');
     } finally {
       await shell.stop();
     }
