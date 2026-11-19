@@ -1,18 +1,22 @@
-/**
- * Conversation capture: every captured text goes through the kernel ingest path, redacted before it
- * is written and marked with what was removed.
- *
- * `bash`/`read` tool output, the assistant reply and the terminal record all arrive here. The shell
- * redacts with the kernel's public `redactSecretText` (see SecretRedactor) and then writes through
- * the exported `KernelAgentMemoryBackend`, so the events carry
- * `metadata.secretFindings` — the same key the kernel's suppression checks read — plus a
- * `metadata.redaction` count.
- */
 import { CONVERSATION_CAPTURE_LANE, KernelAgentMemoryBackend, type MemoryEvent, type MemoryKernel } from 'cogmem';
 import type { RunSummary } from '../state/agent-loop.ts';
 import { SecretRedactor } from '../kernel-host.ts';
 import type { TraceLog } from '../trace.ts';
 import type { NativePlugin } from './host.ts';
+
+export const MAX_CAPTURED_TOOL_RESULT_CHARS = 48_000;
+const MEMORY_REQUEST_RE = /记住|不要忘记|别忘记|remember|don't forget/i;
+const TOOL_REFERENCE_RE = /工具|读取|读到|文件|结果|这条|这个|tool|read|result/i;
+const TOOL_OBSERVATION_PROMOTED_KEY = 'toolObservationPromoted';
+
+function promotesToolObservations(userText: string): boolean {
+  return MEMORY_REQUEST_RE.test(userText) && TOOL_REFERENCE_RE.test(userText);
+}
+
+function boundToolResult(text: string): string {
+  if (text.length <= MAX_CAPTURED_TOOL_RESULT_CHARS) return text;
+  return `${text.slice(0, MAX_CAPTURED_TOOL_RESULT_CHARS)}\n\n[tool result truncated: ${text.length - MAX_CAPTURED_TOOL_RESULT_CHARS} chars omitted]`;
+}
 
 export interface CaptureServiceOptions {
   backend: KernelAgentMemoryBackend;
@@ -135,6 +139,7 @@ export class CaptureService {
     output: string;
     isError: boolean;
     eventOrdinal: number;
+    promotesToolObservation?: boolean;
   }): Promise<{ event: MemoryEvent; redactions: number } | undefined> {
     if (this.paused()) return undefined;
     const { backend, agentId, projectId, sessionId } = this.options;
@@ -150,9 +155,14 @@ export class CaptureService {
       toolCallEventId: input.toolCallEventId,
       toolCallId: input.toolCallId,
       toolName: input.toolName,
-      output: marked.value,
+      output: boundToolResult(marked.value),
       eventOrdinal: input.eventOrdinal,
-      metadata: { sourceAgent: agentId, isError: input.isError, ...marked.metadata },
+      metadata: {
+        sourceAgent: agentId,
+        isError: input.isError,
+        ...(input.promotesToolObservation ? { [TOOL_OBSERVATION_PROMOTED_KEY]: true } : {}),
+        ...marked.metadata,
+      },
     });
     return { event, redactions: markTotal(marked.metadata) };
   }
@@ -202,12 +212,6 @@ export class CaptureService {
     };
   }
 
-  /**
-   * The pause gate, at the one place a run's content reaches the kernel. Nothing is buffered for
-   * later: a pause means "do not write", and replaying the held turns on resume would be a decision
-   * the user did not make. What was skipped is written down (counts, not text) so the silence is
-   * visible in the trace rather than looking like a lost turn.
-   */
   async captureRun(summary: RunSummary, threadId: string): Promise<CaptureResult> {
     if (this.paused()) {
       this.options.trace?.append('capture_paused', {
@@ -221,8 +225,6 @@ export class CaptureService {
       });
       return { turnId: summary.turnId, toolCallEventIds: [], toolResultEventIds: [], redactionCount: 0 };
     }
-    // An autonomous run has no user turn to write. Booking it through `rememberTurnWithResult`
-    // would invent one — the exact write #229 forbids — so it is a task event instead.
     if (summary.origin === 'emergence') return this.captureAutonomousRun(summary, threadId);
     const { backend, agentId, projectId, sessionId } = this.options;
     const user = this.redactor.mark(summary.userText);
@@ -239,14 +241,13 @@ export class CaptureService {
       userText: user.value,
       assistantText: assistant.value || undefined,
       ingestMode: 'selective_compile',
-      // The lane marker is what makes these rows the session ledger the kernel's digest, recall
-      // and tail read (#245, #248). Without it the shell's own turns were invisible to `assembleSessionContext`.
       metadata: { sourceAgent: agentId, source: 'companion-shell', kind: 'turn', captureLane: CONVERSATION_CAPTURE_LANE, ...marks },
     });
     const assistantEventId = result.rawEventIds[1];
     const toolCallEventIds: string[] = [];
     const toolResultEventIds: string[] = [];
     const byCallId = new Map<string, string>();
+    const promotesToolObservation = promotesToolObservations(summary.userText);
     for (const call of summary.toolCalls) {
       const input = this.redactor.mark(call.input);
       redactionCount += markTotal(input.metadata);
@@ -281,8 +282,13 @@ export class CaptureService {
         toolCallEventId,
         toolCallId: resultEntry.toolCallId,
         toolName: resultEntry.toolName,
-        output: output.value,
-        metadata: { sourceAgent: agentId, isError: resultEntry.isError, ...output.metadata },
+        output: boundToolResult(output.value),
+        metadata: {
+          sourceAgent: agentId,
+          isError: resultEntry.isError,
+          ...(promotesToolObservation ? { [TOOL_OBSERVATION_PROMOTED_KEY]: true } : {}),
+          ...output.metadata,
+        },
       });
       toolResultEventIds.push(event.eventId);
     }
@@ -304,10 +310,6 @@ export class CaptureService {
     };
   }
 
-  /**
-   * The autonomous half: one task event for what the companion said, tool rows under it, all marked
-   * `origin: emergence` and role `system` (the kernel's task-event default). No user row is written.
-   */
   private async captureAutonomousRun(summary: RunSummary, threadId: string): Promise<CaptureResult> {
     const { backend, agentId, projectId, sessionId } = this.options;
     const assistant = this.redactor.mark(summary.assistantText || '(no assistant text)');
@@ -367,7 +369,7 @@ export class CaptureService {
         toolCallEventId,
         toolCallId: resultEntry.toolCallId,
         toolName: resultEntry.toolName,
-        output: output.value,
+        output: boundToolResult(output.value),
         metadata: { sourceAgent: agentId, origin: 'emergence', isError: resultEntry.isError, ...output.metadata },
       });
       toolResultEventIds.push(toolEvent.eventId);
@@ -470,6 +472,7 @@ export function capturePlugin(config: CapturePluginConfig): NativePlugin {
         redactionCount: number;
       }
       const buffers = new Map<string, Buffer>();
+      let previousToolResultEventIds: string[] = [];
       const ensure = (runId: string): Buffer => {
         const existing = buffers.get(runId);
         if (existing) return existing;
@@ -512,6 +515,10 @@ export function capturePlugin(config: CapturePluginConfig): NativePlugin {
         const buffer = ensure(busCtx.runId);
         const content = event.message?.content ?? '';
         if (event.message?.role === 'user') {
+          if (promotesToolObservations(content) && previousToolResultEventIds.length > 0) {
+            for (const eventId of previousToolResultEventIds) kernel.eventStore.markToolObservationPromoted(eventId);
+            previousToolResultEventIds = [];
+          }
           buffer.userText = content;
           const written = service.recordMessage({
             threadId: `companion-day:${clock.localDate()}`,
@@ -588,6 +595,7 @@ export function capturePlugin(config: CapturePluginConfig): NativePlugin {
           output: event.result.output,
           isError: event.result.isError,
           eventOrdinal: ++buffer.ordinal,
+          promotesToolObservation: promotesToolObservations(buffer.userText),
         });
         if (written) {
           buffer.toolResultEventIds.push(written.event.eventId);
@@ -600,6 +608,7 @@ export function capturePlugin(config: CapturePluginConfig): NativePlugin {
         const origin = event.summary?.origin ?? 'user';
         const buffer = buffers.get(runId);
         if (!buffer && origin === 'user') return;
+        const toolResultEventIds = buffer?.toolResultEventIds ?? [];
         buffers.delete(runId);
         const summary: RunSummary = {
           runId,
@@ -626,6 +635,7 @@ export function capturePlugin(config: CapturePluginConfig): NativePlugin {
               redactionCount: buffer.redactionCount,
               userText: buffer.primaryUserText ?? buffer.userText,
             });
+            previousToolResultEventIds = toolResultEventIds;
           } else {
             await service.captureRun(summary, threadId);
           }

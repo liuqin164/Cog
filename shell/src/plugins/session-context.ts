@@ -150,6 +150,7 @@ function toContextItem(item: AgentRecallItem): SessionContextItem {
     ...(eventId === undefined ? {} : { sourceRefs: [eventId], anchorEvent: eventId }),
     ...(sourceLocator === undefined ? {} : { sourceLocator }),
     ...(item.whyMatched === undefined ? {} : { whyMatched: item.whyMatched }),
+    ...(item.trust === undefined ? {} : { trust: item.trust }),
   };
 }
 

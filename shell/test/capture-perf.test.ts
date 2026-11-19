@@ -34,4 +34,11 @@ describe('a large tool result is captured without compiling it (#359)', () => {
     expect(small.elapsed).toBeLessThan(5_000);
     expect(small.events.every((event) => event.eventType === 'RAW_EVENT_RECORDED')).toBe(true);
   }, 30_000);
+
+  test('a tool result past the cap is truncated, not stored whole (#325)', async () => {
+    const large = await captureBytes(60_000);
+    expect(large.text.length).toBeLessThan(60_000);
+    expect(large.text).toMatch(/\[tool result truncated: \d+ chars omitted\]$/);
+    expect(large.events.every((event) => event.eventType === 'RAW_EVENT_RECORDED')).toBe(true);
+  }, 30_000);
 });
