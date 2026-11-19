@@ -76,6 +76,11 @@ export const SOVEREIGNTY_DELETE_COUNT_FIELDS = [
   'entityMentions',
   'episodes',
   'frames',
+  'projectBranches',
+  'topologyMembership',
+  'interactionUnits',
+  'cognitiveNodes',
+  'traceEvents',
 ] as const;
 
 /** The counts an export reports. Frozen. */
@@ -370,6 +375,21 @@ export class MemorySovereigntyService {
            OR EXISTS (SELECT 1 FROM json_each(evidence_event_ids_json) WHERE value IN (SELECT id FROM _sovereignty_event_ids))
          )`,
         [scope]);
+      deleted.projectBranches = this.deleteIfTable('project_branches', `DELETE FROM project_branches WHERE project_id=?`, [scope]);
+      deleted.topologyMembership = this.deleteIfTable('topology_membership',
+        `DELETE FROM topology_membership WHERE neuron_id IN (SELECT id FROM _sovereignty_event_ids) OR COALESCE(project_id,'')=?`,
+        [scope]);
+      deleted.interactionUnits = this.deleteIfTable('interaction_units',
+        `DELETE FROM interaction_units WHERE json_valid(message_neuron_ids_json) AND EXISTS (
+           SELECT 1 FROM json_each(message_neuron_ids_json) WHERE value IN (SELECT id FROM _sovereignty_event_ids)
+         )`,
+        []);
+      deleted.cognitiveNodes = this.deleteIfTable('cognitive_nodes',
+        `DELETE FROM cognitive_nodes WHERE source_neuron_id IN (SELECT id FROM _sovereignty_event_ids) OR COALESCE(project_id,'')=?`,
+        [scope]);
+      deleted.traceEvents = this.deleteIfTable('trace_events',
+        `DELETE FROM trace_events WHERE COALESCE(project_id,'')=? AND timestamp>=? AND timestamp<?`,
+        [scope, input.start, input.end]);
       this.runDelete(`DELETE FROM memory_events WHERE event_id IN (SELECT id FROM _sovereignty_event_ids)`, []);
       })();
     } finally {
