@@ -434,9 +434,10 @@ test('doctor --storage reads the configured database without --db', async () => 
   const output = await new Response(proc.stdout).text();
   const errorOutput = await new Response(proc.stderr).text();
   expect({ exitCode: await proc.exited, stderr: errorOutput }).toEqual({ exitCode: 0, stderr: '' });
-  const parsed = JSON.parse(output) as { dbPath?: string; storage?: { rawEvents?: unknown } };
+  const parsed = JSON.parse(output) as { dbPath?: string; storage?: { rawEvents?: unknown; embeddings?: unknown } };
   expect(parsed.dbPath).toBe(join(dir, '.cogmem', 'memory.db'));
   expect(parsed.storage?.rawEvents).toBe(0);
+  expect(parsed.storage?.embeddings).toEqual({ completed: 0, total: 0, failed: 0 });
 });
 
 test('memory CLI explicit database recall requires an explicit project timezone', async () => {

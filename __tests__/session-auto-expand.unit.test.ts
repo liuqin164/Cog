@@ -1,10 +1,15 @@
 import { describe, expect, test } from 'bun:test';
+import { join } from 'node:path';
 
+import { KernelAgentMemoryBackend, type AgentRecallItem } from '../src/agent/AgentMemoryBackend.js';
+import { createMemoryKernel } from '../src/factory.js';
 import {
   assembleSessionContext,
   type SessionContextAssembly,
   type SessionDigest,
 } from '../src/session/index.js';
+import type { SessionContextItem } from '../src/session/index.js';
+import { makeTempDir } from './helpers/tmp.js';
 
 /**
  * Deterministic auto-expansion (#253, roadmap B3).
@@ -125,4 +130,67 @@ describe('an expansion is budgeted like any working_set item, and gives way firs
     expect(assembly.autoExpanded.length).toBe(1);
     expect(assembly.autoExpanded[0]).toBe('evt-stub-1');
   });
+});
+
+test('a profile summary expands into the ledger original it stands for', async () => {
+  const ORIGINAL_TEXT = '他说那句「过阵子再说」先不动，我听他的。';
+  const KEY = '发布计划';
+  const VALUE = '「先别动发布」';
+  const SUMMARY = `${KEY}: ${VALUE}`;
+  const kernel = createMemoryKernel({ dbPath: join(makeTempDir('cogmem-atlas-expand-'), 'memory.db') });
+  const backend = new KernelAgentMemoryBackend(kernel);
+  try {
+    const source = kernel.recordRawEvent({
+      projectId: 'p',
+      sessionId: 's',
+      threadId: 's',
+      role: 'user',
+      content: ORIGINAL_TEXT,
+    });
+    const eventId = source.eventId;
+    kernel.eventStore.append({
+      streamId: `profile-entry:${KEY}`,
+      streamType: 'system',
+      eventType: 'PROFILE_ENTRY_COMPILED',
+      projectId: 'p',
+      sourceId: 'profile',
+      occurredAt: Date.now(),
+      payload: {
+        entryId: 'profile:发布计划',
+        projectId: 'p',
+        ledger: 'facts',
+        key: KEY,
+        value: VALUE,
+        sourceRefs: [{ eventId, eventType: 'RAW_EVENT_RECORDED', role: 'user' }],
+        recordedAt: Date.now(),
+        compiledAt: Date.now(),
+        version: 1,
+      },
+    });
+
+    const recalled = backend.recall({ agentId: 'a', projectId: 'p', query: '先别动发布', limit: 5 });
+    const profile = recalled.items.find((item): item is AgentRecallItem => item.text === SUMMARY);
+    expect(profile).toBeDefined();
+    expect(profile!.sourceContext?.event?.text).toBe(ORIGINAL_TEXT);
+
+    const toContextItem = (item: AgentRecallItem): SessionContextItem => ({
+      id: item.sourceAnchor?.eventId ?? item.id,
+      text: item.text,
+      originalText: item.sourceContext?.event?.text,
+      sourceRefs: [item.sourceAnchor?.eventId ?? item.id],
+      anchorEvent: item.sourceAnchor?.eventId,
+      sourceLocator: `read mem:${item.sourceAnchor?.eventId}`,
+    });
+    const assembly = assemble({
+      recall: recalled.items.map(toContextItem),
+      recentText: ['先别动发布'],
+    });
+
+    expect(assembly.autoExpanded.length).toBeGreaterThan(0);
+    expect(assembly.lanes.find((lane) => lane.lane === 'working_set')!.items.map((item) => item.text))
+      .toContain(ORIGINAL_TEXT);
+    expect(assembly.text).toContain(ORIGINAL_TEXT);
+  } finally {
+    kernel.close();
+  }
 });
