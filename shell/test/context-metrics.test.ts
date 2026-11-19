@@ -94,7 +94,7 @@ describe('autoExpands in /context reflects assembly (#352)', () => {
   }, 30_000);
 });
 describe('tools load full set, independent of message content (#333)', () => {
-  test('casual message and task-like message both load the same 8 tools', async () => {
+  test('casual message and task-like message both load the same 9 tools', async () => {
     const provider = new ScriptedProvider([{ text: '收到。', toolCalls: [] }]);
     const shell = makeShell(makeTempDir(), provider, { dream: NO_DREAM });
     await shell.start();
@@ -118,6 +118,7 @@ describe('tools load full set, independent of message content (#333)', () => {
       expect(casualToolList).toContain('ask_user');
       expect(casualToolList).toContain('declare_task');
       expect(casualToolList).toContain('propose_soul_edit');
+      expect(casualToolList).toContain('memory');
     } finally {
       await shell.stop();
     }
@@ -131,7 +132,7 @@ describe('tools load full set, independent of message content (#333)', () => {
       const ctx = (await shell.runCommand('context')).text;
       const toolsLine = ctx.match(/已装载工具：(.+)/);
       expect(toolsLine).not.toBeNull();
-      expect(toolsLine![1].split('、')).toHaveLength(8);
+      expect(toolsLine![1].split('、')).toHaveLength(9);
     } finally {
       await shell.stop();
     }
