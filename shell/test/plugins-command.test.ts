@@ -222,8 +222,9 @@ describe('a requested restart continues the open assignment once', () => {
     try {
       await waitFor(() => settled === 1);
       expect(provider.calls).toHaveLength(1);
-      expect(provider.calls[0].systemPrompt).toContain('confirmed findings: 注册表在 shell/src/config.ts:147');
-      expect(provider.calls[0].systemPrompt).toContain('install the telegram plugin');
+      const request = (provider.calls[0].messages ?? []).map((message) => String(message.content)).join('\n');
+      expect(request).toContain('confirmed findings: 注册表在 shell/src/config.ts:147');
+      expect(request).toContain('install the telegram plugin');
       expect(shell.trace.read().some((record) => record.kind === 'assignment_resume' && record.assignmentId === 'assignment-1')).toBe(true);
       // Cleared before the run, so a run that dies cannot restart into another resume.
       expect(shell.machine.runtime.resumeAfterRestart).toBeUndefined();

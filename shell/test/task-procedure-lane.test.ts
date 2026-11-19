@@ -5,7 +5,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import type { SessionContextAssembly } from 'cogmem';
-import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
+import { ScriptedProvider, makeShell, makeTempDir, seedOpenAssignment } from './helpers.ts';
 import type { ModelTurn } from '../src/state/agent-loop.ts';
 
 const NO_DREAM = { runKernelNight: false, maxEpisodes: 5, windowStartHour: 3, windowEndHour: 3 };
@@ -32,7 +32,9 @@ const shellFor = (prefix: string, provider: ScriptedProvider, contextSweetSpot =
 
 /** Task A, completed twice with the same declared practice, so the book holds it as established. */
 const completeTaskA = async (shell: ReturnType<typeof makeShell>) => {
+  seedOpenAssignment(shell, '把发布脚本改好');
   await shell.submit('把发布脚本改好');
+  seedOpenAssignment(shell, '把发布脚本改好');
   await shell.submit('再把发布脚本核一遍');
 };
 
@@ -105,6 +107,7 @@ describe('the start-of-task lane carries a produced practice (#261)', () => {
     const shell = shellFor('task-procedure-lane-budget-', provider, 400);
     await shell.start();
     try {
+      seedOpenAssignment(shell, '发布之前做一次回滚演练');
       for (const [index, descriptor] of [
         { domain: '发布', key: 'npm-publish', title: '发布 npm 包', steps: ['跑测试', 'bun run build'], tools: ['bun'], checklist: true },
         { domain: '回滚', key: 'rollback', title: '回滚一次发布', steps: ['取上一版', '重新部署'], tools: ['bash'] },

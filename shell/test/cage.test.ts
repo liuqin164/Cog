@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CompanionShell } from '../src/app.ts';
 import type { CageConfig } from '../src/plugins/cage.ts';
-import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
+import { ScriptedProvider, makeShell, makeTempDir, seedOpenAssignment } from './helpers.ts';
 
 /** The cage axis is the whole point of these tests, so it stays a named argument. */
 function cageShell(dir: string, provider: ScriptedProvider, budgets: CageConfig) {
@@ -41,6 +41,7 @@ describe('the cage (budgets and whitelist at hook points)', () => {
     const shell = cageShell(dir, provider, { maxTurnsPerRun: 2, maxTokensPerRun: 10_000, toolWhitelist: ['read'] });
     await shell.start();
     try {
+      seedOpenAssignment(shell, 'loop');
       const summary = await shell.submit('loop');
       expect(summary!.stopReason).toBe('budget_exceeded');
       expect(summary!.turns).toBe(2);

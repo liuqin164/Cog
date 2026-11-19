@@ -2,9 +2,18 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CompanionShell } from '../src/app.ts';
-import { ScriptedProvider, makeShell, makeTempDir, waitUntil } from './helpers.ts';
+import { ScriptedProvider, makeShell, makeTempDir, seedOpenAssignment, waitUntil } from './helpers.ts';
 
 const TIGHT = { maxTurnsPerRun: 6, maxTokensPerRun: 20_000, toolWhitelist: null };
+const asText = (messages: Array<{ content: unknown }> | undefined) => (messages ?? []).map((message) => String(message.content)).join('\n');
+
+const laneBlock = (text: string, lane: string): string => {
+  const start = text.indexOf(`[${lane}]`);
+  if (start < 0) return '';
+  const rest = text.slice(start + lane.length + 2);
+  const next = rest.search(/\n\[[a-z_]+\]/);
+  return next < 0 ? rest : rest.slice(0, next);
+};
 
 /** The emergence decision point replaced with one candidate, so a tick starts an autonomous run. */
 function emerge(shell: CompanionShell, text = 'an autonomous thought'): void {
@@ -75,6 +84,7 @@ describe('the budget tiers (#222)', () => {
     });
     await shell.start();
     try {
+      seedOpenAssignment(shell, 'install the plugin');
       const first = await shell.submit('install the plugin');
       expect(first!.stopReason).toBe('budget_exceeded');
       expect(shell.state).toBe('SUSPENDED');
@@ -83,8 +93,9 @@ describe('the budget tiers (#222)', () => {
       expect(open.origin).toBe('user_message');
       expect(open.stoppedStep).toContain('read');
       expect(open.nextStep).toBeTruthy();
-      expect(shell.systemPrompt()).toContain('<open-assignment>');
-      expect(shell.systemPrompt()).toContain(open.nextStep!);
+      const resumed = asText(provider.calls[1].messages);
+      expect(laneBlock(resumed, 'working_set')).toContain('<open-assignment>');
+      expect(laneBlock(resumed, 'working_set')).toContain(open.nextStep!);
       expect(shell.trace.read().some((record) => record.kind === 'assignment_stopped')).toBe(true);
       // 3.5k spent on one turn at a 3k cap: the estimate is one more turn at the same rate.
       expect(shell.machine.runtime.suspension?.budget?.additionalTokens).toBe(3_501);
@@ -120,6 +131,7 @@ describe('the budget tiers (#222)', () => {
     });
     await shell.start();
     try {
+      seedOpenAssignment(shell, 'install the plugin');
       const first = await shell.submit('install the plugin');
       expect(first!.stopReason).toBe('run_error');
       expect(shell.machine.runtime.openAssignment?.origin).toBe('user_message');

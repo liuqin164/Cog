@@ -9,9 +9,18 @@ import { join } from 'node:path';
 import type { CompanionShell } from '../src/app.ts';
 import { CheckpointStore } from '../src/state/checkpoint.ts';
 import type { CageConfig } from '../src/plugins/cage.ts';
-import { ScriptedProvider, makeShell, makeTempDir, waitUntil } from './helpers.ts';
+import { ScriptedProvider, makeShell, makeTempDir, seedOpenAssignment, waitUntil } from './helpers.ts';
 
 const TIGHT: CageConfig = { maxTurnsPerRun: 5, maxTokensPerRun: 1_000, toolWhitelist: null };
+const asText = (messages: Array<{ content: unknown }> | undefined) => (messages ?? []).map((message) => String(message.content)).join('\n');
+
+const laneBlock = (text: string, lane: string): string => {
+  const start = text.indexOf(`[${lane}]`);
+  if (start < 0) return '';
+  const rest = text.slice(start + lane.length + 2);
+  const next = rest.search(/\n\[[a-z_]+\]/);
+  return next < 0 ? rest : rest.slice(0, next);
+};
 
 /** The emergence decision point replaced with one candidate, so a tick starts an autonomous run. */
 function emerge(shell: CompanionShell, text = 'continue the open task'): void {
@@ -35,6 +44,7 @@ describe('a budget pause (#228)', () => {
     const shell = pausedShell(dir, provider);
     await shell.start();
     try {
+      seedOpenAssignment(shell, 'do the thing');
       const first = await shell.submit('do the thing');
       expect(first!.stopReason).toBe('budget_exceeded');
       expect(shell.state).toBe('SUSPENDED');
@@ -60,9 +70,9 @@ describe('a budget pause (#228)', () => {
 
       expect(shell.machine.runtime.suspension).toBeUndefined();
       expect(shell.trace.read().some((record) => record.kind === 'suspension_approved')).toBe(true);
-      // The resumed run is the same assignment: its prompt still names the place to continue.
-      expect(provider.calls[1].systemPrompt).toContain('<open-assignment>');
-      expect(provider.calls[1].systemPrompt).toContain('do the thing');
+      const resumed = asText(provider.calls[1].messages);
+      expect(laneBlock(resumed, 'working_set')).toContain('<open-assignment>');
+      expect(laneBlock(resumed, 'working_set')).toContain('do the thing');
     } finally {
       await shell.stop();
     }
@@ -198,6 +208,7 @@ describe('autonomous continuation backoff (#228)', () => {
     }, { now: () => now });
     await shell.start();
     try {
+      seedOpenAssignment(shell, 'do the thing');
       await shell.submit('do the thing');
       emerge(shell);
 
@@ -211,7 +222,7 @@ describe('autonomous continuation backoff (#228)', () => {
       await shell.tick(now);
       assignment = shell.machine.runtime.openAssignment!;
       expect(assignment.attempts).toBe(1);
-      expect(provider.calls[2].systemPrompt).not.toContain('<open-assignment>');
+      expect(asText(provider.calls[2].messages)).not.toContain('<open-assignment>');
       expect(shell.trace.read().some((record) => record.kind === 'assignment_resume_deferred')).toBe(true);
 
       now += 5 * 60_000;
@@ -250,6 +261,7 @@ describe('autonomous continuation backoff (#228)', () => {
     }, { now: () => now });
     await shell.start();
     try {
+      seedOpenAssignment(shell, 'do the thing');
       await shell.submit('do the thing');
       const firstId = shell.machine.runtime.openAssignment!.id;
       emerge(shell);
