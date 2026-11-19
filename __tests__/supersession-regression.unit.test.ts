@@ -32,13 +32,30 @@ describe('Issue #72: supersession on the recall surface', () => {
     const { kernel, backend } = fixture('cogmem-supersession-isolation-');
     try {
       await backend.rememberTurn({ agentId: 'a', projectId: 'p', sessionId: 's-a', userText: 'The deployment window for atlas is on day 5. Ticket A-100.' });
-      await backend.rememberTurn({ agentId: 'b', projectId: 'p', sessionId: 's-b', userText: 'Correction: the deployment window for atlas is on day 10. Ticket B-200.' });
-      const fromA = backend.recall({ agentId: 'a', projectId: 'p', query: 'When is the deployment window for atlas?', limit: 5 }).items.map((item) => item.text).join('\n');
-      const fromB = backend.recall({ agentId: 'b', projectId: 'p', query: 'When is the deployment window for atlas?', limit: 5 }).items.map((item) => item.text).join('\n');
-      expect(fromA).toContain('A-100');
-      expect(fromA).not.toContain('B-200');
-      expect(fromB).toContain('B-200');
-      expect(fromB).not.toContain('A-100');
+      await backend.rememberTurn({ agentId: 'a', projectId: 'p', sessionId: 's-a', userText: 'Correction: the deployment window for atlas is on day 6. Ticket A-101.' });
+      kernel.recordRawEvent({
+        projectId: 'p',
+        sessionId: 's-b',
+        threadId: 's-b',
+        role: 'user',
+        eventOrdinal: 1,
+        content: 'The deployment window for atlas is on day 10. Ticket B-200.',
+        metadata: { tags: ['agent:b'] },
+      });
+      kernel.recordRawEvent({
+        projectId: 'p',
+        sessionId: 's-b',
+        threadId: 's-b',
+        role: 'user',
+        eventOrdinal: 2,
+        content: 'Correction: the deployment window for atlas is on day 11. Ticket B-201.',
+        metadata: { tags: ['agent:b'] },
+      });
+      const result = texts(backend, 'p', 'When is the deployment window for atlas?');
+      expect(result).toContain('A-101');
+      expect(result).not.toContain('A-100');
+      expect(result).toContain('B-201');
+      expect(result).not.toContain('B-200');
     } finally {
       kernel.close();
     }

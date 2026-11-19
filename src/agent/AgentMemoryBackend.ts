@@ -2368,7 +2368,7 @@ export class KernelAgentMemoryBackend {
     return filterSuperseded(merged, (item) => ({
       id: item.id,
       content: item.text,
-      createdAt: item.sourceAnchor?.eventOrdinal ?? item.sourceAnchor?.turnSeq ?? 0,
+      createdAt: item.sourceAnchor?.turnSeq ?? item.sourceAnchor?.eventOrdinal ?? 0,
       // Deliberately no `topicPath`: on this path many unrelated records share
       // one, and grouping by it collapsed the recall floor from 4/18 to 2/18.
       // The subject phrase is the signature the rule is stated in.
