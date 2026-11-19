@@ -152,6 +152,9 @@ function statusLines(view: TuiView): string[] {
     `临期承诺：${dueSoon} 条（待办 ${pending} 条）`,
     view.status.memoryModel?.line ?? '记忆模型：等待常驻进程应答',
     `下次唤醒：${view.status.nextWakeAt === undefined ? '无安排' : formatWakeAt(view.status.nextWakeAt, view.status.timeZone)}`,
+    view.status.quietWindow === undefined
+      ? '勿扰窗：关'
+      : `勿扰窗：${String(view.status.quietWindow.startHour).padStart(2, '0')}:00–${String(view.status.quietWindow.endHour).padStart(2, '0')}:00（${view.status.quietWindow.active ? '生效中' : '未生效'}）`,
     `沙箱：${view.status.sandbox === 'off' ? '关（bwrap 不可用，bash 无隔离，结果标注 [sandbox: off]）' : view.status.sandbox === 'on' ? '开（bwrap）' : '未知（等常驻进程应答）'}`,
   ];
 }

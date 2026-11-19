@@ -80,6 +80,8 @@ export interface CommandHost {
   snooze?(minutes: number, commitmentId?: string): CommandReply;
   /** F2: register the agent's own wake intention. */
   wake?(minutes: number, reason: string): CommandReply;
+  /** #328: the configured do-not-disturb window and whether it is open now. */
+  quietWindow?(): { startHour: number; endHour: number; active: boolean } | undefined;
   whyReport(): string;
   capturePaused(): boolean;
   setCapturePaused(paused: boolean): void;
@@ -253,7 +255,11 @@ export const CORE_COMMANDS: readonly CoreCommand[] = [
       const feedbackLine = modulated.length === 0
         ? '浮现降频：无'
         : `浮现降频：${modulated.map((type) => `${type.type} L${type.level}${type.stopped ? '（已停）' : ''} 忽略 ${type.ignoredCount}`).join(' · ')}`;
-      return { text: `生命周期 ${state}，checkpoint seq ${seq}，本日 ${costDayTokens} token，${sandboxLine}。${feedbackLine}。` };
+      const quiet = host.quietWindow?.();
+      const quietLine = quiet === undefined
+        ? '勿扰窗：关'
+        : `勿扰窗：${String(quiet.startHour).padStart(2, '0')}:00–${String(quiet.endHour).padStart(2, '0')}:00（${quiet.active ? '生效中' : '未生效'}）`;
+      return { text: `生命周期 ${state}，checkpoint seq ${seq}，本日 ${costDayTokens} token，${sandboxLine}。${quietLine}。${feedbackLine}。` };
     },
   },
   {

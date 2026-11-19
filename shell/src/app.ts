@@ -759,7 +759,13 @@ export class CompanionShell implements ShellControl, AttachShell {
       if (this.modelRouter.storeError) this.trace.append('model_routes_load_failed', { message: this.modelRouter.storeError });
       provider = modelRouterPlugin(this.modelRouter);
     }
-    this.host.register(clockPlugin({ timeZone: this.config.timeZone, idleWakeIntervalMs: this.config.idleWakeIntervalMs, dreamWindow: { startHour: this.config.dream.windowStartHour, endHour: this.config.dream.windowEndHour }, now: this.now }));
+    this.host.register(clockPlugin({
+      timeZone: this.config.timeZone,
+      idleWakeIntervalMs: this.config.idleWakeIntervalMs,
+      dreamWindow: { startHour: this.config.dream.windowStartHour, endHour: this.config.dream.windowEndHour },
+      ...(this.config.quiet ? { quietWindow: this.config.quiet } : {}),
+      now: this.now,
+    }));
     this.host.register(provider, this.config.model);
     this.host.register(cagePlugin(this.config.budgets, this.trace, { ...this.config.workBudget, toolWhitelist: this.config.budgets.toolWhitelist }));
     this.host.register(builtinToolsPlugin(), {
@@ -1676,6 +1682,25 @@ export class CompanionShell implements ShellControl, AttachShell {
     }
     if (this.machine.state === 'DREAMING') return;
     await this.applyDueWakeIntent(at);
+    const quiet = this.clock!.quietWindowOpen(at);
+    if (!quiet && this.machine.state === 'IDLE') {
+      const queue = [...(this.machine.runtime.awayQueue ?? [])];
+      const deferred = queue.findIndex((entry) => entry.deferred === 'quiet');
+      if (deferred >= 0) {
+        const [entry] = queue.splice(deferred, 1);
+        this.machine.updateRuntime({ awayQueue: queue });
+        this.consumeEmergence({ id: entry!.id, source: entry!.source, observedAt: entry!.observedAt, sourceRefs: entry!.sourceRefs }, at);
+        await this.speakEmergence({
+          id: entry!.id,
+          text: entry!.text,
+          reason: entry!.reason,
+          ...(entry!.source === undefined ? {} : { source: entry!.source as SurfacingSource }),
+          ...(entry!.sourceRefs === undefined ? {} : { sourceRefs: entry!.sourceRefs }),
+        }, at);
+        this.trace.append('emergence_quiet_delivered', { projectId: this.config.projectId, id: entry!.id, at });
+        return;
+      }
+    }
     if (this.dreamDue(at)) {
       const empty = this.emptyCatchupTarget(at);
       if (empty) {
@@ -1699,8 +1724,9 @@ export class CompanionShell implements ShellControl, AttachShell {
       const decision = allowed ? this.emergence!.decide(at) : undefined;
       if (due) this.runKernelWakeTick(at);
       if (decision) {
-        const userState = this.shouldHoldForAbsence() ? 'idle' : 'in-conversation';
-        const channel = { reachability: 'online' as const, interruptibility: this.shouldHoldForAbsence() ? 'low' as const : 'high' as const };
+        const absent = this.shouldHoldForAbsence();
+        const userState = quiet ? 'night-dnd' : absent ? 'idle' : 'in-conversation';
+        const channel = { reachability: 'online' as const, interruptibility: quiet || absent ? 'low' as const : 'high' as const };
         const routed = new Map<string, ReturnType<KernelAgentMemoryBackend['deliveryRoute']>>();
         if (decision.candidates.length === 1) {
           const only = decision.candidates[0]!;
@@ -1725,7 +1751,7 @@ export class CompanionShell implements ShellControl, AttachShell {
             break;
           }
           if (delivery?.decision === 'accumulate') {
-            this.consumeEmergence(item, at);
+            if (!quiet) this.consumeEmergence(item, at);
             if (!(this.machine.runtime.awayQueue ?? []).some((entry) => entry.id === item.id)) {
               this.machine.updateRuntime({
                 awayQueue: enqueueAway(this.machine.runtime, {
@@ -1736,7 +1762,7 @@ export class CompanionShell implements ShellControl, AttachShell {
                   ...(item.source ? { source: item.source } : {}),
                   ...(item.observedAt === undefined ? {} : { observedAt: item.observedAt }),
                   ...(item.sourceRefs ? { sourceRefs: item.sourceRefs } : {}),
-                  deferred: 'absence',
+                  deferred: quiet ? 'quiet' : 'absence',
                 }),
               });
             }
@@ -1746,7 +1772,9 @@ export class CompanionShell implements ShellControl, AttachShell {
               reason: item.reason,
               at,
               destination: delivery.destination,
+              ...(quiet ? { reason: 'quiet_window' } : {}),
             });
+            break;
           }
         }
       } else if (due && !allowed) {
@@ -1901,6 +1929,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   private reportHealth(at: number): void {
     try {
       this.kernel.health.check({ now: at });
+      if (this.clock!.quietWindowOpen(at)) return;
       this.reportMemoryPressure(at);
       const away = this.shouldHoldForAbsence();
       const notice = this.backend.healthNotice({
@@ -2227,6 +2256,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       promptCache: this.promptCache ?? null,
       costTokens: this.machine.runtime.costDayDate === today ? this.machine.runtime.costDayTokens ?? 0 : 0,
       timeZone: this.config.timeZone,
+      quietWindow: this.config.quiet ? { ...this.config.quiet, active: this.clock?.quietWindowOpen() ?? false } : undefined,
       sandbox: this.sandboxState(),
       capturePaused: this.capturePaused,
       ...(this.machine.state === 'SUSPENDED' && this.machine.runtime.suspension ? { suspended: this.suspendedLine(this.machine.runtime.suspension) } : {}),
@@ -3055,6 +3085,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     resumeSurfacing: (type: string) => this.resumeSurfacing(type),
     snooze: (minutes: number, commitmentId: string | undefined) => this.snooze(minutes, commitmentId),
     wake: (minutes: number, reason: string) => this.wake(minutes, reason),
+    quietWindow: () => (this.config.quiet ? { ...this.config.quiet, active: this.clock!.quietWindowOpen() } : undefined),
     whyReport: () => this.whyReport(),
     capturePaused: () => this.capturePaused,
     setCapturePaused: (paused: boolean) => {

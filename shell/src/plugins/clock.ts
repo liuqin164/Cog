@@ -12,6 +12,7 @@ export interface ClockConfig {
   timeZone: string;
   idleWakeIntervalMs: number;
   dreamWindow: { startHour: number; endHour: number };
+  quietWindow?: { startHour: number; endHour: number };
   /** The process clock; injected so a test can cross a minute boundary on purpose. */
   now?: () => number;
 }
@@ -123,6 +124,14 @@ export class ClockService {
     const { startHour, endHour } = this.config.dreamWindow;
     if (startHour < endHour) return hour >= endHour || hour < startHour;
     return startHour > endHour && hour >= endHour && hour < startHour;
+  }
+
+  quietWindowOpen(at = this.now()): boolean {
+    const window = this.config.quietWindow;
+    if (!window) return false;
+    const hour = this.timeContext(at).hour;
+    if (window.startHour < window.endHour) return hour >= window.startHour && hour < window.endHour;
+    return hour >= window.startHour || hour < window.endHour;
   }
 
   dreamNightDate(at = this.now()): string {
