@@ -15,6 +15,7 @@ export interface ModelRouterOptions {
   store: RouteStore;
   /** The env-derived mg route. Never written to the store; it is the built-in default. */
   builtin: ModelRoute;
+  builtinAvailable?: boolean;
   timeoutMs: number;
   /** Each provider retry, so a recovered 429 is in the trace (#282). */
   onRetry?: (event: { attempt: number; status: number; delayMs: number }) => void;
@@ -23,6 +24,7 @@ export interface ModelRouterOptions {
 export class ModelRouter implements ModelProvider {
   private provider: ModelProvider;
   private activeName: string;
+  private current: ModelRoute;
   private readonly timeoutMs: number;
 
   constructor(private readonly options: ModelRouterOptions) {
@@ -31,6 +33,7 @@ export class ModelRouter implements ModelProvider {
     const route = stored ? options.store.find(stored) : undefined;
     const initial = route ?? options.builtin;
     this.activeName = initial.name;
+    this.current = initial;
     this.provider = this.build(initial);
   }
 
@@ -45,6 +48,14 @@ export class ModelRouter implements ModelProvider {
   /** The active route's name, not the provider's display name. */
   get active(): string {
     return this.activeName;
+  }
+
+  get activeRoute(): ModelRoute {
+    return this.current;
+  }
+
+  get builtinUnavailable(): boolean {
+    return this.options.builtinAvailable === false && this.options.store.list().length > 0;
   }
 
   /** The active route's context budget; a route without one inherits the built-in route's. */
@@ -76,6 +87,7 @@ export class ModelRouter implements ModelProvider {
     if (!route) throw new Error(`route_unknown: "${name}" 不在路线表里（可用：${this.routes().map((entry) => entry.name).join('、')}）`);
     this.provider = this.build(route);
     this.activeName = route.name;
+    this.current = route;
     this.options.store.setActive(route.name === BUILTIN_ROUTE_NAME ? undefined : route.name);
     return route;
   }
@@ -102,10 +114,10 @@ export class ModelRouter implements ModelProvider {
 }
 
 /** What a route looks like when printed: never the key, never a URL that carries one. */
-export function routeLine(route: ModelRoute, active: boolean): string {
+export function routeLine(route: ModelRoute, active: boolean, unavailable = false): string {
   const marker = active ? '●' : '○';
   const where = redactUrl(route.baseUrl, [route.apiKey]);
-  return `${marker} ${route.name} · ${route.model} · ${where}`;
+  return `${marker} ${route.name} · ${route.model} · ${where}${unavailable ? ' · 不可用（本机未配置 MG_BASE_URL）' : ''}`;
 }
 
 /** The plugin face: the router becomes the `model` service the runtime was already built around. */

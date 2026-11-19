@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
+import { join } from 'node:path';
+import { RouteStore } from '../src/model/routes.ts';
 import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
 
 const DREAM_ALL_DAY = { runKernelNight: true, maxEpisodes: 5, windowStartHour: 0, windowEndHour: 24 };
@@ -41,6 +43,97 @@ function startModelServer(usage = { prompt_tokens: 100, completion_tokens: 50 })
 }
 
 describe('Dream route A in the shell', () => {
+  test('the memory role follows the active custom route and calls its provider', async () => {
+    const model = startModelServer();
+    const dir = makeTempDir();
+    const store = new RouteStore(join(dir, 'data', 'routes.json')).load();
+    store.add({ name: 'owner-model', baseUrl: model.url, apiKey: 'test-key', model: 'test-model' });
+    store.setActive('owner-model');
+    const shell = makeShell(dir, undefined, {
+      dream: DREAM_ALL_DAY,
+      http: { enabled: true, port: 0, hostname: '127.0.0.1' },
+    });
+    await shell.start();
+    try {
+      const clock = shell.host.getService<{ localDate(at?: number): string }>('clock');
+      const dayThread = `companion-day:${clock.localDate(NIGHT)}`;
+      await shell.backend.rememberTurnWithResult({
+        agentId: shell.config.agentId,
+        projectId: shell.config.projectId,
+        sessionId: shell.config.sessionId,
+        threadId: dayThread,
+        turnId: 'custom-route-seed',
+        userText: '请以后始终记住：不要碰事实同伴库。',
+        assistantText: '记下了。',
+        timestamp: BASE,
+        ingestMode: 'raw_then_dream',
+      });
+
+      const health = await (await fetch(`${shell.httpUrl}/health`)).json() as {
+        memoryModel: { route: string; baseUrl: string; state: string };
+      };
+      expect(health.memoryModel.route).toBe('owner-model');
+      expect(health.memoryModel.baseUrl).toBe(new URL(model.url).toString());
+      expect(health.memoryModel.state).toBe('reachable');
+
+      await shell.runDream(NIGHT);
+      expect(model.calls()).toBeGreaterThan(0);
+      expect(shell.trace.read().some((record) => record.kind === 'dream_model_usage')).toBe(true);
+    } finally {
+      await shell.stop();
+    }
+  });
+
+  test('an unreachable memory model is visible, traced, and counts as a failed night', async () => {
+    const dir = makeTempDir();
+    const store = new RouteStore(join(dir, 'data', 'routes.json')).load();
+    store.add({ name: 'dead-model', baseUrl: 'http://127.0.0.1:1', apiKey: 'test-key', model: 'test-model' });
+    store.setActive('dead-model');
+    const shell = makeShell(dir, undefined, {
+      dream: DREAM_ALL_DAY,
+      http: { enabled: true, port: 0, hostname: '127.0.0.1' },
+    });
+    await shell.start();
+    try {
+      const clock = shell.host.getService<{ localDate(at?: number): string }>('clock');
+      for (let day = 0; day < 3; day += 1) {
+        const at = BASE + day * 24 * 60 * 60_000;
+        await shell.backend.rememberTurnWithResult({
+          agentId: shell.config.agentId,
+          projectId: shell.config.projectId,
+          sessionId: shell.config.sessionId,
+          threadId: `companion-day:${clock.localDate(at + 2 * 60 * 60_000)}`,
+          turnId: `dead-model-seed-${day}`,
+          userText: `第 ${day + 1} 天：请以后始终记住不要碰事实同伴库。`,
+          assistantText: '记下了。',
+          timestamp: at,
+          ingestMode: 'raw_then_dream',
+        });
+        await shell.runDream(at + 2 * 60 * 60_000);
+      }
+
+      const trace = shell.trace.read();
+      expect(trace.some((record) => record.kind === 'memory_model_unavailable')).toBe(true);
+      expect(shell.currentStatus().memoryModel).toMatchObject({
+        route: 'dead-model',
+        state: 'unreachable',
+      });
+      expect(shell.currentStatus().memoryModel?.line).toContain('夜间整合不会用模型');
+
+      const health = await (await fetch(`${shell.httpUrl}/health`)).json() as {
+        memoryModel: { state: string; line: string };
+      };
+      expect(health.memoryModel.state).toBe('unreachable');
+      expect(health.memoryModel.line).toContain('夜间整合不会用模型');
+
+      const streak = shell.kernel.health.check({ record: false }).checks.find((check) => check.id === 'dream_streak');
+      expect(streak?.status).toBe('degraded');
+      expect((streak?.detail as { streak: number }).streak).toBe(3);
+    } finally {
+      await shell.stop();
+    }
+  });
+
   test('the memory model proposes a review candidate with llm_inference provenance', async () => {
     const model = startModelServer();
     const dir = makeTempDir();

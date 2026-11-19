@@ -62,6 +62,7 @@ describe('runtime model routes in the resident', () => {
       const switched = await shell.runCommand('model', 'mg');
       expect(switched.text).toContain('已切到路线「mg」');
       expect(shell.currentStatus().model).toBe('mg/auto/deepseek-v4.1-flash');
+      expect(shell.currentStatus().memoryModel).toMatchObject({ route: 'mg', state: 'reachable' });
       expect(shell.modelRoutes()).toHaveLength(2);
 
       // The same runtime object and the same checkpoint: no restart, no session rewrite.

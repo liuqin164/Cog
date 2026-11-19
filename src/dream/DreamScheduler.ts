@@ -180,7 +180,7 @@ export class DreamScheduler {
       semanticProcessorAvailable, semanticProcessorUnavailableCount, semanticProcessorFailedCount,
       semanticProcessorReason, semanticProcessorError,
     };
-    this.recordRun(result, startedAt, failures ? 'partial' : 'succeeded');
+    this.recordRun(result, startedAt, failures || semanticProcessorFailedCount > 0 ? 'partial' : 'succeeded');
     return result;
   }
 
