@@ -1444,7 +1444,7 @@ export class MemoryKernel {
   private refreshAtlasForRecall(projectId: string): void {
     const state = this.memoryAtlasStore.getProjectionState(projectId);
     if (!state || state.status === 'clean') return;
-    if (state.lastRebuildAt === undefined || Date.now() - state.lastRebuildAt < ATLAS_RECALL_REFRESH_MS) return;
+    if (state.lastRebuildAt !== undefined && Date.now() - state.lastRebuildAt < ATLAS_RECALL_REFRESH_MS) return;
     try {
       this.memoryAtlasIndexer.ensureFresh({ projectId, frameMode: 'repair' });
     } catch (error) {

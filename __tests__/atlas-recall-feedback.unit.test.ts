@@ -80,3 +80,27 @@ test('a recall within the day leaves a dirty Atlas for the nightly pass', () => 
     kernel.close();
   }
 });
+
+test('a recall builds an Atlas that was never built', () => {
+  const kernel = createMemoryKernel({ dbPath: join(makeTempDir('cogmem-atlas-recall-first-'), 'memory.db') });
+  try {
+    seedClosedEpisode(kernel);
+    kernel.memoryAtlasStore.db.prepare(`
+      UPDATE memory_atlas_projection_state SET last_rebuild_at=NULL WHERE project_id=? AND projection_name='memory_atlas.v2'
+    `).run('p');
+    expect(kernel.memoryAtlasStore.getProjectionState('p')?.lastRebuildAt).toBeUndefined();
+    expect(kernel.memoryAtlasStore.countDocuments('p')).toBe(0);
+
+    const result = new KernelAgentMemoryBackend(kernel).recall({
+      agentId: 'a', projectId: 'p', query: '归档保留期', limit: 4, now: Date.now(),
+    });
+
+    const state = kernel.memoryAtlasStore.getProjectionState('p');
+    expect(state?.status).toBe('clean');
+    expect(state?.lastRebuildAt).toBeNumber();
+    expect(kernel.memoryAtlasStore.countDocuments('p')).toBeGreaterThan(0);
+    expect(result.items.some((candidate) => candidate.tags.includes('atlas_node'))).toBe(true);
+  } finally {
+    kernel.close();
+  }
+});

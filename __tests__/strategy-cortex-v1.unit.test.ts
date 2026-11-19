@@ -96,6 +96,7 @@ describe('strategy cortex v1', () => {
       userText: 'Needle policy phrase exists only in raw history.', assistantText: 'Stored.',
       ingestMode: 'raw_archive_only',
     });
+    kernel.memoryAtlasStore.markProjectionClean('brain');
 
     const withoutRaw = memory.recall({
       agentId: 'openclaw', projectId: 'brain', query: 'Needle policy phrase',

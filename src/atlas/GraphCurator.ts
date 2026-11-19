@@ -8,6 +8,7 @@ import { EpisodeTitleGenerator } from './EpisodeTitleGenerator.js';
 import { extractEntityCues, inferActionKinds, normalizeEntityCueId } from '../utils/EntityCueExtractor.js';
 import { DEFAULT_TAXONOMY, type MemoryTaxonomy } from '../config/MemoryTaxonomy.js';
 import { localDateFor } from '../utils/LocalDateContext.js';
+import { eventHoldsSecretMark } from '../security/SecretMarks.js';
 import {
   invalidateMemoryEdgeSupportIds,
   mergeMemoryEdge,
@@ -109,6 +110,7 @@ export class GraphCurator {
     for (const row of rows) {
       const eventIds = this.episodeEventIds(row.episode_id);
       const events = eventIds.map((eventId) => this.eventStore.getEvent(eventId)).filter((event): event is MemoryEvent => Boolean(event));
+      if (events.some(eventHoldsSecretMark)) continue;
       const title = this.titleGenerator.generate({
         episodeId: row.episode_id,
         summary: row.summary,
@@ -218,9 +220,10 @@ export class GraphCurator {
     return { episodeCount: rows.length, facetNodeCount, facetEdgeCount, reviewNeeded };
   }
 
-  private projectEpisode(row: EpisodeRow, projectId: string, now: number): { projection: EpisodeProjection; facetNodeCount: number; facetEdgeCount: number; reviewNeeded: number } {
+  private projectEpisode(row: EpisodeRow, projectId: string, now: number): { projection?: EpisodeProjection; facetNodeCount: number; facetEdgeCount: number; reviewNeeded: number } {
     const eventIds = this.episodeEventIds(row.episode_id);
     const events = eventIds.map((eventId) => this.eventStore.getEvent(eventId)).filter((event): event is MemoryEvent => Boolean(event));
+    if (events.some(eventHoldsSecretMark)) return { facetNodeCount: 0, facetEdgeCount: 0, reviewNeeded: 0 };
     const title = this.titleGenerator.generate({
       episodeId: row.episode_id,
       summary: row.summary,

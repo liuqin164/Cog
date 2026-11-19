@@ -44,6 +44,7 @@ function seedFacetNode(kernel: MemoryKernel, evidenceEventIds: string[], occurre
     occurredAt,
     evidenceEventIds,
   });
+  kernel.memoryAtlasStore.markProjectionClean('p');
 }
 
 function evidenceReturnedFor(kernel: MemoryKernel, query: string): number {
