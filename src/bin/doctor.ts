@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path';
 
 import { loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfig.js';
 import { createMemoryKernelFromConfig } from '../factory.js';
+import { EventEmbeddingStore } from '../embedding/EventEmbeddingStore.js';
 import type { SharedCollection } from '../ports/index.js';
 import { RECALL_TRACE_MAX_ROWS } from '../observability/RecallDecisionTrace.js';
 import {
@@ -542,7 +543,7 @@ if (envPath) {
     const trace = readRecallTraceRetention(kernelDbPath!);
     storageReport = {
       rawEvents,
-      ...(embeddings ? { embeddings: { completed: embeddings.completed, total: embeddings.total, ...(embeddings.failed > 0 ? { failed: embeddings.failed } : {}) } } : {}),
+      ...(embeddings ? { embeddings } : {}),
       ...(trace ? { recallDecisions: trace } : {}),
     };
     ok([
