@@ -122,7 +122,17 @@ export interface ShellRuntimeState {
    * Emergence candidates that arrived with nobody attached. Talking to an empty room is not
    * presence, so they are held here and reported on the next attach instead of spoken into the void.
    */
-  awayQueue?: Array<{ id: string; text: string; reason: string; at: number }>;
+  awayQueue?: Array<{
+    id: string;
+    text: string;
+    reason: string;
+    at: number;
+    source?: string;
+    observedAt?: number;
+    sourceRefs?: Array<{ eventId?: string; sourceId?: string; contentHash?: string }>;
+    /** `quiet` waits for the window to close; `absence` waits for the next attach. */
+    deferred?: 'quiet' | 'absence';
+  }>;
   /** Today's cumulative token cost and its local date, so the footer's "本日" survives a restart. */
   costDayDate?: string;
   costDayTokens?: number;
@@ -212,7 +222,6 @@ export interface ShellRuntimeState {
     /** Configured local date the count belongs to. */
     day: string;
     count: number;
-    lastAt?: number;
     /** Consumed candidate keys, oldest first. The shell keeps the newest 500. */
     consumed: string[];
   };

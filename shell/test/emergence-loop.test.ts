@@ -70,7 +70,7 @@ describe('emergence does not consume its own query (#229)', () => {
     }
   }, 30_000);
 
-  test('a candidate is consumed once, the cooldown holds, and the Tokyo day has a hard cap', async () => {
+  test('a candidate is consumed once and the Tokyo day has a hard cap', async () => {
     const dir = makeTempDir();
     const provider = new ScriptedProvider([{ text: 'one', toolCalls: [] }, { text: 'two', toolCalls: [] }]);
     const shell = makeShell(dir, provider, {}, { now: () => BASE });
@@ -79,7 +79,7 @@ describe('emergence does not consume its own query (#229)', () => {
       emerge(shell, 'evt-repeat');
       await shell.tick(BASE);
       expect(provider.calls).toHaveLength(1);
-      // Same event again after the cooldown: the checkpoint's consumed key still refuses it.
+      // Same event again: the checkpoint's consumed key still refuses it.
       await shell.tick(BASE + 31 * 60_000);
       expect(provider.calls).toHaveLength(1);
 
@@ -98,7 +98,7 @@ describe('emergence does not consume its own query (#229)', () => {
     }
   }, 30_000);
 
-  test('the cooldown and the Tokyo day count survive a restart', async () => {
+  test('consumed keys and the Tokyo day count survive a restart', async () => {
     const dir = makeTempDir();
     const first = makeShell(dir, new ScriptedProvider([{ text: 'one', toolCalls: [] }]), {}, { now: () => BASE });
     await first.start();
@@ -112,14 +112,13 @@ describe('emergence does not consume its own query (#229)', () => {
     await second.start();
     try {
       emerge(second, 'evt-after-restart');
-      // Still inside the checkpointed cooldown: no run on the first tick after boot.
+      // A fresh candidate is not blocked by a shell-side cooldown; only the consumed key is.
       await second.tick(BASE + 60_000);
-      expect(provider.calls).toHaveLength(0);
-      expect(second.machine.runtime.emergence?.count).toBe(1);
+      expect(provider.calls).toHaveLength(1);
+      expect(second.machine.runtime.emergence?.count).toBe(2);
 
       await second.tick(BASE + 3 * 60_000);
       expect(provider.calls).toHaveLength(1);
-      expect(second.machine.runtime.emergence?.count).toBe(2);
     } finally {
       await second.stop();
     }
@@ -135,7 +134,7 @@ describe('the emergence day cap follows the configured zone (#285)', () => {
     await shell.start();
     try {
       emerge(shell, 'evt-new-day');
-      shell.machine.updateRuntime({ emergence: { day: '2026-01-01', count: 8, lastAt: NY_LATE - 10 * 60_000, consumed: [] } });
+      shell.machine.updateRuntime({ emergence: { day: '2026-01-01', count: 8, consumed: [] } });
       now = NY_AFTER;
       await shell.tick(NY_AFTER);
       expect(provider.calls).toHaveLength(1);
@@ -154,7 +153,7 @@ describe('the emergence day cap follows the configured zone (#285)', () => {
     await shell.start();
     try {
       emerge(shell, 'evt-same-day');
-      shell.machine.updateRuntime({ emergence: { day: '2026-01-02', count: 8, lastAt: NY_LATE - 10 * 60_000, consumed: [] } });
+      shell.machine.updateRuntime({ emergence: { day: '2026-01-02', count: 8, consumed: [] } });
       now = NY_AFTER;
       await shell.tick(NY_AFTER);
       expect(provider.calls).toHaveLength(0);

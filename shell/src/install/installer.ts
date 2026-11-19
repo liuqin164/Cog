@@ -898,9 +898,6 @@ export class Installer {
     this.choices.dreamEndHour = dreamEnd;
     this.choices.quietStartHour = quietStart;
     this.choices.quietEndHour = quietEnd;
-    // The resident reads TZ and the dream window from the env file. The quiet window is recorded
-    // here too; nothing in the shell gates on it yet (that is F16's emergence routing), and the
-    // installer says so rather than pretending the silence is wired.
     this.writeEnvFile({
       COGMEM_SHELL_TZ: timeZone,
       COGMEM_SHELL_DREAM_START: String(dreamStart),
@@ -908,7 +905,6 @@ export class Installer {
       ...(quietStart === null ? {} : { COGMEM_SHELL_QUIET_START: String(quietStart), COGMEM_SHELL_QUIET_END: String(quietEnd ?? 7) }),
     });
     this.io.say(`节律已写入：时区 ${timeZone}，做梦 ${dreamStart}:00-${dreamEnd}:00，勿扰 ${quietStart === null ? '关' : `${quietStart}:00-${quietEnd}:00`}`);
-    if (quietStart !== null) this.io.say('（勿扰窗已记录；壳内浮现/做梦的静默闸门属 F16，尚未落地）');
     return { ok: true };
   }
 

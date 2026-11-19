@@ -69,6 +69,19 @@ export interface CommandHost {
       promotionTargetType?: string;
     }>;
   };
+  /** F7's per-source modulation, for the status face. */
+  surfacingFeedback?(): {
+    types: Array<{ type: string; level: number; stopped: boolean; cooldownUntil: number | null; ignoredCount: number }>;
+  };
+  /** F7: the owner stops or restarts one proactive source. */
+  stopSurfacing?(type?: string): CommandReply;
+  resumeSurfacing?(type: string): CommandReply;
+  /** F16: move a surfaced promise's occurrence to `minutes` from now. */
+  snooze?(minutes: number, commitmentId?: string): CommandReply;
+  /** F2: register the agent's own wake intention. */
+  wake?(minutes: number, reason: string): CommandReply;
+  /** #328: the configured do-not-disturb window and whether it is open now. */
+  quietWindow?(): { startHour: number; endHour: number; active: boolean } | undefined;
   whyReport(): string;
   capturePaused(): boolean;
   setCapturePaused(paused: boolean): void;
@@ -238,7 +251,58 @@ export const CORE_COMMANDS: readonly CoreCommand[] = [
     run(host) {
       const { state, seq, costDayTokens, sandbox } = host.lifecycle();
       const sandboxLine = sandbox === 'on' ? '沙箱 开（bwrap，网络隔离）' : '沙箱 关（bwrap 不可用，bash 无隔离）';
-      return { text: `生命周期 ${state}，checkpoint seq ${seq}，本日 ${costDayTokens} token，${sandboxLine}。` };
+      const modulated = (host.surfacingFeedback?.().types ?? []).filter((type) => type.level > 0 || type.stopped);
+      const feedbackLine = modulated.length === 0
+        ? '浮现降频：无'
+        : `浮现降频：${modulated.map((type) => `${type.type} L${type.level}${type.stopped ? '（已停）' : ''} 忽略 ${type.ignoredCount}`).join(' · ')}`;
+      const quiet = host.quietWindow?.();
+      const quietLine = quiet === undefined
+        ? '勿扰窗：关'
+        : `勿扰窗：${String(quiet.startHour).padStart(2, '0')}:00–${String(quiet.endHour).padStart(2, '0')}:00（${quiet.active ? '生效中' : '未生效'}）`;
+      return { text: `生命周期 ${state}，checkpoint seq ${seq}，本日 ${costDayTokens} token，${sandboxLine}。${quietLine}。${feedbackLine}。` };
+    },
+  },
+  {
+    name: 'snooze',
+    description: '把已浮现的承诺顺延（分钟）',
+    argumentHint: '<分钟> [承诺 id]',
+    surfaces: ['palette', 'resident', 'tui'],
+    run(host, args) {
+      const [rawMinutes = '', id] = args.trim().split(/\s+/u).filter(Boolean);
+      const minutes = Number(rawMinutes);
+      if (!Number.isInteger(minutes) || minutes <= 0) return { text: '用法：/snooze <分钟> [承诺 id]', receipt: true };
+      if (!host.snooze) return { text: '本进程没有接上承诺册。', receipt: true };
+      return host.snooze(minutes, id);
+    },
+  },
+  {
+    name: 'wake',
+    description: '给同伴设一个自己的醒来意图（分钟 + 理由）',
+    argumentHint: '<分钟> <理由>',
+    surfaces: ['palette', 'resident', 'tui'],
+    run(host, args) {
+      const trimmed = args.trim();
+      const split = trimmed.search(/\s/u);
+      const minutes = Number(split < 0 ? trimmed : trimmed.slice(0, split));
+      const reason = split < 0 ? '' : trimmed.slice(split).trim();
+      if (!Number.isInteger(minutes) || minutes <= 0 || reason === '') return { text: '用法：/wake <分钟> <理由>', receipt: true };
+      if (!host.wake) return { text: '本进程没有接上醒来意图。', receipt: true };
+      return host.wake(minutes, reason);
+    },
+  },
+  {
+    name: 'surfacing',
+    description: '浮现反馈：查看降频，或让某个来源停下 / 恢复',
+    argumentHint: '[stop [来源] | resume <来源>]',
+    surfaces: ['palette', 'resident', 'tui'],
+    run(host, args) {
+      const [verb = '', type] = args.trim().split(/\s+/u).filter(Boolean);
+      if (verb === 'stop') return host.stopSurfacing?.(type) ?? { text: '本进程没有接上浮现反馈。', receipt: true };
+      if (verb === 'resume' && type !== undefined) return host.resumeSurfacing?.(type) ?? { text: '本进程没有接上浮现反馈。', receipt: true };
+      const state = host.surfacingFeedback?.();
+      if (!state) return { text: '本进程没有接上浮现反馈。', receipt: true };
+      const lines = state.types.map((entry) => `${entry.type}：L${entry.level} 忽略 ${entry.ignoredCount}${entry.stopped ? ' · 已停' : ''}${entry.cooldownUntil === null ? '' : ` · 冷却至 ${new Date(entry.cooldownUntil).toISOString()}`}`);
+      return { text: ['浮现反馈（按来源）：', ...lines, '用 /surfacing stop [来源] 停下，/surfacing resume <来源> 恢复。'].join('\n') };
     },
   },
   {

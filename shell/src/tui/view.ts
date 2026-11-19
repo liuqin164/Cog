@@ -49,6 +49,8 @@ export interface StatusState {
   promptCache?: { hit: number; miss: number; percent: number } | null;
   costTokens: number;
   timeZone: string;
+  /** #328: the configured do-not-disturb window, absent when it is off. */
+  quietWindow?: { startHour: number; endHour: number; active: boolean };
   /** `off` means bash runs without bwrap; the status overlay says so instead of hiding it (#284). */
   sandbox?: 'on' | 'off';
   /** `/pause`: the status bar shows it while it is true, because a silent pause looks like a bug. */

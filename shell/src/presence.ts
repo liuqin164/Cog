@@ -89,7 +89,7 @@ function completedCommitments(input: AwayReportInput): PresenceReport['commitmen
 
 export const AWAY_QUEUE_LIMIT = 50;
 
-export function enqueueAway(runtime: ShellRuntimeState, entry: { id: string; text: string; reason: string; at: number }): Array<{ id: string; text: string; reason: string; at: number }> {
+export function enqueueAway(runtime: ShellRuntimeState, entry: NonNullable<ShellRuntimeState['awayQueue']>[number]): NonNullable<ShellRuntimeState['awayQueue']> {
   const queue = [...(runtime.awayQueue ?? []), entry];
   return queue.slice(-AWAY_QUEUE_LIMIT);
 }

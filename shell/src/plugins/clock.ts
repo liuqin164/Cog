@@ -1,10 +1,7 @@
 /**
- * Time perception, shell-side until F2 (#156) lands the kernel version.
- *
- * Waking injects a time context block; the companion's next wake intent is persistent runtime state
- * (the state machine's checkpoint), not a kernel row — the kernel has prospective memories with a
- * `dueAt`, but no wake-intent registration, no due-time event and no time-context builder. Probing
- * that boundary is part of this stage; the gaps are recorded in `probes/gaps.ts`.
+ * The shell's process clock. The agent's own wake intentions live in the kernel's F2 ledger; the
+ * checkpoint here holds only process-recovery alarms (`idle_checkin`, `morning_after_dream`, an
+ * upgrade report) that must survive a restart before any agent intent exists.
  */
 import type { StateMachine } from '../state/machine.ts';
 import { isUpgradePromise } from '../upgrade/records.ts';
@@ -15,6 +12,7 @@ export interface ClockConfig {
   timeZone: string;
   idleWakeIntervalMs: number;
   dreamWindow: { startHour: number; endHour: number };
+  quietWindow?: { startHour: number; endHour: number };
   /** The process clock; injected so a test can cross a minute boundary on purpose. */
   now?: () => number;
 }
@@ -67,7 +65,7 @@ export class ClockService {
   }
 
   /** The block the model sees in place of "I do not know what time it is". */
-  timeContextBlock(at = this.now()): string {
+  timeContextBlock(at = this.now(), extra: string[] = []): string {
     const context = this.timeContext(at);
     const silence = context.silentForMs === undefined ? 'no recorded contact yet' : formatDuration(context.silentForMs);
     const next = context.nextWakeAt === undefined ? 'none scheduled' : `${minuteIso(context.nextWakeAt)} (${context.nextWakeReason})`;
@@ -79,6 +77,7 @@ export class ClockService {
       `local date: ${context.localDate}`,
       `since last contact: ${silence}`,
       `next wake intent: ${next}`,
+      ...extra,
       '</time-context>',
     ].join('\n');
   }
@@ -125,6 +124,14 @@ export class ClockService {
     const { startHour, endHour } = this.config.dreamWindow;
     if (startHour < endHour) return hour >= endHour || hour < startHour;
     return startHour > endHour && hour >= endHour && hour < startHour;
+  }
+
+  quietWindowOpen(at = this.now()): boolean {
+    const window = this.config.quietWindow;
+    if (!window) return false;
+    const hour = this.timeContext(at).hour;
+    if (window.startHour < window.endHour) return hour >= window.startHour && hour < window.endHour;
+    return hour >= window.startHour || hour < window.endHour;
   }
 
   dreamNightDate(at = this.now()): string {

@@ -91,6 +91,8 @@ export interface ShellConfig {
    */
   maxIdleTurns: number;
   dream: { windowStartHour: number; windowEndHour: number; runKernelNight: boolean; maxEpisodes: number };
+  /** The owner's do-not-disturb window; proactive speech waits for it to close. */
+  quiet?: { startHour: number; endHour: number };
   idleWakeIntervalMs: number;
   /** Tick interval for due intents/dream/emergence. Deterministic; tests drive ticks directly. */
   tickIntervalMs: number;
@@ -172,6 +174,23 @@ function embeddingDimensionsFromEnv(): number | undefined {
     throw new Error(`invalid_embedding_dimensions: COGMEM_EMBEDDING_DIMENSIONS=${raw}`);
   }
   return value;
+}
+
+function quietFromEnv(): ShellConfig['quiet'] {
+  const start = env('COGMEM_SHELL_QUIET_START');
+  const end = env('COGMEM_SHELL_QUIET_END');
+  if (start === undefined && end === undefined) return undefined;
+  const startHour = Number(start);
+  const endHour = Number(end);
+  if (
+    start === undefined || end === undefined
+    || !Number.isInteger(startHour) || startHour < 0 || startHour > 23
+    || !Number.isInteger(endHour) || endHour < 0 || endHour > 23
+    || startHour === endHour
+  ) {
+    throw new Error(`invalid_quiet_window: COGMEM_SHELL_QUIET_START=${start ?? ''} COGMEM_SHELL_QUIET_END=${end ?? ''}; both hours are required, 0-23, and must differ`);
+  }
+  return { startHour, endHour };
 }
 
 /**
@@ -307,6 +326,7 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
     dailyBudget: overrides.dailyBudget ?? daily,
     nightBudget: overrides.nightBudget ?? night,
     maxIdleTurns,
+    quiet: overrides.quiet ?? quietFromEnv(),
     contextSweetSpot: overrides.contextSweetSpot ?? 10_800,
     tailTurns: overrides.tailTurns ?? tailTurnsFromEnv(),
     dream,
