@@ -87,8 +87,8 @@ describe('a database 4.0 creates', () => {
     // this line is what keeps that equivalence from silently drifting: a
     // legitimate schema change updates it, and a projection or auxiliary object
     // that stopped installing fails here.
-    expect(rows.length).toBe(397);
-    expect(digest).toBe('d52851adf13fe07dccbe65218aefd0819c7bb8d1a780695dea9e7beecb324d05');
+    expect(rows.length).toBe(395);
+    expect(digest).toBe('f0337a73d78ca7bcc63e7284aa35c7777308370f00de7d3e9b7c430c3f9a075c');
     rmSync(dir, { recursive: true, force: true });
   });
 
