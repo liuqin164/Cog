@@ -6,6 +6,7 @@
  *   stream        a run whose provider never answers — killed mid-stream, after `message_start`
  *   stream-steer  the same run with two lines steered into it while it is going
  *   tool          a run whose `bash` tool never returns — the call recorded in flight
+ *   tool-complete a run whose `bash` tool finishes, then the provider never answers
  *   dream         the IDLE→DREAMING transition landed, the nightly integration still in flight
  *   write         a RUNNING shell whose checkpoint is rewritten continuously — killed mid-write
  *   recover       a normal start, then report what the recovery path read back from the disk
@@ -49,6 +50,13 @@ function providerFor(currentMode: string): ModelProvider {
     async complete(input: ModelCompletionInput): Promise<ModelTurn> {
       providerCalls.push(input);
       if (currentMode === 'tool') return { text: '', toolCalls: [{ toolCallId: 'call-kill', toolName: 'bash', input: { command: 'sleep 5' } }] };
+      if (currentMode === 'tool-complete') {
+        if (providerCalls.length === 1) {
+          return { text: 'running the tool', toolCalls: [{ toolCallId: 'call-done', toolName: 'bash', input: { command: "printf 'kill-tool-result-marker'" } }] };
+        }
+        say({ event: 'second_call' });
+        return await new Promise<ModelTurn>(() => {});
+      }
       if (['stream', 'stream-steer', 'write'].includes(currentMode)) {
         say({ event: 'streaming' });
         onProviderEntered?.();
@@ -78,11 +86,23 @@ const shell = new CompanionShell({
   tick: false,
 });
 
-function reportRecovered(): Record<string, unknown> {
+async function reportRecovered(): Promise<Record<string, unknown>> {
   const trace = shell.trace.read();
   const interrupted = typeof (shell as { interruptedRun?: unknown }).interruptedRun === 'function'
     ? (shell as unknown as { interruptedRun(): { runId: string; chars: number; text: string } | undefined }).interruptedRun()
     : undefined;
+  const clock = shell.host.getService<{ localDate(at?: number): string }>('clock');
+  const threadId = `companion-day:${clock.localDate()}`;
+  const events = shell.kernel.getThreadEvents(threadId, { projectId: shell.config.projectId, limit: 500 });
+  const toolResult = events.find((event) => event.rawEventType === 'tool_result');
+  const read = toolResult
+    ? await shell.host.tools.invoke('read', { toolCallId: 'recover', input: { path: `mem:${toolResult.eventId}` } }, { runId: 'recover' })
+    : undefined;
+  const digest = shell.backend.sessionDigest({
+    projectId: shell.config.projectId,
+    agentId: shell.config.agentId,
+    sessionId: shell.config.sessionId,
+  });
   return {
     event: 'recovered',
     state: shell.state,
@@ -100,6 +120,15 @@ function reportRecovered(): Record<string, unknown> {
     captureRuns: trace.filter((record) => record.kind === 'capture_run').length,
     promptRecovered: trace.filter((record) => record.kind === 'prompt_recovered').length,
     interrupted: interrupted ?? null,
+    ledgerRows: events.map((event) => ({
+      eventId: event.eventId,
+      rawEventType: event.rawEventType,
+      role: event.role,
+      turnId: event.turnId,
+      text: (event.payload as { text?: string }).text ?? '',
+    })),
+    sessionTurns: digest.tail.map((turn) => ({ role: turn.role, text: turn.text, turnId: turn.turnId })),
+    toolResultRead: read?.output,
   };
 }
 
@@ -110,7 +139,7 @@ if (mode === 'recover' || mode === 'recover-steer') {
     say({ event: 'refused', message: error instanceof Error ? error.message : String(error) });
     process.exit(1);
   }
-  say(reportRecovered());
+  say(await reportRecovered());
   if (mode === 'recover-steer') {
     // The restored queue is consumed by the next run; record what the model actually saw, per request.
     await shell.submit('继续');
@@ -139,7 +168,7 @@ if (mode === 'dream') {
   await shell.machine.dispatch('dream_window_open', { reason: 'kill_fixture_dream' });
   say({ event: 'dreaming', state: shell.state });
 } else {
-  void shell.submit(mode === 'tool' ? 'run a tool' : LONG_PROMPT).catch((error) => say({ event: 'submit_failed', message: String(error) }));
+  void shell.submit(mode === 'tool' || mode === 'tool-complete' ? 'run a tool' : LONG_PROMPT).catch((error) => say({ event: 'submit_failed', message: String(error) }));
 }
 say({ event: 'holding', state: shell.state });
 

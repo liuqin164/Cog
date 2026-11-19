@@ -8,7 +8,7 @@
  * `metadata.secretFindings` — the same key the kernel's suppression checks read — plus a
  * `metadata.redaction` count.
  */
-import { CONVERSATION_CAPTURE_LANE, KernelAgentMemoryBackend, type MemoryEvent } from 'cogmem';
+import { CONVERSATION_CAPTURE_LANE, KernelAgentMemoryBackend, type MemoryEvent, type MemoryKernel } from 'cogmem';
 import type { RunSummary } from '../state/agent-loop.ts';
 import { SecretRedactor } from '../kernel-host.ts';
 import type { TraceLog } from '../trace.ts';
@@ -16,6 +16,7 @@ import type { NativePlugin } from './host.ts';
 
 export interface CaptureServiceOptions {
   backend: KernelAgentMemoryBackend;
+  kernel: MemoryKernel;
   agentId: string;
   projectId: string;
   sessionId: string;
@@ -38,6 +39,15 @@ export interface CaptureResult {
   redactionCount: number;
 }
 
+export interface CapturedTurn {
+  userEventId: string;
+  assistantEventIds: string[];
+  toolCallEventIds: string[];
+  toolResultEventIds: string[];
+  redactionCount: number;
+  userText: string;
+}
+
 export class CaptureService {
   private readonly redactor: SecretRedactor;
 
@@ -48,6 +58,148 @@ export class CaptureService {
   /** The gate the pause command closes; the only predicate every write path in this module reads. */
   paused(): boolean {
     return this.options.paused?.() === true;
+  }
+
+  recordMessage(input: {
+    threadId: string;
+    turnId: string;
+    turnSeq?: number;
+    role: 'user' | 'assistant';
+    content: string;
+    eventOrdinal: number;
+    parentEventId?: string;
+    prevEventId?: string;
+    causalityType?: 'replies_to';
+  }): { event: MemoryEvent; redactions: number; turnSeq: number } | undefined {
+    if (this.paused()) return undefined;
+    const { kernel, agentId, projectId, sessionId } = this.options;
+    const marked = this.redactor.mark(input.content);
+    const turnSeq = input.turnSeq ?? kernel.eventStore.getNextTurnSeq(input.threadId, projectId);
+    const event = kernel.recordRawEvent({
+      projectId,
+      workspaceId: projectId,
+      threadId: input.threadId,
+      sessionId,
+      turnId: input.turnId,
+      turnSeq,
+      role: input.role,
+      content: marked.value,
+      eventOrdinal: input.eventOrdinal,
+      parentEventId: input.parentEventId,
+      prevEventId: input.prevEventId,
+      causalityType: input.causalityType,
+      sourceId: `${agentId}:${sessionId}`,
+      metadata: { sourceAgent: agentId, source: 'companion-shell', kind: 'turn', captureLane: CONVERSATION_CAPTURE_LANE, ...marked.metadata },
+    });
+    return { event, redactions: markTotal(marked.metadata), turnSeq };
+  }
+
+  async recordToolCall(input: {
+    threadId: string;
+    turnId: string;
+    turnSeq: number;
+    assistantEventId?: string;
+    toolCallId: string;
+    toolName: string;
+    input?: unknown;
+    eventOrdinal: number;
+  }): Promise<{ event: MemoryEvent; redactions: number } | undefined> {
+    if (this.paused()) return undefined;
+    const { backend, agentId, projectId, sessionId } = this.options;
+    const marked = this.redactor.mark(input.input);
+    const event = await backend.ingestToolCall({
+      agentId,
+      projectId,
+      workspaceId: projectId,
+      sessionId,
+      threadId: input.threadId,
+      turnId: input.turnId,
+      turnSeq: input.turnSeq,
+      assistantEventId: input.assistantEventId,
+      toolCallId: input.toolCallId,
+      toolName: input.toolName,
+      input: marked.value,
+      eventOrdinal: input.eventOrdinal,
+      metadata: { sourceAgent: agentId, ...marked.metadata },
+    });
+    return { event, redactions: markTotal(marked.metadata) };
+  }
+
+  async recordToolResult(input: {
+    threadId: string;
+    turnId: string;
+    turnSeq: number;
+    toolCallEventId: string;
+    toolCallId: string;
+    toolName: string;
+    output: string;
+    isError: boolean;
+    eventOrdinal: number;
+  }): Promise<{ event: MemoryEvent; redactions: number } | undefined> {
+    if (this.paused()) return undefined;
+    const { backend, agentId, projectId, sessionId } = this.options;
+    const marked = this.redactor.mark(input.output);
+    const event = await backend.ingestToolObservation({
+      agentId,
+      projectId,
+      workspaceId: projectId,
+      sessionId,
+      threadId: input.threadId,
+      turnId: input.turnId,
+      turnSeq: input.turnSeq,
+      toolCallEventId: input.toolCallEventId,
+      toolCallId: input.toolCallId,
+      toolName: input.toolName,
+      output: marked.value,
+      eventOrdinal: input.eventOrdinal,
+      metadata: { sourceAgent: agentId, isError: input.isError, ...marked.metadata },
+    });
+    return { event, redactions: markTotal(marked.metadata) };
+  }
+
+  async finalizeRun(summary: RunSummary, threadId: string, captured: CapturedTurn): Promise<CaptureResult> {
+    if (this.paused()) {
+      this.options.trace?.append('capture_paused', {
+        kind: 'run',
+        runId: summary.runId,
+        turnId: summary.turnId,
+        toolCalls: summary.toolCalls.length,
+        toolResults: summary.toolResults.length,
+        userChars: summary.userText.length,
+        assistantChars: summary.assistantText.length,
+      });
+      return { turnId: summary.turnId, toolCallEventIds: [], toolResultEventIds: [], redactionCount: 0 };
+    }
+    const { backend, agentId, projectId, sessionId } = this.options;
+    const assistantEventId = captured.assistantEventIds.at(-1);
+    await backend.rememberTurnWithResult({
+      agentId,
+      projectId,
+      workspaceId: projectId,
+      sessionId,
+      threadId,
+      turnId: summary.turnId,
+      userText: captured.userText,
+      assistantText: summary.assistantText || undefined,
+      ingestMode: 'selective_compile',
+      metadata: { sourceAgent: agentId, source: 'companion-shell', kind: 'turn', captureLane: CONVERSATION_CAPTURE_LANE },
+      prewritten: { userEventId: captured.userEventId, assistantEventIds: captured.assistantEventIds },
+    });
+    this.options.trace?.append('capture_run', {
+      runId: summary.runId,
+      turnId: summary.turnId,
+      redactionCount: captured.redactionCount,
+      toolCalls: summary.toolCalls.length,
+      toolResults: summary.toolResults.length,
+    });
+    return {
+      turnId: summary.turnId,
+      userEventId: captured.userEventId,
+      assistantEventId,
+      toolCallEventIds: captured.toolCallEventIds,
+      toolResultEventIds: captured.toolResultEventIds,
+      redactionCount: captured.redactionCount,
+    };
   }
 
   /**
@@ -290,10 +442,12 @@ export function capturePlugin(config: CapturePluginConfig): NativePlugin {
     provide: ['capture'],
     apply(ctx) {
       const backend = ctx.getService<KernelAgentMemoryBackend>('memory');
+      const kernel = ctx.getService<MemoryKernel>('kernel');
       const clock = ctx.getService<{ localDate(at?: number): string }>('clock');
       const trace = ctx.getService<TraceLog>('trace');
       const service = new CaptureService({
         backend,
+        kernel,
         agentId: config.agentId,
         projectId: config.projectId,
         sessionId: config.sessionId,
@@ -305,12 +459,32 @@ export function capturePlugin(config: CapturePluginConfig): NativePlugin {
         assistantText: string[];
         toolCalls: RunSummary['toolCalls'];
         toolResults: RunSummary['toolResults'];
+        userEventId?: string;
+        primaryUserText?: string;
+        assistantEventIds: string[];
+        toolCallEventIds: string[];
+        toolResultEventIds: string[];
+        byCallId: Map<string, string>;
+        turnSeq?: number;
+        ordinal: number;
+        redactionCount: number;
       }
       const buffers = new Map<string, Buffer>();
       const ensure = (runId: string): Buffer => {
         const existing = buffers.get(runId);
         if (existing) return existing;
-        const created: Buffer = { userText: '', assistantText: [], toolCalls: [], toolResults: [] };
+        const created: Buffer = {
+          userText: '',
+          assistantText: [],
+          toolCalls: [],
+          toolResults: [],
+          assistantEventIds: [],
+          toolCallEventIds: [],
+          toolResultEventIds: [],
+          byCallId: new Map(),
+          ordinal: 0,
+          redactionCount: 0,
+        };
         buffers.set(runId, created);
         return created;
       };
@@ -319,13 +493,7 @@ export function capturePlugin(config: CapturePluginConfig): NativePlugin {
         const added = event.message?.toolsAdded ?? [];
         const removed = event.message?.toolsRemoved ?? [];
         if (event.message?.role === 'system' && (added.length > 0 || removed.length > 0)) {
-          // A tool-loadout declaration belongs in the transcript, not only in the run's context. The
-          // ledger is the shell's append-only transcript, so the loadout the model was told about has a
-          // durable record too (the checkpoint keeps the same set for recovery). A failed write is not
-          // swallowed: it reaches the run boundary like any other capture failure.
           if (service.paused()) {
-            // It is still an ingest call, so the gate covers it: while paused the capture plugin
-            // writes nothing at all, which is what makes "the ledger gained no row" checkable.
             trace?.append('capture_paused', { kind: 'tool-loadout', toolsAdded: added.length, toolsRemoved: removed.length });
             return;
           }
@@ -342,24 +510,95 @@ export function capturePlugin(config: CapturePluginConfig): NativePlugin {
           return;
         }
         const buffer = ensure(busCtx.runId);
-        if (event.message?.role === 'user') buffer.userText = event.message.content ?? '';
-        if (event.message?.role === 'assistant' && event.message.content) buffer.assistantText.push(event.message.content);
+        const content = event.message?.content ?? '';
+        if (event.message?.role === 'user') {
+          buffer.userText = content;
+          const written = service.recordMessage({
+            threadId: `companion-day:${clock.localDate()}`,
+            turnId: `${busCtx.runId}:0`,
+            turnSeq: buffer.turnSeq,
+            role: 'user',
+            content,
+            eventOrdinal: ++buffer.ordinal,
+          });
+          if (written) {
+            buffer.turnSeq = written.turnSeq;
+            buffer.redactionCount += written.redactions;
+            if (!buffer.userEventId) {
+              buffer.userEventId = written.event.eventId;
+              buffer.primaryUserText = content;
+            }
+          }
+        }
+        if (event.message?.role === 'assistant' && content) {
+          buffer.assistantText.push(content);
+          if (buffer.userEventId) {
+            const written = service.recordMessage({
+              threadId: `companion-day:${clock.localDate()}`,
+              turnId: `${busCtx.runId}:0`,
+              turnSeq: buffer.turnSeq,
+              role: 'assistant',
+              content,
+              eventOrdinal: ++buffer.ordinal,
+              parentEventId: buffer.assistantEventIds.at(-1) ?? buffer.userEventId,
+              prevEventId: buffer.assistantEventIds.at(-1) ?? buffer.userEventId,
+              causalityType: 'replies_to',
+            });
+            if (written) {
+              buffer.assistantEventIds.push(written.event.eventId);
+              buffer.redactionCount += written.redactions;
+            }
+          }
+        }
       });
-      ctx.on('tool_execution_start', (event: { toolCallId?: string; toolName?: string; input?: unknown }, busCtx?: { runId?: string }) => {
+      ctx.on('tool_execution_start', async (event: { toolCallId?: string; toolName?: string; input?: unknown }, busCtx?: { runId?: string }) => {
         if (!busCtx?.runId || !event.toolCallId || !event.toolName) return;
-        ensure(busCtx.runId).toolCalls.push({ toolCallId: event.toolCallId, toolName: event.toolName, input: event.input });
+        const buffer = ensure(busCtx.runId);
+        buffer.toolCalls.push({ toolCallId: event.toolCallId, toolName: event.toolName, input: event.input });
+        if (!buffer.userEventId || buffer.turnSeq === undefined) return;
+        const written = await service.recordToolCall({
+          threadId: `companion-day:${clock.localDate()}`,
+          turnId: `${busCtx.runId}:0`,
+          turnSeq: buffer.turnSeq,
+          assistantEventId: buffer.assistantEventIds.at(-1) ?? buffer.userEventId,
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+          input: event.input,
+          eventOrdinal: ++buffer.ordinal,
+        });
+        if (written) {
+          buffer.toolCallEventIds.push(written.event.eventId);
+          buffer.byCallId.set(event.toolCallId, written.event.eventId);
+          buffer.redactionCount += written.redactions;
+        }
       });
-      ctx.on('tool_execution_end', (event: { toolCallId?: string; toolName?: string; result?: RunSummary['toolResults'][number] }, busCtx?: { runId?: string }) => {
+      ctx.on('tool_execution_end', async (event: { toolCallId?: string; toolName?: string; result?: RunSummary['toolResults'][number] }, busCtx?: { runId?: string }) => {
         if (!busCtx?.runId || !event.result) return;
-        ensure(busCtx.runId).toolResults.push(event.result);
+        const buffer = ensure(busCtx.runId);
+        buffer.toolResults.push(event.result);
+        const toolCallEventId = event.toolCallId ? buffer.byCallId.get(event.toolCallId) : undefined;
+        if (!toolCallEventId || !event.result.toolCallId || buffer.turnSeq === undefined) return;
+        const written = await service.recordToolResult({
+          threadId: `companion-day:${clock.localDate()}`,
+          turnId: `${busCtx.runId}:0`,
+          turnSeq: buffer.turnSeq,
+          toolCallEventId,
+          toolCallId: event.result.toolCallId,
+          toolName: event.result.toolName,
+          output: event.result.output,
+          isError: event.result.isError,
+          eventOrdinal: ++buffer.ordinal,
+        });
+        if (written) {
+          buffer.toolResultEventIds.push(written.event.eventId);
+          buffer.redactionCount += written.redactions;
+        }
       });
       ctx.on('agent_end', async (event: { summary?: RunSummary }, busCtx?: { runId?: string }) => {
         const runId = busCtx?.runId ?? event.summary?.runId;
         if (!runId) return;
         const origin = event.summary?.origin ?? 'user';
         const buffer = buffers.get(runId);
-        // A user run's account starts with its user message; an autonomous run that failed before
-        // its first reply still has an origin and a stop reason worth booking.
         if (!buffer && origin === 'user') return;
         buffers.delete(runId);
         const summary: RunSummary = {
@@ -378,13 +617,19 @@ export function capturePlugin(config: CapturePluginConfig): NativePlugin {
         };
         const threadId = `companion-day:${clock.localDate()}`;
         try {
-          await service.captureRun(summary, threadId);
+          if (origin === 'user' && buffer?.userEventId) {
+            await service.finalizeRun(summary, threadId, {
+              userEventId: buffer.userEventId,
+              assistantEventIds: buffer.assistantEventIds,
+              toolCallEventIds: buffer.toolCallEventIds,
+              toolResultEventIds: buffer.toolResultEventIds,
+              redactionCount: buffer.redactionCount,
+              userText: buffer.primaryUserText ?? buffer.userText,
+            });
+          } else {
+            await service.captureRun(summary, threadId);
+          }
         } catch (error) {
-          // No retry and no swallow. The turn's account is lost, so say which turn and how much, then
-          // let the failure reach the run's boundary, where it becomes the run's error and the machine
-          // still leaves RUNNING (`AgentRuntime` reports `run_error` for a failed `agent_end`). A retry
-          // ladder stood here and came out: CODING_STANDARDS.md's "not a way to survive the failure"
-          // is the reason, and a transient ledger error is better reported than papered over.
           trace?.append('capture_failed', {
             runId,
             turnId: summary.turnId,

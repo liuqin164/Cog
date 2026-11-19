@@ -105,6 +105,7 @@ export interface AssembleSessionContextInput {
   protectedIds?: readonly string[];
   /** How many recent turns stay verbatim. Defaults to `SESSION_DIGEST_TAIL_TURNS`. */
   tailTurns?: number;
+  excludeTurnIds?: readonly string[];
   /**
    * The newest user message and the latest model output, as the shell has them at assembly time
    * (#253). A stub whose key or own entity words occur here is expanded before the request.
