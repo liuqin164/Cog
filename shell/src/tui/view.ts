@@ -30,6 +30,7 @@ export interface StatusState {
   nextWakeAt?: number;
   nextWakeReason?: string;
   model: string;
+  memoryModel?: { route: string; model: string; baseUrl: string; state: 'reachable' | 'unreachable' | 'rule_only'; line: string };
   workspace: string;
   showWorkspace: boolean;
   contextTokens: number;

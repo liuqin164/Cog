@@ -22,7 +22,7 @@ import { PluginHost } from './plugins/host.ts';
 import { clockPlugin, ClockService } from './plugins/clock.ts';
 import { providedModelPlugin } from './plugins/mg-provider.ts';
 import { ModelRouter, modelRouterPlugin, routeLine } from './model/router.ts';
-import { RouteStore, redactUrl } from './model/routes.ts';
+import { BUILTIN_ROUTE_NAME, RouteStore, redactUrl, type ModelRoute } from './model/routes.ts';
 import { cagePlugin, estimateBudgetGrant, RunCage, type CageTier } from './plugins/cage.ts';
 import { bwrapUsable, builtinToolsPlugin } from './plugins/builtin-tools.ts';
 import { coreCommandFor, availableCoreCommand, unknownCommandReply, type CommandHost, type CommandReply } from './commands.ts';
@@ -157,11 +157,17 @@ export interface CompanionShellOptions {
  */
 class ShellModelRegistry extends ModelRegistry {
   embeddingReady = false;
+  routeTarget?: () => ModelRoute | undefined;
 
   override getRoleConfig(role: ModelRoleName): ModelRoleConfig {
     const config = super.getRoleConfig(role);
-    if (role !== 'embedding' || this.embeddingReady) return config;
-    return { ...config, provider: 'deterministic_local', modelName: 'deterministic_local' };
+    if (role === 'embedding') {
+      return this.embeddingReady ? config : { ...config, provider: 'deterministic_local', modelName: 'deterministic_local' };
+    }
+    const route = this.routeTarget?.();
+    return route
+      ? { ...config, provider: 'openai_compatible', baseUrl: route.baseUrl, apiKey: route.apiKey, modelName: route.model }
+      : config;
   }
 }
 
@@ -178,7 +184,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   private runtime?: AgentRuntime;
   private cage?: RunCage;
   private clock?: ClockService;
-  private dream?: { integrate(...args: [string, string, number?]): Promise<{ localDate: string; eventCount: number; sourceRefs: unknown[]; summary: string }> };
+  private dream?: { integrate(...args: [string, string, number?]): Promise<{ localDate: string; eventCount: number; sourceRefs: unknown[]; summary: string; memoryModelUsed?: boolean; memoryModelDegraded?: string }> };
   private emergence?: {
     hasDue?(now?: number): boolean;
     decide(now?: number): {
@@ -283,6 +289,8 @@ export class CompanionShell implements ShellControl, AttachShell {
   /** Any host-supplied embedder, so the install's semantic probe is not limited to the local one. */
   private readonly embeddingProvider?: EmbeddingProvider;
   private readonly shellRegistry?: ShellModelRegistry;
+  private readonly modelRegistry: ModelRegistry;
+  private memoryModelFailed = false;
   /** A degraded provider must not claim the index; only a warm provider over a current index may. */
   private embeddingReadyAllowed = false;
 
@@ -305,6 +313,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     // The nightly snapshot lives beside the resident's other state, so a default install keeps the
     // last seven nights without an extra config key (#196).
     const registry = options.modelRegistry ?? this.buildModelRegistry();
+    this.modelRegistry = registry;
     this.shellRegistry = registry instanceof ShellModelRegistry ? registry : undefined;
     const embedding = options.embedding && !options.embeddingProvider
       ? createEmbeddingProvider(this.config.embedding, this.config.dataDir, (status) => this.onEmbeddingState(status))
@@ -405,15 +414,9 @@ export class CompanionShell implements ShellControl, AttachShell {
     return this.http?.baseUrl;
   }
 
-  /**
-   * The shell's memory role is the mg route it already uses for its own turns. The embedding role
-   * names the local model, but `ShellModelRegistry` keeps it deterministic until the model has
-   * actually loaded: the kernel then reports `semanticIndex: false` rather than claiming an index it
-   * does not have (#231/#250).
-   */
   private buildModelRegistry(): ShellModelRegistry {
     const model = this.config.model;
-    return new ShellModelRegistry({
+    const registry = new ShellModelRegistry({
       memory: {
         role: 'memory',
         provider: 'openai_compatible',
@@ -441,6 +444,8 @@ export class CompanionShell implements ShellControl, AttachShell {
       beforeGenerate: () => this.beforeDreamModelCall(),
       onUsage: (_role, usage) => this.chargeDreamModelUsage(usage),
     });
+    registry.routeTarget = () => this.modelRouter?.activeRoute;
+    return registry;
   }
 
   private beginDreamModelBudget(at: number): void {
@@ -565,6 +570,7 @@ export class CompanionShell implements ShellControl, AttachShell {
           state: this.machine.state,
           plugins: this.pluginHealth(),
           embedding: this.embeddingStatus(),
+          memoryModel: this.memoryModelHealth(),
           suspension: this.machine.runtime.suspension
             ? { ...this.suspendedLine(this.machine.runtime.suspension), id: this.machine.runtime.suspension.id, createdAt: this.machine.runtime.suspension.createdAt }
             : null,
@@ -726,6 +732,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       this.modelRouter = new ModelRouter({
         store: new RouteStore(join(this.config.dataDir, 'routes.json')).load(),
         builtin: { name: 'mg', baseUrl: this.config.model.baseUrl, apiKey: this.config.model.apiKey, model: this.config.model.model, targetTokens: this.config.contextSweetSpot },
+        builtinAvailable: process.env.MG_BASE_URL !== undefined,
         timeoutMs: this.config.model.timeoutMs,
         // A 429 the gateway could not absorb is retried by the provider, not the run ladder (#282).
         onRetry: ({ attempt, status, delayMs }) => this.trace.append('provider_retry', { attempt, status, delayMs }),
@@ -1865,6 +1872,8 @@ export class CompanionShell implements ShellControl, AttachShell {
     const localDate = this.clock!.localDate(at);
     try {
       const result = await this.dream!.integrate(localDate, `companion-day:${localDate}`, at);
+      if (result.memoryModelDegraded === 'semantic_processor_failed') this.memoryModelFailed = true;
+      else if (result.memoryModelUsed) this.memoryModelFailed = false;
       this.clock!.markDreamed(at);
       this.clock!.setWakeIntent(at + 8 * 60 * 60_000, 'morning_after_dream');
       this.trace.append('dream_complete', { localDate, eventCount: result.eventCount, sourceRefs: result.sourceRefs.length });
@@ -2004,6 +2013,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       nextWakeAt: next?.at,
       nextWakeReason: next?.reason,
       model: this.modelLabel,
+      memoryModel: this.memoryModelHealth(),
       workspace: this.config.workspaceRoot,
       showWorkspace: true,
       contextTokens: this.contextTokenEstimate,
@@ -2016,6 +2026,23 @@ export class CompanionShell implements ShellControl, AttachShell {
       sandbox: this.sandboxState(),
       capturePaused: this.capturePaused,
       ...(this.machine.state === 'SUSPENDED' && this.machine.runtime.suspension ? { suspended: this.suspendedLine(this.machine.runtime.suspension) } : {}),
+    };
+  }
+
+  private memoryModelHealth(): { route: string; model: string; baseUrl: string; state: 'reachable' | 'unreachable' | 'rule_only'; line: string } {
+    const role = this.modelRegistry.getRoleConfig('memory');
+    const route = this.modelRouter?.active ?? 'default';
+    const ruleOnly = role.provider !== 'openai_compatible';
+    const state = ruleOnly ? 'rule_only' : this.memoryModelFailed ? 'unreachable' : 'reachable';
+    const stateText = state === 'rule_only'
+      ? '降级为规则；夜间整合不会用模型'
+      : state === 'unreachable' ? '不可达，降级为规则；夜间整合不会用模型' : '可达';
+    return {
+      route,
+      model: role.modelName,
+      baseUrl: redactUrl(role.baseUrl, [role.apiKey]),
+      state,
+      line: `记忆模型：${route}/${role.modelName}（${stateText}）`,
     };
   }
 
@@ -2450,6 +2477,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     try {
       const route = this.modelRouter.switchTo(name);
       this.modelLabel = `${route.name}/${route.model}`;
+      this.memoryModelFailed = false;
       // The key is not in any of these fields; the URL is redacted in case it carries one.
       this.trace.append('model_route_switched', { name: route.name, model: route.model, baseUrl: redactUrl(route.baseUrl, [route.apiKey]) });
       void this.host.bus.emit('companion_model_routes', { routes: this.modelRoutes(), active: route.name });
@@ -2773,7 +2801,11 @@ export class CompanionShell implements ShellControl, AttachShell {
       this.modelRouter
         ? {
             active: this.modelRouter.active,
-            lines: this.modelRouter.routes().map((route) => routeLine(route, route.name === this.modelRouter!.active)),
+            lines: this.modelRouter.routes().map((route) => routeLine(
+              route,
+              route.name === this.modelRouter!.active,
+              route.name === BUILTIN_ROUTE_NAME && this.modelRouter!.builtinUnavailable,
+            )),
             storeError: this.modelRouter.storeError,
           }
         : undefined,

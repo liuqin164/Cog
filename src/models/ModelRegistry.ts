@@ -62,7 +62,7 @@ export class ModelRegistry {
   }
 
   getEmbedder(): EmbedFn {
-    const role = this.config.embedding;
+    const role = this.getRoleConfig('embedding');
     if (role.provider === 'deterministic_local') {
       throw new Error('Embedding role uses deterministic_local; caller should use Embedder directly.');
     }
@@ -96,7 +96,7 @@ export class ModelRegistry {
     visited.add(roleName);
     this.hooks.beforeGenerate?.(roleName);
 
-    const role = this.config[roleName];
+    const role = this.getRoleConfig(roleName);
     if (role.provider === 'openai_compatible') {
       const client = new OpenAICompatibleClient({
         baseUrl: role.baseUrl || 'http://localhost:11434/v1',
@@ -151,7 +151,7 @@ export class ModelRegistry {
     if (visited.has(roleName)) return 'rule_only';
     visited.add(roleName);
 
-    const role = this.config[roleName];
+    const role = this.getRoleConfig(roleName);
     if (role.provider === 'rule_only') {
       if (!role.fallback || role.fallback === 'rule_only' || role.fallback === 'deterministic_local') {
         return 'rule_only';

@@ -36,6 +36,8 @@ export interface DreamResult {
   dreamEventId?: string;
   kernelNightRan: boolean;
   kernelNightSkippedReason?: string;
+  memoryModelUsed: boolean;
+  memoryModelDegraded?: string;
 }
 
 export class DreamService {
@@ -49,6 +51,8 @@ export class DreamService {
     const refs = dedupeRefs(events);
     let kernelNightRan = false;
     let kernelNightSkippedReason: string | undefined;
+    let memoryModelUsed = false;
+    let memoryModelDegraded: string | undefined;
     if (this.options.runKernelNight) {
       this.options.beforeKernelNight?.(now);
       try {
@@ -56,12 +60,21 @@ export class DreamService {
         kernelNightRan = true;
         kernelNightSkippedReason = night.dream.skipped ? night.dream.reason : undefined;
         if (night.dream.semanticProcessorReason) {
+          memoryModelDegraded = night.dream.semanticProcessorReason;
           this.options.trace?.append('dream_model_degraded', {
             localDate,
             reason: night.dream.semanticProcessorReason,
             error: night.dream.semanticProcessorError,
           });
+          if (night.dream.semanticProcessorReason === 'semantic_processor_failed') {
+            this.options.trace?.append('memory_model_unavailable', {
+              localDate,
+              reason: night.dream.semanticProcessorReason,
+              error: night.dream.semanticProcessorError,
+            });
+          }
         } else if (night.dream.semanticProcessorAvailable) {
+          memoryModelUsed = true;
           this.options.trace?.append('dream_model_used', { localDate });
         }
       } catch (error) {
@@ -107,6 +120,8 @@ export class DreamService {
       dreamEventId: dreamEvent.eventId,
       kernelNightRan,
       kernelNightSkippedReason,
+      memoryModelUsed,
+      memoryModelDegraded,
     };
   }
 }

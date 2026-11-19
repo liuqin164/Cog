@@ -7,7 +7,7 @@ import { describe, expect, test } from 'bun:test';
 import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { MgModelProvider } from '../src/plugins/mg-provider.ts';
-import { ModelRouter } from '../src/model/router.ts';
+import { ModelRouter, routeLine } from '../src/model/router.ts';
 import { BUILTIN_ROUTE_NAME, RouteStore, redactSecrets, redactUrl, safeRouteName, type ModelRoute } from '../src/model/routes.ts';
 import { classifyEndpointFailure, classifyProviderError, planFailure, type RetryPolicy } from '../src/state/retry.ts';
 import { makeTempDir } from './helpers.ts';
@@ -120,6 +120,11 @@ describe('the model router', () => {
     expect(resumed.active).toBe('deepseek');
     expect(resumed.name).toBe('deepseek');
     expect(resumed.model).toBe('deepseek-chat');
+    expect(resumed.activeRoute).toMatchObject({ name: 'deepseek', baseUrl: STORED.baseUrl });
+
+    const noGateway = new ModelRouter({ store, builtin, builtinAvailable: false, timeoutMs: 1_000 });
+    expect(noGateway.builtinUnavailable).toBe(true);
+    expect(routeLine(noGateway.routes()[0]!, false, noGateway.builtinUnavailable)).toContain('不可用（本机未配置 MG_BASE_URL）');
   });
 
   test('switching changes the endpoint in place and is remembered; unknown names are refused', () => {
