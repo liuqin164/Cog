@@ -152,6 +152,8 @@ export type { DreamCuratorRunOptions, DreamCuratorRunResult } from './engine/Dre
 export type { DreamTickOptions, DreamTickResult } from './dream/index.js';
 export type { EpisodeClosureReceipt, EpisodeDreamStatus, EpisodeListOptions, MemoryEpisode } from './episode/index.js';
 
+const ATLAS_RECALL_REFRESH_MS = 24 * 60 * 60 * 1000;
+
 export interface MemoryKernelOptions {
   /** Shared items one recall may append, on top of the private budget. Unset = a third of the limit. */
   sharedRecallLimit?: number;
@@ -1345,6 +1347,7 @@ export class MemoryKernel {
     const timeZone = options.timeZone ?? this.projectClock.timeZone;
     const localDateNow = options.localDateNow ?? localDateFor(now, timeZone) ?? '';
     try {
+      if (options.projectId) this.refreshAtlasForRecall(options.projectId);
       const planned = this.atlasPathRetriever.retrieve(query, {
         projectId: options.projectId ?? '',
         limit: options.limit,
@@ -1364,6 +1367,21 @@ export class MemoryKernel {
         details: { component: 'atlas_path_retriever' },
       });
       return { atlasStatus: 'unavailable' as const, atlasErrorCode: 'atlas_recall_failed' as const };
+    }
+  }
+
+  private refreshAtlasForRecall(projectId: string): void {
+    const state = this.memoryAtlasStore.getProjectionState(projectId);
+    if (!state || state.status === 'clean') return;
+    if (state.lastRebuildAt === undefined || Date.now() - state.lastRebuildAt < ATLAS_RECALL_REFRESH_MS) return;
+    try {
+      this.memoryAtlasIndexer.ensureFresh({ projectId, frameMode: 'repair' });
+    } catch (error) {
+      this.pipelineMetrics.recordNonFatal('memory_atlas_recall_refresh_failed', {
+        projectId,
+        message: error instanceof Error ? error.message : String(error),
+        details: { component: 'memory_atlas_indexer' },
+      });
     }
   }
 

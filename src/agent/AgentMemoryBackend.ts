@@ -1087,8 +1087,33 @@ export class KernelAgentMemoryBackend {
     // Occasion scope is the last admission, after the shared lane as well as the local ones: a shared
     // item is still text this connection may not be allowed to speak (#162).
     const gated = this.applyOccasionGate(query, answered, suppressedIds);
+    this.touchAtlasRecallHits(query, gated.result);
     this.recordRecallTrace(query, gated.result, gated.suppressedIds);
     return gated.result;
+  }
+
+  private touchAtlasRecallHits(query: AgentRecallQuery, result: AgentRecallResult): void {
+    if (!query.projectId) return;
+    const nodeIds = new Set<string>();
+    for (const item of result.items) {
+      if (!item.canonicalId) continue;
+      if (!item.tags.some((tag) => tag === 'atlas_node' || tag === 'facet_graph' || tag === 'atlas_path')) continue;
+      nodeIds.add(item.canonicalId);
+    }
+    if (!nodeIds.size) return;
+    try {
+      this.kernel.touchMemoryAtlas({
+        projectId: query.projectId,
+        nodeIds: [...nodeIds],
+        reason: 'recall_hit',
+        query: String(query.query ?? ''),
+      });
+    } catch (error) {
+      this.kernel.pipelineMetrics.recordNonFatal('memory_atlas_recall_touch_failed', {
+        projectId: query.projectId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private scopeExcludedSessionTail(query: AgentRecallQuery): AgentRecallQuery {
@@ -2326,13 +2351,10 @@ export class KernelAgentMemoryBackend {
       const keys = [item.canonicalId, item.sourceAnchor?.eventId, item.id].filter((value): value is string => Boolean(value));
       const duplicate = keys.map((key) => keptByKey.get(key)).find((candidate): candidate is AgentRecallItem => Boolean(candidate));
       if (keys.some((key) => seen.has(key))) {
-        // A compiled card that cites the same event as an answer already kept is not a
-        // second answer — it says what that answer is. Dropping it silently is what made
-        // the compiled layer invisible: `evidenceFor` returned four atlas nodes and every
-        // recall answer was raw text with no trace of them (#119).
         if (duplicate && item.source === 'memory_atlas' && duplicate.source !== 'memory_atlas') {
           duplicate.displayTitle ??= item.displayTitle;
           duplicate.whyMatched ??= item.whyMatched;
+          duplicate.canonicalId ??= item.canonicalId;
           for (const tag of item.tags) if (!duplicate.tags.includes(tag)) duplicate.tags.push(tag);
         }
         continue;

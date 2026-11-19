@@ -172,7 +172,7 @@ Rejected designs:
 - fixed recent-six-turn context as the memory model
 ## Memory Atlas projection
 
-Memory Atlas v1 is a canonical-memory-safe navigation projection over governed memory and source-anchored organization. Query tools are pure reads; only explicit `MemoryKernel.touchMemoryAtlas()` records non-evidentiary activation telemetry for nodes the agent used. Atlas does not replace or rewrite Raw Ledger, recall, Memory Binding, Episode Dream, beliefs, topics, or governance, and an Atlas summary is never evidence.
+Memory Atlas v1 is a canonical-memory-safe navigation projection over governed memory and source-anchored organization. Query tools are pure reads; only explicit `MemoryKernel.touchMemoryAtlas()` records non-evidentiary activation telemetry for nodes the agent used, and the recall lane applies it to the Atlas nodes it returns. Atlas does not replace or rewrite Raw Ledger, recall, Memory Binding, Episode Dream, beliefs, topics, or governance, and an Atlas summary is never evidence.
 
 Atlas nodes project topics, entities, clusters, episodes, beliefs, action frames, and time buckets. Edges project existing memory relations plus deterministic action target/time links. Every evidentiary route terminates in raw event IDs and a `cogmem memory show` locator.
 
