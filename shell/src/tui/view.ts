@@ -570,39 +570,38 @@ export function flattenEntry(entry: TranscriptEntry, width: number, env: RenderE
   return renderTool(entry.block, width, env);
 }
 
-/**
- * A proposal in the receipt's visual family: the same `⌁` marker, but the pending one carries its
- * answer keys inline so "this is an offer, not an execution" is legible at a glance and in ASCII
- * (the marker degrades to `#`, the labels are words). The command text is drawn even after it
- * settled, so the receipt always says what was offered before it says what happened.
- */
 function renderProposal(proposal: CommandProposal, width: number, env: RenderEnv): Row[] {
   const marker = env.unicode ? '⌁ ' : '# ';
   const target = `/${proposal.command}${proposal.args === '' ? '' : ` ${proposal.args}`}`;
   const head = `提议 ${target} · ${proposal.reason}`;
+  const headRows = (text: string, style: 'accent' | 'dim' | 'warn'): Row[] =>
+    wrapPlain(text, Math.max(1, width - 2)).map((line, index) => [
+      seg(index === 0 ? marker : '  ', style),
+      seg(line, style),
+    ]);
   const body = (text: string, style: 'plain' | 'dim' = 'plain'): Row[] =>
     wrapPlain(text, Math.max(1, width - 2)).map((line) => [seg('  ', 'dim'), seg(line, style)]);
   switch (proposal.status) {
     case 'pending':
       return [
-        [seg(marker, 'accent'), seg(truncatePlain(head, Math.max(1, width - 2)), 'accent')],
+        ...headRows(head, 'accent'),
         ...body('Enter 执行 · Esc 放弃（尚未执行）', 'dim'),
         [],
       ];
     case 'executed':
       return [
-        [seg(marker, 'accent'), seg(truncatePlain(`${head} · 已执行`, Math.max(1, width - 2)), 'accent')],
+        ...headRows(`${head} · 已执行`, 'accent'),
         ...body(proposal.resultText ?? '（命令已执行）'),
         [],
       ];
     case 'discarded':
       return [
-        [seg(marker, 'dim'), seg(truncatePlain(`${head} · 已放弃，提议失效`, Math.max(1, width - 2)), 'dim')],
+        ...headRows(`${head} · 已放弃，提议失效`, 'dim'),
         [],
       ];
     default:
       return [
-        [seg(marker, 'warn'), seg(truncatePlain(`${head} · 已拒绝，未执行`, Math.max(1, width - 2)), 'warn')],
+        ...headRows(`${head} · 已拒绝，未执行`, 'warn'),
         ...body(proposal.rejectedReason ?? '命令不可用。', 'dim'),
         [],
       ];

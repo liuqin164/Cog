@@ -1,12 +1,3 @@
-/**
- * Command proposals (spec §7, #165 round 22): the agent hands the user a command to run and the user
- * decides. The discriminators are the three the round names — a `/pause` offer becomes an executable
- * element and only a confirmation runs it; a `/pin` offer is refused on the spot and traced; and
- * the execution entry refuses an unconfirmed proposal object outright.
- *
- * Red-first: this file was run against the tree before `src/proposals.ts`'s confirmation gate
- * existed (the gate temporarily removed) and the three tests below failed exactly where they should.
- */
 import { describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { AttachClient } from '../src/attach/client.ts';
@@ -15,8 +6,10 @@ import { availableCoreCommand } from '../src/commands.ts';
 import {
   CommandProposals,
   MAX_SETTLED_PROPOSALS,
+  PROPOSABLE_COMMANDS,
   SETTLED_PROPOSAL_TTL_MS,
   executeProposal,
+  isProposableCommand,
   type CommandProposal,
   type ProposalConfirmation,
 } from '../src/proposals.ts';
@@ -159,7 +152,6 @@ describe('the availability table is shared with the panel (spec §7)', () => {
       expect(availableCoreCommand(name, 'resident')).toBeDefined();
       expect(paletteCommands(new TuiView()).some((command) => command.name === name)).toBe(true);
     }
-    // Proposable iff the palette offers it, asked on the face a confirmation executes on.
     for (const name of ['pause', 'resume', 'sleep', 'status', 'why', 'help']) {
       expect(availableCoreCommand(name, 'resident')).toBeDefined();
       expect(availableCoreCommand(name, 'palette')).toBeDefined();
@@ -179,6 +171,108 @@ describe('the availability table is shared with the panel (spec §7)', () => {
     } finally {
       await shell.stop();
     }
+  });
+});
+
+const NEVER_PROPOSABLE = [
+  ['forget', '2000-01-01 2100-01-01'],
+  ['plugins', 'add ./evil.ts'],
+  ['upgrade', '/tmp/some-tree'],
+  ['export', '/tmp/leak'],
+  ['correct', 'tone blunt'],
+] as const;
+
+describe('the proposal whitelist is explicit', () => {
+  test('the tool description lists exactly PROPOSABLE_COMMANDS', async () => {
+    const dir = makeTempDir();
+    const provider = new ScriptedProvider([{ text: '嗯', toolCalls: [] }]);
+    const shell = makeShell(dir, provider, { dream: NO_DREAM });
+    await shell.start();
+    try {
+      await shell.submit('你好');
+      const description = provider.calls[0]?.tools.find((tool) => tool.name === 'propose_command')?.description ?? '';
+      const listed = [...new Set(description.match(/\/[a-z]+/gu) ?? [])].map((name) => name.slice(1)).sort();
+      expect(listed).toEqual([...PROPOSABLE_COMMANDS].sort());
+    } finally {
+      await shell.stop();
+    }
+  });
+
+  for (const [command, args] of NEVER_PROPOSABLE) {
+    test(`/${command} can never be proposed`, () => {
+      expect(isProposableCommand(command)).toBe(false);
+      const registry = new CommandProposals(isProposableCommand, { append: () => {} }, () => 0);
+      const { proposal, accepted } = registry.propose({ command, args, reason: 'probe' });
+      expect(accepted).toBe(false);
+      expect(proposal.status).toBe('rejected');
+      expect(proposal.rejectedReason).toContain('command_not_available_for_proposal');
+    });
+  }
+
+  test('the triage probe is refused and /pause still reaches confirmation', async () => {
+    const dir = makeTempDir();
+    const probes = [
+      ['plugins', 'add ./evil.ts'],
+      ['forget', '2000-01-01 2100-01-01'],
+      ['upgrade', '/tmp/some-tree'],
+    ] as const;
+    const provider = new ScriptedProvider([
+      ...probes.flatMap(([command, args], index) => [
+        { text: '', toolCalls: [{ toolCallId: `probe-${index}`, toolName: 'propose_command', input: { command, args, reason: 'probe' } }] },
+        { text: '收到。', toolCalls: [] },
+      ]),
+      { text: '', toolCalls: [{ toolCallId: 'probe-pause', toolName: 'propose_command', input: { command: 'pause', args: '', reason: '你累了' } }] },
+      { text: '已递出。', toolCalls: [] },
+    ]);
+    const shell = makeShell(dir, provider, { dream: NO_DREAM });
+    const events = recordEvents(shell.host.bus, ['companion_command_proposal']);
+    await shell.start();
+    try {
+      for (const [index, [command, args]] of probes.entries()) {
+        await shell.submit('试一下');
+        const rejected = traceKinds(shell, 'command_proposal_rejected').at(-1) ?? {};
+        expect(rejected.command).toBe(command);
+        expect(String(rejected.detail)).toContain('command_not_available_for_proposal');
+        const toolResult = provider.calls.at(-1)?.messages.find((message) => message.role === 'tool' && message.toolCallId === `probe-${index}`);
+        expect(toolResult?.content).toContain('command_not_available_for_proposal');
+        expect(toolResult?.content).toContain(args);
+      }
+      expect(shell.currentProposals()).toHaveLength(0);
+
+      await shell.submit('好累');
+      const pending = shell.currentProposals();
+      expect(pending).toHaveLength(1);
+      expect(pending[0].command).toBe('pause');
+      const view = new TuiView();
+      for (const event of events) view.applyEvent({ name: event.name, payload: event.payload });
+      expect(view.pendingProposal()?.proposal.id).toBe(pending[0].id);
+      expect((await shell.confirmProposal(pending[0].id)).ok).toBe(true);
+      expect(shell.capturePaused).toBe(true);
+    } finally {
+      await shell.stop();
+    }
+  });
+});
+
+describe('the proposal card shows the command it asks for', () => {
+  test('a long argument string is wrapped, not truncated', () => {
+    const view = new TuiView();
+    view.applyEvent({
+      name: 'companion_command_proposal',
+      payload: {
+        proposal: {
+          id: 'proposal-long',
+          command: 'model',
+          args: 'a-very-long-route-name-that-exceeds-the-card-width',
+          reason: '换个路线',
+          status: 'pending',
+          createdAt: 1,
+        },
+      },
+    });
+    const text = rendered(proposalsIn(view)[0], 40);
+    expect(text.replace(/\s+/gu, '')).toContain('a-very-long-route-name-that-exceeds-the-card-width');
+    expect(text).toContain('换个路线');
   });
 });
 

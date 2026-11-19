@@ -14,11 +14,7 @@ export interface TuiCommand {
   argumentHint?: string;
 }
 
-/**
- * The palette half of the table; a conditional entry (`/model`) only joins once its condition holds.
- * It is `availableCoreCommand` that decides — the same rule the proposal path uses — so the panel
- * and "what the agent may propose" cannot drift apart.
- */
+/** The palette half of the table; a conditional entry (`/model`) only joins once its condition holds. */
 function corePaletteCommands(multipleRoutes: boolean): TuiCommand[] {
   return CORE_COMMANDS
     .filter((command) => availableCoreCommand(command.name, 'palette', { multipleRoutes }) !== undefined)
