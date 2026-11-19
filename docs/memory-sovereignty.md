@@ -101,6 +101,11 @@ newest-first, and the order does not change between runs.
 | `entityMentions` | Mentions attached to a removed event. |
 | `episodes` | Episodes overlapping the window. |
 | `frames` | Frames belonging to a removed episode. |
+| `projectBranches` | Legacy project branches for the project. |
+| `topologyMembership` | Legacy topology rows naming a removed event. |
+| `interactionUnits` | Interaction units whose messages were removed. |
+| `cognitiveNodes` | Legacy cognitive nodes for the project or a removed event. |
+| `traceEvents` | Recall traces stamped inside the window. |
 
 Every field is present on every result; a field that removed nothing is `0`.
 
