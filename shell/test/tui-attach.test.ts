@@ -11,7 +11,7 @@ import type { AttachServerMessage, AttachSnapshot } from '../src/attach/server.t
 import { openProbeSession } from '../src/install/attach.ts';
 import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
 
-const NO_DREAM = { windowStartHour: 0, windowEndHour: 0, runKernelNight: false, maxEpisodes: 5 };
+const NO_DREAM = { windowStartHour: 0, windowEndHour: 1, runKernelNight: false, maxEpisodes: 5 };
 
 function attachShell(dir: string, provider: ScriptedProvider, now?: () => number) {
   return makeShell(dir, provider, { attach: { enabled: true }, dream: NO_DREAM }, now ? { now } : {});

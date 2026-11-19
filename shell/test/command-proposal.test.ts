@@ -18,7 +18,7 @@ import { defaultRenderEnv } from '../src/tui/frame.ts';
 import { paletteCommands } from '../src/tui/commands.ts';
 import { ScriptedProvider, makeShell, makeTempDir, recordEvents } from './helpers.ts';
 
-const NO_DREAM = { windowStartHour: 0, windowEndHour: 0, runKernelNight: false, maxEpisodes: 5 };
+const NO_DREAM = { windowStartHour: 0, windowEndHour: 1, runKernelNight: false, maxEpisodes: 5 };
 
 function offering(command: string, reason: string, args = ''): ScriptedProvider {
   return new ScriptedProvider([

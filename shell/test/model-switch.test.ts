@@ -121,7 +121,7 @@ describe('runtime model routes in the resident', () => {
     const store = new RouteStore(join(dataDir, 'routes.json')).load();
     store.add(CUSTOM);
     store.setActive('deepseek');
-    const shell = makeShell(dir, undefined, { attach: { enabled: true }, dream: { windowStartHour: 0, windowEndHour: 0, runKernelNight: false, maxEpisodes: 5 } });
+    const shell = makeShell(dir, undefined, { attach: { enabled: true }, dream: { windowStartHour: 0, windowEndHour: 1, runKernelNight: false, maxEpisodes: 5 } });
     await shell.start();
     const client = new AttachClient();
     const events: AttachServerMessage[] = [];

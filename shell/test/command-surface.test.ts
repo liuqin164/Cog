@@ -18,7 +18,7 @@ import { TuiView } from '../src/tui/view.ts';
 import { TerminalChannel } from '../src/channels/terminal.ts';
 import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
 
-const NO_DREAM = { windowStartHour: 0, windowEndHour: 0, runKernelNight: false, maxEpisodes: 5 };
+const NO_DREAM = { windowStartHour: 0, windowEndHour: 1, runKernelNight: false, maxEpisodes: 5 };
 const SPEC_COMMANDS = ['soul', 'memory', 'commitments', 'candidates', 'status', 'context', 'sleep', 'dream', 'pause', 'resume', 'why', 'model', 'help', 'exit'];
 
 async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {

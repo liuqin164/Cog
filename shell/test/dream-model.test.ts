@@ -55,8 +55,8 @@ describe('Dream route A in the shell', () => {
     });
     await shell.start();
     try {
-      const clock = shell.host.getService<{ localDate(at?: number): string }>('clock');
-      const dayThread = `companion-day:${clock.localDate(NIGHT)}`;
+      const clock = shell.host.getService<{ dreamTargetDate(at?: number): string }>('clock');
+      const dayThread = `companion-day:${clock.dreamTargetDate(NIGHT)}`;
       await shell.backend.rememberTurnWithResult({
         agentId: shell.config.agentId,
         projectId: shell.config.projectId,
@@ -95,14 +95,14 @@ describe('Dream route A in the shell', () => {
     });
     await shell.start();
     try {
-      const clock = shell.host.getService<{ localDate(at?: number): string }>('clock');
+      const clock = shell.host.getService<{ dreamTargetDate(at?: number): string }>('clock');
       for (let day = 0; day < 3; day += 1) {
         const at = BASE + day * 24 * 60 * 60_000;
         await shell.backend.rememberTurnWithResult({
           agentId: shell.config.agentId,
           projectId: shell.config.projectId,
           sessionId: shell.config.sessionId,
-          threadId: `companion-day:${clock.localDate(at + 2 * 60 * 60_000)}`,
+          threadId: `companion-day:${clock.dreamTargetDate(at + 2 * 60 * 60_000)}`,
           turnId: `dead-model-seed-${day}`,
           userText: `第 ${day + 1} 天：请以后始终记住不要碰事实同伴库。`,
           assistantText: '记下了。',
@@ -129,6 +129,11 @@ describe('Dream route A in the shell', () => {
       const streak = shell.kernel.health.check({ record: false }).checks.find((check) => check.id === 'dream_streak');
       expect(streak?.status).toBe('degraded');
       expect((streak?.detail as { streak: number }).streak).toBe(3);
+      const runs = shell.kernel.factStore.getDatabase()
+        .prepare(`SELECT status FROM episode_dream_runs`)
+        .all() as Array<{ status: string }>;
+      expect(runs).toHaveLength(3);
+      expect(runs.every((run) => run.status === 'partial')).toBe(true);
     } finally {
       await shell.stop();
     }
@@ -143,8 +148,8 @@ describe('Dream route A in the shell', () => {
     });
     await shell.start();
     try {
-      const clock = shell.host.getService<{ localDate(at?: number): string }>('clock');
-      const date = clock.localDate(NIGHT);
+      const clock = shell.host.getService<{ dreamTargetDate(at?: number): string }>('clock');
+      const date = clock.dreamTargetDate(NIGHT);
       const dayThread = `companion-day:${date}`;
       const seed = await shell.backend.rememberTurnWithResult({
         agentId: shell.config.agentId,
@@ -202,8 +207,8 @@ describe('Dream route A in the shell', () => {
     });
     await shell.start();
     try {
-      const clock = shell.host.getService<{ localDate(at?: number): string }>('clock');
-      const dayThread = `companion-day:${clock.localDate(NIGHT)}`;
+      const clock = shell.host.getService<{ dreamTargetDate(at?: number): string }>('clock');
+      const dayThread = `companion-day:${clock.dreamTargetDate(NIGHT)}`;
       await shell.backend.rememberTurnWithResult({
         agentId: shell.config.agentId,
         projectId: shell.config.projectId,

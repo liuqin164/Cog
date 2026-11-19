@@ -101,7 +101,7 @@ test('retained RSS stays flat across mixed resident cycles', async () => {
   const shell = makeShell(dir, provider, {
     idleWakeIntervalMs: 1_000,
     // Keep the dream window out of the soak's artificial 12:00 clock.
-    dream: { windowStartHour: 23, windowEndHour: 23, runKernelNight: false, maxEpisodes: 5 },
+    dream: { windowStartHour: 0, windowEndHour: 1, runKernelNight: false, maxEpisodes: 5 },
     attach: { enabled: true, socketPath: join(dir, 'attach.sock') },
   }, { now: () => now });
   const web = new PluginHost();

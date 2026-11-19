@@ -89,6 +89,8 @@ export interface Suspension {
 
 export interface ShellRuntimeState {
   lastDreamDate?: string;
+  dreamRetry?: { night: string; attempts: number; nextAt: number; gaveUp?: boolean };
+  lastSnapshotAt?: number;
   lastInteractionAt?: number;
   lastInteractionText?: string;
   /** The block injected when the shell last woke; the system prompt reuses it until the next wake. */

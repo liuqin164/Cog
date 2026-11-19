@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import type { CompanionShell } from '../src/app.ts';
 import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
 
-const NO_DREAM = { runKernelNight: false, maxEpisodes: 5, windowStartHour: 3, windowEndHour: 3 };
+const NO_DREAM = { runKernelNight: false, maxEpisodes: 5, windowStartHour: 0, windowEndHour: 1 };
 const EVENT_TEXT = '部署窗口是周二凌晨两点，「周五不能部署」；预算 120,000 日元。';
 
 /** The key a context stub hands a model: the digest entry's own sourceRef, from a real captured turn. */

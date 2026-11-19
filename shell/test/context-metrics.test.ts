@@ -6,7 +6,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { LaneAssemblyView, ContextMetrics } from '../src/state/session-lanes.ts';
 import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
-const NO_DREAM = { runKernelNight: false, maxEpisodes: 5, windowStartHour: 3, windowEndHour: 3 };
+const NO_DREAM = { runKernelNight: false, maxEpisodes: 5, windowStartHour: 0, windowEndHour: 1 };
 const EVENT_TEXT = '账本原文：部署窗口是周二凌晨两点。';
 describe('context projection metrics (#268)', () => {
   test('a fold and a mem: drill are counted on the trace, and /context shows the same numbers', async () => {

@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { CheckpointStore } from '../src/state/checkpoint.ts';
 import { ScriptedProvider, makeShell, makeTempDir, seedOpenAssignment } from './helpers.ts';
 
-const NO_DREAM = { runKernelNight: false, maxEpisodes: 5, windowStartHour: 3, windowEndHour: 3 };
+const NO_DREAM = { runKernelNight: false, maxEpisodes: 5, windowStartHour: 0, windowEndHour: 1 };
 
 const shellAt = (dir: string, provider: ScriptedProvider, contextSweetSpot = 6_000) =>
   makeShell(dir, provider, {

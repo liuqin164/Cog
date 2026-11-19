@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
 
-const NO_DREAM = { runKernelNight: false, maxEpisodes: 5, windowStartHour: 3, windowEndHour: 3 };
+const NO_DREAM = { runKernelNight: false, maxEpisodes: 5, windowStartHour: 0, windowEndHour: 1 };
 
 describe('tool output is not owner memory (#325)', () => {
   test('an owner fact and a large read: only the owner fact is recallable', async () => {

@@ -885,6 +885,14 @@ export class Installer {
       }
     }
 
+    if (dreamStart === dreamEnd) {
+      return {
+        ok: false,
+        message: `做梦开始与结束都是 ${dreamStart} 点：窗口长度为零，永远不会触发 Dream。`,
+        hint: '把结束改到开始之后，或跨午夜（如 23 → 6）。',
+      };
+    }
+
     this.choices.timeZone = timeZone;
     this.choices.dreamStartHour = dreamStart;
     this.choices.dreamEndHour = dreamEnd;

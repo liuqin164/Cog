@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { ScriptedProvider, makeShell, makeTempDir, spawnFixture } from './helpers.ts';
 
-const NO_DREAM = { runKernelNight: false, maxEpisodes: 5, windowStartHour: 3, windowEndHour: 3 };
+const NO_DREAM = { runKernelNight: false, maxEpisodes: 5, windowStartHour: 0, windowEndHour: 1 };
 
 function dayThread(shell: ReturnType<typeof makeShell>): string {
   const clock = shell.host.getService<{ localDate(at?: number): string }>('clock');
