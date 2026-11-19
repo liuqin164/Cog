@@ -246,6 +246,65 @@ test('agent backend excludes current-session compiled evidence when excludeSessi
   kernel.close();
 });
 
+test('agent backend recalls older turns of the excluded session past its tail', async () => {
+  const dir = makeTempDir('agent-backend-excluded-session-tail-');
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+
+  await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'session-current',
+    userText: '请记住：青岚代号是 7391。',
+    assistantText: '已记录青岚代号。',
+    timestamp: 1_700_000_000_000,
+    ingestMode: 'immediate_compile',
+  });
+  await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'session-current',
+    userText: '今天把书架和旧照片整理了一遍。',
+    assistantText: '记下了。',
+    timestamp: 1_700_000_060_000,
+    ingestMode: 'immediate_compile',
+  });
+  await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'session-current',
+    userText: '请记住：尾巴暗号是 5820。',
+    assistantText: '已记录尾巴暗号。',
+    timestamp: 1_700_000_120_000,
+    ingestMode: 'immediate_compile',
+  });
+
+  const recalled = backend.recall({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'session-current',
+    excludeSessionId: 'session-current',
+    excludeSessionTailTurns: 1,
+    query: '代号 暗号',
+    limit: 5,
+  });
+
+  expect(recalled.items.some((item) => item.text.includes('青岚代号是 7391'))).toBe(true);
+  expect(recalled.items.some((item) => item.text.includes('尾巴暗号是 5820'))).toBe(false);
+
+  const wholeSession = backend.recall({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'session-current',
+    excludeSessionId: 'session-current',
+    query: '代号 暗号',
+    limit: 5,
+  });
+  expect(wholeSession.items.some((item) => item.text.includes('青岚代号是 7391'))).toBe(false);
+
+  kernel.close();
+});
+
 test('agent backend can recall the previous session from the raw ledger without semantic guessing', async () => {
   const dir = makeTempDir('agent-backend-previous-session-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });

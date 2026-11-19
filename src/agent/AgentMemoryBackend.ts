@@ -158,6 +158,8 @@ export interface AgentRecallQuery {
   sessionId?: string;
   threadId?: string;
   excludeSessionId?: string;
+  excludeSessionTailTurns?: number;
+  excludeSessionBeforeTurnSeq?: number;
   intent?: AgentRecallIntent;
   anchorEventId?: string;
   anchorText?: string;
@@ -1079,6 +1081,7 @@ export class KernelAgentMemoryBackend {
    * lane did not (#115).
    */
   recall(query: AgentRecallQuery): AgentRecallResult {
+    query = this.scopeExcludedSessionTail(query);
     const { result, suppressedIds } = this.recallPrivate(query);
     const answered = this.withSharedLane(query, result);
     // Occasion scope is the last admission, after the shared lane as well as the local ones: a shared
@@ -1086,6 +1089,23 @@ export class KernelAgentMemoryBackend {
     const gated = this.applyOccasionGate(query, answered, suppressedIds);
     this.recordRecallTrace(query, gated.result, gated.suppressedIds);
     return gated.result;
+  }
+
+  private scopeExcludedSessionTail(query: AgentRecallQuery): AgentRecallQuery {
+    const sessionId = query.excludeSessionId;
+    const turns = query.excludeSessionTailTurns;
+    if (!sessionId || !turns || turns <= 0) return query;
+    const page = this.kernel.eventStore.queryEvents(1, Math.max(turns * 2, 2), {
+      projectId: query.projectId !== undefined ? [query.projectId] : undefined,
+      sessionId: [sessionId],
+      order: 'desc',
+    });
+    const sequences = page.records
+      .map((event) => event.turnSeq)
+      .filter((value): value is number => typeof value === 'number');
+    if (sequences.length === 0) return query;
+    const latest = Math.max(...sequences);
+    return { ...query, excludeSessionBeforeTurnSeq: latest - turns + 1 };
   }
 
   /**
@@ -2526,7 +2546,9 @@ export class KernelAgentMemoryBackend {
   }
 
   private isAllowedSession(event: MemoryEvent, query: AgentRecallQuery, effectiveIntent: AgentRecallIntent | undefined = query.intent): boolean {
-    if (query.excludeSessionId && event.sessionId === query.excludeSessionId) return false;
+    if (query.excludeSessionId && event.sessionId === query.excludeSessionId
+      && (query.excludeSessionBeforeTurnSeq === undefined
+        || (event.turnSeq ?? 0) >= query.excludeSessionBeforeTurnSeq)) return false;
     if (query.sessionId && effectiveIntent && effectiveIntent !== 'memory_recall' && event.sessionId === query.sessionId) return false;
     return true;
   }
