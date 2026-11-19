@@ -16,8 +16,8 @@ describe('night integration (DREAMING)', () => {
     const shell = makeDreamShell(dir, provider);
     await shell.start();
     try {
-      const clock = shell.host.getService<{ localDate(at?: number): string }>('clock');
-      const date = clock.localDate();
+      const clock = shell.host.getService<{ dreamTargetDate(at?: number): string }>('clock');
+      const date = clock.dreamTargetDate();
       const dayThread = `companion-day:${date}`;
       const seed = await shell.backend.rememberTurnWithResult({
         agentId: shell.config.agentId,

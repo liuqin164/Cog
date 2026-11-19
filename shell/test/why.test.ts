@@ -7,7 +7,7 @@ import { describe, expect, test } from 'bun:test';
 import { RecallDecisionTrace, TraceStore } from 'cogmem/internal';
 import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
 
-const NO_DREAM = { windowStartHour: 0, windowEndHour: 0, runKernelNight: false, maxEpisodes: 5 };
+const NO_DREAM = { windowStartHour: 0, windowEndHour: 1, runKernelNight: false, maxEpisodes: 5 };
 
 describe('/why reads the last recall decision trace (spec §7)', () => {
   test('a seeded decision is shown field for field', async () => {

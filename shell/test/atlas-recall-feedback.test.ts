@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test';
 import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
 
 const DAY = 24 * 60 * 60 * 1000;
-const NO_DREAM = { windowStartHour: 0, windowEndHour: 0, runKernelNight: false, maxEpisodes: 5 };
+const NO_DREAM = { windowStartHour: 0, windowEndHour: 1, runKernelNight: false, maxEpisodes: 5 };
 
 describe('Atlas on the companion recall path (#356)', () => {
   test('a real shell recall rebuilds a stale Atlas and records the node it returned', async () => {

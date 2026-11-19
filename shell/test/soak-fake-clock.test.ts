@@ -26,7 +26,7 @@ function makeSoakShell(dir: string, provider: ScriptedProvider, clock: { now: nu
     provider,
     {
       // Keep the 2–5 dream window out of the fake day; the soak is about ticks, not the night.
-      dream: { windowStartHour: 23, windowEndHour: 23, runKernelNight: false, maxEpisodes: 5 },
+      dream: { windowStartHour: 0, windowEndHour: 1, runKernelNight: false, maxEpisodes: 5 },
     },
     { now: () => clock.now },
   );
@@ -63,8 +63,15 @@ function autonomousUserRows(shell: CompanionShell): number {
 async function advance(shell: CompanionShell, clock: { now: number }, ticks: number, step = TICK_MS): Promise<void> {
   for (let tick = 0; tick < ticks; tick += 1) {
     clock.now += step;
-    await shell.tick(clock.now);
+    await tickWithoutDream(shell, clock.now);
   }
+}
+
+async function tickWithoutDream(shell: CompanionShell, at: number): Promise<void> {
+  const clock = shell.host.getService<{ dreamTargetDate(at?: number): string }>('clock');
+  const target = clock.dreamTargetDate(at);
+  if (shell.machine.runtime.lastDreamDate !== target) shell.machine.updateRuntime({ lastDreamDate: target });
+  await shell.tick(at);
 }
 
 describe('fake-clock soak (#235)', () => {
@@ -132,7 +139,7 @@ describe('fake-clock soak (#235)', () => {
       // Walk the fake clock to the due instant in half-hour ticks, then past it.
       while (clock.now < due) {
         clock.now = Math.min(clock.now + 30 * 60_000, due);
-        await shell.tick(clock.now);
+        await tickWithoutDream(shell, clock.now);
       }
       const afterDue = ledgerSize(shell);
       const callsAtDue = provider.calls.length;
@@ -176,7 +183,7 @@ describe('fake-clock soak (#235)', () => {
       const due = entry!.dueAt!;
       while (clock.now < due) {
         clock.now = Math.min(clock.now + 30 * 60_000, due);
-        await shell.tick(clock.now);
+        await tickWithoutDream(shell, clock.now);
       }
       const afterDue = ledgerSize(shell);
       await advance(shell, clock, 60);
@@ -191,6 +198,198 @@ describe('fake-clock soak (#235)', () => {
       // Two turns (2 rows each) plus the promise's opened/surfaced/autonomous rows and projections.
       expect(ledgerSize(shell)).toBeLessThanOrEqual(10);
       expect(shell.machine.state).toBe('IDLE');
+    } finally {
+      await shell.stop();
+    }
+  }, 60_000);
+});
+
+const DREAM_WINDOW = { runKernelNight: false, maxEpisodes: 5, windowStartHour: 2, windowEndHour: 5 };
+
+function dreamShell(dir: string, clock: { now: number }, dream = DREAM_WINDOW): CompanionShell {
+  return makeShell(dir, new ScriptedProvider([{ text: 'unused', toolCalls: [] }]), { dream }, { now: () => clock.now });
+}
+
+async function seedDay(shell: CompanionShell, date: string, at: number): Promise<void> {
+  await shell.backend.rememberTurnWithResult({
+    agentId: shell.config.agentId,
+    projectId: shell.config.projectId,
+    sessionId: shell.config.sessionId,
+    threadId: `companion-day:${date}`,
+    turnId: `catchup-seed-${date}-${at}`,
+    userText: '昨天整理书架，把工具书放到第二层。',
+    assistantText: '记下了：工具书在第二层。',
+    timestamp: at,
+    ingestMode: 'immediate_compile',
+  });
+}
+
+describe('dream scheduling (#327)', () => {
+  test('a tick inside the window folds the previous local day', async () => {
+    const clock = { now: Date.UTC(2026, 2, 11, 3, 0, 0) };
+    const shell = dreamShell(makeTempDir('dream-day-'), clock);
+    await shell.start();
+    try {
+      const service = shell.host.getService<{ dreamTargetDate(at?: number): string }>('clock');
+      const target = service.dreamTargetDate(clock.now);
+      await seedDay(shell, target, clock.now - 60 * 60_000);
+
+      await shell.tick(clock.now);
+      const dreams = shell.trace.read().filter((record) => record.kind === 'dream_complete');
+      expect(dreams).toHaveLength(1);
+      expect(dreams[0]!.localDate).toBe(target);
+      expect(dreams[0]!.localDate).toBe('2026-03-10');
+      expect(shell.machine.runtime.lastDreamDate).toBe('2026-03-10');
+    } finally {
+      await shell.stop();
+    }
+  }, 60_000);
+
+  test('a process started after the window catches up on its first tick', async () => {
+    const clock = { now: Date.UTC(2026, 2, 11, 6, 0, 0) };
+    const shell = dreamShell(makeTempDir('dream-catchup-'), clock);
+    await shell.start();
+    try {
+      const service = shell.host.getService<{ dreamTargetDate(at?: number): string }>('clock');
+      const target = service.dreamTargetDate(clock.now);
+      await seedDay(shell, target, clock.now - 3 * 60 * 60_000);
+
+      await shell.tick(clock.now);
+      const catchups = shell.trace.read().filter((record) => record.kind === 'dream_catchup');
+      const dreams = shell.trace.read().filter((record) => record.kind === 'dream_complete');
+      expect(catchups).toHaveLength(1);
+      expect(catchups[0]!.dream_catchup).toBe(true);
+      expect(catchups[0]!.localDate).toBe(target);
+      expect(dreams).toHaveLength(1);
+      expect(dreams[0]!.dream_catchup).toBe(true);
+      expect(shell.machine.runtime.lastDreamDate).toBe(target);
+    } finally {
+      await shell.stop();
+    }
+  }, 60_000);
+
+  test('a multi-day gap catches up only the latest day and reports the skipped days', async () => {
+    const clock = { now: Date.UTC(2026, 2, 14, 6, 0, 0) };
+    const shell = dreamShell(makeTempDir('dream-gap-'), clock);
+    await shell.start();
+    try {
+      const service = shell.host.getService<{ dreamTargetDate(at?: number): string }>('clock');
+      const target = service.dreamTargetDate(clock.now);
+      await seedDay(shell, target, clock.now - 3 * 60 * 60_000);
+      shell.machine.updateRuntime({ lastDreamDate: '2026-03-10' });
+
+      await shell.tick(clock.now);
+      const catchup = shell.trace.read().find((record) => record.kind === 'dream_catchup')!;
+      expect(catchup.localDate).toBe('2026-03-13');
+      expect(catchup.skippedDays).toBe(2);
+      const dreams = shell.trace.read().filter((record) => record.kind === 'dream_complete');
+      expect(dreams).toHaveLength(1);
+      expect(dreams[0]!.localDate).toBe('2026-03-13');
+    } finally {
+      await shell.stop();
+    }
+  }, 60_000);
+
+  test('a 23 to 6 window runs once across midnight', async () => {
+    const clock = { now: Date.UTC(2026, 2, 10, 23, 30, 0) };
+    const shell = dreamShell(makeTempDir('dream-midnight-'), clock, {
+      runKernelNight: false,
+      maxEpisodes: 5,
+      windowStartHour: 23,
+      windowEndHour: 6,
+    });
+    await shell.start();
+    try {
+      const service = shell.host.getService<{
+        dreamWindowOpen(at?: number): boolean;
+        dreamTargetDate(at?: number): string;
+      }>('clock');
+      expect(service.dreamWindowOpen(clock.now)).toBe(true);
+      const target = service.dreamTargetDate(clock.now);
+      await seedDay(shell, target, clock.now - 60 * 60_000);
+
+      await shell.tick(clock.now);
+      clock.now = Date.UTC(2026, 2, 11, 2, 0, 0);
+      expect(service.dreamWindowOpen(clock.now)).toBe(true);
+      await shell.tick(clock.now);
+
+      const dreams = shell.trace.read().filter((record) => record.kind === 'dream_complete');
+      expect(dreams).toHaveLength(1);
+      expect(dreams[0]!.localDate).toBe(target);
+      expect(shell.machine.runtime.lastDreamDate).toBe(target);
+    } finally {
+      await shell.stop();
+    }
+  }, 60_000);
+
+  test('02:00 in a 23 to 6 window triggers a night that has not run', async () => {
+    const clock = { now: Date.UTC(2026, 2, 11, 2, 0, 0) };
+    const shell = dreamShell(makeTempDir('dream-midnight-start-'), clock, {
+      runKernelNight: false,
+      maxEpisodes: 5,
+      windowStartHour: 23,
+      windowEndHour: 6,
+    });
+    await shell.start();
+    try {
+      const service = shell.host.getService<{ dreamTargetDate(at?: number): string }>('clock');
+      const target = service.dreamTargetDate(clock.now);
+      await seedDay(shell, target, clock.now - 60 * 60_000);
+
+      await shell.tick(clock.now);
+      const dreams = shell.trace.read().filter((record) => record.kind === 'dream_complete');
+      expect(dreams).toHaveLength(1);
+      expect(dreams[0]!.localDate).toBe('2026-03-09');
+    } finally {
+      await shell.stop();
+    }
+  }, 60_000);
+
+  test('a failed gateway backs off and stops at the nightly attempt cap', async () => {
+    const start = Date.UTC(2026, 2, 11, 2, 0, 0);
+    const end = Date.UTC(2026, 2, 11, 5, 0, 0);
+    const clock = { now: start };
+    const shell = dreamShell(makeTempDir('dream-backoff-'), clock);
+    await shell.start();
+    try {
+      const attempts: number[] = [];
+      (shell as unknown as { dream: { integrate: () => Promise<never> } }).dream = {
+        integrate: async () => {
+          attempts.push(clock.now);
+          throw new Error('gateway down');
+        },
+      };
+
+      while (clock.now <= end) {
+        await shell.tick(clock.now);
+        clock.now += 30_000;
+      }
+
+      const minutes = attempts.map((at) => (at - start) / 60_000);
+      const gaps = minutes.slice(1).map((minute, index) => minute - minutes[index]!);
+      console.log(`[dream-backoff] attempts at ${minutes.join(', ')} minutes; gaps ${gaps.join(', ')}`);
+      expect(attempts).toHaveLength(5);
+      expect(gaps).toEqual([5, 10, 20, 30]);
+      const failures = shell.trace.read().filter((record) => record.kind === 'dream_failed');
+      expect(failures).toHaveLength(5);
+      expect(failures.at(-1)!.gaveUp).toBe(true);
+      expect(shell.trace.read().some((record) => record.kind === 'dream_complete')).toBe(false);
+      expect(shell.machine.runtime.lastDreamDate).toBeUndefined();
+    } finally {
+      await shell.stop();
+    }
+  }, 60_000);
+
+  test('48 hours without a Dream still writes a snapshot', async () => {
+    const clock = { now: Date.UTC(2026, 2, 11, 6, 0, 0) };
+    const shell = dreamShell(makeTempDir('dream-snapshot-'), clock);
+    await shell.start();
+    try {
+      clock.now += 48 * 60 * 60_000;
+      await shell.tick(clock.now);
+      expect(shell.kernel.backup.list().length).toBeGreaterThanOrEqual(1);
+      expect(shell.trace.read().filter((record) => record.kind === 'snapshot_taken')).toHaveLength(1);
+      expect(shell.trace.read().some((record) => record.kind === 'dream_complete')).toBe(false);
     } finally {
       await shell.stop();
     }

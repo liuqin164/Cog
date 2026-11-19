@@ -11,7 +11,7 @@ import { SESSION_CONTEXT_LANES, type SessionContextLaneName, type SessionContext
 import type { LaneAssemblyView } from '../src/state/session-lanes.ts';
 import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
 
-const NO_DREAM = { runKernelNight: false, maxEpisodes: 5, windowStartHour: 3, windowEndHour: 3 };
+const NO_DREAM = { runKernelNight: false, maxEpisodes: 5, windowStartHour: 0, windowEndHour: 1 };
 const asText = (messages: Array<{ content: unknown }> | undefined) => (messages ?? []).map((message) => String(message.content)).join('\n');
 
 /** One lane's rendered bytes: its `[lane]` header up to the next lane header. */

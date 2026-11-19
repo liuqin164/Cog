@@ -99,6 +99,10 @@ const MAX_TASK_STUBS = 20;
 const MAX_RETAINED_CONSTRAINTS = 8;
 /** If the run's ledger row never arrives (capture paused), stop retrying the stub after an hour. */
 const TASK_STUB_RETRY_MS = 60 * 60_000;
+const DREAM_RETRY_BASE_MS = 5 * 60_000;
+const DREAM_RETRY_CAP_MS = 30 * 60_000;
+const DREAM_MAX_ATTEMPTS_PER_NIGHT = 5;
+const SNAPSHOT_INTERVAL_MS = 24 * 60 * 60_000;
 
 /**
  * Autonomous continuation backoff (#228): 5 min × 2^n, capped at 6 h. The base is the shortest wait
@@ -184,7 +188,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   private runtime?: AgentRuntime;
   private cage?: RunCage;
   private clock?: ClockService;
-  private dream?: { integrate(...args: [string, string, number?]): Promise<{ localDate: string; eventCount: number; sourceRefs: unknown[]; summary: string; memoryModelUsed?: boolean; memoryModelDegraded?: string }> };
+  private dream?: { integrate(...args: [string, string, number?]): Promise<{ localDate: string; eventCount: number; sourceRefs: unknown[]; summary: string; memoryModelUsed?: boolean; memoryModelDegraded?: string; kernelNightRan?: boolean }> };
   private emergence?: {
     hasDue?(now?: number): boolean;
     decide(now?: number): {
@@ -1651,15 +1655,24 @@ export class CompanionShell implements ShellControl, AttachShell {
     if (this.machine.state === 'RUNNING' || this.machine.state === 'WAKING' || this.machine.state === 'SUSPENDED') return;
     this.reportHealth(at);
     if (this.machine.state === 'DORMANT') {
+      await this.maybeSnapshot(at);
       await this.applyDueWakeIntent(at);
       return;
     }
     if (this.machine.state === 'DREAMING') return;
     await this.applyDueWakeIntent(at);
-    if (this.clock!.dreamWindowOpen(at) && !this.clock!.dreamedToday(at)) {
-      await this.runDream(at);
-      return;
+    if (this.dreamDue(at)) {
+      const empty = this.emptyCatchupTarget(at);
+      if (empty) {
+        this.trace.append('dream_catchup', { dream_catchup: true, localDate: empty, skippedDays: this.dreamSkippedDays(empty), empty: true });
+        this.clock!.markDreamed(at);
+      } else {
+        await this.runDream(at);
+        await this.maybeSnapshot(at);
+        return;
+      }
     }
+    await this.maybeSnapshot(at);
     if (this.machine.state === 'IDLE') {
       this.compileProactiveBooks(at);
       // The candidate query must run before F2's tick: a due wake intention is still pending at
@@ -1874,16 +1887,86 @@ export class CompanionShell implements ShellControl, AttachShell {
     await this.machine.dispatch('context_injected', { reason: 'wake_intent' });
   }
 
+  private async maybeSnapshot(at: number): Promise<void> {
+    const last = this.machine.runtime.lastSnapshotAt;
+    if (last !== undefined && at - last < SNAPSHOT_INTERVAL_MS) return;
+    this.machine.updateRuntime({ lastSnapshotAt: at });
+    try {
+      const manifest = await this.kernel.backup.snapshot();
+      if (manifest) {
+        this.trace.append('snapshot_taken', {
+          file: manifest.snapshot.file,
+          createdAt: manifest.createdAt,
+          verification: manifest.verification.ok,
+        });
+      }
+    } catch (error) {
+      this.trace.append('snapshot_failed', { message: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  private dreamDue(at: number): boolean {
+    const clock = this.clock!;
+    if (clock.dreamedNight(at)) return false;
+    const retry = this.machine.runtime.dreamRetry;
+    return !retry
+      || retry.night !== clock.dreamNightDate(at)
+      || (!retry.gaveUp && retry.nextAt <= at);
+  }
+
+  private emptyCatchupTarget(at: number): string | undefined {
+    if (this.clock!.dreamWindowOpen(at)) return undefined;
+    const localDate = this.clock!.dreamTargetDate(at);
+    const events = this.kernel.getThreadEvents(`companion-day:${localDate}`, {
+      projectId: this.config.projectId,
+      limit: 1,
+    });
+    return events.length === 0 ? localDate : undefined;
+  }
+
+  private dreamSkippedDays(localDate: string): number {
+    const last = this.machine.runtime.lastDreamDate;
+    return last ? Math.max(0, this.clock!.daysBetween(last, localDate) - 1) : 0;
+  }
+
+  private scheduleDreamRetry(night: string, at: number): { attempts: number; nextAt?: number; gaveUp: boolean } {
+    const prior = this.machine.runtime.dreamRetry;
+    const attempts = prior?.night === night ? prior.attempts + 1 : 1;
+    if (attempts >= DREAM_MAX_ATTEMPTS_PER_NIGHT) {
+      this.machine.updateRuntime({ dreamRetry: { night, attempts, nextAt: at, gaveUp: true } });
+      this.trace.append('dream_retry_scheduled', { night, attempts, gaveUp: true, clockAt: at });
+      return { attempts, gaveUp: true };
+    }
+    const nextAt = at + Math.min(DREAM_RETRY_BASE_MS * 2 ** (attempts - 1), DREAM_RETRY_CAP_MS);
+    this.machine.updateRuntime({ dreamRetry: { night, attempts, nextAt } });
+    this.trace.append('dream_retry_scheduled', { night, attempts, nextAt, delayMs: nextAt - at, gaveUp: false, clockAt: at });
+    return { attempts, nextAt, gaveUp: false };
+  }
+
   async runDream(at = this.now()): Promise<void> {
+    const localDate = this.clock!.dreamTargetDate(at);
+    const night = this.clock!.dreamNightDate(at);
+    const catchup = !this.clock!.dreamWindowOpen(at);
+    const skippedDays = this.dreamSkippedDays(localDate);
+    if (catchup) this.trace.append('dream_catchup', { dream_catchup: true, localDate, skippedDays });
     await this.machine.dispatch('dream_window_open', { reason: 'dream_window' });
-    const localDate = this.clock!.localDate(at);
     try {
       const result = await this.dream!.integrate(localDate, `companion-day:${localDate}`, at);
       if (result.memoryModelDegraded === 'semantic_processor_failed') this.memoryModelFailed = true;
       else if (result.memoryModelUsed) this.memoryModelFailed = false;
       this.clock!.markDreamed(at);
+      this.machine.updateRuntime({
+        dreamRetry: undefined,
+        ...(result.kernelNightRan ? { lastSnapshotAt: at } : {}),
+      });
       this.clock!.setWakeIntent(at + 8 * 60 * 60_000, 'morning_after_dream');
-      this.trace.append('dream_complete', { localDate, eventCount: result.eventCount, sourceRefs: result.sourceRefs.length });
+      this.trace.append('dream_complete', {
+        localDate,
+        eventCount: result.eventCount,
+        sourceRefs: result.sourceRefs.length,
+        dream_catchup: catchup,
+        skippedDays,
+      });
       void this.host.bus.emit('companion_dream', { product: { localDate, eventCount: result.eventCount, summary: result.summary } });
       // A message that arrived while the integration was awaiting wakes the shell out of DREAMING.
       // The product is already written; the transition belongs to whoever moved the state, not to us.
@@ -1894,7 +1977,15 @@ export class CompanionShell implements ShellControl, AttachShell {
       await this.machine.dispatch('dream_complete', { reason: `dream:${localDate}` });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.trace.append('dream_failed', { localDate, message });
+      const retry = this.scheduleDreamRetry(night, at);
+      this.trace.append('dream_failed', {
+        localDate,
+        message,
+        clockAt: at,
+        attempt: retry.attempts,
+        nextAt: retry.nextAt ?? null,
+        gaveUp: retry.gaveUp,
+      });
       await this.machine.dispatch('run_error', { reason: `dream_failed:${message}` });
     }
   }

@@ -267,6 +267,15 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
   const daily: DailyBudget = { ...DEFAULT_DAILY_BUDGET, ...operating.daily };
   const night: NightBudget = { ...DEFAULT_NIGHT_BUDGET, ...operating.night };
   const maxIdleTurns = overrides.maxIdleTurns ?? operating.maxIdleTurns ?? DEFAULT_MAX_IDLE_TURNS;
+  const dream = overrides.dream ?? {
+    windowStartHour: Number(env('COGMEM_SHELL_DREAM_START') ?? 2),
+    windowEndHour: Number(env('COGMEM_SHELL_DREAM_END') ?? 5),
+    runKernelNight: env('COGMEM_SHELL_DREAM_KERNEL') !== 'off',
+    maxEpisodes: Number(env('COGMEM_SHELL_DREAM_MAX_EPISODES') ?? 25),
+  };
+  if (dream.windowStartHour === dream.windowEndHour) {
+    throw new Error(`invalid_dream_window: start ${dream.windowStartHour} equals end ${dream.windowEndHour}; a zero-length window never runs Dream`);
+  }
   // The registry is read here, once, so a plugin registered by `/plugins add` reaches the next
   // process and nothing re-reads the file mid-run. A corrupt file is a startup error (see registry).
   const registryPlugins = readPluginRegistry(dataDir);
@@ -300,14 +309,7 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
     maxIdleTurns,
     contextSweetSpot: overrides.contextSweetSpot ?? 10_800,
     tailTurns: overrides.tailTurns ?? tailTurnsFromEnv(),
-    // The install's rhythm step is what fills these; the literals stay the fallback for a hand-run
-    // shell that was never installed.
-    dream: overrides.dream ?? {
-      windowStartHour: Number(env('COGMEM_SHELL_DREAM_START') ?? 2),
-      windowEndHour: Number(env('COGMEM_SHELL_DREAM_END') ?? 5),
-      runKernelNight: env('COGMEM_SHELL_DREAM_KERNEL') !== 'off',
-      maxEpisodes: Number(env('COGMEM_SHELL_DREAM_MAX_EPISODES') ?? 25),
-    },
+    dream,
     idleWakeIntervalMs: overrides.idleWakeIntervalMs ?? 30 * 60_000,
     tickIntervalMs: overrides.tickIntervalMs ?? 30_000,
     http: overrides.http ?? {

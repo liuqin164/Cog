@@ -9,7 +9,7 @@ import { describe, expect, test } from 'bun:test';
 import { ScriptedProvider, makeShell, makeTempDir, seedOpenAssignment, waitUntil } from './helpers.ts';
 
 const TIGHT = { maxTurnsPerRun: 6, maxTokensPerRun: 20_000, toolWhitelist: null };
-const NO_DREAM = { windowStartHour: 0, windowEndHour: 0, runKernelNight: false, maxEpisodes: 5 };
+const NO_DREAM = { windowStartHour: 0, windowEndHour: 1, runKernelNight: false, maxEpisodes: 5 };
 const asText = (messages: Array<{ content: unknown }> | undefined) => (messages ?? []).map((message) => String(message.content)).join('\n');
 
 describe('confirmed findings travel with the open assignment', () => {

@@ -8,7 +8,7 @@ import type { SessionContextAssembly } from 'cogmem';
 import { ScriptedProvider, makeShell, makeTempDir, seedOpenAssignment } from './helpers.ts';
 import type { ModelTurn } from '../src/state/agent-loop.ts';
 
-const NO_DREAM = { runKernelNight: false, maxEpisodes: 5, windowStartHour: 3, windowEndHour: 3 };
+const NO_DREAM = { runKernelNight: false, maxEpisodes: 5, windowStartHour: 0, windowEndHour: 1 };
 const asText = (messages: Array<{ content: unknown }> | undefined) => (messages ?? []).map((message) => String(message.content)).join('\n');
 
 const laneBlock = (text: string, lane: string): string => {

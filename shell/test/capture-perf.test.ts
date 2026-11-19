@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
 
-const NO_DREAM = { runKernelNight: false, maxEpisodes: 5, windowStartHour: 3, windowEndHour: 3 };
+const NO_DREAM = { runKernelNight: false, maxEpisodes: 5, windowStartHour: 0, windowEndHour: 1 };
 
 async function captureBytes(size: number): Promise<{ elapsed: number; text: string; events: Array<{ eventType: string; rawEventType?: string }> }> {
   const shell = makeShell(makeTempDir('capture-perf-'), new ScriptedProvider([

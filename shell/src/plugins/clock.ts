@@ -116,16 +116,42 @@ export class ClockService {
   dreamWindowOpen(at = this.now()): boolean {
     const hour = this.timeContext(at).hour;
     const { startHour, endHour } = this.config.dreamWindow;
-    return hour >= startHour && hour < endHour;
+    if (startHour < endHour) return hour >= startHour && hour < endHour;
+    return startHour > endHour && (hour >= startHour || hour < endHour);
   }
 
-  dreamedToday(at = this.now()): boolean {
-    return this.machine.runtime.lastDreamDate === this.localDate(at);
+  dreamWindowClosed(at = this.now()): boolean {
+    const hour = this.timeContext(at).hour;
+    const { startHour, endHour } = this.config.dreamWindow;
+    if (startHour < endHour) return hour >= endHour || hour < startHour;
+    return startHour > endHour && hour >= endHour && hour < startHour;
+  }
+
+  dreamNightDate(at = this.now()): string {
+    const date = this.localDate(at);
+    return this.timeContext(at).hour >= this.config.dreamWindow.startHour ? date : shiftDate(date, -1);
+  }
+
+  dreamTargetDate(at = this.now()): string {
+    return shiftDate(this.dreamNightDate(at), -1);
+  }
+
+  dreamedNight(at = this.now()): boolean {
+    return this.machine.runtime.lastDreamDate === this.dreamTargetDate(at);
   }
 
   markDreamed(at = this.now()): void {
-    this.machine.updateRuntime({ lastDreamDate: this.localDate(at) });
+    this.machine.updateRuntime({ lastDreamDate: this.dreamTargetDate(at) });
   }
+
+  daysBetween(from: string, to: string): number {
+    return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000);
+  }
+}
+
+function shiftDate(date: string, days: number): string {
+  const [year, month, day] = date.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day) + days * 86_400_000).toISOString().slice(0, 10);
 }
 
 function formatDuration(ms: number): string {

@@ -289,6 +289,19 @@ describe('model probe diagnosis', () => {
 });
 
 describe('the six-step install', () => {
+  test('the rhythm step refuses a zero-length dream window and says why', async () => {
+    const io = createScriptedIO(['UTC', '3', '3', '', 'y']);
+    const harness = makeHarness({ probeOk: true, io, flags: { yes: false } });
+    const step = (harness.installer as unknown as {
+      stepRhythm(): Promise<{ ok: boolean; message?: string; hint?: string }>;
+    }).stepRhythm();
+    const result = await step;
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain('窗口长度为零');
+    expect(result.hint).toContain('23 → 6');
+    expect(harness.io.lines.join('\n')).not.toContain('节律已写入');
+  });
+
   test('runs all six, writes the soul, registers rhythm, and the first wake matches', async () => {
     const harness = makeHarness({ probeOk: true });
     const code = await harness.installer.run();

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
 
-const NO_DREAM = { runKernelNight: false, maxEpisodes: 5, windowStartHour: 3, windowEndHour: 3 };
+const NO_DREAM = { runKernelNight: false, maxEpisodes: 5, windowStartHour: 0, windowEndHour: 1 };
 const FACT = '部署窗口是周二凌晨两点，代号 Orion。';
 
 function toolOutput(summary: { toolResults: Array<{ toolName: string; output: string; isError: boolean }> } | undefined): string {
