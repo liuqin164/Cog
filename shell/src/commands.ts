@@ -395,14 +395,7 @@ export function coreCommandFor(name: string, surface: CommandSurface): CoreComma
   return CORE_COMMANDS.find((command) => command.name === name && command.surfaces.includes(surface));
 }
 
-/**
- * The one availability rule (spec §7): whether a face may present a core command as available right
- * now. The palette lists exactly these (`tui/commands.ts`), and the proposal path asks the same
- * question with the resident's face — the face a confirmed proposal executes on. Because the shared
- * table is the source, a name the panel hides is refused as a proposal too: `/pin` and
- * `/unpin` are not in `CORE_COMMANDS`, so they cannot even enter the pending state. `/model` is
- * available only once a second route exists, on both paths alike.
- */
+/** The palette's availability rule (spec §7): whether a face may present a core command right now. */
 export function availableCoreCommand(
   name: string,
   surface: CommandSurface,

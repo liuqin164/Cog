@@ -1,20 +1,24 @@
-/**
- * Command proposals (spec §7, #165 round 22): the agent hands the user one shell command to run and
- * the user decides. A proposal is an executable offer, not a message — it is structured state, it
- * lives in the transcript as its own element, and it has exactly two entries:
- *
- *  - `CommandProposals.propose` records it (and refuses a command the palette would not offer — the
- *    proposal path and the panel share the one availability rule, `commands.ts`'s
- *    `availableCoreCommand`);
- *  - `executeProposal` is the only thing that runs it, gated on a fresh user-confirmation event.
- *
- * The agent's tool never runs anything: it records the offer and says so. The user's confirmation is
- * the only key to `executeProposal`, a proposal is one-shot (executing or discarding retires it and
- * neither can be replayed), and every step lands in the trace. This is the seam the discriminating
- * test guards: an unconfirmed proposal object handed straight to `executeProposal` is refused.
- */
-
 export type ProposalStatus = 'pending' | 'executed' | 'discarded' | 'rejected';
+
+export const PROPOSABLE_COMMANDS = [
+  'pause',
+  'resume',
+  'sleep',
+  'status',
+  'context',
+  'dream',
+  'model',
+  'why',
+  'memory',
+  'soul',
+  'commitments',
+  'help',
+  'continue',
+] as const;
+
+export function isProposableCommand(command: string): boolean {
+  return (PROPOSABLE_COMMANDS as readonly string[]).includes(command);
+}
 
 export interface CommandProposal {
   id: string;
@@ -27,7 +31,7 @@ export interface CommandProposal {
   createdAt: number;
   /** Set once it executed: the command's own receipt text. */
   resultText?: string;
-  /** Set when the command was refused at propose time (not on the availability table). */
+  /** Set when the command was refused at propose time (not in `PROPOSABLE_COMMANDS`). */
   rejectedReason?: string;
 }
 
@@ -67,16 +71,10 @@ export interface ProposeInput {
 
 export interface ProposeResult {
   proposal: CommandProposal;
-  /** `false` when the command is not on the availability table: it never entered the pending state. */
+  /** `false` when the command is not proposable: it never entered the pending state. */
   accepted: boolean;
 }
 
-/**
- * The proposal registry. `isAvailable` is the shared availability rule, injected so the shell can
- * hold the palette's face and the resident's face to the same table (`availableCoreCommand`).
- * `onChange` is the one place a proposal reaches the view, so a re-broadcast can never drift from
- * the registry's own state.
- */
 export class CommandProposals {
   private readonly byId = new Map<string, CommandProposal>();
   private seq = 0;
@@ -111,9 +109,7 @@ export class CommandProposals {
     const reason = input.reason.trim();
     const base = { id, command, args, reason, createdAt: at };
     if (!this.isAvailable(command)) {
-      // Refused on the spot: no pending state exists, so nothing can confirm it into running. The
-      // trace carries both the agent's ask and the refusal, in one record.
-      const detail = `command_not_available: /${command} 不在可用命令表上（不是核心命令，或尚未实现）`;
+      const detail = `command_not_available_for_proposal: /${command} 不可经提议递出（不在白名单，或当前不可用）`;
       const proposal: CommandProposal = { ...base, status: 'rejected', rejectedReason: detail };
       this.byId.set(id, proposal);
       this.trace.append('command_proposal_rejected', { id, command, args, reason, detail }, at);

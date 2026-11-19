@@ -28,7 +28,7 @@ import { bwrapUsable, builtinToolsPlugin } from './plugins/builtin-tools.ts';
 import { coreCommandFor, availableCoreCommand, unknownCommandReply, type CommandHost, type CommandReply } from './commands.ts';
 import { proposalPlugin } from './plugins/proposal.ts';
 import { askPlugin } from './plugins/ask.ts';
-import { CommandProposals, executeProposal, type CommandProposal, type ProposalConfirmation } from './proposals.ts';
+import { CommandProposals, executeProposal, isProposableCommand, type CommandProposal, type ProposalConfirmation } from './proposals.ts';
 import { capturePlugin } from './plugins/capture.ts';
 import { sessionContextPlugin } from './plugins/session-context.ts';
 import { assignmentPlugin } from './plugins/assignment.ts';
@@ -351,11 +351,10 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.host.seedService('shell', this);
     this.host.seedService('commands', this.host.commands);
     this.host.seedService('trace', this.trace);
-    // The proposal registry (spec §7, #165 round 22). Its availability rule is the palette's, asked
-    // on the resident's face — the face a confirmed proposal executes on — so the panel and the
-    // proposal path cannot disagree about what is runnable.
     this.proposals = new CommandProposals(
-      (command) => availableCoreCommand(command, 'resident', { multipleRoutes: this.modelRoutes().length > 1 }) !== undefined,
+      (command) =>
+        isProposableCommand(command) &&
+        availableCoreCommand(command, 'resident', { multipleRoutes: this.modelRoutes().length > 1 }) !== undefined,
       this.trace,
       this.now,
       (proposal) => void this.host.bus.emit('companion_command_proposal', { proposal }),
