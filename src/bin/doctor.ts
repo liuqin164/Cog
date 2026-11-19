@@ -529,17 +529,25 @@ if (envPath) {
   let storageReport: Record<string, unknown> | undefined;
   if (storage) {
     const db = new Database(kernelDbPath!, { readonly: true });
-    const rawEvents = Number((db.prepare(`SELECT COUNT(*) AS count FROM memory_events`).get() as { count?: number } | null)?.count ?? 0);
-    db.close();
+    let rawEvents = 0;
+    let embeddings: { completed: number; total: number; failed: number } | undefined;
+    try {
+      rawEvents = Number((db.prepare(`SELECT COUNT(*) AS count FROM memory_events`).get() as { count?: number } | null)?.count ?? 0);
+      embeddings = new EventEmbeddingStore(db).getProgress();
+    } finally {
+      db.close();
+    }
     // #187: the decision log is append-only and capped, so the operator needs the current count next to
     // the cap — a table at its ceiling is normal, a table missing is "nothing has recalled here yet".
     const trace = readRecallTraceRetention(kernelDbPath!);
     storageReport = {
       rawEvents,
+      ...(embeddings ? { embeddings: { completed: embeddings.completed, total: embeddings.total, ...(embeddings.failed > 0 ? { failed: embeddings.failed } : {}) } } : {}),
       ...(trace ? { recallDecisions: trace } : {}),
     };
     ok([
       `storage raw_events=${rawEvents}`,
+      ...(embeddings ? [`embeddings=${embeddings.completed}/${embeddings.total}`, ...(embeddings.failed > 0 ? [`embedding_failures=${embeddings.failed}`] : [])] : []),
       ...(trace ? [`recall_decisions=${trace.rows}/${trace.maxRows}`] : []),
     ].join(' '));
   }
