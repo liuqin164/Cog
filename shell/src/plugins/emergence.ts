@@ -10,7 +10,7 @@
  * intention) and a wake intention. The associative ledger echo this service used in 5.0 is gone:
  * it surfaced whatever the owner had just said, had no due instant, and was the path #229 burned.
  */
-import type { KernelAgentMemoryBackend, SensitivityTier, SurfacingDecisionTrace, SurfacingSource } from 'cogmem';
+import type { KernelAgentMemoryBackend, SensitivityTier, SurfacingDecisionTrace, SurfacingFreshness, SurfacingSource } from 'cogmem';
 import type { TraceLog } from '../trace.ts';
 import type { NativePlugin } from './host.ts';
 
@@ -31,6 +31,8 @@ export interface EmergenceCandidate {
   reason: string;
   source: SurfacingSource;
   sensitivity: SensitivityTier;
+  confidence: number;
+  freshness: SurfacingFreshness;
   /** The source's own due/observed instant: a snoozed commitment resumes as a new occurrence. */
   observedAt: number;
   sourceRefs: Array<{ eventId?: string; sourceId?: string; contentHash?: string }>;
@@ -111,6 +113,8 @@ export class EmergenceService {
         reason: item.reason,
         source: item.source,
         sensitivity: item.sensitivity,
+        confidence: item.confidence,
+        freshness: item.freshness,
         observedAt: item.freshness.observedAt,
         sourceRefs: item.sourceRefs,
         decisionTrace: item.decisionTrace,

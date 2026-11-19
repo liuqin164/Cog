@@ -29,7 +29,7 @@
 | 上下文装配 | 六车道（pinned/profile/digest/working_set/recall/tail）按预算拼每轮请求；assignment 只在 working_set 出现一次，无 assignment 时不出现（#334） | session-context 插件每轮调用 | 记分卡长会话 592/600（#343 后复核）；#319/#320 预算与前缀缓存测试；context-continuity 探针（闲聊 0 块／declare 后恰好 1 块） | ✅ |
 | 工具面 | 默认 9 工具：read/write/edit/bash＋declare_task/ask_user/propose_command/propose_soul_edit＋memory（search/read/recent）；declare_task start 是唯一的 assignment 构造点，普通消息不再隐式创建（#334）；propose_command 只可提议 13 个白名单命令，破坏性五命令（/forget /plugins /upgrade /export /correct）永不可提议（#335） | 每轮挂载；/context 可见清单 | #333 实测 schema ≈1,336 token/请求；壳测试；context-continuity 的 declare start/end 用例；round 129 白名单探针（五命令逐个被拒、描述与白名单集合相等、/pause 端到端确认）；#323 工具数 8→9、memory-tool 三动作 | installPlugin 安装路径无 hygiene 门 — #363；自治运行共用全量工具 — #349 待定 |
 | 笼子 | 回合/令牌预算＋工具白名单，超限暂停到 SUSPENDED | cage 插件在钩子点拦截 | cage.test.ts；#222 预算档位 | ✅ |
-| 浮现 | 到期承诺/意图在合适时机冒出来 | emergence 插件（nextWakeAt/surfacingCandidates） | F6/F7/F8/F10 门测试 | ⚠️ 反馈环未接（无人调 recordSurfacingFeedback/snooze）— #330 |
+| 浮现 | 到期承诺/意图在合适时机冒出来 | emergence 插件（nextWakeAt/surfacingCandidates）＋ F18 deliveryRoute(Batch) | F6/F7/F8/F10 门测试；壳 surfacing-loop 4 测（忽略降频、/wake 到期、/snooze 顺延、/surfacing 停源） | ✅ 反馈环已接 — #330（忽略/叫停写 recordSurfacingFeedback，snooze 走 /snooze，送达走 F18） |
 | 时间 | 每轮注入分钟级当前时间，保前缀缓存 | clock 插件 | #320 测试（相邻请求前缀 100% 一致） | ✅ |
 | 秘密脱敏 | 密钥类文本进账本前抹掉 | capture 插件＋模型路由的 redactSecretText | 根套件脱敏测试 | ✅ |
 | 模型接入 | 自定义 OpenAI 协议端点＋mg 路由 | provider 插件每轮调用 | box/生产多路由实测 | ✅ |
