@@ -682,6 +682,10 @@ export class CompanionShell implements ShellControl, AttachShell {
         dimensions: status.dimensions,
         loadMs: status.loadMs ?? null,
       });
+      const backfill = await this.kernel.backfillEventEmbeddings({ projectId: this.config.projectId });
+      if (backfill.completed > 0 || backfill.failed > 0) {
+        this.trace.append('embedding_backfill', { projectId: this.config.projectId, ...backfill });
+      }
     } catch (error) {
       // A missing model, a failed download or a broken ONNX file all land here. The companion keeps
       // answering with lexical recall; health and this trace record why.

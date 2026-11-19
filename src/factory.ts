@@ -1295,6 +1295,77 @@ export class MemoryKernel {
     }
   }
 
+  async backfillEventEmbeddings(options: { projectId?: string; limit?: number } = {}): Promise<{ completed: number; failed: number }> {
+    const provider = this.embeddingProvider;
+    if (!provider) return { completed: 0, failed: 0 };
+    const batchSize = Math.max(1, options.limit ?? 64);
+    const db = this.factStore.getDatabase();
+    const scoped = options.projectId !== undefined;
+    const select = db.prepare(`
+      SELECT e.rowid AS row_id, e.event_id AS event_id, e.project_id AS project_id, e.payload_json AS payload_json
+      FROM memory_events e
+      LEFT JOIN memory_event_embeddings ee ON ee.event_id = e.event_id AND ee.model_id = ?
+      WHERE e.event_type = 'RAW_EVENT_RECORDED'
+        AND ee.event_id IS NULL
+        AND e.rowid > ?
+        ${scoped ? `AND COALESCE(e.project_id,'') = ?` : ''}
+      ORDER BY e.rowid
+      LIMIT ?
+    `);
+    let completed = 0;
+    let failed = 0;
+    let cursor = 0;
+    for (;;) {
+      const rows = (scoped
+        ? select.all(provider.modelId, cursor, options.projectId ?? '', batchSize)
+        : select.all(provider.modelId, cursor, batchSize)) as Array<{
+          row_id: number;
+          event_id: string;
+          project_id: string | null;
+          payload_json: string;
+        }>;
+      if (rows.length === 0) break;
+      cursor = rows[rows.length - 1]!.row_id;
+      const entries = rows.map((row) => {
+        let text = row.payload_json;
+        try {
+          const payload = JSON.parse(row.payload_json) as { text?: unknown };
+          if (typeof payload.text === 'string') text = payload.text;
+        } catch {}
+        return { ...row, text };
+      });
+      try {
+        const vectors = await provider.embedBatch(entries.map((entry) => entry.text));
+        for (const [index, entry] of entries.entries()) {
+          const vector = vectors[index];
+          if (!vector || vector.length !== provider.dimensions) {
+            failed += 1;
+            this.pipelineMetrics.recordNonFatal('event_embedding_failed', {
+              projectId: entry.project_id ?? undefined,
+              message: `Embedding dimension mismatch for ${provider.modelId}: expected ${provider.dimensions}, got ${vector?.length ?? 0}`,
+              details: { eventId: entry.event_id },
+            });
+            continue;
+          }
+          this.eventEmbeddingStore.upsert(entry.event_id, provider.modelId, vector, entry.project_id ?? undefined);
+          db.prepare(`DELETE FROM memory_event_embeddings WHERE event_id=? AND model_id<>?`).run(entry.event_id, provider.modelId);
+          completed += 1;
+        }
+      } catch (error) {
+        failed += entries.length;
+        const message = error instanceof Error ? error.message : String(error);
+        for (const entry of entries) {
+          this.pipelineMetrics.recordNonFatal('event_embedding_failed', {
+            projectId: entry.project_id ?? undefined,
+            message,
+            details: { eventId: entry.event_id },
+          });
+        }
+      }
+    }
+    return { completed, failed };
+  }
+
   async ingest(input: IngestInput | { content: string; projectId?: string; tags?: string[] }): Promise<Neuron> {
     await this.initialize();
     const normalizedInput: IngestInput = {
