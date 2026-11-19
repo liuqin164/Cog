@@ -65,6 +65,7 @@ export interface Suspension {
   id: string;
   kind: 'budget' | 'question';
   assignmentId: string;
+  userText?: string;
   createdAt: number;
   /** The run that suspended, so the pause is attributable in the trace. */
   runId?: string;

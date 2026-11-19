@@ -5,7 +5,7 @@
 import { describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { CheckpointStore } from '../src/state/checkpoint.ts';
-import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
+import { ScriptedProvider, makeShell, makeTempDir, seedOpenAssignment } from './helpers.ts';
 
 const NO_DREAM = { runKernelNight: false, maxEpisodes: 5, windowStartHour: 3, windowEndHour: 3 };
 
@@ -66,7 +66,9 @@ describe('the task-end producer leaves only the real trajectory (#262)', () => {
     const shell = shellFor('task-procedure-', provider);
     await shell.start();
     try {
+      seedOpenAssignment(shell, '把发布脚本改好');
       await shell.submit('把发布脚本改好');
+      seedOpenAssignment(shell, '把发布脚本改好');
       await shell.submit('再把发布脚本核一遍');
 
       const entry = shell.kernel.procedures.entries({ projectId: shell.config.projectId })
@@ -97,6 +99,7 @@ describe('the task-end producer leaves only the real trajectory (#262)', () => {
     const shell = shellFor('task-procedure-empty-', provider);
     await shell.start();
     try {
+      seedOpenAssignment(shell, '读一下笔记');
       await shell.submit('读一下笔记');
       expect(shell.kernel.procedures.entries({ projectId: shell.config.projectId })).toEqual([]);
       expect(shell.trace.read().some((record) => record.kind === 'task_procedure_written')).toBe(false);
@@ -121,6 +124,7 @@ describe('the task-end producer leaves only the real trajectory (#262)', () => {
     ]));
     await first.start();
     try {
+      seedOpenAssignment(first, '读一下笔记');
       await first.submit('读一下笔记');
       const before = first.kernel.procedures.entries({ projectId: first.config.projectId })
         .filter((entry) => entry.origin !== 'imported');

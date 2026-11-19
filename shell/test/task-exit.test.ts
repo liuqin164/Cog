@@ -8,7 +8,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import type { SessionContextAssembly } from 'cogmem';
-import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
+import { ScriptedProvider, makeShell, makeTempDir, seedOpenAssignment } from './helpers.ts';
 
 const NO_DREAM = { runKernelNight: false, maxEpisodes: 5, windowStartHour: 3, windowEndHour: 3 };
 const asText = (messages: Array<{ content: unknown }> | undefined) => (messages ?? []).map((message) => String(message.content)).join('\n');
@@ -34,6 +34,7 @@ const budgetShell = (prefix: string, provider: ScriptedProvider) =>
 
 /** A is left open by a budget stop, with a conclusion the next run can hand off. */
 const openTaskA = async (shell: ReturnType<typeof makeShell>, text = '迁移脚本改到 step 3') => {
+  seedOpenAssignment(shell, text);
   await shell.submit(text);
   expect(shell.state).toBe('SUSPENDED');
   expect(shell.machine.runtime.openAssignment).toBeDefined();
@@ -45,6 +46,7 @@ describe('a declared task end exits the working set (#263)', () => {
       { text: '结论：迁移脚本从 step 3 开始改。', toolCalls: [{ toolCallId: 'c1', toolName: 'read', input: { path: 'missing.txt' } }], usage: { input: 25_000, output: 1 } },
       { text: '做完了。', toolCalls: [{ toolCallId: 'c2', toolName: 'declare_task', input: { action: 'end' } }] },
       { text: '收尾。', toolCalls: [] },
+      { text: '换成任务 B。', toolCalls: [{ toolCallId: 'cB', toolName: 'declare_task', input: { action: 'start' } }] },
       { text: 'B 结论：发布清单已整理。', toolCalls: [] },
     ]);
     const shell = budgetShell('task-exit-', provider);

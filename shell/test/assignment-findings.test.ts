@@ -6,10 +6,11 @@
  * Red/green is the ticket's own discriminator: run A writes a conclusion, run B's prompt contains it.
  */
 import { describe, expect, test } from 'bun:test';
-import { ScriptedProvider, makeShell, makeTempDir, waitUntil } from './helpers.ts';
+import { ScriptedProvider, makeShell, makeTempDir, seedOpenAssignment, waitUntil } from './helpers.ts';
 
 const TIGHT = { maxTurnsPerRun: 6, maxTokensPerRun: 20_000, toolWhitelist: null };
 const NO_DREAM = { windowStartHour: 0, windowEndHour: 0, runKernelNight: false, maxEpisodes: 5 };
+const asText = (messages: Array<{ content: unknown }> | undefined) => (messages ?? []).map((message) => String(message.content)).join('\n');
 
 describe('confirmed findings travel with the open assignment', () => {
   test('run A\'s conclusion is in run B\'s prompt', async () => {
@@ -22,6 +23,7 @@ describe('confirmed findings travel with the open assignment', () => {
     const shell = makeShell(dir, provider, { budgets: TIGHT, workBudget: { maxTurnsPerRun: 4, maxTokensPerRun: 1_000 }, dream: NO_DREAM });
     await shell.start();
     try {
+      seedOpenAssignment(shell, 'install the plugin');
       const first = await shell.submit('install the plugin');
       expect(first!.stopReason).toBe('budget_exceeded');
       expect(shell.machine.runtime.openAssignment?.findings).toBe(conclusion);
@@ -34,8 +36,9 @@ describe('confirmed findings travel with the open assignment', () => {
       expect(shell.state).toBe('SUSPENDED');
       await shell.runCommand('continue');
       await waitUntil(() => provider.calls.length === 2 && shell.state === 'IDLE');
-      expect(provider.calls[1].systemPrompt).toContain(`confirmed findings: ${conclusion}`);
-      expect(provider.calls[1].systemPrompt).toContain('install the plugin');
+      const resumed = asText(provider.calls[1].messages);
+      expect(resumed).toContain(`confirmed findings: ${conclusion}`);
+      expect(resumed).toContain('install the plugin');
     } finally {
       await shell.stop();
     }
@@ -50,6 +53,7 @@ describe('confirmed findings travel with the open assignment', () => {
     const shell = makeShell(dir, provider, { budgets: TIGHT, workBudget: { maxTurnsPerRun: 4, maxTokensPerRun: 1_000 }, dream: NO_DREAM });
     await shell.start();
     try {
+      seedOpenAssignment(shell, 'install the plugin');
       await shell.submit('install the plugin');
       const findings = shell.machine.runtime.openAssignment?.findings ?? '';
       expect(findings.length).toBe(600);

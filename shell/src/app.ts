@@ -213,6 +213,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   private runTokens = 0;
   /** The tier this process last started a run with; the work bar shows that tier's limits. */
   private runTier: CageTier = 'autonomous';
+  private currentRunUserText = '';
   /**
    * The provider's own prompt-cache account for the run in flight (#165 round 21): `hit` is what the
    * endpoint reported served from cache, `miss` the remainder of the prompt, `percent` their ratio.
@@ -951,7 +952,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       'A new user line continues the open task by default. Call `declare_task` with action "start" only when the newest line begins a different task, and with "end" when the open task is finished. Judge by meaning, never by a word.',
       'Never invent a memory. If no lane carries a fact, say so plainly and ask; never claim it was not stored.',
     ].filter(Boolean);
-    const tail = [this.clock ? this.clock.timeContextBlock(this.now()) : '', this.openAssignmentBlock(), this.suspensionBlock()].filter(Boolean);
+    const tail = [this.clock ? this.clock.timeContextBlock(this.now()) : '', this.suspensionBlock()].filter(Boolean);
     return { pinned: pinned.join('\n\n'), tail: tail.join('\n\n') };
   }
 
@@ -1314,9 +1315,6 @@ export class CompanionShell implements ShellControl, AttachShell {
     }
     if (this.dailyBudgetExceeded()) this.announceDailyBudget('user_message');
     if (this.machine.state === 'SUSPENDED') return this.submitWhileSuspended(text);
-    // The user's message is the assignment's provenance. It is written before the run so an
-    // autonomous wake after a budget stop can inherit the work tier from the ledger, not from a
-    // guess about what the wake's text means.
     this.beginUserAssignment(text);
     this.clock!.markInteraction(text, this.now());
     await this.wakeIfNeeded('message_received');
@@ -1358,13 +1356,15 @@ export class CompanionShell implements ShellControl, AttachShell {
     trigger: 'message_received' | 'emergence_due',
     reason: string,
     dispatchTrigger: Trigger = trigger,
+    grant?: { tokens: number; turns: number },
   ): Promise<RunSummary> {
     const runId = `run-${this.now().toString(36)}-${randomUUID().slice(0, 8)}`;
     const origin = trigger === 'emergence_due' ? 'emergence' : 'user';
     const tier = this.budgetTier(trigger);
     this.runTier = tier;
+    this.currentRunUserText = text;
     // The owner's grant widens this one run's cage and is spent when it settles (#228).
-    this.cage!.beginRun(runId, tier, tier === 'work' ? this.machine.runtime.openAssignment?.grant : undefined);
+    this.cage!.beginRun(runId, tier, tier === 'work' ? (grant ?? this.machine.runtime.openAssignment?.grant) : undefined);
     // A backed-off autonomous wake still runs (F7's surfacing decision is untouched) but it does not
     // inherit the work tier or the assignment, so it cannot keep retrying the same continuation.
     this.hideAssignmentContext = trigger === 'emergence_due' && tier === 'autonomous' && this.machine.runtime.openAssignment !== undefined;
@@ -1408,9 +1408,9 @@ export class CompanionShell implements ShellControl, AttachShell {
   }
 
   /**
-   * Which cage this run gets. A user message is an assignment by definition. An autonomous wake
-   * inherits the work tier only when the ledger still holds an unfinished user-assigned task; the
-   * check reads that task's `origin`, never the wake's words.
+   * Which cage this run gets. An autonomous wake inherits the work tier only when the ledger still
+   * holds an unfinished user-assigned task; the check reads that task's `origin`, never the wake's
+   * words.
    */
   private budgetTier(trigger: 'message_received' | 'emergence_due'): CageTier {
     if (trigger === 'message_received') return 'work';
@@ -1427,22 +1427,9 @@ export class CompanionShell implements ShellControl, AttachShell {
     if (!trimmed) return;
     const open = this.machine.runtime.openAssignment;
     if (open) {
-      // A new message continues the open task by default (#246 A2): the budget stop's place and the
-      // confirmed findings are the handoff, and a follow-up like "继续" must not erase them. The
-      // model says "this is a different task" through `declare_task`, not the shell guessing.
       this.machine.updateRuntime({ openAssignment: { ...open, latestUserText: trimmed.slice(0, 500) } });
       this.trace.append('assignment_attached', { assignmentId: open.id, chars: trimmed.length });
-      return;
     }
-    this.machine.updateRuntime({
-      openAssignment: {
-        id: `assignment-${this.now().toString(36)}-${randomUUID().slice(0, 8)}`,
-        origin: 'user_message',
-        text: trimmed.slice(0, 500),
-        latestUserText: trimmed.slice(0, 500),
-        startedAt: this.now(),
-      },
-    });
   }
 
   /**
@@ -1496,8 +1483,9 @@ export class CompanionShell implements ShellControl, AttachShell {
 
   /**
    * A completed run closes the assignment; a budget stop keeps it open and writes the place and the
-   * next move. A run error or abort keeps it open too: the work is unfinished, and the next wake
-   * must not mistake it for a fresh autonomous idea.
+   * next move. A run without an assignment pauses without one. A run error or abort keeps the
+   * assignment open too: the work is unfinished, and the next wake must not mistake it for a fresh
+   * autonomous idea.
    */
   private settleAssignment(summary: RunSummary, tier: CageTier, trigger: 'message_received' | 'emergence_due'): Trigger {
     const question = this.pendingQuestion;
@@ -1505,23 +1493,23 @@ export class CompanionShell implements ShellControl, AttachShell {
     const assignment = this.machine.runtime.openAssignment;
     // A question can only be waited on by a work run; the tool refuses the autonomous tier, and this
     // is the second half of that guard rather than a second policy.
-    if (!assignment || tier !== 'work') return summary.stopReason;
+    if (tier !== 'work') return summary.stopReason;
     if (summary.stopReason === 'run_complete' && question) {
       const suspension: Suspension = {
         id: `suspension-${this.now().toString(36)}-${randomUUID().slice(0, 8)}`,
         kind: 'question',
-        assignmentId: assignment.id,
+        assignmentId: assignment?.id ?? '',
         createdAt: this.now(),
         runId: summary.runId,
         question,
       };
       this.machine.updateRuntime({
         suspension,
-        openAssignment: { ...assignment, lastRunId: summary.runId, stoppedAt: this.now(), nextStep: 'continue the open task with the answer' },
+        ...(assignment ? { openAssignment: { ...assignment, lastRunId: summary.runId, stoppedAt: this.now(), nextStep: 'continue the open task with the answer' } } : {}),
       });
       this.trace.append('assignment_paused', {
         runId: summary.runId,
-        assignmentId: assignment.id,
+        assignmentId: assignment?.id ?? '',
         suspensionId: suspension.id,
         kind: 'question',
         questionChars: question.text.length,
@@ -1535,11 +1523,11 @@ export class CompanionShell implements ShellControl, AttachShell {
     // The run's own closing words are the handoff: bounded, collapsed to one line, and carried into
     // the next run's prompt so a continuation does not re-read the same sources. A run that ends
     // without text (an abort mid-tool) keeps the earlier findings rather than erasing them.
-    const findings = this.captureFindings(summary, assignment);
+    const findings = assignment ? this.captureFindings(summary, assignment) : undefined;
     // Only an autonomous continuation counts an attempt, and a successful tool result is the
     // progress that resets it (#228). A user-driven run resets the count: the owner is present.
     const progressed = summary.toolResults.some((result) => !result.isError);
-    const attempts = trigger === 'emergence_due' && !progressed ? (assignment.attempts ?? 0) + 1 : 0;
+    const attempts = trigger === 'emergence_due' && assignment && !progressed ? (assignment.attempts ?? 0) + 1 : 0;
     const nextResumeAt = attempts > 0 ? this.now() + Math.min(RESUME_BACKOFF_BASE_MS * 2 ** (attempts - 1), RESUME_BACKOFF_CAP_MS) : undefined;
     if (summary.stopReason !== 'budget_exceeded') {
       // A no-progress stop is unfinished work like a budget stop, but it ends through the existing
@@ -1556,18 +1544,20 @@ export class CompanionShell implements ShellControl, AttachShell {
         : undefined;
       this.machine.updateRuntime({
         suspension: undefined,
-        openAssignment: {
-          ...assignment,
-          lastRunId: summary.runId,
-          grant: undefined,
-          attempts,
-          nextResumeAt,
-          ...(findings ? { findings } : {}),
-          ...(stoppedStep ? { stoppedStep, nextStep } : {}),
-        },
+        ...(assignment ? {
+          openAssignment: {
+            ...assignment,
+            lastRunId: summary.runId,
+            grant: undefined,
+            attempts,
+            nextResumeAt,
+            ...(findings ? { findings } : {}),
+            ...(stoppedStep ? { stoppedStep, nextStep } : {}),
+          },
+        } : {}),
       });
-      if (noProgress) this.trace.append('assignment_stopped', { runId: summary.runId, assignmentId: assignment.id, stoppedStep, nextStep, findingsChars: findings?.length ?? 0 });
-      if (attempts > 0) this.trace.append('assignment_backoff', { assignmentId: assignment.id, attempts, nextResumeAt });
+      if (noProgress && assignment) this.trace.append('assignment_stopped', { runId: summary.runId, assignmentId: assignment.id, stoppedStep, nextStep, findingsChars: findings?.length ?? 0 });
+      if (attempts > 0 && assignment) this.trace.append('assignment_backoff', { assignmentId: assignment.id, attempts, nextResumeAt });
       return summary.stopReason;
     }
     const lastCall = summary.toolCalls.at(-1);
@@ -1582,7 +1572,8 @@ export class CompanionShell implements ShellControl, AttachShell {
     const suspension: Suspension = {
       id: `suspension-${this.now().toString(36)}-${randomUUID().slice(0, 8)}`,
       kind: 'budget',
-      assignmentId: assignment.id,
+      assignmentId: assignment?.id ?? '',
+      userText: assignment?.text ?? this.currentRunUserText,
       createdAt: this.now(),
       runId: summary.runId,
       budget: {
@@ -1597,22 +1588,24 @@ export class CompanionShell implements ShellControl, AttachShell {
     };
     this.machine.updateRuntime({
       suspension,
-      openAssignment: {
-        ...assignment,
-        lastRunId: summary.runId,
-        stoppedAt: this.now(),
-        stoppedStep,
-        nextStep,
-        grant: undefined,
-        attempts,
-        nextResumeAt,
-        ...(findings ? { findings } : {}),
-      },
+      ...(assignment ? {
+        openAssignment: {
+          ...assignment,
+          lastRunId: summary.runId,
+          stoppedAt: this.now(),
+          stoppedStep,
+          nextStep,
+          grant: undefined,
+          attempts,
+          nextResumeAt,
+          ...(findings ? { findings } : {}),
+        },
+      } : {}),
     });
-    this.trace.append('assignment_stopped', { runId: summary.runId, assignmentId: assignment.id, stoppedStep, nextStep, findingsChars: findings?.length ?? 0 });
-    this.trace.append('assignment_paused', {
+    if (assignment) this.trace.append('assignment_stopped', { runId: summary.runId, assignmentId: assignment.id, stoppedStep, nextStep, findingsChars: findings?.length ?? 0 });
+    this.trace.append(assignment ? 'assignment_paused' : 'run_paused', {
       runId: summary.runId,
-      assignmentId: assignment.id,
+      assignmentId: assignment?.id ?? null,
       suspensionId: suspension.id,
       kind: 'budget',
       additionalTokens: estimate.tokens,
@@ -2575,30 +2568,31 @@ export class CompanionShell implements ShellControl, AttachShell {
     if (suspension.kind !== 'budget') return { text: '这次挂起在等一个回答，不是等预算：直接回复即可。', receipt: true };
     if (this.dailyBudgetExceeded()) this.announceDailyBudget('budget_approved');
     const assignment = this.machine.runtime.openAssignment;
-    if (!assignment || assignment.id !== suspension.assignmentId) {
+    if (assignment && assignment.id !== suspension.assignmentId) {
       this.trace.append('suspension_resume_refused', { id: suspension.id, reason: 'assignment_mismatch' });
       return { text: '挂起对象与当前任务对不上，没有续跑（痕迹已记）。', receipt: true };
     }
     const grant = { tokens: suspension.budget?.additionalTokens ?? 0, turns: suspension.budget?.additionalTurns ?? 0 };
     this.suspensionProposalId = undefined;
-    this.machine.updateRuntime({ openAssignment: { ...assignment, grant, attempts: 0, nextResumeAt: undefined }, suspension: undefined });
-    this.trace.append('suspension_approved', { id: suspension.id, assignmentId: assignment.id, grant, basis: suspension.budget?.basis });
+    this.machine.updateRuntime({
+      ...(assignment ? { openAssignment: { ...assignment, grant, attempts: 0, nextResumeAt: undefined } } : {}),
+      suspension: undefined,
+    });
+    this.trace.append('suspension_approved', { id: suspension.id, assignmentId: assignment?.id ?? null, grant, basis: suspension.budget?.basis });
     setTimeout(() => {
-      void this.resumeSuspendedRun(assignment.id).catch((error) =>
-        this.trace.append('suspension_resume_failed', { assignmentId: assignment.id, message: error instanceof Error ? error.message : String(error) }),
+      void this.resumeSuspendedRun(suspension.userText ?? '', grant).catch((error) =>
+        this.trace.append('suspension_resume_failed', { assignmentId: assignment?.id ?? null, message: error instanceof Error ? error.message : String(error) }),
       );
     }, 0);
     return { text: `已批准：追加 ${grant.tokens} token / ${grant.turns} 回合，原地续跑。`, receipt: true };
   }
 
-  private async resumeSuspendedRun(assignmentId: string): Promise<void> {
-    const assignment = this.machine.runtime.openAssignment;
-    if (!assignment || assignment.id !== assignmentId) return;
+  private async resumeSuspendedRun(userText: string, grant?: { tokens: number; turns: number }): Promise<void> {
     if (this.machine.state !== 'SUSPENDED') {
-      this.trace.append('suspension_resume_skipped', { assignmentId, reason: `state:${this.machine.state}` });
+      this.trace.append('suspension_resume_skipped', { reason: `state:${this.machine.state}` });
       return;
     }
-    await this.executeRun(assignment.text, 'message_received', 'budget_approved', 'budget_approved');
+    await this.executeRun(userText, 'message_received', 'budget_approved', 'budget_approved', grant);
   }
 
   /**
@@ -2679,11 +2673,11 @@ export class CompanionShell implements ShellControl, AttachShell {
       return { ok: false, text: 'declare_task_unavailable: 只有用户在场的 work run 才能声明任务边界；自主 run 不要调用。' };
     }
     const previous = this.machine.runtime.openAssignment;
-    if (!previous) {
-      this.trace.append('assignment_declaration_refused', { action, runId: input.runId, reason: 'no_open_assignment' });
-      return { ok: false, text: 'declare_task_refused: 现在没有 open assignment，无需声明边界。' };
-    }
     if (action === 'end') {
+      if (!previous) {
+        this.trace.append('assignment_declaration_refused', { action, runId: input.runId, reason: 'no_open_assignment' });
+        return { ok: false, text: 'declare_task_refused: 现在没有 open assignment，无需声明结束。' };
+      }
       // #263: the working set exits as a lane, not item by item. The assignment is the shell's
       // working-set material; a protected item inside it is a constraint and stays (#255). The
       // stub is written once the run's ledger row exists (at settle, or the next assembly after a
@@ -2729,7 +2723,7 @@ export class CompanionShell implements ShellControl, AttachShell {
           : '已声明任务结束：open assignment 已收束，本 run 剩余部分不再把它当待办。未填 domain/key，本次不写入做法册。',
       };
     }
-    const brief = (previous.latestUserText ?? previous.text).trim().slice(0, 500);
+    const brief = this.currentRunUserText.trim().slice(0, 500);
     const assignment = {
       id: `assignment-${this.now().toString(36)}-${randomUUID().slice(0, 8)}`,
       origin: 'user_message' as const,
@@ -2741,7 +2735,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.trace.append('assignment_declared', {
       action,
       runId: input.runId,
-      previousAssignmentId: previous.id,
+      previousAssignmentId: previous?.id ?? null,
       assignmentId: assignment.id,
       textChars: brief.length,
     });

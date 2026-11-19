@@ -5,7 +5,7 @@ import { EventBus } from '../src/bus.ts';
 import { AgentRuntime, type ToolInvoker } from '../src/state/agent-loop.ts';
 import { RunCage } from '../src/plugins/cage.ts';
 import { DEFAULT_MAX_IDLE_TURNS, defaultShellConfig } from '../src/config.ts';
-import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
+import { ScriptedProvider, makeShell, makeTempDir, seedOpenAssignment } from './helpers.ts';
 
 function echoTools(): ToolInvoker {
   const definitions = [{ name: 'echo', description: 'echo', parameters: {}, source: 'test' }];
@@ -84,6 +84,7 @@ describe('no-progress criterion', () => {
     shell.host.bus.on('terminal_print', (event: { text?: string }) => printed.push(String(event.text)));
     await shell.start();
     try {
+      seedOpenAssignment(shell, 'ping');
       const summary = await shell.submit('ping');
       expect(summary!.turns).toBe(3);
       expect(summary!.turns).toBeLessThan(32);

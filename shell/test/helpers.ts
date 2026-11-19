@@ -36,6 +36,18 @@ export async function waitUntil(predicate: () => boolean, timeoutMs = 5_000): Pr
   }
 }
 
+export function seedOpenAssignment(shell: CompanionShell, text: string): void {
+  shell.machine.updateRuntime({
+    openAssignment: {
+      id: `assignment-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      origin: 'user_message',
+      text,
+      latestUserText: text,
+      startedAt: Date.now(),
+    },
+  });
+}
+
 export interface FixtureHarness {
   child: ChildProcess;
   /** Every JSON line the fixture printed, in order. */
