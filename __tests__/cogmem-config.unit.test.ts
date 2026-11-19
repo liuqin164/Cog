@@ -47,7 +47,6 @@ test('loadCogmemConfig parses TOML and resolves paths relative to the config fil
   expect(loaded.configPath).toBe(configPath);
   expect(loaded.homeDir).toBe(join(root, '.cogmem'));
   expect(loaded.options.dbPath).toBe(join(root, '.cogmem', 'memory.db'));
-  expect(loaded.options.vectorBackend).toBe('sqlite-vec');
   expect(loaded.options.redactionPolicy).toEqual({ email: true, phone: false, ssn: true });
   expect(loaded.paths.snapshotsDir).toBe(join(root, '.cogmem', 'snapshots'));
   expect(loaded.modelRegistry.getRoleConfig('memory').apiKey).toBe('test-secret');
@@ -222,7 +221,7 @@ test('createMemoryKernelFromConfig ignores stale process env without mutating it
       projectId: 'toml-only',
       content: 'TOML configuration must not read stale process env model settings.',
     });
-    expect(neuron.coordinates.V).toHaveLength(384);
+    expect(neuron.content).toContain('TOML configuration');
     expect(process.env.AGENT_BRAIN_MODEL_EMBEDDING_PROVIDER).toBe('openai_compatible');
     expect(process.env.AGENT_BRAIN_MODEL_MEMORY_PROVIDER).toBe('anthropic');
   } finally {
@@ -291,19 +290,3 @@ test('createMemoryKernelFromConfig opens the TOML configured database', () => {
   kernel.close();
 });
 
-test('createMemoryKernelFromConfig applies vector_dimension to the active vector store', () => {
-  const root = makeTempDir('cogmem-kernel-vector-dimension-');
-  const configPath = join(root, '.cogmem', 'config.toml');
-  mkdirSync(join(root, '.cogmem'), { recursive: true });
-  writeFileSync(configPath, [
-    '[core]',
-    'db_path = "memory.db"',
-    'vector_backend = "sqlite-vec"',
-    'vector_dimension = 4096',
-  ].join('\n'));
-
-  const kernel = createMemoryKernelFromConfig({ configPath });
-
-  expect(kernel.vectorStore.getStats().dimension).toBe(4096);
-  kernel.close();
-});

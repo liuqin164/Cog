@@ -5,7 +5,6 @@ import {
   memoryEntityId,
 } from '../../binding/MemoryBindingIdentity.js';
 import { mergeMemoryEdge } from '../../binding/MemoryEdgeMerge.js';
-import { cognitiveEdgeId, cognitiveNodeId } from '../../engine/CognitiveGraphIdentity.js';
 import {
   FINAL_AUXILIARY_OBJECTS,
   FINAL_TABLES,
@@ -20,7 +19,7 @@ import { tableExists } from '../../utils/Values.js';
  * migration that also carried the 3.x upgrade path. This is only the part a new
  * database needs; the upgrade helpers that lived beside it are gone, and the
  * schema it produces is verified object-for-object against the old installer's
- * output (501 objects, digest pinned in `__tests__/schema-migration.unit.test.ts`).
+ * output (the pinned digest lives in `__tests__/schema-migration.unit.test.ts`).
  *
  * The postcondition check at the end is not decoration: it is what notices a
  * projection or auxiliary object that failed to install, and it runs on every
@@ -50,22 +49,6 @@ const REBUILDABLE_PROJECTIONS = [
   'memory_atlas_projection_state',
   'memory_action_frame_evidence',
   'memory_action_frames',
-  'cognitive_edges',
-  'cognitive_nodes',
-  'vector_projection_state',
-  'time_bucket_entries',
-  'time_buckets',
-  'temporal_adjacency',
-  'neuron_embeddings',
-  'topology_projection_state',
-  'topology_source_revisions',
-  'topology_time_rebuild_active_neurons',
-  'topology_time_rebuild_adjacency',
-  'topology_time_rebuild_buckets',
-  'topology_time_rebuild_cognitive_edges',
-  'topology_time_rebuild_cognitive_nodes',
-  'topology_time_rebuild_entries',
-  'topology_time_rebuild_jobs',
 ] as const;
 
 export function multidimensionalMemoryGraph374Issue(db: Database): string | undefined {
@@ -83,15 +66,6 @@ export function multidimensionalMemoryGraph374Issue(db: Database): string | unde
   if (tableExists(db, 'memory_events') && db.prepare(`
     SELECT 1 FROM memory_events WHERE project_scope<>COALESCE(project_id,'') LIMIT 1
   `).get()) return 'memory_event_scope';
-  if (tableExists(db, 'synapses') && tableExists(db, 'neurons') && db.prepare(`
-    SELECT 1 FROM synapses s
-    LEFT JOIN neurons a ON a.id=s.source_id
-    LEFT JOIN neurons b ON b.id=s.target_id
-    WHERE a.id IS NULL OR b.id IS NULL OR a.is_deleted<>0 OR b.is_deleted<>0
-      OR COALESCE(a.project_id,'')<>COALESCE(b.project_id,'')
-      OR s.project_id<>COALESCE(a.project_id,'')
-    LIMIT 1
-  `).get()) return 'synapse_scope';
   if (tableExists(db, 'entity_aliases') && db.prepare(`
     SELECT 1 FROM entity_aliases a
     WHERE NOT EXISTS (
@@ -194,62 +168,6 @@ export function multidimensionalMemoryGraph374Issue(db: Database): string | unde
       if (!row.resolved_entity_id || !entityVisibleInScope(db, row.resolved_entity_id, row.project_scope)) {
         return 'pending_entity_resolved_scope';
       }
-    }
-  }
-  for (const config of [
-    { parent: 'task_branches', entries: 'task_branch_entries', id: 'task_id' },
-    { parent: 'event_clusters', entries: 'event_cluster_entries', id: 'cluster_id' },
-    { parent: 'project_branches', entries: 'branch_entries', id: 'branch_id' },
-  ]) {
-    if (!tableExists(db, config.parent) || !tableExists(db, config.entries)) continue;
-    for (const entry of db.prepare(`SELECT * FROM ${config.entries}`).all() as TopologyEntryRow[]) {
-      const parent = db.prepare(`SELECT COALESCE(project_id,'') AS scope FROM ${config.parent} WHERE ${config.id}=?`)
-        .get(String(entry[config.id])) as { scope: string } | null;
-      const inferred = inferTopologyEntryScope(db, entry);
-      if (!parent || inferred.scope !== parent.scope || String(entry.project_id ?? '') !== parent.scope) {
-        return `${config.entries}_scope`;
-      }
-    }
-  }
-  if (tableExists(db, 'topology_membership') && db.prepare(`
-    SELECT 1 FROM topology_membership m LEFT JOIN neurons n ON n.id=m.neuron_id
-    WHERE n.id IS NULL OR n.is_deleted<>0 OR COALESCE(n.project_id,'')<>COALESCE(m.project_id,'')
-    LIMIT 1
-  `).get()) return 'topology_membership_scope';
-  if (tableExists(db, 'cognitive_nodes')) {
-    for (const row of db.prepare(`SELECT * FROM cognitive_nodes`).all() as Record<string, unknown>[]) {
-      const scope = String(row.project_id ?? '');
-      if (String(row.node_id) !== cognitiveNodeId(scope, row.node_type as Parameters<typeof cognitiveNodeId>[1], String(row.node_key))) {
-        return 'cognitive_node_identity';
-      }
-      if (row.source_neuron_id != null && !(scopeForNeuron(db, String(row.source_neuron_id)) ?? []).includes(scope)) {
-        return 'cognitive_node_scope';
-      }
-      if (row.node_type === 'fact' && !db.prepare(`
-        SELECT 1 FROM facts WHERE ('fact:'||fact_id)=? AND status IN ('provisional','provisional_enriched','verified')
-      `).get(String(row.node_key))) return 'cognitive_fact_inactive';
-      if (row.node_type === 'belief' && !db.prepare(`
-        SELECT 1 FROM beliefs WHERE ('belief:'||id)=? AND status='active'
-      `).get(String(row.node_key))) return 'cognitive_belief_inactive';
-      if (row.node_type === 'compiled_event' && !db.prepare(`
-        SELECT 1 FROM compiled_events WHERE ('compiled_event:'||event_id)=? AND status IN ('provisional','verified')
-      `).get(String(row.node_key))) return 'cognitive_event_inactive';
-    }
-  }
-  if (tableExists(db, 'cognitive_edges')) {
-    for (const row of db.prepare(`
-      SELECT e.*,s.project_id AS source_project,t.project_id AS target_project
-      FROM cognitive_edges e LEFT JOIN cognitive_nodes s ON s.node_id=e.source_node_id
-      LEFT JOIN cognitive_nodes t ON t.node_id=e.target_node_id
-    `).all() as Record<string, unknown>[]) {
-      const scope = String(row.project_id ?? '');
-      if (row.source_project !== scope || row.target_project !== scope
-        || String(row.edge_id) !== cognitiveEdgeId({
-          projectId: scope,
-          sourceNodeId: String(row.source_node_id),
-          targetNodeId: String(row.target_node_id),
-          edgeType: row.edge_type as Parameters<typeof cognitiveEdgeId>[0]['edgeType'],
-        })) return 'cognitive_edge_scope';
     }
   }
   return undefined;
@@ -363,50 +281,6 @@ function parseEvidenceIds(value: unknown): string[] | null {
   }
 }
 
-type TopologyEntryRow = Record<string, unknown> & {
-  neuron_id?: string | null;
-  unit_id?: string | null;
-  belief_id?: string | null;
-  fact_id?: string | null;
-  event_id?: string | null;
-  created_at: number;
-};
-
-function inferTopologyEntryScope(
-  db: Database,
-  entry: TopologyEntryRow,
-): { scope?: string; scopes: string[]; reason: string } {
-  const scopes = new Set<string>();
-  let unresolved = false;
-  let referenced = false;
-  const add = (resolved: string[] | null) => {
-    referenced = true;
-    if (!resolved?.length) unresolved = true;
-    else for (const scope of resolved) scopes.add(scope);
-  };
-  if (entry.neuron_id) add(scopeForNeuron(db, String(entry.neuron_id)));
-  if (entry.unit_id) add(scopesForUnit(db, String(entry.unit_id)));
-  if (entry.belief_id) add(scopeForBelief(db, String(entry.belief_id)));
-  if (entry.fact_id) add(scopeForNeuronReference(db, 'facts', 'fact_id', String(entry.fact_id)));
-  if (entry.event_id) {
-    add(scopeForNeuronReference(db, 'compiled_events', 'event_id', String(entry.event_id))
-      ?? scopeForProjectRecord(db, 'memory_events', 'event_id', String(entry.event_id)));
-  }
-  if (!referenced || unresolved || scopes.size !== 1) return {
-    scopes: [...scopes].sort(),
-    reason: !referenced || unresolved ? 'topology_entry_scope_unresolved' : 'topology_entry_scope_conflict',
-  };
-  return { scope: [...scopes][0]!, scopes: [...scopes], reason: '' };
-}
-
-function scopeForNeuron(db: Database, neuronId: string): string[] | null {
-  if (!tableExists(db, 'neurons')) return null;
-  const row = db.prepare(`
-    SELECT COALESCE(project_id,'') AS scope FROM neurons WHERE id=? AND is_deleted=0
-  `).get(neuronId) as { scope: string } | null;
-  return row ? [row.scope] : null;
-}
-
 function scopeForProjectRecord(
   db: Database,
   table: string,
@@ -419,41 +293,6 @@ function scopeForProjectRecord(
     WHERE ${quoteIdentifier(idColumn)}=?
   `).get(id) as { scope: string } | null;
   return row ? [row.scope] : null;
-}
-
-function scopeForNeuronReference(
-  db: Database,
-  table: string,
-  idColumn: string,
-  id: string,
-): string[] | null {
-  if (!tableExists(db, table) || !tableExists(db, 'neurons')) return null;
-  const row = db.prepare(`
-    SELECT COALESCE(n.project_id,'') AS scope
-    FROM ${quoteIdentifier(table)} r JOIN neurons n ON n.id=r.neuron_id
-    WHERE r.${quoteIdentifier(idColumn)}=? AND n.is_deleted=0
-  `).get(id) as { scope: string } | null;
-  return row ? [row.scope] : null;
-}
-
-function scopeForBelief(db: Database, beliefId: string): string[] | null {
-  return scopeForProjectRecord(db, 'beliefs', 'id', beliefId)
-    ?? scopeForProjectRecord(db, 'belief_graph_nodes', 'belief_id', beliefId);
-}
-
-function scopesForUnit(db: Database, unitId: string): string[] | null {
-  if (!tableExists(db, 'interaction_units')) return null;
-  const row = db.prepare(`SELECT message_neuron_ids_json FROM interaction_units WHERE unit_id=?`)
-    .get(unitId) as { message_neuron_ids_json: string } | null;
-  const neuronIds = row ? parseEvidenceIds(row.message_neuron_ids_json) : null;
-  if (!neuronIds?.length) return null;
-  const scopes = new Set<string>();
-  for (const neuronId of neuronIds) {
-    const scope = scopeForNeuron(db, neuronId);
-    if (!scope) return null;
-    scopes.add(scope[0]!);
-  }
-  return [...scopes];
 }
 
 function dropRebuildableProjections(db: Database): void {
@@ -470,27 +309,13 @@ function dropRebuildableProjections(db: Database): void {
 
 function initializeProjectionState(db: Database): void {
   const now = Date.now();
-  if (tableExists(db, 'topology_source_revisions')) {
-    db.exec(`
-      INSERT OR IGNORE INTO topology_source_revisions(project_id,revision,updated_at)
-      SELECT DISTINCT COALESCE(project_id,''),0,${now} FROM neurons WHERE is_deleted=0
-    `);
-  }
-  if (tableExists(db, 'topology_projection_state')) {
-    db.exec(`
-      INSERT OR REPLACE INTO topology_projection_state(
-        project_id,projection_version,status,time_zone,updated_at,error,source_revision
-      )
-      SELECT project_id,1,'dirty',NULL,${now},NULL,revision FROM topology_source_revisions
-    `);
-  }
   if (tableExists(db, 'memory_atlas_projection_state')) {
     db.exec(`
       INSERT OR REPLACE INTO memory_atlas_projection_state(
         project_id,projection_name,status,metadata_json,projection_version
       )
       SELECT DISTINCT COALESCE(project_id,''),'memory_atlas.v2','dirty','{}','v2'
-      FROM neurons WHERE is_deleted=0
+      FROM memory_events WHERE event_type='RAW_EVENT_RECORDED'
     `);
   }
 }

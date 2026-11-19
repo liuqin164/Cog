@@ -10,6 +10,7 @@ import {
   SnapshotImporter,
   createMemoryKernel,
 } from '../src/public.js';
+import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
 import { makeTempDir } from './helpers/tmp.js';
 
 function tempDir(): string {
@@ -63,9 +64,14 @@ describe('MemorySnapshot v1.9.7', () => {
     await new SnapshotImporter({ expectedEmbeddingDimension: meta.header.embeddingDimension })
       .import(snapshotPath, targetDb);
     const restored = createMemoryKernel({ dbPath: targetDb });
-    const recall = restored.evidenceFor('Qwen embedding config', { projectId: 'snapshot-user', limit: 5 });
+    const recall = new KernelAgentMemoryBackend(restored).recall({
+      agentId: 'snapshot',
+      query: 'Qwen embedding config',
+      projectId: 'snapshot-user',
+      limit: 5,
+    });
 
-    expect(recall.rawEvidence.some((item) => item.content.includes('Qwen embedding config'))).toBe(true);
+    expect(recall.items.some((item) => item.text.includes('Qwen embedding config'))).toBe(true);
     restored.close();
     rmSync(dir, { recursive: true, force: true });
   });

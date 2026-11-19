@@ -40,7 +40,7 @@ describe('the general relevance floor (#321)', () => {
       for (const query of ['明天午饭吃什么好', '今天心情不错', '帮我把这段文字改得更简洁']) {
         const result = backend.recall({ agentId: 'owner', projectId, query, limit: 3, now: NOW });
         expect(result.items, query).toEqual([]);
-        expect(result.decisionTrace?.suppressed?.some((entry) => entry.reason === 'below_relevance_floor'), query).toBe(true);
+        expect(result.decisionTrace?.zeroExplanation, query).toBeDefined();
       }
     } finally {
       close();

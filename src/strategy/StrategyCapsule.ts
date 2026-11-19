@@ -10,7 +10,7 @@ export type StrategyTemplateId =
   | 'graph-source'
   | 'balanced-memory';
 
-export type RetrievalLane = 'graph' | 'compiled' | 'raw_source';
+export type RetrievalLane = 'graph' | 'raw_source';
 export type StrategySourcePolicy = 'not_needed' | 'fallback' | 'on_dispute' | 'required';
 export type StrategyReplanReason =
   | 'intent_changed'

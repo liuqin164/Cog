@@ -53,7 +53,6 @@ export interface DecadeCheckpoint {
   year: number;
   turns: number;
   events: number;
-  neurons: number;
   episodes: number;
   atlasDocuments: number;
   dbBytes: number;
@@ -301,7 +300,6 @@ export async function measureDecade(options: DecadeOptions = {}): Promise<Decade
         year,
         turns: year * turnsPerYear + year * probeTurns,
         events: count(db, 'memory_events'),
-        neurons: count(db, 'neurons'),
         episodes: count(db, 'memory_episodes'),
         atlasDocuments: count(db, 'memory_atlas_documents'),
         dbBytes: statSync(dbPath).size,
@@ -369,13 +367,12 @@ if (import.meta.main) {
   if (args.includes('--json')) {
     console.log(JSON.stringify(result, null, 2));
   } else {
-    console.log('year  turns   events  neurons  dbMB   compile p50/p95 ms   recall p50/p95 ms   hits');
+    console.log('year  turns   events  dbMB   compile p50/p95 ms   recall p50/p95 ms   hits');
     for (const point of result.checkpoints) {
       console.log([
         String(point.year).padStart(4),
         String(point.turns).padStart(7),
         String(point.events).padStart(8),
-        String(point.neurons).padStart(8),
         (point.dbBytes / 1024 / 1024).toFixed(1).padStart(6),
         `${point.compile.medianMs.toFixed(1)}/${point.compile.p95Ms.toFixed(1)}`.padStart(18),
         `${point.recall.p50Ms.toFixed(1)}/${point.recall.p95Ms.toFixed(1)}`.padStart(18),

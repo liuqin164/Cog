@@ -87,8 +87,8 @@ export class MemoryInspectionStore {
       vectorState: {
         indexed: vectorCount,
         liveEmbeddings,
-        recallAvailableWithoutVectors: rawLedgerCount > 0 || this.tableExists('beliefs') || this.tableExists('facts'),
-        status: vectorCount > 0 || liveEmbeddings > 0 ? 'indexed' : 'not_indexed',
+        recallAvailableWithoutVectors: true,
+        status: vectorCount > 0 ? 'indexed' : 'not_indexed',
       },
       dreamedRawCount,
       undreamedRawCount,
@@ -157,21 +157,6 @@ export class MemoryInspectionStore {
     return Number((this.db!.prepare(`SELECT COUNT(*) AS count FROM "${name}"`).get() as { count?: number } | null)?.count || 0);
   }
 
-  private countVectors(projectId?: string): number {
-    if (!this.tableExists('vector_index')) return 0;
-    if (projectId === undefined || !this.tableExists('neurons')) return this.countTable('vector_index');
-    return Number((this.db!.prepare(`SELECT COUNT(*) AS count FROM vector_index v JOIN neurons n ON n.id=v.neuron_id AND n.is_deleted=0 WHERE COALESCE(n.project_id,'')=?`)
-      .get(projectScope(projectId)) as { count?: number } | null)?.count ?? 0);
-  }
-
-  private countEmbeddings(projectId?: string): number {
-    if (!this.tableExists('neuron_embeddings')) return 0;
-    if (projectId === undefined) return this.countTable('neuron_embeddings');
-    if (!this.tableExists('neurons')) return 0;
-    return Number((this.db!.prepare(`SELECT COUNT(*) AS count FROM neuron_embeddings e JOIN neurons n ON n.id=e.neuron_id AND n.is_deleted=0 WHERE COALESCE(n.project_id,'')=?`)
-      .get(projectScope(projectId)) as { count?: number } | null)?.count ?? 0);
-  }
-
   private countScopedEvents(scope: MemoryInspectionScope): number {
     if (!this.tableExists('memory_events')) return 0;
     const conditions: string[] = [];
@@ -195,6 +180,18 @@ export class MemoryInspectionStore {
     if (projectId !== undefined) { conditions.push("COALESCE(project_id, '') = ?"); params.push(projectScope(projectId)); }
     if (maxGlobalSeq !== undefined) { conditions.push('global_seq <= ?'); params.push(maxGlobalSeq); }
     return Number((this.db!.prepare(`SELECT COUNT(*) AS count FROM memory_events WHERE ${conditions.join(' AND ')}`).get(...params) as { count?: number } | null)?.count || 0);
+  }
+
+  private countVectors(projectId?: string): number {
+    if (!this.tableExists('memory_event_embeddings')) return 0;
+    if (projectId === undefined) return this.countTable('memory_event_embeddings');
+    return Number((this.db!.prepare(`
+      SELECT COUNT(*) AS count FROM memory_event_embeddings WHERE COALESCE(project_id,'')=?
+    `).get(projectScope(projectId)) as { count?: number } | null)?.count ?? 0);
+  }
+
+  private countEmbeddings(projectId?: string): number {
+    return this.countVectors(projectId);
   }
 
   private readDreamState(projectId?: string): { lastDreamedGlobalSeq?: number; lastDreamedAt?: number; updatedAt?: number } {

@@ -1,6 +1,6 @@
 {
-  "head": "c5e7356b",
-  "runAt": "2026-11-18T07:28:34.185Z",
+  "head": "558d5d63",
+  "runAt": "2026-11-19T01:06:05.723Z",
   "bun": "1.3.14",
   "platform": "linux",
   "arch": "arm64",
@@ -10,7 +10,7 @@
       "metrics": [
         {
           "key": "recall_lane_included",
-          "value": "600/600 (100.0%)",
+          "value": "592/600 (98.7%)",
           "pass": true,
           "threshold": ">= 90% of turns"
         },
@@ -25,11 +25,11 @@
           "value": "99.4%",
           "pass": true,
           "threshold": ">= 50% of target after the first cut",
-          "detail": "whole run min 11.2%, 503 turn(s) after the first cut"
+          "detail": "whole run min 9.3%, 503 turn(s) after the first cut"
         }
       ],
       "pass": true,
-      "durationMs": 281386.345835
+      "durationMs": 184529.553294
     },
     {
       "name": "forget (#332/#331)",
@@ -55,7 +55,7 @@
         }
       ],
       "pass": false,
-      "durationMs": 1312.210923000006
+      "durationMs": 466.390853000019
     },
     {
       "name": "night catch-up (#327)",
@@ -80,7 +80,7 @@
         }
       ],
       "pass": false,
-      "durationMs": 708.3798580000293
+      "durationMs": 385.9460240000044
     },
     {
       "name": "emergence feedback (#330)",
@@ -100,7 +100,7 @@
         }
       ],
       "pass": false,
-      "durationMs": 1260.625447999977
+      "durationMs": 547.455483000027
     },
     {
       "name": "budget pause and resume (#228)",
@@ -125,7 +125,7 @@
         }
       ],
       "pass": true,
-      "durationMs": 584.7344220000086
+      "durationMs": 340.3653179999965
     },
     {
       "name": "SIGKILL recovery (#331)",
@@ -151,7 +151,7 @@
         }
       ],
       "pass": true,
-      "durationMs": 947.6197110000066
+      "durationMs": 908.2388890000002
     }
   ]
 }

@@ -53,6 +53,11 @@ export class FactStore {
 
   private initializeSchema(): void {
     this.db.exec(`
+      PRAGMA journal_mode = WAL;
+      PRAGMA synchronous = NORMAL;
+      PRAGMA foreign_keys = ON;
+      PRAGMA busy_timeout = 5000;
+
       CREATE TABLE IF NOT EXISTS facts (
         fact_id TEXT PRIMARY KEY,
         neuron_id TEXT NOT NULL,
@@ -236,7 +241,7 @@ export class FactStore {
     const entityPlaceholders = entityIds.map(() => '?').join(', ');
     const predicateFamilies = options?.predicateFamilies || [];
     const scopeSql = options?.projectId === undefined ? '' : ` AND EXISTS (
-      SELECT 1 FROM neurons n WHERE n.id=facts.neuron_id AND n.is_deleted=0 AND COALESCE(n.project_id,'')=?
+      SELECT 1 FROM memory_events n WHERE n.event_id=facts.neuron_id AND COALESCE(n.project_id,'')=?
     )`;
     const scopeParams = options?.projectId === undefined ? [] : [options.projectId];
 
@@ -286,7 +291,7 @@ export class FactStore {
       SELECT *
       FROM compiled_events
       WHERE neuron_id IN (${placeholders})
-        ${projectId === undefined ? '' : `AND EXISTS (SELECT 1 FROM neurons n WHERE n.id=compiled_events.neuron_id AND n.is_deleted=0 AND COALESCE(n.project_id,'')=?)`}
+        ${projectId === undefined ? '' : `AND EXISTS (SELECT 1 FROM memory_events n WHERE n.event_id=compiled_events.neuron_id AND COALESCE(n.project_id,'')=?)`}
       ORDER BY valid_from DESC, event_id DESC
       LIMIT ?
     `).all(...neuronIds, ...(projectId === undefined ? [] : [projectId]), limit) as any[];
@@ -334,7 +339,7 @@ export class FactStore {
     let sql = `
       SELECT f.*
       FROM facts f
-      JOIN neurons n ON n.id=f.neuron_id AND n.is_deleted=0
+      JOIN memory_events n ON n.event_id=f.neuron_id
       WHERE f.valid_from >= ?
         AND f.valid_from < ?
     `;
@@ -369,7 +374,7 @@ export class FactStore {
     let sql = `
       SELECT e.*
       FROM compiled_events e
-      JOIN neurons n ON n.id=e.neuron_id AND n.is_deleted=0
+      JOIN memory_events n ON n.event_id=e.neuron_id
       WHERE e.valid_from >= ?
         AND e.valid_from < ?
     `;

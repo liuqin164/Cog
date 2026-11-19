@@ -82,8 +82,8 @@ describe('Entity instance resolution unit', () => {
 
   it('routes ambiguous mentions into pending with an explicit STAY_PENDING fallback', () => {
     const db = new Database(':memory:');
-    db.exec(`CREATE TABLE neurons (id TEXT PRIMARY KEY, project_id TEXT, is_deleted INTEGER NOT NULL DEFAULT 0)`);
-    db.prepare(`INSERT INTO neurons(id,project_id,is_deleted) VALUES(?,?,0)`).run('n-1', '');
+    db.exec(`CREATE TABLE memory_events (event_id TEXT PRIMARY KEY, project_id TEXT)`);
+    db.prepare(`INSERT INTO memory_events(event_id,project_id) VALUES(?,?)`).run('n-1', '');
     const store = new EntityStore(db);
     const decision = decideEntityInstanceResolution(entityReferenceSamplesZh.ambiguousReference);
     const pending = store.registerPendingResolution({
@@ -210,8 +210,8 @@ describe('Entity instance resolution unit', () => {
 
   it('keeps identical aliases, attributes, and projectless timelines inside their exact project scope', () => {
     const store = new EntityStore(':memory:');
-    store.getDatabase().exec(`CREATE TABLE neurons(id TEXT PRIMARY KEY, project_id TEXT, is_deleted INTEGER NOT NULL DEFAULT 0)`);
-    store.getDatabase().exec(`INSERT INTO neurons VALUES('n-a','a',0),('n-b','b',0),('n-global',NULL,0)`);
+    store.getDatabase().exec(`CREATE TABLE memory_events(event_id TEXT PRIMARY KEY, project_id TEXT)`);
+    store.getDatabase().exec(`INSERT INTO memory_events VALUES('n-a','a'),('n-b','b'),('n-global',NULL)`);
     const a = store.upsertEntity({
       canonicalName: 'Shared Alias A', type: 'person', aliases: ['shared'],
       metadata: { projectId: 'a' }, instanceMode: 'new_instance', createdAt: 1,

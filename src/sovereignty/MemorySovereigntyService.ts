@@ -71,9 +71,7 @@ export const SOVEREIGNTY_DELETE_COUNT_FIELDS = [
   'events',
   'derivedEntries',
   'entryVersions',
-  'neurons',
   'facts',
-  'synapses',
   'beliefs',
   'entityMentions',
   'episodes',
@@ -164,7 +162,6 @@ export interface MemorySovereigntyPorts {
   /** Markdown exports written by `/export`; unset means none are scanned. */
   exportsDir?: string;
   rebuildAtlas?: (projectId: string) => unknown;
-  afterNeuronsDeleted?: (neuronIds: readonly string[], projectId: string) => void;
   now?: () => number;
 }
 
@@ -334,10 +331,8 @@ export class MemorySovereigntyService {
     // above the limit on some builds.
     this.ports.db.exec(`
       CREATE TEMP TABLE IF NOT EXISTS _sovereignty_event_ids (id TEXT PRIMARY KEY);
-      CREATE TEMP TABLE IF NOT EXISTS _sovereignty_neuron_ids (id TEXT PRIMARY KEY);
       CREATE TEMP TABLE IF NOT EXISTS _sovereignty_episode_ids (id TEXT PRIMARY KEY);
     `);
-    let neuronIds: string[] = [];
     try {
       const insertEventId = this.ports.db.prepare(`INSERT OR IGNORE INTO _sovereignty_event_ids (id) VALUES (?)`);
       this.ports.db.transaction(() => {
@@ -345,18 +340,10 @@ export class MemorySovereigntyService {
       })();
       const episodeRows = this.episodesInRange(scope, input.start, input.end);
       const episodeIds = new Set(episodeRows.map((row) => row.episodeId));
-      neuronIds = this.neuronsForEvents(scope);
-      const insertNeuronId = this.ports.db.prepare(`INSERT OR IGNORE INTO _sovereignty_neuron_ids (id) VALUES (?)`);
       const insertEpisodeId = this.ports.db.prepare(`INSERT OR IGNORE INTO _sovereignty_episode_ids (id) VALUES (?)`);
       this.ports.db.transaction(() => {
-        for (const id of neuronIds) insertNeuronId.run(id);
         for (const id of episodeIds) insertEpisodeId.run(id);
       })();
-      if (neuronIds.length === 0) {
-        deleted.facts = 0;
-        deleted.synapses = 0;
-        deleted.entityMentions = 0;
-      }
       if (episodeIds.size === 0) {
         deleted.episodes = 0;
         deleted.frames = 0;
@@ -364,19 +351,11 @@ export class MemorySovereigntyService {
 
       this.ports.db.transaction(() => {
       this.deleteIfTable('memory_events_fts', `DELETE FROM memory_events_fts WHERE event_id IN (SELECT id FROM _sovereignty_event_ids)`, []);
-      deleted.neurons = neuronIds.length;
-      if (neuronIds.length > 0) {
-        deleted.facts = this.runDelete(`DELETE FROM facts WHERE neuron_id IN (SELECT id FROM _sovereignty_neuron_ids)`, []);
-        deleted.synapses = this.runDelete(`DELETE FROM synapses WHERE source_id IN (SELECT id FROM _sovereignty_neuron_ids) OR target_id IN (SELECT id FROM _sovereignty_neuron_ids)`, []);
-        deleted.beliefs = this.runDelete(`DELETE FROM beliefs WHERE source_event_id IN (SELECT id FROM _sovereignty_event_ids) OR source_neuron_id IN (SELECT id FROM _sovereignty_neuron_ids)`, []);
-        deleted.entityMentions = this.runDelete(`DELETE FROM entity_mentions WHERE neuron_id IN (SELECT id FROM _sovereignty_neuron_ids)`, []);
-        this.deleteIfTable('neuron_embeddings', `DELETE FROM neuron_embeddings WHERE neuron_id IN (SELECT id FROM _sovereignty_neuron_ids)`, []);
-        this.deleteIfTable('vector_index', `DELETE FROM vector_index WHERE neuron_id IN (SELECT id FROM _sovereignty_neuron_ids)`, []);
-        this.deleteIfTable('neurons_fts', `DELETE FROM neurons_fts WHERE id IN (SELECT id FROM _sovereignty_neuron_ids)`, []);
-        deleted.neurons = this.runDelete(`DELETE FROM neurons WHERE id IN (SELECT id FROM _sovereignty_neuron_ids)`, []);
-      } else {
-        deleted.beliefs = this.runDelete(`DELETE FROM beliefs WHERE source_event_id IN (SELECT id FROM _sovereignty_event_ids)`, []);
-      }
+      deleted.neurons = 0;
+      deleted.synapses = 0;
+      deleted.facts = this.runDelete(`DELETE FROM facts WHERE neuron_id IN (SELECT id FROM _sovereignty_event_ids)`, []);
+      deleted.beliefs = this.runDelete(`DELETE FROM beliefs WHERE source_event_id IN (SELECT id FROM _sovereignty_event_ids) OR source_neuron_id IN (SELECT id FROM _sovereignty_event_ids)`, []);
+      deleted.entityMentions = this.runDelete(`DELETE FROM entity_mentions WHERE neuron_id IN (SELECT id FROM _sovereignty_event_ids)`, []);
       if (episodeIds.size > 0) {
         this.runDelete(`DELETE FROM memory_episode_events WHERE episode_id IN (SELECT id FROM _sovereignty_episode_ids) OR event_id IN (SELECT id FROM _sovereignty_event_ids)`, []);
         this.deleteIfTable('memory_frame_reviews', `DELETE FROM memory_frame_reviews WHERE frame_id IN (SELECT frame_id FROM memory_frames WHERE episode_id IN (SELECT id FROM _sovereignty_episode_ids))`, []);
@@ -396,13 +375,10 @@ export class MemorySovereigntyService {
     } finally {
       this.ports.db.exec(`
         DROP TABLE IF EXISTS _sovereignty_event_ids;
-        DROP TABLE IF EXISTS _sovereignty_neuron_ids;
         DROP TABLE IF EXISTS _sovereignty_episode_ids;
       `);
     }
     this.eraseFreedPages();
-
-    if (neuronIds.length > 0) this.ports.afterNeuronsDeleted?.(neuronIds, scope);
 
     // A snapshot or export made after the earliest deleted row was recorded may hold that row's
     // text. Both are whole copies, so they are removed rather than rewritten.
@@ -581,13 +557,6 @@ export class MemorySovereigntyService {
       )
     `).all(scope, end, start) as Array<{ episode_id: string }>;
     return rows.map((row) => ({ episodeId: row.episode_id }));
-  }
-
-  private neuronsForEvents(scope: string): string[] {
-    const rows = this.ports.db.prepare(`
-      SELECT id FROM neurons WHERE COALESCE(project_id, '')=? AND source_event_id IN (SELECT id FROM _sovereignty_event_ids)
-    `).all(scope) as Array<{ id: string }>;
-    return rows.map((row) => row.id);
   }
 
   private graphRows(scope: string): Array<{ node_type: string; label: string }> {

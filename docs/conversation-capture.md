@@ -38,8 +38,7 @@ later round rather than a line smuggled into this one.
 3. appends one ledger row, which is where the secret mark and the PII redaction are applied, as they
    are for every other raw event,
 4. hands the row to episode assembly, and
-5. compiles the turn through the kernel's one ingest entry point (`MemoryKernel.ingest`) — the same
-   path `ingestToolObservation` uses, so a large turn costs what a large tool result costs (#199).
+5. returns the ledger row. There is no second compiled copy of the turn (#343).
 
 The ledger row is written before the compile: if the compile throws, the turn is still captured and
 the caller sees the error. Episode assembly is an organizational index and cannot fail the write. The
@@ -86,7 +85,6 @@ way to say "a human, but not the owner", which is exactly the gap this ticket na
 | `role` | The ledger's coarse role for that speaker, from the table above. |
 | `text` | The written text: the caller's own text, minus what explicit exclusion and redaction removed. Never trimmed. |
 | `occurredAt` | The instant the turn happened. Defaults to the clock at the write. |
-| `compiledNeuronId` | Set when the compile half produced a neuron; the ledger row exists either way. |
 
 ## Capture lanes
 

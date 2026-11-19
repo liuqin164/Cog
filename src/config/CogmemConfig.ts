@@ -6,7 +6,6 @@ import type { MemoryKernelOptions } from '../factory.js';
 import type { RedactionPolicy } from '../governance/index.js';
 import { ModelRegistry } from '../models/ModelRegistry.js';
 import type { ModelRoleConfig, ModelRoleName, ProviderType } from '../models/ModelRole.js';
-import type { VectorBackend } from '../store/IVectorStore.js';
 import {
   type ConfigDiagnosticLike,
   DEFAULT_VECTOR_DIMENSION,
@@ -147,17 +146,6 @@ export function loadCogmemConfig(options: LoadCogmemConfigOptions = {}): LoadedC
   optionsOut.dbPath = resolvePath(interpolate(dbPath, env, diagnostics), homeDir, env);
   optionsOut.sharedEnabled = booleanValue(shared.enabled) === true;
   if (numberValue(shared.recall_limit) !== undefined) optionsOut.sharedRecallLimit = numberValue(shared.recall_limit);
-
-  const vectorBackend = stringValue(core.vector_backend) || 'sqlite-vec';
-  if (vectorBackend === 'sqlite-vec' || vectorBackend === 'hnswlib') {
-    optionsOut.vectorBackend = vectorBackend as VectorBackend;
-  } else {
-    diagnostics.push({
-      severity: 'error',
-      code: 'invalid_vector_backend',
-      message: 'core.vector_backend must be sqlite-vec or hnswlib.',
-    });
-  }
 
   const coreVectorDimension = core.vector_dimension;
   const embeddingVectorDimension = embedding.vector_dimension;

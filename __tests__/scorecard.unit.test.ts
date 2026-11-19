@@ -44,7 +44,7 @@ test('the scorecard entry point runs, so a rename inside it cannot go unnoticed'
   const { runScorecard } = await import('../scripts/scorecard.js');
   const result = await runScorecard({ items: 2, seed: 1 });
   const arms = [...result.recall, ...result.currentTruth, ...result.hostPath, ...result.hostPathMarked, ...result.crossHost];
-  expect(arms.map((arm) => arm.arm)).toContain('evidence_layer');
+  expect(arms.map((arm) => arm.arm)).toContain('agent_backend');
   expect(result.hostPath.some((arm) => arm.arm === 'agent_backend_context_plan')).toBe(true);
 }, 180_000);
 

@@ -6,7 +6,6 @@ import { join } from 'node:path';
 import { buildEpisodeEnvelope, ConversationMarkdownAdapter, type SourceDefinition, type SourceFileSnapshot } from '../src/adapters/index.js';
 import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
 import { createMemoryKernel } from '../src/factory.js';
-import { explainRecallWithKernel } from '../src/recall/RecallExplanation.js';
 import { EventStore } from '../src/store/EventStore.js';
 import {
   normalizeDelimitedRecords,
@@ -166,7 +165,6 @@ test('MemoryKernel exposes project-scoped raw ledger search through the public f
     timestamp: 1_700_000_000_000,
   });
 
-  expect(kernel.vectorStore.getCurrentCount()).toBe(0);
   const matches = kernel.searchRawEvents('vector pruning memory pruning', {
     projectId: 'project-a',
     limit: 5,
@@ -206,36 +204,6 @@ test('KernelAgentMemoryBackend records raw turn events with parent and prev link
   expect(context.event.eventId).toBe(assistantEvent.eventId);
   expect(context.before.map((event: any) => event.eventId)).toEqual([userEvent.eventId]);
   expect(context.parent?.eventId).toBe(userEvent.eventId);
-
-  kernel.close();
-});
-
-test('recall explanation can anchor semantic evidence back to raw ledger events', async () => {
-  const kernel = createMemoryKernel({ dbPath: tempDbPath('cogmem-ledger-explain-'), vectorBackend: 'sqlite-vec' });
-  const backend = new KernelAgentMemoryBackend(kernel);
-
-  await backend.rememberTurn({
-    agentId: 'openclaw',
-    projectId: 'project-a',
-    sessionId: 'session-a',
-    userText: 'The billing migration must keep the audit trail.',
-    assistantText: 'Stored the billing migration audit constraint.',
-    timestamp: 1_700_000_000_000,
-  });
-
-  const rawEvents = (kernel as any).getThreadEvents('session-a');
-  const explanation = explainRecallWithKernel(kernel, {
-    query: 'billing migration audit trail',
-    projectId: 'project-a',
-    agentId: 'openclaw',
-    limit: 1,
-  });
-  const anchor = explanation.evidence[0]?.sourceAnchor;
-
-  expect(anchor?.eventId).toMatch(/^evt-/);
-  expect(anchor?.sourceRefs?.map((ref: any) => ref.eventId)).toEqual(rawEvents.map((event: any) => event.eventId));
-  expect(anchor?.sourceRefs?.map((ref: any) => ref.role)).toEqual(['user', 'assistant']);
-  expect(anchor?.context?.event.eventType).toBe('INGESTED');
 
   kernel.close();
 });
@@ -413,10 +381,5 @@ test('tool call and result facade records parent-child ledger links without bypa
   expect(replay.find((event) => event.eventId === assistantEvent?.eventId)?.nextEventId).toBe(callEvent.eventId);
   expect(replay.find((event) => event.eventId === callEvent.eventId)?.nextEventId).toBe(resultEvent.eventId);
 
-  const recall = kernel.evidenceFor('idempotent ALTER TABLE', {
-    projectId: 'tool-ledger-project',
-    includeRawEvidence: true,
-  });
-  expect(recall.rawEvidence.some((neuron) => neuron.metadata.sourceType === 'external_tool')).toBe(true);
   kernel.close();
 });

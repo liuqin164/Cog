@@ -4,9 +4,7 @@ import { FINAL_AUXILIARY_OBJECTS } from './FinalSchemaDefinition.js';
 import { tableExists } from '../../utils/Values.js';
 
 const PROVENANCE_TRIGGER_PREFIXES = [
-  'synapses_scope_',
   'belief_evidence_scope_',
-  'cognitive_node_source_',
   'reasoning_step_scope_',
   'pending_entity_scope_',
   'memory_binding_scope_',
@@ -38,11 +36,9 @@ function installFinalTriggers(db: Database, matches: (name: string) => boolean):
 }
 
 function provenanceDependenciesPresent(db: Database, name: string): boolean {
-  const dependencies = name.startsWith('synapses_scope_') ? ['neurons']
-    : name.startsWith('belief_evidence_scope_') ? ['beliefs', 'neurons', 'memory_events']
-    : name.startsWith('cognitive_node_source_') ? ['neurons']
-    : name.startsWith('reasoning_step_scope_') ? ['reasoning_chains', 'neurons']
-    : name.startsWith('pending_entity_scope_') ? ['neurons', 'entity_instances', 'entity_mentions']
+  const dependencies = name.startsWith('belief_evidence_scope_') ? ['beliefs', 'memory_events']
+    : name.startsWith('reasoning_step_scope_') ? ['reasoning_chains']
+    : name.startsWith('pending_entity_scope_') ? ['memory_events', 'entity_instances', 'entity_mentions']
     : ['memory_events', 'memory_topics', 'memory_entities', 'memory_clusters'];
   return dependencies.every((table) => tableExists(db, table));
 }

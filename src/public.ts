@@ -416,8 +416,6 @@ export {
   type AgentRecallEntityCard,
   type AgentRecallIntent,
   type AgentRecallItem,
-  type AgentRecallPackResult,
-  type AgentRecallPackSlots,
   type AgentRecallQuery,
   type AgentRecallQueryPlan,
   type AgentRecallResult,
@@ -495,9 +493,6 @@ export {
  * Core recall pipeline.
  * @stable @since 1.0.0
  */
-export { BrainRecall } from './recall/BrainRecall.js';
-export type { BrainRecallOptions } from './recall/BrainRecall.js';
-export type { BrainRecallResult } from './types/BrainRecallResult.js';
 
 /**
  * Neuron types — the fundamental memory unit.
@@ -965,7 +960,6 @@ export { EmbeddingUnavailableError, embedOne } from './embedding/EmbeddingProvid
  * Re-embedding status for observability.
  * @beta @since 1.9.8
  */
-export type { ReEmbeddingStatus } from './embedding/ReEmbeddingStatus.js';
 
 /**
  * Dream curator scheduling helpers. They describe host-owned schedules; core
@@ -981,7 +975,6 @@ export type {
   DreamCuratorScheduleMode,
   DreamCuratorWorkflowDescription,
 } from './engine/DreamCuratorSchedule.js';
-export { ReEmbeddingPipeline } from './embedding/ReEmbeddingPipeline.js';
 export { EntityGovernanceService } from './entity/index.js';
 export type { EntityMergeCandidate, EntityMergeCandidateStatus, ProposeEntityMergeInput } from './entity/index.js';
 
@@ -990,27 +983,17 @@ export type { EntityMergeCandidate, EntityMergeCandidateStatus, ProposeEntityMer
  * and the legacy in-process hnswlib backend.
  * @beta @since 1.12.0
  */
-export { SqliteVecStore } from './store/SqliteVecStore.js';
-export { HnswlibVectorStore } from './store/HnswlibVectorStore.js';
-export { ActivationStore } from './store/ActivationStore.js';
 export { MemoryBindingStore } from './store/MemoryBindingStore.js';
-/** @deprecated Use HnswlibVectorStore. Will be removed in v3.0. */
-export { VectorStore } from './store/VectorStore.js';
-export type { ActivationDecayOptions, ActivationDecayResult, ActivationHotspot, ActivationTouchInput } from './store/ActivationStore.js';
 export type { UpsertMemoryEntityInput, UpsertMemoryTopicInput } from './store/MemoryBindingStore.js';
-export type { IVectorStore, VectorBackend, VectorSearchResult, VectorStoreStats } from './store/IVectorStore.js';
 
 /**
  * Offline consolidation — advanced use only.
  * @beta @since 1.9.0
  */
-export { OfflineConsolidationPipeline } from './engine/OfflineConsolidationPipeline.js';
 
 /**
- * MemoryGraph — low-level neuron graph. Prefer MemoryKernel for most use cases.
  * @beta @since 1.0.0
  */
-export { MemoryGraph } from './core/MemoryGraph.js';
 
 /**
  * Source adapters and the workspace profiles the import bridge reads.
@@ -1047,32 +1030,11 @@ export type {
  * advanced integrations can inspect or compose these pieces directly.
  * @beta @since 2.0.0
  */
-export { QueryCompiler } from './retrieval/QueryCompiler.js';
-export type { CompiledQuery } from './retrieval/QueryCompiler.js';
-export { RetrievalPlanner } from './retrieval/RetrievalPlanner.js';
-export type { RetrievalExecutionPlan, RetrievalIntent } from './retrieval/RetrievalPlanner.js';
-export { TemporalBranchSearch } from './retrieval/TemporalBranchSearch.js';
-export type { TemporalBranchSearchResult, TemporalTraversalSegment } from './retrieval/TemporalBranchSearch.js';
-export { PulseRetrievalEngine } from './retrieval/PulseRetrievalEngine.js';
-export type { PulseRetrievalResult } from './retrieval/PulseRetrievalEngine.js';
-export { NarrativeRecallAssembler } from './retrieval/NarrativeRecallAssembler.js';
-export type { NarrativeRecallSummary } from './retrieval/NarrativeRecallAssembler.js';
-export { UniverseNavigator } from './retrieval/UniverseNavigator.js';
-export type { UniverseNavigationResult } from './retrieval/UniverseNavigator.js';
-export { UniverseTraversalExecutor } from './retrieval/UniverseTraversalExecutor.js';
-export type { UniverseTraversalExecution, UniverseTraversalSegment } from './retrieval/UniverseTraversalExecutor.js';
 
 /**
  * Recall explainability helpers.
  * @beta @since 2.0.0
  */
-export { explainRecallWithKernel } from './recall/RecallExplanation.js';
-export type {
-  RecallExplanation,
-  RecallExplanationEvidence,
-  RecallExplanationOptions,
-  RecallExplanationSourceAnchor,
-} from './recall/RecallExplanation.js';
 export type { DreamBacklogStatus } from './store/DreamLedgerStore.js';
 export { MemoryFrameStore, frameSourceFingerprint } from './store/MemoryFrameStore.js';
 export type { MemoryFrameSaveInput } from './store/MemoryFrameStore.js';

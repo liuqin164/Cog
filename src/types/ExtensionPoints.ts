@@ -1,8 +1,7 @@
-import type { BrainRecallResult } from './BrainRecallResult.js';
 import type { Neuron } from './index.js';
 
 export interface ILLMClarifier {
-  clarify(prompt: string, evidence: BrainRecallResult): Promise<{ finalAnswer: string } | string>;
+  clarify(prompt: string, evidence: { rawEvidence: Neuron[] }): Promise<{ finalAnswer: string } | string>;
 }
 
 export interface SkillCandidateLike {

@@ -1,5 +1,4 @@
 // @ts-nocheck
-import type { IngestInput, Neuron } from '../types/index.js';
 import {
   MarkdownSourceLoader,
   buildEpisodeEnvelope,
@@ -9,8 +8,7 @@ import {
   type SourceDefinition
 } from '../adapters/index.js';
 import type { IngestionCursorStore } from './IngestionCursorStore.js';
-import type { OfflineConsolidationOutput } from '../engine/OfflineConsolidationPipeline.js';
-import type { MemoryEvent, MemorySourceRef } from '../types/index.js';
+import type { MemoryEvent } from '../types/index.js';
 import { projectScope } from '../topology/ProjectScope.js';
 
 export interface BatchConsolidationWindow {
@@ -34,7 +32,6 @@ export interface BatchConsolidationSummary {
   processedSourceIds: string[];
   adapterDiagnostics: SourceAdapterDiagnostic[];
   sourceResults: BatchSourceResult[];
-  offline: OfflineConsolidationOutput;
 }
 
 export interface BatchSourceResult {
@@ -93,9 +90,7 @@ export type BatchProgressEvent =
 
 interface InstalledBatchProcessorDependencies {
   cursorStore: IngestionCursorStore;
-  ingestBatch: (inputs: IngestInput[]) => Promise<Neuron[]>;
   recordRawEvidence?: (envelope: BatchEpisodeEnvelope) => MemoryEvent | undefined | Promise<MemoryEvent | undefined>;
-  runOfflineWindow: (window: BatchConsolidationWindow) => Promise<OfflineConsolidationOutput>;
   onProgress?: (event: BatchProgressEvent) => void;
 }
 
@@ -184,38 +179,9 @@ export class InstalledBatchProcessor {
           pendingRecords: pending.length
         });
         const envelopes = pending.map((record) => buildEpisodeEnvelope(source, record));
-        const inputs = await Promise.all(envelopes.map(async (item) => {
-          const rawEvent = await this.deps.recordRawEvidence?.(item);
-          if (!rawEvent) return item.ingestInput;
-          const sourceRefs = item.ingestInput.sourceRefs || [];
-          const rawRef: MemorySourceRef = {
-            ...(sourceRefs[0] || {}),
-            eventId: rawEvent.eventId,
-            eventType: rawEvent.eventType,
-            contentHash: rawEvent.contentHash,
-            threadId: rawEvent.threadId,
-            sessionId: rawEvent.sessionId,
-            turnId: rawEvent.turnId,
-            role: rawEvent.role,
-            threadSeq: rawEvent.threadSeq,
-            turnSeq: rawEvent.turnSeq,
-            eventOrdinal: rawEvent.eventOrdinal,
-            parentEventId: rawEvent.parentEventId,
-            prevEventId: rawEvent.prevEventId,
-            nextEventId: rawEvent.nextEventId,
-            causalityType: rawEvent.causalityType,
-            orderingConfidence: rawEvent.orderingConfidence,
-          };
-          return {
-            ...item.ingestInput,
-            sourceEventId: rawEvent.eventId,
-            sourceRefs: [...sourceRefs, rawRef],
-          };
-        }));
-        const neurons = await this.deps.ingestBatch(inputs);
         recordsIngested += envelopes.length;
-        envelopes.forEach((item, index) => {
-          const neuron = neurons[index];
+        for (const item of envelopes) {
+          const rawEvent = await this.deps.recordRawEvidence?.(item);
           this.deps.cursorStore.markRecordProcessed({
             recordHash: item.record.provenance.recordHash,
             sourceId: source.sourceId,
@@ -226,9 +192,9 @@ export class InstalledBatchProcessor {
             contentWindowStart: options.window.start,
             contentWindowEnd: options.window.end,
             processedAt: Date.now(),
-            neuronId: neuron?.id
+            ...(rawEvent ? { neuronId: rawEvent.eventId } : {}),
           });
-        });
+        }
         this.deps.onProgress?.({
           stage: 'source:ingest:complete',
           sourceIndex,
@@ -263,13 +229,6 @@ export class InstalledBatchProcessor {
       });
     }
 
-    this.deps.onProgress?.({ stage: 'offline:start', recordsIngested });
-    // Re-deriving a window with nothing new in it only re-upserts the beliefs that are
-    // already there, appending duplicate BELIEF_UPSERTED events on every repeat import.
-    const offline = recordsIngested > 0
-      ? await this.deps.runOfflineWindow(options.window)
-      : emptyOfflineOutput();
-    this.deps.onProgress?.({ stage: 'offline:complete', recordsIngested });
     return {
       window: options.window,
       sourcesScanned: sources.length,
@@ -280,21 +239,6 @@ export class InstalledBatchProcessor {
       processedSourceIds,
       adapterDiagnostics,
       sourceResults,
-      offline
     };
   }
-}
-
-function emptyOfflineOutput(): OfflineConsolidationOutput {
-  return {
-    verifiedFacts: [],
-    verifiedEvents: [],
-    correctedEntityBindings: [],
-    consolidatedBeliefs: [],
-    archivedFactIds: [],
-    rejectedFactIds: [],
-    archivedEntityIds: [],
-    unresolvedReferenceIds: [],
-    plasticityProposals: []
-  };
 }

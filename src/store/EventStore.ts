@@ -194,18 +194,6 @@ export class EventStore {
       CREATE INDEX IF NOT EXISTS idx_memory_event_cjk_terms_seq
         ON memory_event_cjk_terms(term, global_seq, event_id);
 
-      CREATE TABLE IF NOT EXISTS vector_projection_state (
-        projection_name TEXT PRIMARY KEY,
-        last_event_id TEXT,
-        last_event_time INTEGER,
-        last_global_seq INTEGER,
-        last_rebuild_at INTEGER,
-        last_full_count INTEGER NOT NULL DEFAULT 0,
-        last_checksum TEXT,
-        status TEXT NOT NULL DEFAULT 'idle',
-        metadata_json TEXT
-      );
-
       CREATE TABLE IF NOT EXISTS event_sequence_counters (
         counter_key TEXT PRIMARY KEY,
         value INTEGER NOT NULL
@@ -1173,42 +1161,6 @@ export class EventStore {
   getEventCount(): number {
     const row = this.db.prepare(`SELECT COUNT(*) AS count FROM memory_events`).get() as { count: number } | null;
     return row?.count || 0;
-  }
-
-  getProjectionCheckpoint(projectionName: string): ProjectionCheckpoint | null {
-    const row = this.db.prepare(`SELECT * FROM vector_projection_state WHERE projection_name = ?`).get(projectionName) as any;
-    if (!row) return null;
-
-    return {
-      projectionName: row.projection_name,
-      lastEventId: row.last_event_id || undefined,
-      lastEventTime: row.last_event_time || undefined,
-      lastGlobalSeq: row.last_global_seq ?? undefined,
-      lastRebuildAt: row.last_rebuild_at || undefined,
-      lastFullCount: row.last_full_count || 0,
-      lastChecksum: row.last_checksum || undefined,
-      status: row.status,
-      metadata: row.metadata_json ? JSON.parse(row.metadata_json) : undefined
-    };
-  }
-
-  upsertProjectionCheckpoint(checkpoint: ProjectionCheckpoint): void {
-    this.db.prepare(`
-      INSERT OR REPLACE INTO vector_projection_state (
-        projection_name, last_event_id, last_event_time, last_global_seq, last_rebuild_at,
-        last_full_count, last_checksum, status, metadata_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      checkpoint.projectionName,
-      checkpoint.lastEventId || null,
-      checkpoint.lastEventTime ?? null,
-      checkpoint.lastGlobalSeq ?? null,
-      checkpoint.lastRebuildAt ?? null,
-      checkpoint.lastFullCount,
-      checkpoint.lastChecksum || null,
-      checkpoint.status,
-      checkpoint.metadata ? JSON.stringify(checkpoint.metadata) : null
-    );
   }
 
   close(): void {

@@ -5,7 +5,6 @@ import { fileURLToPath } from 'node:url';
 
 import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
 import { createMemoryKernel, type MemoryKernel } from '../src/factory.js';
-import { explainRecallWithKernel } from '../src/recall/RecallExplanation.js';
 import {
   CHANNEL_BINDING_FIELDS,
   OCCASION_CONTRACT_VERSION,
@@ -300,92 +299,14 @@ describe('group withholds another person’s private material, not project-publi
   });
 });
 
-describe('the pack slots apply the same gate as the direct answer', () => {
-  test('a private belief touch is withheld in group and kept in private', () => {
-    const belief = kernel.beliefStore.upsert({
-      projectId,
-      scope: 'project',
-      subject: '咖啡',
-      predicate: 'note',
-      objectValue: { raw: '保险箱密码换了', normalized: '保险箱密码换了', type: 'string' },
-      confidence: 0.9,
-      sourceEventId: privatePersonal.eventId,
-      sourceType: 'user_input',
-      validityKind: 'open',
-      validFrom: 1,
-    }).belief!;
-
-    const groupPack = backendWith(groupBinding).recallPack({ agentId, projectId, query: '咖啡', limit: 50 });
-    expect(groupPack.slots.beliefTouches.some((touch) => touch.beliefId === belief.id)).toBe(false);
-    // Two non-life high turns plus the belief touch are withheld by occasion; the life-marked high
-    // turn is withheld by F10 and names its own gate.
-    expect(groupPack.decisionTrace?.suppressed).toContainEqual({ reason: 'occasion_private_tier', count: 3 });
-    expect(groupPack.decisionTrace?.suppressed).toContainEqual({ reason: 'life_sensitivity_withheld', count: 1 });
-
-    const privatePack = backendWith(privateBinding).recallPack({ agentId, projectId, query: '咖啡', limit: 50 });
-    expect(privatePack.slots.beliefTouches.some((touch) => touch.beliefId === belief.id)).toBe(true);
-  });
-
-  test('a life-marked belief touch is withheld even in a private pack', () => {
-    const belief = kernel.beliefStore.upsert({
-      projectId,
-      scope: 'project',
-      subject: '咖啡',
-      predicate: 'note',
-      objectValue: { raw: '高血压加重了', normalized: '高血压加重了', type: 'string' },
-      confidence: 0.9,
-      sourceEventId: highPersonal.eventId,
-      sourceType: 'user_input',
-      validityKind: 'open',
-      validFrom: 1,
-    }).belief!;
-
-    const privatePack = backendWith(privateBinding).recallPack({ agentId, projectId, query: '咖啡', limit: 50 });
-    expect(privatePack.slots.beliefTouches.some((touch) => touch.beliefId === belief.id)).toBe(false);
-    // The direct life-marked turn plus the slot built from it.
-    expect(privatePack.decisionTrace?.suppressed).toContainEqual({ reason: 'life_sensitivity_withheld', count: 2 });
-  });
-});
-
 describe('explain obeys the connection binding', () => {
   test('group evidence, context windows and withheld entries carry no private text', () => {
-    for (const scopedAgent of [agentId, undefined]) {
-      const explained = explainRecallWithKernel(kernel, {
-        query: '咖啡',
-        projectId,
-        ...(scopedAgent ? { agentId: scopedAgent } : {}),
-        binding: groupBinding,
-        limit: 50,
-      });
+    const explained = backendWith(groupBinding).recall({ query: '咖啡', projectId, agentId, limit: 50 });
 
-      expect(explained.evidence.map((entry) => entry.text).join('\n')).not.toContain('密码');
-      expect(JSON.stringify(explained.evidence.map((entry) => entry.sourceAnchor?.context))).not.toContain('密码');
-      expect(JSON.stringify(explained.evidence.map((entry) => entry.sourceAnchor?.context))).not.toContain('高血压');
-      expect(JSON.stringify(explained.filteredEvidence)).not.toContain('密码');
-    }
-  });
-
-  test('the no-agent branch drops a high-sensitivity neuron in group and names the reason', async () => {
-    const explainScratch = makeTempDir('cogmem-occasion-explain-');
-    const other = createMemoryKernel({ dbPath: join(explainScratch, 'memory.db'), projectTimeZone: 'UTC' });
-    try {
-      const neuron = await other.ingest({ projectId, content: 'The vault password changed this month.' });
-      const group = other.occasionScope.register({ channelId: 'explain-group', occasion: 'group' });
-      const privateScopeBinding = other.occasionScope.register({ channelId: 'explain-private', occasion: 'private' });
-
-      const groupExplained = explainRecallWithKernel(other, { query: 'password', projectId, binding: group, limit: 50 });
-      expect(groupExplained.evidence.map((entry) => entry.text)).not.toContain(neuron.content);
-      const withheld = groupExplained.filteredEvidence?.find((entry) => entry.id === neuron.id);
-      expect(withheld?.reason).toBe('occasion_private_tier');
-      expect(withheld?.text).toBeUndefined();
-
-      const privateExplained = explainRecallWithKernel(other, {
-        query: 'password', projectId, binding: privateScopeBinding, limit: 50,
-      });
-      expect(privateExplained.evidence.map((entry) => entry.text)).toContain(neuron.content);
-    } finally {
-      other.close();
-    }
+    expect(explained.items.map((entry) => entry.text).join('\n')).not.toContain('密码');
+    expect(JSON.stringify(explained.items.map((entry) => entry.sourceContext))).not.toContain('密码');
+    expect(JSON.stringify(explained.items.map((entry) => entry.sourceContext))).not.toContain('高血压');
+    expect(JSON.stringify(explained.decisionTrace?.suppressed)).not.toContain('密码');
   });
 });
 

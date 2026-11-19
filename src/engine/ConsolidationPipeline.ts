@@ -10,7 +10,6 @@ import type { LocalSemanticCompiler, SemanticCompilation } from './LocalSemantic
 import type { CompilerConfidenceStore } from '../store/CompilerConfidenceStore.js';
 import type { FactStore } from '../store/FactStore.js';
 import type { EntityStore } from '../store/EntityStore.js';
-import { OfflineConsolidationPipeline } from './OfflineConsolidationPipeline.js';
 import {
   createAsyncEnrichmentRunId,
   NoopAsyncEnrichmentHook,
@@ -49,7 +48,6 @@ export class ConsolidationPipeline {
   private asyncEnrichmentHook: AsyncEnrichmentHook;
   private asyncEnrichmentEnabled: boolean;
   private lowConfidenceThreshold: number;
-  private offlineConsolidationPipeline: OfflineConsolidationPipeline;
 
   constructor(
     private beliefStore: BeliefStore,
@@ -60,7 +58,6 @@ export class ConsolidationPipeline {
     private entityStore: EntityStore,
     private compilerConfidenceStore?: CompilerConfidenceStore,
     beliefExtractor?: BeliefExtractor,
-    offlineConsolidationPipeline: OfflineConsolidationPipeline = new OfflineConsolidationPipeline(),
     asyncEnrichmentHook: AsyncEnrichmentHook = new NoopAsyncEnrichmentHook(),
     options: {
       enabled?: boolean;
@@ -69,7 +66,6 @@ export class ConsolidationPipeline {
   ) {
     this.beliefExtractor = beliefExtractor || new BeliefExtractor();
     this.memoryGate = new MemoryGate();
-    this.offlineConsolidationPipeline = offlineConsolidationPipeline;
     this.asyncEnrichmentHook = asyncEnrichmentHook;
     this.asyncEnrichmentEnabled = options.enabled === true;
     this.lowConfidenceThreshold = options.lowConfidenceThreshold ?? 0.72;
@@ -190,7 +186,6 @@ export class ConsolidationPipeline {
     };
 
     this.dispatchAsyncEnrichment(neuron, sourceEventId, result);
-    this.scheduleOfflineConsolidation(neuron, result);
     return result;
   }
 
@@ -258,34 +253,6 @@ export class ConsolidationPipeline {
           if (result) this.persistAsyncEnrichmentResult(runId, neuron, sourceEventId, result);
         })
         .catch(() => undefined);
-    });
-  }
-
-  private scheduleOfflineConsolidation(
-    neuron: Neuron,
-    consolidation: ConsolidationResult
-  ): void {
-    const pendingReferenceIds = consolidation.compiledFacts
-      .filter((fact) => fact.status === 'provisional' && !fact.entityId)
-      .map((fact) => fact.factId);
-    const reasons = [
-      ...(pendingReferenceIds.length > 0 ? ['pending_reference_or_entity_binding'] : []),
-      ...(this.collectAsyncEnrichmentTriggers(consolidation).map((trigger) => trigger.kind)),
-      ...((consolidation.semanticCompilation?.issueHints.length || 0) > 1 ? ['multi_issue_candidate_sentence'] : []),
-      ...((consolidation.binding.bound || consolidation.binding.pendingRegistered) ? ['interaction_binding_present'] : [])
-    ];
-
-    queueMicrotask(() => {
-      this.offlineConsolidationPipeline.schedule({
-        neuron,
-        interactionUnit: consolidation.interactionUnit,
-        provisionalFacts: consolidation.compiledFacts,
-        provisionalEvents: consolidation.compiledEvents,
-        provisionalEntityIds: consolidation.compiledEntityIds,
-        beliefIds: consolidation.beliefs.map((belief) => belief.id),
-        pendingReferenceIds,
-        reasons: Array.from(new Set(reasons))
-      });
     });
   }
 

@@ -324,7 +324,7 @@ export class DeepWritePromotionPolicy {
   private promoteFact(candidate: DeepWriteCandidateRecord, content: Record<string, unknown>): DeepWritePromotionDecision {
     if (!this.deps.factStore) return this.keep(candidate, 'fact_store_unavailable');
     const provenance = this.resolveProvenance(candidate);
-    const neuronId = provenance.neuronIds[0];
+    const neuronId = provenance.neuronIds[0] ?? provenance.eventIds[0];
     const subject = stringField(content, ['subject', 'entity', 'topic']);
     const predicateFamily = stringField(content, ['predicateFamily', 'predicate', 'relation', 'kind']) || 'deep_write_fact';
     const object = stringField(content, ['object', 'objectValue', 'value', 'predicateValue', 'statement']);
@@ -502,7 +502,7 @@ export class DeepWritePromotionPolicy {
   private promotePreference(candidate: DeepWriteCandidateRecord, content: Record<string, unknown>): DeepWritePromotionDecision {
     if (!this.deps.beliefStore) return this.keep(candidate, 'belief_store_unavailable');
     const provenance = this.resolveProvenance(candidate);
-    const neuronId = provenance.neuronIds[0];
+    const neuronId = provenance.neuronIds[0] ?? provenance.eventIds[0];
     const eventId = provenance.eventIds[0];
     const subject = stringField(content, ['subject', 'owner', 'user']) || 'user';
     const predicate = stringField(content, ['predicate', 'preference', 'kind']) || 'preference';
@@ -617,16 +617,17 @@ export class DeepWritePromotionPolicy {
     if (!run) return { projectId: '', neuronIds: [], eventIds: [] };
     const projectId = projectScope(run.projectId);
     const db = this.deps.candidateStore.getDatabase();
-    const hasNeurons = Boolean(db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='neurons'`).get());
     const hasEvents = Boolean(db.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_events'`).get());
     const neuronIds = new Set<string>();
     const eventIds = new Set<string>();
     const addNeuron = (id: string | undefined): void => {
       if (!id) return;
-      if (!hasNeurons) return;
-      const row = db.prepare(`SELECT COALESCE(project_id,'') AS scope FROM neurons WHERE id=? AND is_deleted=0`)
+      const row = db.prepare(`SELECT COALESCE(project_id,'') AS scope FROM memory_events WHERE event_id=?`)
         .get(id) as { scope: string } | null;
-      if (row?.scope === projectId) neuronIds.add(id);
+      if (row?.scope === projectId) {
+        neuronIds.add(id);
+        eventIds.add(id);
+      }
     };
     const addEvent = (id: string | undefined): void => {
       if (!id) return;

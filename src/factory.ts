@@ -21,57 +21,18 @@ import {
   type MemoryGraphRecallAnchor,
 } from './binding/index.js';
 import { IngestionCursorStore } from './batch/IngestionCursorStore.js';
-import { MemoryGraph } from './core/MemoryGraph.js';
-import { Metabolism } from './core/Metabolism.js';
-import { Reflection } from './core/Reflection.js';
-import { TwoStagePulseRanker } from './core/TwoStagePulseRanker.js';
-import { BrainRecall, type BrainRecallOptions } from './recall/BrainRecall.js';
+import { NeuronFactory } from './core/Neuron.js';
 import { AtlasPathRetriever, MultidimensionalQueryPlanner } from './recall/index.js';
-import { HierarchicalRecallRouter } from './recall/HierarchicalRecallRouter.js';
-import {
-  isRecallableMemoryEvidence,
-  recallSuppressionReasonFor,
-  type RecallGovernanceSuppressionReason,
-} from './recall/RecallGovernance.js';
-import { TopicClassifier } from './recall/TopicClassifier.js';
-import { TopicDecayPolicy } from './recall/TopicDecayPolicy.js';
-import { TopicRegistry } from './recall/TopicRegistry.js';
-import { TopicSummaryBoard } from './recall/TopicSummaryBoard.js';
-import { CognitiveGraphCompiler } from './engine/CognitiveGraphCompiler.js';
-import { cognitiveEdgeId, cognitiveNodeId } from './engine/CognitiveGraphIdentity.js';
 import { ConsolidationPipeline } from './engine/ConsolidationPipeline.js';
-import { ConsolidationTrigger } from './engine/ConsolidationTrigger.js';
-import { CrossTopicSynthesizer } from './engine/CrossTopicSynthesizer.js';
-import { CrossTopicTrigger } from './engine/CrossTopicTrigger.js';
 import { DeepWritePromotionPolicy, type DeepWritePromotionDecision } from './engine/DeepWritePromotionPolicy.js';
 import { DreamCuratorWorker, type DreamCuratorRunOptions, type DreamCuratorRunResult } from './engine/DreamCuratorWorker.js';
-import { EpisodicSemanticDistiller } from './engine/EpisodicSemanticDistiller.js';
 import { EntityResolutionEngine } from './engine/EntityResolutionEngine.js';
 import { FactCompiler } from './engine/FactCompiler.js';
-import { GraphCommunityEngine } from './engine/GraphCommunityEngine.js';
-import { IngestionEngine } from './engine/IngestionEngine.js';
 import { InteractionBinder } from './engine/InteractionBinder.js';
 import { LocalSemanticCompiler } from './engine/LocalSemanticCompiler.js';
-import { MemoryConsolidationEngine } from './engine/MemoryConsolidationEngine.js';
-import { OfflineConsolidationPipeline, type OfflineConsolidationOutput } from './engine/OfflineConsolidationPipeline.js';
-import { OrphanCleaner } from './engine/OrphanCleaner.js';
 import { PipelineMetrics } from './engine/PipelineMetrics.js';
-import { PrincipleDecayPolicy } from './engine/PrincipleDecayPolicy.js';
-import { TopologyCompiler } from './engine/TopologyCompiler.js';
-import { WorkingMemoryDelta } from './engine/WorkingMemoryDelta.js';
-import { EntityActivationIndex } from './retrieval/EntityActivationIndex.js';
-import { NarrativeRecallAssembler } from './retrieval/NarrativeRecallAssembler.js';
-import { PulseRetrievalEngine } from './retrieval/PulseRetrievalEngine.js';
-import { QueryCompiler } from './retrieval/QueryCompiler.js';
-import { RetrievalPlanner } from './retrieval/RetrievalPlanner.js';
-import { TemporalBranchSearch } from './retrieval/TemporalBranchSearch.js';
-import { UniverseNavigator, type UniverseNavigationResult } from './retrieval/UniverseNavigator.js';
-import { UniverseTraversalExecutor } from './retrieval/UniverseTraversalExecutor.js';
 import type { EmbeddingProvider } from './embedding/EmbeddingProvider.js';
-import { NeuronEmbeddingStore } from './embedding/NeuronEmbeddingStore.js';
-import { ReEmbeddingPipeline } from './embedding/ReEmbeddingPipeline.js';
-import type { ReEmbeddingStatus } from './embedding/ReEmbeddingStatus.js';
-import { nearestNeuronIds } from './embedding/vectorRecall.js';
+import { EventEmbeddingStore } from './embedding/EventEmbeddingStore.js';
 import type { EncryptionProvider } from './encryption/index.js';
 import { TopicAliasRegistry, TopicGovernance, TopicPathRegistry as UserTopicPathRegistry, TopicRelationGraph } from './topic/index.js';
 import { CorrectionResolver } from './episode/CorrectionResolver.js';
@@ -127,16 +88,10 @@ import {
   type ConfigDiagnosticLike,
 } from './config/CogmemConfig.js';
 import { ModelRegistry } from './models/ModelRegistry.js';
-import { IterativeLLMClarifier, type BrainToolDispatcherLike } from './routing/IterativeLLMClarifier.js';
-import { ToolUsePolicy } from './routing/ToolUsePolicy.js';
-import { createConfiguredEmbedder } from './store/EmbedderFactory.js';
-import type { Embedder } from './store/Embedder.js';
-import { CognitiveGraphStore } from './store/CognitiveGraphStore.js';
-import { CompilerConfidenceStore } from './store/CompilerConfidenceStore.js';
 import { DeepWriteCandidateStore, type DeepWriteCandidateStatus } from './store/DeepWriteCandidateStore.js';
 import { CandidateReviewStore, type CandidateReviewRecord } from './store/CandidateReviewStore.js';
+import { CompilerConfidenceStore } from './store/CompilerConfidenceStore.js';
 import { DreamLedgerStore, type DreamBacklogStatus } from './store/DreamLedgerStore.js';
-import { ActivationStore, type ActivationDecayResult, type ActivationHotspot } from './store/ActivationStore.js';
 import { EntityStore } from './store/EntityStore.js';
 import { EventStore, type RawEventOrder } from './store/EventStore.js';
 import { FactStore } from './store/FactStore.js';
@@ -157,13 +112,8 @@ import {
 } from './atlas/index.js';
 import { MemoryGovernanceStore } from './store/MemoryGovernanceStore.js';
 import { SummaryStore } from './store/SummaryStore.js';
-import { TemporalAdjacencyStore } from './store/TemporalAdjacencyStore.js';
-import { TopologyStore } from './store/TopologyStore.js';
 import { matchesProjectScope, projectScope } from './topology/ProjectScope.js';
 import { deleteRegisteredProjectContent, deleteResidualProjectOwnedContent } from './governance/PrivacyDeletionRegistry.js';
-import type { IVectorStore, VectorBackend } from './store/IVectorStore.js';
-import { SqliteVecStore } from './store/SqliteVecStore.js';
-import { VectorStore } from './store/VectorStore.js';
 import type {
   IngestInput,
   MemoryEvent,
@@ -172,6 +122,7 @@ import type {
   MemoryRawEventType,
   MemoryEventRole,
   Neuron,
+  NeuronMetadata,
   OrderingConfidence,
 } from './types/index.js';
 import { config } from './utils/Config.js';
@@ -197,8 +148,6 @@ import { secretFindingsMetadata } from './security/SecretPatterns.js';
 import { lifeSensitivityMetadata, type LifeSensitivityTier } from './security/LifeSensitivity.js';
 import { MemorySovereigntyService } from './sovereignty/index.js';
 
-const TIME_PROJECTION_PUBLISH_LEASE_MS = 30_000;
-
 export type { DreamCuratorRunOptions, DreamCuratorRunResult } from './engine/DreamCuratorWorker.js';
 export type { DreamTickOptions, DreamTickResult } from './dream/index.js';
 export type { EpisodeClosureReceipt, EpisodeDreamStatus, EpisodeListOptions, MemoryEpisode } from './episode/index.js';
@@ -215,12 +164,11 @@ export interface MemoryKernelOptions {
   /** Phase projection (#130): a research sample, off unless a caller turns it on. */
   phaseProjectionEnabled?: boolean;
   dbPath?: string;
-  embedder?: Embedder;
+  /** Ignored: the 3.x vector store was removed in #343. Kept for config-file compatibility. */
+  vectorBackend?: string;
+  vectorDimension?: number;
   embeddingProvider?: EmbeddingProvider;
   modelRegistry?: ModelRegistry;
-  maxOfflinePipelineBudgetMs?: number;
-  vectorBackend?: VectorBackend;
-  vectorDimension?: number;
   encryptionProvider?: EncryptionProvider;
   redactionPolicy?: RedactionPolicy | false;
   turnRelationReviewer?: TurnRelationAdvisoryReviewer;
@@ -372,9 +320,6 @@ export interface MemorySelfMap {
   };
   counters: {
     rawEvents: number;
-    neurons: number;
-    vectors: number;
-    activationHotspots: number;
     memoryBindings: number;
     memoryBindingTopics: number;
     memoryBindingEntities: number;
@@ -390,8 +335,8 @@ export interface MemorySelfMap {
 
 export interface MaintenanceTickOptions {
   projectId?: string;
+  /** Shared by the Atlas activation decay below; the neuron activation store is gone (#343). */
   activationDecayFactor?: number;
-  activationFloor?: number;
   confirmationTtlMs?: number;
   now?: number;
   atlasAccessRetentionMs?: number;
@@ -411,12 +356,9 @@ export interface MaintenanceSuggestedAction {
     | 'dream_curator'
     | 'govern_candidates'
     | 'resolve_entities'
-    | 're_embed'
-    | 'inspect_hotspots'
     | 'bind_raw_events'
     | 'inspect_binding_failures'
-    | 'repair_episodes'
-    | 'rebuild_topology';
+    | 'repair_episodes';
   command: string;
   executable: string;
   args: string[];
@@ -432,8 +374,6 @@ export interface MaintenanceTickResult {
     dreamBacklog: number;
     candidateQueue: number;
     entityConflicts: number;
-    activationHotspots: number;
-    staleVectors: number;
     unboundRawEvents: number;
     bindingFailures: number;
     expiredConfirmationCandidates: number;
@@ -441,7 +381,6 @@ export interface MaintenanceTickResult {
     unassignedEpisodeRawEvents: number;
   };
   executed: {
-    activationDecay: ActivationDecayResult;
     /** Conversations the tick judged over: their episodes are sealed for Dream (#87). */
     episodeSealing: { idleGapMs: number; idleBefore: number; sealedEpisodes: number };
     memoryAtlasRefresh: { documents: number; actions: number; refreshed: boolean; /** This tick was told not to run the pass. */ skipped?: boolean; errors?: Array<{ projectId: string; error: string }> };
@@ -455,7 +394,6 @@ export interface MaintenanceTickResult {
     };
     hiddenDaemonStarted: false;
   };
-  hotspots: ActivationHotspot[];
   suggestedActions: MaintenanceSuggestedAction[];
 }
 
@@ -604,34 +542,18 @@ export interface TaskMemoryEventInput {
 export interface MemoryKernelNavigationResult {
   query: string;
   projectId?: string;
-  recallMode: 'universe_navigation' | 'brain_recall_fallback';
+  recallMode: 'brain_recall_fallback';
   fallbackUsed: boolean;
-  navigation?: UniverseNavigationResult;
   rawEvidence: Neuron[];
-  filteredEvidence?: Array<{
-    neuron: Neuron;
-    reason: 'status_suppressed' | 'over_context_limit';
-    governanceReason?: RecallGovernanceSuppressionReason;
-  }>;
-}
-
-interface RecallableEvidenceSelection {
-  rawEvidence: Neuron[];
-  filteredEvidence: NonNullable<MemoryKernelNavigationResult['filteredEvidence']>;
 }
 
 export interface ForgetUserResult {
   projectId: string;
   auditId: string;
   deleted: {
-    neurons: number;
-    synapses: number;
     events: number;
     facts: number;
     compiledEvents: number;
-    embeddings: number;
-    vectors: number;
-    activations: number;
     memoryBindings: number;
     episodes: number;
     brainProjections: number;
@@ -649,7 +571,6 @@ export interface GovernanceAuditRecord {
 }
 
 export class MemoryKernel {
-  readonly memoryGraph: MemoryGraph;
   readonly eventStore: EventStore;
   /** The in-process event stream the resident shell subscribes to. Contract: `docs/events.md`. */
   readonly events: KernelEventStream;
@@ -740,14 +661,7 @@ export class MemoryKernel {
   /** The machine-restorable moving bundle: the same DB copy with its manifest in front (#196). */
   readonly bundle: BrainBundle;
   readonly cursorStore: IngestionCursorStore;
-  readonly vectorStore: IVectorStore;
-  readonly topicRegistry: TopicRegistry;
-  readonly topologyStore: TopologyStore;
-  readonly cognitiveGraphStore: CognitiveGraphStore;
-  readonly temporalAdjacencyStore: TemporalAdjacencyStore;
-  readonly neuronEmbeddingStore: NeuronEmbeddingStore;
   readonly dreamLedgerStore: DreamLedgerStore;
-  readonly activationStore: ActivationStore;
   readonly memoryBindingStore: MemoryBindingStore;
   readonly memoryAtlasStore: MemoryAtlasStore;
   readonly memoryFrameStore: MemoryFrameStore;
@@ -758,6 +672,7 @@ export class MemoryKernel {
   readonly memoryGovernanceStore: MemoryGovernanceStore;
   readonly memoryGovernanceExecutor: MemoryGovernanceExecutor;
   readonly pipelineMetrics: PipelineMetrics;
+  readonly eventEmbeddingStore: EventEmbeddingStore;
   readonly episodeStore: EpisodeStore;
   readonly episodeAssembler: EpisodeAssembler;
   readonly episodeBoundaryPolicy: EpisodeBoundaryPolicy;
@@ -780,7 +695,6 @@ export class MemoryKernel {
     return this.dbPath;
   }
 
-  private readonly embedder: Embedder;
   private readonly embeddingProvider?: EmbeddingProvider;
   private readonly modelRegistry: ModelRegistry;
   private readonly encryptionProvider?: EncryptionProvider;
@@ -797,27 +711,12 @@ export class MemoryKernel {
   private readonly memoryBindingService: MemoryBindingService;
   private readonly memoryAtlasIndexer: MemoryAtlasIndexer;
   private readonly atlasPathRetriever: AtlasPathRetriever;
-  private readonly topicSummaryBoard: TopicSummaryBoard;
-  private readonly topicDecayPolicy: TopicDecayPolicy;
   private readonly localSemanticCompiler: LocalSemanticCompiler;
-  private readonly topicClassifier: TopicClassifier;
-  private readonly reflection: Reflection;
-  private readonly metabolism: Metabolism;
-  private readonly ingestionEngine: IngestionEngine;
-  private readonly universeNavigator: UniverseNavigator;
-  private readonly offlineConsolidationPipeline: OfflineConsolidationPipeline;
   private readonly consolidationPipeline: ConsolidationPipeline;
-  private readonly topologyCompiler: TopologyCompiler;
-  private readonly cognitiveGraphCompiler: CognitiveGraphCompiler;
-  private readonly brainRecall: BrainRecall;
-  private readonly ranker: TwoStagePulseRanker;
-  private readonly reEmbeddingPipeline?: ReEmbeddingPipeline;
   private readonly extensions = new Map<string, unknown>();
   private readonly taxonomyResolution: TaxonomyResolution;
   private readonly language?: string;
   private readonly phaseProjection: boolean;
-  private lastEmbedSuccessAt?: number;
-  private lastEmbedErrorAt?: number;
   private initialized = false;
   private closed = false;
 
@@ -870,7 +769,6 @@ export class MemoryKernel {
     this.factStore = new FactStore(this.dbPath, this.encryptionProvider);
     const db = this.factStore.getDatabase();
     ensureUsableTempSpace(db);
-    this.memoryGraph = new MemoryGraph(db);
     this.events = new KernelEventStream();
     this.eventStore = new EventStore(db, this.encryptionProvider, this.projectClock.timeZone);
     // Every ledger write routes through this store, so this one hook is the whole ledger-append
@@ -895,10 +793,6 @@ export class MemoryKernel {
       `);
       createFinalSchema(db);
     }
-    const rebuildJobColumns = db.prepare(`PRAGMA table_info(topology_time_rebuild_jobs)`).all() as Array<{ name: string }>;
-    if (rebuildJobColumns.length > 0 && !rebuildJobColumns.some((column) => column.name === 'publish_token')) db.exec(`ALTER TABLE topology_time_rebuild_jobs ADD COLUMN publish_token TEXT`);
-    if (rebuildJobColumns.length > 0 && !rebuildJobColumns.some((column) => column.name === 'publish_lease_until')) db.exec(`ALTER TABLE topology_time_rebuild_jobs ADD COLUMN publish_lease_until INTEGER`);
-    db.exec(`CREATE TABLE IF NOT EXISTS vector_write_outbox (neuron_id TEXT PRIMARY KEY, vector_json TEXT NOT NULL, created_at INTEGER NOT NULL)`);
     // Built after the schema phase on purpose: `createFinalSchema` detaches every view, trigger and
     // index it does not own and replays them afterwards, so a shared index created before it would be
     // saved and replayed against a table the final schema does not contain. Same connection as the
@@ -908,7 +802,7 @@ export class MemoryKernel {
     this.entityStore = new EntityStore(db);
     this.ensureGovernanceAuditTable(db);
     this.soul = new SoulService(db);
-    const vectorDimension = options.vectorDimension ?? config.vector.dimension;
+    const vectorDimension = config.vector.dimension;
     this.modelRegistry = options.modelRegistry ?? ModelRegistry.defaults();
     this.beliefStore = new BeliefStore(db, this.eventStore);
     this.beliefGovernanceService = new BeliefGovernanceService(db, (eventId) => {
@@ -962,25 +856,10 @@ export class MemoryKernel {
           });
         }
       },
-      ingest: (input) => this.ingest(input),
     });
     this.cursorStore = new IngestionCursorStore(db);
-    this.vectorStore = options.vectorBackend === 'hnswlib'
-      ? new VectorStore(vectorDimension)
-      : new SqliteVecStore(db, vectorDimension);
-    if (!(this.vectorStore instanceof SqliteVecStore)) {
-      for (const page of this.memoryGraph.iterateNeuronVectors(2_000, { includeStatuses: ['active', 'cold'], onlyNotDeleted: true })) {
-        for (const row of page) this.vectorStore.addVector(row.id, row.vector);
-      }
-      this.drainVectorOutbox();
-    }
-    this.topicRegistry = new TopicRegistry(this.memoryGraph);
-    this.topologyStore = new TopologyStore(db);
-    this.cognitiveGraphStore = new CognitiveGraphStore(db);
-    this.temporalAdjacencyStore = new TemporalAdjacencyStore(db);
     this.interactionUnitStore = new InteractionUnitStore(db);
     this.compilerConfidenceStore = new CompilerConfidenceStore(db);
-    this.neuronEmbeddingStore = new NeuronEmbeddingStore(db);
     this.dreamLedgerStore = new DreamLedgerStore(db);
     this.episodeStore = new EpisodeStore(db, (eventId) => this.eventStore.getEvent(eventId), { initializeSchemaForTests: false });
     this.episodeBoundaryPolicy = new EpisodeBoundaryPolicy({ ...normalizedBoundary.config, timezone: this.projectClock.timeZone });
@@ -1010,7 +889,6 @@ export class MemoryKernel {
       this.episodeBoundaryPolicy,
       this.taxonomyResolution.taxonomy.episodeTypes,
     );
-    this.activationStore = new ActivationStore(db);
     this.memoryBindingStore = new MemoryBindingStore(db);
     installRuntimeProvenanceGuards(db);
     this.memoryBindingService = new MemoryBindingService(this.memoryBindingStore, this.entityStore);
@@ -1059,7 +937,10 @@ export class MemoryKernel {
     this.persons = new PersonDirectory({
       entities: this.entityStore,
       governance: this.entityGovernanceService,
-      lookupMemory: (neuronId) => this.memoryGraph.getNeuron(neuronId),
+      lookupMemory: (eventId) => {
+        const event = this.eventStore.getEvent(eventId);
+        return event ? { content: eventPayloadText(event.payload) } : null;
+      },
     });
     // The profile compiler (#159). It owns no storage either: every version of an entry is a ledger
     // row, so the ledger is the state, the history and the audit. Contract:
@@ -1069,7 +950,7 @@ export class MemoryKernel {
       facts: this.factStore,
       beliefs: this.beliefStore,
       entities: this.entityStore,
-      sourceEventOfNeuron: (neuronId) => (neuronId ? this.memoryGraph.getNeuron(neuronId)?.metadata.sourceEventId : undefined),
+      sourceEventOfNeuron: (eventId) => eventId,
       // Every status, so the compiler's own owner-confirmed rule is the one that decides. A pending
       // candidate is not the owner's yet (F2), so it is not an ongoing item.
       listOngoing: (projectId) => this.prospectiveMemoryService.list({
@@ -1139,11 +1020,6 @@ export class MemoryKernel {
       snapshotsDir: options.snapshotsDir,
       exportsDir: options.exportsDir ?? (this.dbPath === ':memory:' ? undefined : join(dirname(this.dbPath), 'exports')),
       rebuildAtlas: (projectId) => this.memoryAtlasIndexer.rebuild({ projectId }),
-      afterNeuronsDeleted: (neuronIds, projectId) => {
-        this.memoryGraph.removeNeuronIdsFromIndexes(neuronIds);
-        this.reflection.forgetNeurons(neuronIds);
-        this.topicRegistry.invalidate(projectId);
-      },
     });
     this.surfacing = new SurfacingCandidates({
       events: this.eventStore,
@@ -1264,6 +1140,7 @@ export class MemoryKernel {
     );
     this.pipelineMetrics = new PipelineMetrics(db);
     this.summaryStore = new SummaryStore(db);
+    this.eventEmbeddingStore = new EventEmbeddingStore(db);
     this.summaryStore.migrateLegacyFactSummaries();
     this.deepWriteCandidateStore = new DeepWriteCandidateStore(db);
     this.dreamCuratorWorker = new DreamCuratorWorker({
@@ -1282,67 +1159,8 @@ export class MemoryKernel {
       memoryFrameStore: this.memoryFrameStore,
     });
     this.dreamScheduler = new DreamScheduler(this.episodeStore, this.dreamCuratorWorker, this.deepWriteCandidateStore, this.memoryFrameStore);
-    this.topicSummaryBoard = new TopicSummaryBoard(this.memoryGraph, this.summaryStore);
-    this.topicDecayPolicy = new TopicDecayPolicy(this.memoryGraph);
     this.localSemanticCompiler = new LocalSemanticCompiler();
-    this.embedder = options.embedder ?? createConfiguredEmbedder(vectorDimension, this.modelRegistry);
     this.embeddingProvider = options.embeddingProvider;
-    this.universeNavigator = new UniverseNavigator(
-      new QueryCompiler(this.localSemanticCompiler, new EntityResolutionEngine(this.entityStore)),
-      new RetrievalPlanner(),
-      new TemporalBranchSearch(this.topologyStore, this.temporalAdjacencyStore),
-      new PulseRetrievalEngine(
-        this.temporalAdjacencyStore,
-        new EntityActivationIndex(this.entityStore, this.factStore)
-      ),
-      new NarrativeRecallAssembler(),
-      new UniverseTraversalExecutor()
-    );
-    this.topicClassifier = new TopicClassifier(
-      this.memoryGraph,
-      { confidenceThreshold: 0.25, enableEmbedding: true, embeddingThreshold: 0.75 },
-      this.topicRegistry,
-      this.embedder
-    );
-    this.ranker = new TwoStagePulseRanker(this.vectorStore);
-    this.reflection = new Reflection(this.memoryGraph);
-    this.metabolism = new Metabolism(this.memoryGraph, this.vectorStore, this.eventStore);
-    this.ingestionEngine = new IngestionEngine(this.embedder, undefined, vectorDimension);
-    this.ingestionEngine.setDedupDeps(
-      (vector, k) => this.vectorStore.search(vector, k),
-      (id) => this.memoryGraph.getNeuron(id),
-      (id) => this.reflection.onNeuronActivated(id)
-    );
-
-    const noOpDispatcher = {
-      dispatch: async (call: { action?: string }) => ({
-        toolName: 'brain_recall',
-        callId: `memory-kernel-${Date.now()}`,
-        success: true,
-        result: [],
-        durationMs: 0,
-      }),
-    } as BrainToolDispatcherLike;
-    const makeClarifier = (answer: string) =>
-      new IterativeLLMClarifier(async () => answer, noOpDispatcher, {
-        maxIterations: 1,
-        policy: new ToolUsePolicy(),
-      });
-    const memoryConsolidationEngine = new MemoryConsolidationEngine(
-      new ConsolidationTrigger(this.memoryGraph),
-      new EpisodicSemanticDistiller(
-        this.memoryGraph,
-        makeClarifier('Consolidated principle from repeated experience.')
-      )
-    );
-    const crossTopicSynthesizer = new CrossTopicSynthesizer(
-      this.memoryGraph,
-      new CrossTopicTrigger(this.memoryGraph),
-      makeClarifier('Cross-domain principle from multiple semantic consolidations.')
-    );
-    const graphCommunityEngine = new GraphCommunityEngine(this.memoryGraph);
-    const orphanCleaner = new OrphanCleaner(this.memoryGraph);
-    const principleDecayPolicy = new PrincipleDecayPolicy(this.memoryGraph);
     this.deepWritePromotionPolicy = new DeepWritePromotionPolicy({
       candidateStore: this.deepWriteCandidateStore,
       factStore: this.factStore,
@@ -1359,30 +1177,6 @@ export class MemoryKernel {
       this.deepWritePromotionPolicy,
       (eventId) => this.eventStore.getEvent(eventId),
     );
-    const workingMemoryDelta = new WorkingMemoryDelta(db, this.memoryGraph);
-
-    this.offlineConsolidationPipeline = new OfflineConsolidationPipeline({
-      factStore: this.factStore,
-      entityStore: this.entityStore,
-      beliefStore: this.beliefStore,
-      compilerConfidenceStore: this.compilerConfidenceStore,
-      semanticCompiler: this.localSemanticCompiler,
-      deepWritePromotionPolicy: this.deepWritePromotionPolicy,
-      topicSummaryBoard: this.topicSummaryBoard,
-      topicDecayPolicy: this.topicDecayPolicy,
-      memoryConsolidationEngine,
-      proceduralLearningBridge: {
-        scan: (projectId: string) => this.getExtension<{ scan(projectId: string): unknown }>('procedural_bridge')?.scan(projectId),
-      },
-      crossTopicSynthesizer,
-      graphCommunityEngine,
-      orphanCleaner,
-      principleDecayPolicy,
-      pipelineMetrics: this.pipelineMetrics,
-      maxBudgetMs: options.maxOfflinePipelineBudgetMs,
-      db,
-      workingMemoryDelta,
-    });
     this.consolidationPipeline = new ConsolidationPipeline(
       this.beliefStore,
       new InteractionBinder(this.interactionUnitStore),
@@ -1391,33 +1185,14 @@ export class MemoryKernel {
       this.factStore,
       this.entityStore,
       this.compilerConfidenceStore,
-      undefined,
-      this.offlineConsolidationPipeline
+      undefined
     );
-    this.topologyCompiler = new TopologyCompiler(this.topologyStore);
-    this.cognitiveGraphCompiler = new CognitiveGraphCompiler(this.cognitiveGraphStore, this.entityStore);
-    this.brainRecall = new BrainRecall({
-      memoryGraph: this.memoryGraph,
-      factStore: this.factStore,
-      entityStore: this.entityStore,
-      beliefStore: this.beliefStore,
-      cursorStore: this.cursorStore,
-      summaryStore: this.summaryStore,
-      hierarchicalRouter: new HierarchicalRecallRouter(this.memoryGraph, { minConfidence: 0.15, maxCandidates: 500 }),
-      topicSummaryBoard: this.topicSummaryBoard,
-      graphCommunityEngine,
-      embeddingProvider: this.embeddingProvider,
-      neuronEmbeddingStore: this.neuronEmbeddingStore,
-    });
-    this.reEmbeddingPipeline = this.embeddingProvider
-      ? new ReEmbeddingPipeline(this.neuronEmbeddingStore, this.embeddingProvider, this.memoryGraph, db)
-      : undefined;
     this.ensureMetaTable(db);
   }
 
   async initialize(skipWarmup = true): Promise<void> {
     if (this.initialized) return;
-    if (!skipWarmup) await this.embedder.warmup();
+    void skipWarmup;
     this.initialized = true;
   }
 
@@ -1426,7 +1201,6 @@ export class MemoryKernel {
   }
 
   stop(): void {
-    this.metabolism.stop();
   }
 
   close(): void {
@@ -1435,13 +1209,8 @@ export class MemoryKernel {
     this.stop();
     this.beliefStore.close();
     this.cursorStore.close();
-    this.memoryGraph.close();
     this.eventStore.close();
     this.entityStore.close();
-    this.topologyStore.close();
-    this.cognitiveGraphStore.close();
-    this.temporalAdjacencyStore.close();
-    this.activationStore.close();
     this.interactionUnitStore.close();
     this.compilerConfidenceStore.close();
     this.factStore.close();
@@ -1451,519 +1220,177 @@ export class MemoryKernel {
     Bun.gc(true);
   }
 
-  async ingest(input: IngestInput | { content: string; projectId?: string; tags?: string[] }): Promise<Neuron> {
-    await this.initialize();
-    const normalizedInput = await this.normalizeIngestInput(input);
-    // The same pause gate as `recordRawEvent`: a paused project takes no new memory at all.
-    if (this.sovereignty && this.sovereignty.recordingPaused(normalizedInput.projectId)) {
-      throw new Error('recording_paused');
-    }
-    const prevNeuronSelfHash = this.memoryGraph.getLatestNeuronSelfHash(projectScope(normalizedInput.projectId));
-    const { neuron, isDuplicate } = await this.ingestionEngine.ingest(normalizedInput, { prevNeuronSelfHash });
-    if (isDuplicate) {
-      this.metabolism.recordActivity();
-      return neuron;
-    }
-
-    let vectorCommitted = false;
-    try {
-      this.factStore.getDatabase().transaction(() => {
-        const ingestedEvent = this.eventStore.append({
-          streamId: neuron.id,
-          streamType: 'neuron',
-          eventType: 'INGESTED',
-          projectId: neuron.metadata.projectId,
-          sourceNeuronId: neuron.id,
-          parentEventId: normalizedInput.sourceRefs?.find((ref) => ref.eventId)?.eventId,
-          causalityType: normalizedInput.sourceRefs?.some((ref) => ref.eventId) ? 'derived_from' : undefined,
-          sourceId: normalizedInput.sourceRefs?.[0]?.sourceId,
-          contentHash: normalizedInput.sourceRefs?.[0]?.contentHash,
-          payload: {
-            neuronId: neuron.id,
-            selfHash: neuron.self_hash,
-            prevHash: neuron.prev_hash,
-            type: neuron.metadata.type,
-            createdAt: neuron.metadata.createdAt,
-            source: normalizedInput.source,
-            sourceRefs: normalizedInput.sourceRefs || [],
-          },
-        });
-
-        neuron.metadata.sourceEventId = ingestedEvent.eventId;
-        neuron.metadata.updatedAt = neuron.metadata.createdAt;
-        const projectionUpdate = this.topologyStore.beginTimeProjectionSourceUpdate(
-          neuron.metadata.projectId,
-          this.projectClock.timeZone,
-          neuron.metadata.createdAt,
-        );
-        const temporalIncremental = projectionUpdate.incremental;
-        const sourceRevision = projectionUpdate.sourceRevision;
-        this.memoryGraph.addNeuronInTransaction(neuron, false);
-        if (this.vectorStore instanceof SqliteVecStore) {
-          this.vectorStore.addVector(neuron.id, neuron.coordinates.V);
-          vectorCommitted = true;
-        } else {
-          this.factStore.getDatabase().prepare(`INSERT OR REPLACE INTO vector_write_outbox(neuron_id,vector_json,created_at) VALUES(?,?,?)`)
-            .run(neuron.id, JSON.stringify(neuron.coordinates.V), neuron.metadata.createdAt);
-        }
-        this.reflection.onNeuronActivated(neuron.id);
-        this.reflection.detectAndCreateOverrides(neuron, (vector, k) => this.vectorStore.search(vector, k));
-        const consolidation = this.consolidationPipeline.consolidate(neuron, ingestedEvent.eventId);
-        const topology = this.topologyCompiler.compile({
-          neuron,
-          consolidation,
-          timeZone: this.projectClock.timeZone,
-          temporalEnabled: temporalIncremental,
-        });
-        if (temporalIncremental) this.temporalAdjacencyStore.syncBuckets(topology.timeBuckets, neuron.metadata.createdAt);
-        const cognitiveGraph = this.cognitiveGraphCompiler.compile({ neuron, consolidation, topology });
-        if (temporalIncremental) {
-          this.topologyStore.markTimeProjectionCleanIfCurrent(
-            projectScope(neuron.metadata.projectId),
-            this.projectClock.timeZone,
-            neuron.metadata.createdAt,
-            sourceRevision,
-          );
-        }
-        this.eventStore.append({
-          streamId: neuron.id,
-          streamType: 'neuron',
-          eventType: 'TOPOLOGY_COMPILED',
-          projectId: neuron.metadata.projectId,
-          sourceNeuronId: neuron.id,
-          occurredAt: neuron.metadata.createdAt,
-          payload: {
-            neuronId: neuron.id,
-            timeBuckets: topology.timeBuckets.map((bucket) => bucket.bucketId),
-            branchIds: topology.branchIds,
-            taskIds: topology.taskIds,
-            clusterIds: topology.clusterIds,
-          },
-        });
-        this.eventStore.append({
-          streamId: neuron.id,
-          streamType: 'neuron',
-          eventType: 'COGNITIVE_GRAPH_COMPILED',
-          projectId: neuron.metadata.projectId,
-          sourceNeuronId: neuron.id,
-          occurredAt: neuron.metadata.createdAt,
-          payload: {
-            neuronId: neuron.id,
-            seedNodeIds: cognitiveGraph.seedNodeIds,
-            edgeCount: cognitiveGraph.edgeCount,
-          },
-        });
-      })();
-    } catch (error) {
-      if (vectorCommitted) this.vectorStore.removePoint(neuron.id);
-      throw error;
-    }
-
-    if (!(this.vectorStore instanceof SqliteVecStore)) {
-      try { this.drainVectorOutbox(neuron.id); }
-      catch (error) {
-        this.pipelineMetrics.recordNonFatal('vector_outbox_pending', {
-          projectId: neuron.metadata.projectId,
-          message: error instanceof Error ? error.message : String(error),
-          details: { neuronId: neuron.id },
-        });
-      }
-    }
-
-    this.memoryGraph.indexCommittedNeuron(neuron);
-    this.topicRegistry.invalidate(neuron.metadata.projectId);
-    this.queueEmbedding(neuron);
-
-    this.metabolism.recordActivity();
+  /**
+   * Compile one already-recorded ledger event into the 4.x cognition layer.
+   *
+   * The returned `Neuron` is a transient value object: it is the compiler's input and the
+   * caller's handle, never a row. The ledger event is the identity and the evidence chain
+   * (`sourceEventId` / `sourceRefs`), and Frames + the Atlas are the durable products.
+   */
+  compileMemory(input: IngestInput, sourceEventId?: string): Neuron {
+    const createdAt = input.createdAt ?? Date.now();
+    const eventId = sourceEventId ?? input.sourceEventId ?? `compiled-${randomUUID()}`;
+    const metadata: NeuronMetadata = {
+      projectId: input.projectId,
+      topicPath: input.topicPath,
+      filePath: input.filePath,
+      type: input.type ?? 'chat',
+      createdAt,
+      updatedAt: input.updatedAt ?? createdAt,
+      tags: input.tags,
+      confidence: 1.0,
+      sourceType: input.sourceType || 'user_input',
+      sourceEventId: eventId,
+      sourceRefs: input.sourceRefs,
+      stability: 1.0,
+      repetitions: 0,
+      importanceLevel: input.importanceLevel ?? 'normal',
+      isPinned: input.isPinned ?? false,
+    };
+    const neuron = NeuronFactory.create(
+      input.content,
+      'genesis',
+      { T: createdAt, S: [0, 0, 0], V: [] },
+      metadata,
+    );
+    neuron.id = eventId;
+    this.consolidationPipeline.consolidate(neuron, eventId);
+    this.queueEventEmbedding(eventId, input.content, input.projectId);
     return neuron;
   }
 
-  private drainVectorOutbox(onlyNeuronId?: string): void {
-    if (this.vectorStore instanceof SqliteVecStore) return;
-    const db = this.factStore.getDatabase();
-    const rows = (onlyNeuronId
-      ? db.prepare(`SELECT o.neuron_id,o.vector_json,n.id AS canonical_id FROM vector_write_outbox o LEFT JOIN neurons n ON n.id=o.neuron_id AND n.is_deleted=0 WHERE o.neuron_id=?`).all(onlyNeuronId)
-      : db.prepare(`SELECT o.neuron_id,o.vector_json,n.id AS canonical_id FROM vector_write_outbox o LEFT JOIN neurons n ON n.id=o.neuron_id AND n.is_deleted=0 ORDER BY o.created_at,o.neuron_id`).all()
-    ) as Array<{ neuron_id: string; vector_json: string; canonical_id: string | null }>;
-    for (const row of rows) {
-      if (!row.canonical_id) { db.prepare(`DELETE FROM vector_write_outbox WHERE neuron_id=?`).run(row.neuron_id); continue; }
-      const vector = JSON.parse(row.vector_json) as number[];
-      this.vectorStore.addVector(row.neuron_id, vector);
-      db.prepare(`DELETE FROM vector_write_outbox WHERE neuron_id=?`).run(row.neuron_id);
+  private queueEventEmbedding(eventId: string, content: string, projectId?: string): void {
+    if (!this.embeddingProvider) return;
+    const embedDocument = this.embeddingProvider.embedBatch
+      ? this.embeddingProvider.embedBatch([content]).then(([vector]) => vector)
+      : this.embeddingProvider.embed(content);
+    embedDocument
+      .then((vector) => {
+        if (vector.length !== this.embeddingProvider!.dimensions) {
+          throw new Error(`Embedding dimension mismatch for ${this.embeddingProvider!.modelId}: expected ${this.embeddingProvider!.dimensions}, got ${vector.length}`);
+        }
+        this.eventEmbeddingStore.upsert(
+          eventId,
+          this.embeddingProvider!.modelId,
+          new Float32Array(vector),
+          projectId,
+        );
+      })
+      .catch((error) => {
+        this.pipelineMetrics.recordNonFatal('event_embedding_failed', {
+          projectId,
+          message: error instanceof Error ? error.message : String(error),
+          details: { eventId },
+        });
+      });
+  }
+
+  /** Raw-event ids whose indexed vector is nearest the query, for the raw ledger lane. */
+  nearestRawEventIds(query: string, projectId: string | undefined, limit: number): string[] {
+    if (!this.embeddingProvider) return [];
+    const embedSync = (this.embeddingProvider as EmbeddingProvider & {
+      embedSync?: (text: string) => Float32Array;
+    }).embedSync;
+    if (typeof embedSync !== 'function') return [];
+    try {
+      const vector = embedSync.call(this.embeddingProvider, query);
+      if (vector.length === 0) return [];
+      return this.eventEmbeddingStore
+        .findNearest(vector, projectId, limit, this.embeddingProvider.modelId)
+        .map((hit) => hit.eventId);
+    } catch {
+      return [];
     }
   }
 
   /**
-   * The evidence layer: governed recall over the raw ledger, compiled memory
-   * and the Atlas. It is a **building block**, not the recall a host calls —
-   * `KernelAgentMemoryBackend.recall()` composes it with graph expansion,
-   * supersession filtering and the context cortex, and that is the one entry
-   * point an agent or a user should use (#105).
+   * Record a raw memory event and compile its 4.x cognition.
    *
-   * `evidenceFor` rather than a "search" name: `search` is on GLOSSARY's `_Avoid_`
-   * list for Pulse, and CODING_STANDARDS says a new public name never uses an avoided
-   * word. This returns the evidence for one cue — it is not a second Pulse, and it
-   * should not borrow Pulse's rejected synonyms to say so.
-   *
-   * @internal
+   * The old 3.x write path also stored a neuron row plus topology and cognitive-graph
+   * projections. Those tables and their three ledger events are gone (#343): the raw
+   * event is the only identity, and it is the only row this method writes.
    */
-  evidenceFor(query: string, options: BrainRecallOptions = {}) {
-    const recallNow = (options as BrainRecallOptions & { now?: number }).now ?? Date.now();
-    const recallTimeZone = options.timeZone ?? this.projectClock.timeZone;
-    const normalizedOptions: BrainRecallOptions = {
-      ...options,
-      now: recallNow,
-      timeZone: recallTimeZone,
-      localDateNow: options.localDateNow ?? localDateFor(recallNow, recallTimeZone),
-    } as BrainRecallOptions;
-    const result = this.brainRecall.recall(query, normalizedOptions);
-    if (normalizedOptions.projectId === undefined) return result;
-    try {
-      const now = recallNow;
-      const timeZone = recallTimeZone;
-      const planned = this.atlasPathRetriever.retrieve(query, { projectId: normalizedOptions.projectId, limit: normalizedOptions.limit, includeEvidence: true, evidenceLimit: 1000, staleOk: true, localDateNow: normalizedOptions.localDateNow, timeZone, now });
-      return { ...result, queryFrame: planned.queryFrame, atlas: planned.result };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.pipelineMetrics.recordNonFatal('memory_atlas_recall_degraded', { projectId: options.projectId, message, details: { component: 'atlas_path_retriever' } });
-      return { ...result, atlasStatus: 'unavailable', atlasErrorCode: 'atlas_recall_failed' };
-    }
-  }
-
-  navigateMemory(query: string, options: MemoryKernelNavigationOptions = {}): MemoryKernelNavigationResult {
-    const clock = resolveProjectClockContext({
-      now: options.now,
-      localDateNow: options.localDateNow,
-      timeZone: options.timeZone,
-      projectTimeZone: this.projectClock.timeZone,
-    });
-    const temporalEnabled = options.projectId !== undefined
-      ? this.topologyStore.hasUsableTimeProjection(projectScope(options.projectId), clock.timeZone)
-      : this.topologyStore.hasUsableTimeProjections(clock.timeZone);
-    const limit = Math.max(1, options.limit ?? 8);
-    const seedLimit = Math.min(Math.max(limit * 4, 24), 120);
-    const seedNeuronIds = this.memoryGraph.fullTextSearch(query, options.projectId, seedLimit);
-    // Fusion: the lexical seeds stay first. When they are sparse (the same
-    // threshold `BrainRecall` uses for its vector fallback), the vector lane
-    // contributes ranked ids next, and the navigator's fused/branch/cognitive
-    // candidates follow. Duplicates keep their first position. With enough
-    // lexical seeds no vector query runs and the previous order is unchanged.
-    const vectorSeedIds = config.recall.vectorEnabled
-      && this.embeddingProvider
-      && seedNeuronIds.length < config.recall.vectorFallbackThreshold
-      ? nearestNeuronIds(this.neuronEmbeddingStore, this.embeddingProvider, query, options.projectId, seedLimit)
-      : [];
-    const cognitiveContext = this.cognitiveGraphStore.collectContext({
-      projectId: options.projectId,
-      terms: extractNavigationTerms(query),
-      // The raw/lexical seeds are already bounded by `seedLimit`; the cognitive
-      // graph walk then expands each seed through two hops, so passing it the
-      // same number multiplies the candidates the navigator must read. Recall
-      // asks for `limit` items, and the decade corpus priced the difference at
-      // ~35 ms per recall (#243).
-      limit: Math.min(seedLimit, 48),
-      hopLimit: 2,
-      excludeTemporal: !temporalEnabled,
-    });
-    const seedTemporalBucketIds = temporalEnabled ? this.topologyStore.listTimeBucketIdsByNeuronIds(
-      seedNeuronIds,
-      options.projectId,
-      seedLimit
-    ) : [];
-    const navigation = this.universeNavigator.navigate({
-      query,
-      projectId: options.projectId,
-      startTime: options.startTime,
-      endTime: options.endTime,
-      temporalEnabled,
-      clock,
-      topologyIds: seedNeuronIds,
-      branchIds: [],
-      temporalBucketIds: seedTemporalBucketIds,
-      temporalNeuronIds: temporalEnabled ? seedNeuronIds : [],
-      graphIds: seedNeuronIds,
-      cognitiveGraphIds: cognitiveContext.neuronIds,
-      entityNeuronIds: [],
-    });
-    const candidateIds = uniqueStrings([
-      ...(vectorSeedIds.length > 0 ? [...seedNeuronIds, ...vectorSeedIds] : []),
-      ...navigation.pulse.fusedIds,
-      ...navigation.branchSearch.neuronIds,
-      ...navigation.branchSearch.temporalTraversal.neuronIds,
-      ...seedNeuronIds,
-      ...cognitiveContext.neuronIds,
-    ]);
-    const rawEvidence = this.memoryGraph.getNeurons(candidateIds)
-      .filter((neuron) => matchesProjectScope(options.projectId, neuron.metadata.projectId));
-    const governedEvidence = selectRecallableEvidence(rawEvidence, limit);
-
-    if (governedEvidence.rawEvidence.length > 0) {
-      return {
-        query,
-        projectId: options.projectId,
-        recallMode: 'universe_navigation',
-        fallbackUsed: false,
-        navigation,
-        rawEvidence: governedEvidence.rawEvidence,
-        filteredEvidence: governedEvidence.filteredEvidence,
-      };
-    }
-
-    const fallbackEvidence = this.evidenceFor(query, {
-      projectId: options.projectId,
-      limit,
-      includeRawEvidence: true,
-      now: clock.now,
-      localDateNow: clock.localDateNow,
-      timeZone: clock.timeZone,
-    }).rawEvidence.filter((neuron) => matchesProjectScope(options.projectId, neuron.metadata.projectId));
-    const governedFallbackEvidence = selectRecallableEvidence(fallbackEvidence, limit);
-
-    return {
-      query,
-      projectId: options.projectId,
-      recallMode: 'brain_recall_fallback',
-      fallbackUsed: true,
-      navigation,
-      rawEvidence: governedFallbackEvidence.rawEvidence,
-      filteredEvidence: uniqueFilteredEvidence([
-        ...governedEvidence.filteredEvidence,
-        ...governedFallbackEvidence.filteredEvidence,
-      ]),
+  async ingest(input: IngestInput | { content: string; projectId?: string; tags?: string[] }): Promise<Neuron> {
+    await this.initialize();
+    const normalizedInput: IngestInput = {
+      ...(input as IngestInput),
+      content: input.content ?? '',
     };
-  }
-
-  rebuildProjectTimeTopology(projectId?: string): { projectId: string; timeZone: string; neurons: number; buckets: number; rebuiltAt: number } {
-    const scope = projectScope(projectId);
-    const timeZone = this.projectClock.timeZone;
-    const now = Date.now();
-    const db = this.factStore.getDatabase();
-    const currentSourceRevision = () => this.topologyStore.getTimeProjectionSourceRevision(scope);
-    let job = db.prepare(`SELECT generation,time_zone,status,cursor_created_at,cursor_neuron_id,neuron_count,source_revision FROM topology_time_rebuild_jobs WHERE project_id=?`).get(scope) as {
-      generation: string; time_zone: string; status: 'building' | 'ready' | 'failed'; cursor_created_at?: number | null; cursor_neuron_id?: string | null; neuron_count: number; source_revision: number;
-    } | null;
-    if (!job || job.status === 'failed' || job.time_zone !== timeZone || job.source_revision !== currentSourceRevision()) {
-      const generation = `topology-${randomUUID()}`;
-      const sourceRevision = currentSourceRevision();
-      db.transaction(() => {
-        db.prepare(`DELETE FROM topology_time_rebuild_jobs WHERE project_id=?`).run(scope);
-        db.prepare(`INSERT INTO topology_time_rebuild_jobs(project_id,generation,time_zone,status,cursor_created_at,cursor_neuron_id,neuron_count,updated_at,error,source_revision) VALUES(?,?,?,'building',NULL,NULL,0,?,NULL,?)`).run(scope, generation, timeZone, now, sourceRevision);
-        this.topologyStore.markTimeProjection(scope, 'building', timeZone, now, undefined, sourceRevision);
-      })();
-      job = { generation, time_zone: timeZone, status: 'building', neuron_count: 0, source_revision: sourceRevision };
+    if (this.sovereignty && this.sovereignty.recordingPaused(normalizedInput.projectId)) {
+      throw new Error('recording_paused');
     }
-    let publishToken: string | undefined;
-    let publishClaimed = false;
-    try {
-      const generation = job.generation;
-      const sourceRevision = job.source_revision;
-      const assertCurrentSource = (): void => {
-        if (currentSourceRevision() !== sourceRevision) throw new Error('topology_source_revision_changed');
-      };
-      let neuronCount = Number(job.neuron_count ?? 0);
-      if (job.status === 'building') {
-        let cursor = job.cursor_created_at !== null && job.cursor_created_at !== undefined && job.cursor_neuron_id
-          ? { createdAt: Number(job.cursor_created_at), id: job.cursor_neuron_id }
-          : undefined;
-        const insertBucket = db.prepare(`INSERT INTO topology_time_rebuild_buckets(generation,bucket_id,project_id,time_zone,bucket_type,bucket_start,bucket_end,label) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(generation,bucket_id) DO UPDATE SET label=excluded.label`);
-        const insertEntry = db.prepare(`INSERT OR IGNORE INTO topology_time_rebuild_entries(generation,bucket_id,neuron_id,project_id,created_at) VALUES(?,?,?,?,?)`);
-        for (;;) {
-          assertCurrentSource();
-          const neurons = this.memoryGraph.listTimeProjectionNeurons(projectId, { afterCreatedAt: cursor?.createdAt, afterId: cursor?.id, limit: 500 });
-          if (neurons.length === 0) break;
-          const planned = this.topologyCompiler.planTimeBuckets(neurons, timeZone);
-          const last = neurons[neurons.length - 1]!;
-          db.transaction(() => {
-            for (const neuron of neurons) {
-              for (const bucket of planned.get(neuron.id) ?? []) {
-                insertBucket.run(generation, bucket.bucketId, scope, timeZone, bucket.bucketType, bucket.bucketStart, bucket.bucketEnd, bucket.label);
-                insertEntry.run(generation, bucket.bucketId, neuron.id, scope, neuron.createdAt);
-              }
-            }
-            db.prepare(`UPDATE topology_time_rebuild_jobs SET cursor_created_at=?,cursor_neuron_id=?,neuron_count=neuron_count+?,updated_at=?,error=NULL WHERE project_id=? AND generation=? AND status='building' AND source_revision=?`).run(last.createdAt, last.id, neurons.length, Date.now(), scope, generation, sourceRevision);
-          })();
-          neuronCount += neurons.length;
-          cursor = { createdAt: last.createdAt, id: last.id };
-        }
-
-        assertCurrentSource();
-        db.prepare(`DELETE FROM topology_time_rebuild_active_neurons WHERE generation=?`).run(generation);
-        const insertActive = db.prepare(`INSERT INTO topology_time_rebuild_active_neurons(generation,neuron_id,project_id,created_at,title) VALUES(?,?,?,?,?)`);
-        let snapshotCursor: { createdAt: number; id: string } | undefined;
-        neuronCount = 0;
-        for (;;) {
-          assertCurrentSource();
-          const neurons = this.memoryGraph.listTimeProjectionNeurons(projectId, { afterCreatedAt: snapshotCursor?.createdAt, afterId: snapshotCursor?.id, limit: 500 });
-          if (neurons.length === 0) break;
-          db.transaction(() => {
-            for (const neuron of neurons) insertActive.run(generation, neuron.id, scope, neuron.createdAt, neuron.title);
-          })();
-          neuronCount += neurons.length;
-          const last = neurons[neurons.length - 1]!;
-          snapshotCursor = { createdAt: last.createdAt, id: last.id };
-        }
-        assertCurrentSource();
-        this.stageTimeProjectionGraph(generation, scope, timeZone, now);
-        assertCurrentSource();
-        db.prepare(`UPDATE topology_time_rebuild_jobs SET status='ready',neuron_count=?,updated_at=?,error=NULL WHERE project_id=? AND generation=? AND status='building' AND source_revision=?`).run(neuronCount, Date.now(), scope, generation, sourceRevision);
-      }
-
-      assertCurrentSource();
-      const bucketCount = Number((db.prepare(`SELECT COUNT(*) AS count FROM topology_time_rebuild_buckets b WHERE b.generation=? AND EXISTS (SELECT 1 FROM topology_time_rebuild_entries e JOIN topology_time_rebuild_active_neurons n ON n.generation=e.generation AND n.neuron_id=e.neuron_id AND n.project_id=e.project_id WHERE e.generation=b.generation AND e.bucket_id=b.bucket_id)`).get(generation) as { count?: number } | null)?.count ?? 0);
-      const claimedToken = `publish-${randomUUID()}`;
-      publishToken = claimedToken;
-      db.transaction(() => {
-        const claimNow = Date.now();
-        const claim = db.prepare(`UPDATE topology_time_rebuild_jobs SET publish_token=?,publish_lease_until=?,updated_at=? WHERE project_id=? AND generation=? AND status='ready' AND source_revision=? AND (publish_token IS NULL OR publish_lease_until IS NULL OR publish_lease_until<?)`).run(claimedToken, claimNow + TIME_PROJECTION_PUBLISH_LEASE_MS, claimNow, scope, generation, sourceRevision, claimNow);
-        const owned = db.prepare(`SELECT 1 FROM topology_time_rebuild_jobs WHERE project_id=? AND generation=? AND status='ready' AND source_revision=? AND publish_token=?`).get(scope, generation, sourceRevision, claimedToken);
-        if (claim.changes !== 1 || !owned) throw new Error('time_projection_rebuild_publish_conflict');
-      })();
-      publishClaimed = true;
-      assertCurrentSource();
-      this.publishTimeProjectionAtomically({ generation, scope, publishToken: claimedToken, sourceRevision });
-      db.transaction(() => {
-        assertCurrentSource();
-        const owned = db.prepare(`SELECT 1 FROM topology_time_rebuild_jobs WHERE project_id=? AND generation=? AND status='ready' AND source_revision=? AND publish_token=?`).get(scope, generation, sourceRevision, claimedToken);
-        if (!owned) throw new Error('time_projection_rebuild_publish_conflict');
-        this.topologyStore.markTimeProjection(scope, 'clean', timeZone, now, undefined, sourceRevision);
-        db.prepare(`DELETE FROM topology_time_rebuild_jobs WHERE project_id=? AND generation=? AND publish_token=?`).run(scope, generation, claimedToken);
-      })();
-      return { projectId: scope, timeZone, neurons: neuronCount, buckets: bucketCount, rebuiltAt: now };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const failed = publishClaimed && publishToken
-        ? db.prepare(`UPDATE topology_time_rebuild_jobs SET status='failed',updated_at=?,error=? WHERE project_id=? AND generation=? AND publish_token=?`).run(Date.now(), message, scope, job.generation, publishToken)
-        : db.prepare(`UPDATE topology_time_rebuild_jobs SET status='failed',updated_at=?,error=? WHERE project_id=? AND generation=? AND publish_token IS NULL`).run(Date.now(), message, scope, job.generation);
-      if (failed.changes === 1) {
-        this.topologyStore.markTimeProjection(scope, 'failed', timeZone, now, message, currentSourceRevision());
-      }
-      throw error;
-    }
-  }
-
-  private publishTimeProjectionAtomically(input: { generation: string; scope: string; publishToken: string; sourceRevision: number }): void {
-    const db = this.factStore.getDatabase();
-    db.transaction(() => {
-      const now = Date.now();
-      const renewed = db.prepare(`UPDATE topology_time_rebuild_jobs SET publish_lease_until=?,updated_at=? WHERE project_id=? AND generation=? AND status='ready' AND source_revision=? AND publish_token=?`).run(now + TIME_PROJECTION_PUBLISH_LEASE_MS, now, input.scope, input.generation, input.sourceRevision, input.publishToken);
-      if (renewed.changes !== 1) throw new Error('time_projection_rebuild_publish_conflict');
-      db.prepare(`DELETE FROM time_bucket_entries WHERE COALESCE(project_id,'')=?`).run(input.scope);
-      db.prepare(`DELETE FROM topology_membership WHERE COALESCE(project_id,'')=? AND dimension_type='time_bucket'`).run(input.scope);
-      db.prepare(`DELETE FROM cognitive_edges WHERE project_id=? AND edge_type='occurred_in_time_bucket'`).run(input.scope);
-      db.prepare(`DELETE FROM cognitive_nodes WHERE project_id=? AND node_type='time_bucket'`).run(input.scope);
-      db.prepare(`DELETE FROM temporal_adjacency WHERE project_id=?`).run(input.scope);
-      db.prepare(`DELETE FROM time_buckets WHERE project_id=? AND bucket_id NOT IN (SELECT bucket_id FROM time_bucket_entries)`).run(input.scope);
-      db.prepare(`INSERT OR IGNORE INTO time_buckets(bucket_id,project_id,time_zone,bucket_type,bucket_start,bucket_end,label) SELECT b.bucket_id,b.project_id,b.time_zone,b.bucket_type,b.bucket_start,b.bucket_end,b.label FROM topology_time_rebuild_buckets b WHERE b.generation=? AND EXISTS (SELECT 1 FROM topology_time_rebuild_entries e JOIN topology_time_rebuild_active_neurons n ON n.generation=e.generation AND n.neuron_id=e.neuron_id AND n.project_id=e.project_id WHERE e.generation=b.generation AND e.bucket_id=b.bucket_id)`).run(input.generation);
-      db.prepare(`INSERT OR IGNORE INTO time_bucket_entries(bucket_id,neuron_id,unit_id,belief_id,fact_id,event_id,project_id,created_at) SELECT e.bucket_id,e.neuron_id,NULL,NULL,NULL,NULL,e.project_id,e.created_at FROM topology_time_rebuild_entries e JOIN topology_time_rebuild_active_neurons n ON n.generation=e.generation AND n.neuron_id=e.neuron_id AND n.project_id=e.project_id WHERE e.generation=?`).run(input.generation);
-      db.prepare(`INSERT OR IGNORE INTO topology_membership(neuron_id,project_id,dimension_type,dimension_key,title,created_at) SELECT e.neuron_id,e.project_id,'time_bucket',e.bucket_id,b.label,e.created_at FROM topology_time_rebuild_entries e JOIN topology_time_rebuild_buckets b ON b.generation=e.generation AND b.bucket_id=e.bucket_id JOIN topology_time_rebuild_active_neurons n ON n.generation=e.generation AND n.neuron_id=e.neuron_id AND n.project_id=e.project_id WHERE e.generation=?`).run(input.generation);
-      db.prepare(`INSERT OR IGNORE INTO cognitive_nodes(node_id,node_type,node_key,title,project_id,source_neuron_id,metadata_json,created_at,updated_at) SELECT node_id,node_type,node_key,title,project_id,source_neuron_id,metadata_json,created_at,updated_at FROM topology_time_rebuild_cognitive_nodes WHERE generation=?`).run(input.generation);
-      db.prepare(`INSERT OR REPLACE INTO cognitive_edges(edge_id,source_node_id,target_node_id,edge_type,weight,project_id,metadata_json,created_at) SELECT edge_id,source_node_id,target_node_id,edge_type,weight,project_id,metadata_json,created_at FROM topology_time_rebuild_cognitive_edges WHERE generation=?`).run(input.generation);
-      db.prepare(`INSERT OR IGNORE INTO temporal_adjacency(project_id,time_zone,source_bucket_id,adjacent_bucket_id,bucket_type,weight,created_at) SELECT project_id,time_zone,source_bucket_id,adjacent_bucket_id,bucket_type,weight,created_at FROM topology_time_rebuild_adjacency WHERE generation=?`).run(input.generation);
-    })();
-  }
-
-  private stageTimeProjectionGraph(generation: string, projectId: string, timeZone: string, createdAt: number): void {
-    const db = this.factStore.getDatabase();
-    const insertNode = db.prepare(`INSERT INTO topology_time_rebuild_cognitive_nodes(generation,node_id,node_type,node_key,title,project_id,source_neuron_id,metadata_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(generation,node_id) DO UPDATE SET title=excluded.title,metadata_json=excluded.metadata_json,updated_at=excluded.updated_at`);
-    const insertEdge = db.prepare(`INSERT OR IGNORE INTO topology_time_rebuild_cognitive_edges(generation,edge_id,source_node_id,target_node_id,edge_type,weight,project_id,metadata_json,created_at) VALUES(?,?,?,?,?,?,?,?,?)`);
-    const insertAdjacent = db.prepare(`INSERT OR IGNORE INTO topology_time_rebuild_adjacency(generation,project_id,time_zone,source_bucket_id,adjacent_bucket_id,bucket_type,weight,created_at) VALUES(?,?,?,?,?,?,?,?)`);
-    db.transaction(() => {
-      db.prepare(`DELETE FROM topology_time_rebuild_cognitive_edges WHERE generation=?`).run(generation);
-      db.prepare(`DELETE FROM topology_time_rebuild_cognitive_nodes WHERE generation=?`).run(generation);
-      db.prepare(`DELETE FROM topology_time_rebuild_adjacency WHERE generation=?`).run(generation);
-    })();
-
-    let neuronCursor = '';
-    for (;;) {
-      const neurons = db.prepare(`
-        SELECT neuron_id,title,created_at
-        FROM topology_time_rebuild_active_neurons
-        WHERE generation=? AND neuron_id>?
-        ORDER BY neuron_id
-        LIMIT 500
-      `).all(generation, neuronCursor) as Array<{ neuron_id: string; title: string; created_at: number }>;
-      if (neurons.length === 0) break;
-      db.transaction(() => {
-        for (const neuron of neurons) {
-          const key = `neuron:${neuron.neuron_id}`;
-          const nodeId = cognitiveNodeId(projectId, 'neuron', key);
-          insertNode.run(generation, nodeId, 'neuron', key, neuron.title, projectId, neuron.neuron_id, JSON.stringify({ status: 'active' }), neuron.created_at, neuron.created_at);
-        }
-      })();
-      neuronCursor = neurons[neurons.length - 1]!.neuron_id;
-    }
-
-    let bucketCursor: { type: string; start: number; id: string } | undefined;
-    const previousByType = new Map<string, { bucket_id: string }>();
-    for (;;) {
-      const buckets = bucketCursor
-        ? db.prepare(`
-            SELECT bucket_id,bucket_type,bucket_start,bucket_end,label
-            FROM topology_time_rebuild_buckets
-            WHERE generation=? AND (
-              bucket_type>? OR (bucket_type=? AND bucket_start>?) OR (bucket_type=? AND bucket_start=? AND bucket_id>?)
-            )
-            ORDER BY bucket_type,bucket_start,bucket_id
-            LIMIT 500
-          `).all(generation, bucketCursor.type, bucketCursor.type, bucketCursor.start, bucketCursor.type, bucketCursor.start, bucketCursor.id)
-        : db.prepare(`
-            SELECT bucket_id,bucket_type,bucket_start,bucket_end,label
-            FROM topology_time_rebuild_buckets
-            WHERE generation=?
-            ORDER BY bucket_type,bucket_start,bucket_id
-            LIMIT 500
-          `).all(generation);
-      const page = buckets as Array<{ bucket_id: string; bucket_type: string; bucket_start: number; bucket_end: number; label: string }>;
-      if (page.length === 0) break;
-      db.transaction(() => {
-        for (const bucket of page) {
-          const key = `time_bucket:${bucket.bucket_id}`;
-          const nodeId = cognitiveNodeId(projectId, 'time_bucket', key);
-          insertNode.run(generation, nodeId, 'time_bucket', key, bucket.label, projectId, null, JSON.stringify({ bucketType: bucket.bucket_type, timeZone }), bucket.bucket_start, createdAt);
-          const previous = previousByType.get(bucket.bucket_type);
-          if (previous) {
-            insertAdjacent.run(generation, projectId, timeZone, previous.bucket_id, bucket.bucket_id, bucket.bucket_type, 0.72, createdAt);
-            insertAdjacent.run(generation, projectId, timeZone, bucket.bucket_id, previous.bucket_id, bucket.bucket_type, 0.72, createdAt);
-          }
-          previousByType.set(bucket.bucket_type, bucket);
-        }
-      })();
-      const last = page[page.length - 1]!;
-      bucketCursor = { type: last.bucket_type, start: last.bucket_start, id: last.bucket_id };
-    }
-
-    let entryCursor = 0;
-    for (;;) {
-      const entries = db.prepare(`
-        SELECT rowid,bucket_id,neuron_id,created_at
-        FROM topology_time_rebuild_entries
-        WHERE generation=? AND rowid>?
-        ORDER BY rowid
-        LIMIT 500
-      `).all(generation, entryCursor) as Array<{ rowid: number; bucket_id: string; neuron_id: string; created_at: number }>;
-      if (entries.length === 0) break;
-      db.transaction(() => {
-        for (const entry of entries) {
-          const sourceNodeId = cognitiveNodeId(projectId, 'neuron', `neuron:${entry.neuron_id}`);
-          const targetNodeId = cognitiveNodeId(projectId, 'time_bucket', `time_bucket:${entry.bucket_id}`);
-          insertEdge.run(generation, cognitiveEdgeId({ projectId, sourceNodeId, targetNodeId, edgeType: 'occurred_in_time_bucket' }), sourceNodeId, targetNodeId, 'occurred_in_time_bucket', 1, projectId, null, entry.created_at);
-        }
-      })();
-      entryCursor = entries[entries.length - 1]!.rowid;
-    }
+    const projectId = normalizedInput.projectId;
+    const event = this.recordRawEvent({
+      projectId,
+      threadId: (normalizedInput as IngestInput & { threadId?: string }).threadId
+        ?? `ingest:${projectId ?? 'default'}`,
+      sessionId: (normalizedInput as IngestInput & { sessionId?: string }).sessionId,
+      role: 'user',
+      content: normalizedInput.content,
+      occurredAt: normalizedInput.createdAt,
+      sourceId: normalizedInput.source,
+      metadata: {
+        ...(normalizedInput.tags ? { tags: normalizedInput.tags } : {}),
+        ingestType: normalizedInput.type ?? 'chat',
+        ingestSourceType: normalizedInput.sourceType ?? 'user_input',
+      },
+    });
+    const sourceRefs = [
+      ...(normalizedInput.sourceRefs ?? []),
+      {
+        eventId: event.eventId,
+        eventType: 'message',
+        sourceId: normalizedInput.source,
+        contentHash: event.contentHash,
+        threadId: event.threadId,
+        sessionId: event.sessionId,
+        turnId: event.turnId,
+        role: event.role,
+      },
+    ];
+    return this.compileMemory({ ...normalizedInput, sourceRefs }, event.eventId);
   }
 
   /**
-   * A turn the caller named is an identity, not a label.
+   * The Atlas half of recall, without the retired compiled-neuron lane.
    *
-   * Returns the event ids the turn must be written under, and whether that turn is
-   * already recorded. The ids come from stable fields only: the fallback that named a
-   * turn after `Date.now()` and an incrementing `turnSeq` gave every retry a new
-   * identity, so one conversation landed in the ledger twice (measured: two writes of
-   * one named turn left seven events, the user and assistant rows byte-identical).
-   * Reusing a turn id for different content is a conflict, and it throws here rather
-   * than after the insert.
+   * `KernelAgentMemoryBackend.recall()` composes this with the raw ledger and the
+   * binding graph; the return shape stays close to the old evidence builder so the
+   * Atlas projection and its degradation path are unchanged (#105, #343).
    */
+  searchAtlas(query: string, options: {
+    projectId?: string;
+    limit?: number;
+    now?: number;
+    localDateNow?: string;
+    timeZone?: string;
+  } = {}) {
+    const now = options.now ?? Date.now();
+    const timeZone = options.timeZone ?? this.projectClock.timeZone;
+    const localDateNow = options.localDateNow ?? localDateFor(now, timeZone) ?? '';
+    try {
+      const planned = this.atlasPathRetriever.retrieve(query, {
+        projectId: options.projectId ?? '',
+        limit: options.limit,
+        includeEvidence: true,
+        evidenceLimit: 1000,
+        staleOk: true,
+        localDateNow,
+        timeZone,
+        now,
+      });
+      return { queryFrame: planned.queryFrame, atlas: planned.result };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.pipelineMetrics.recordNonFatal('memory_atlas_recall_degraded', {
+        projectId: options.projectId,
+        message,
+        details: { component: 'atlas_path_retriever' },
+      });
+      return { atlasStatus: 'unavailable' as const, atlasErrorCode: 'atlas_recall_failed' as const };
+    }
+  }
+
   claimAgentTurn(input: AgentTurnIdentityInput): AgentTurnClaim {
     const userEventId = agentTurnEventId(input, 1);
     const assistantEventId = input.assistantText ? agentTurnEventId(input, 2) : undefined;
@@ -2167,113 +1594,6 @@ export class MemoryKernel {
     };
   }
 
-  async consolidate(options: MemoryKernelConsolidationOptions = {}): Promise<OfflineConsolidationOutput> {
-    const endTime = options.endTime ?? Date.now() + 1;
-    const startTime = options.startTime ?? 0;
-    if (options.projectId === undefined) {
-      const scopes = (this.factStore.getDatabase().prepare(`
-        SELECT DISTINCT COALESCE(project_id, '') AS project_id
-        FROM neurons
-        WHERE is_deleted = 0 AND created_at >= ? AND created_at < ?
-        ORDER BY project_id
-      `).all(startTime, endTime) as Array<{ project_id: string }>).map((row) => row.project_id);
-      const outputs: OfflineConsolidationOutput[] = [];
-      for (const projectId of scopes) outputs.push(await this.consolidate({ ...options, projectId, startTime, endTime }));
-      const seeded = outputs.reduce((sum, output) => sum + Number(output.autoEdgeSeeding?.seededEdgeCount ?? 0), 0);
-      return {
-        verifiedFacts: outputs.flatMap((output) => output.verifiedFacts),
-        verifiedEvents: outputs.flatMap((output) => output.verifiedEvents),
-        correctedEntityBindings: outputs.flatMap((output) => output.correctedEntityBindings),
-        consolidatedBeliefs: outputs.flatMap((output) => output.consolidatedBeliefs),
-        blockedConsolidations: outputs.flatMap((output) => output.blockedConsolidations),
-        archivedFactIds: outputs.flatMap((output) => output.archivedFactIds),
-        rejectedFactIds: outputs.flatMap((output) => output.rejectedFactIds),
-        archivedEntityIds: outputs.flatMap((output) => output.archivedEntityIds),
-        unresolvedReferenceIds: outputs.flatMap((output) => output.unresolvedReferenceIds),
-        plasticityProposals: outputs.flatMap((output) => output.plasticityProposals),
-        ...(outputs.some((output) => output.autoEdgeSeeding) ? { autoEdgeSeeding: { seededEdgeCount: seeded } } : {}),
-      };
-    }
-    const rawEpisodes = this.memoryGraph.listNeuronsByTimeRange(startTime, endTime, options.projectId);
-    const provisionalFacts = this.factStore.listFactsByTimeRange(startTime, endTime, {
-      statuses: ['provisional', 'provisional_enriched', 'enriched_candidate', 'verified'],
-      projectId: options.projectId,
-    });
-    const provisionalEvents = this.factStore.listEventsByTimeRange(startTime, endTime, {
-      statuses: ['provisional', 'verified'],
-      projectId: options.projectId,
-    });
-    const interactionUnits = this.interactionUnitStore.listUnitsByNeuronIds(rawEpisodes.map((episode) => episode.id));
-    const provisionalEntities = this.entityStore
-      .listEntitiesUpdatedInRange(startTime, endTime, undefined, options.projectId)
-      .filter((entity) => this.entityStore.isExclusiveToProject(entity.entityId, options.projectId!));
-    const unresolvedReferences = this.entityStore
-      .listPendingResolutions({ projectId: options.projectId })
-      .filter((item) => item.updatedAt >= startTime && item.updatedAt < endTime);
-    const lowConfidenceItems = [
-      ...provisionalFacts
-        .filter((fact) => fact.confidence < 0.75 || fact.status === 'enriched_candidate')
-        .map((fact) => ({
-          source: 'compiler' as const,
-          targetType: 'fact' as const,
-          targetId: fact.factId,
-          confidence: fact.confidence,
-          reason: fact.status === 'enriched_candidate'
-            ? 'enriched_candidate_pending_verification'
-            : 'low_confidence_provisional_fact',
-        })),
-      ...provisionalEvents
-        .filter((event) => event.confidence < 0.75)
-        .map((event) => ({
-          source: 'compiler' as const,
-          targetType: 'event' as const,
-          targetId: event.eventId,
-          confidence: event.confidence,
-          reason: 'low_confidence_provisional_event',
-        })),
-      ...unresolvedReferences.map((reference) => ({
-        source: 'entity_binding' as const,
-        targetType: 'reference' as const,
-        targetId: reference.pendingId,
-        reason: 'pending_reference_unresolved',
-      })),
-    ];
-    const recentBeliefs = this.beliefStore.listByTimeRange(startTime, endTime, {
-      projectId: options.projectId,
-    });
-
-    const output = await this.offlineConsolidationPipeline.run({
-      rawEpisodes,
-      interactionUnits,
-      provisionalFacts,
-      provisionalEvents,
-      provisionalEntities,
-      unresolvedReferences,
-      lowConfidenceItems,
-      recentBeliefs,
-      window: {
-        projectId: options.projectId,
-        startTime,
-        endTime,
-      },
-    });
-    // The compile-done producer for offline consolidation. The project-less call above fans out into
-    // these per-project calls, so each scope emits exactly one and the fan-out itself emits none.
-    this.events.emit({
-      type: 'compile-done',
-      at: Date.now(),
-      projectId: options.projectId,
-      payload: {
-        kind: 'consolidation',
-        verifiedFacts: output.verifiedFacts.length,
-        verifiedEvents: output.verifiedEvents.length,
-        consolidatedBeliefs: output.consolidatedBeliefs.length,
-        archivedFactIds: output.archivedFactIds.length,
-      },
-    });
-    return output;
-  }
-
   getThreadEvents(
     threadId: string,
     options: { projectId?: string; sessionId?: string; localDate?: string; limit?: number } = {},
@@ -2304,23 +1624,10 @@ export class MemoryKernel {
    * and the misses are the ones whose words are not in the fact).
    */
   semanticIndexEnabled(): boolean {
-    // A memory model makes the curator mark events `shouldEmbed`, but that alone does not build an
-    // index: recall reads `neuronEmbeddingStore` through `embeddingProvider`, and the embedder's
-    // role decides whether vectors are real. Claiming a semantic index with either half missing is
-    // the label lie #231 exists to stop.
-    return this.modelRegistry.getRoleConfig('memory').provider !== 'rule_only'
-      && this.modelRegistry.getRoleConfig('embedding').provider !== 'deterministic_local'
-      && this.embeddingProvider !== undefined;
-  }
-
-  /**
-   * The host's migration path after an embedding role changes: re-embed this project's stale
-   * neurons in bounded batches. A new install never needs it; an existing brain does, and the
-   * pipeline's own progress row makes a restart resume instead of starting over.
-   */
-  async reEmbed(projectId: string): Promise<{ processed: number; remaining: number }> {
-    if (!this.reEmbeddingPipeline) throw new Error('re_embedding_unavailable: no embedding provider configured');
-    return this.reEmbeddingPipeline.run(projectId);
+    // The memory index now belongs to the raw ledger itself (#343). It is only a semantic
+    // lane when the configured provider can answer a query synchronously.
+    return this.embeddingProvider !== undefined
+      && typeof (this.embeddingProvider as { embedSync?: unknown }).embedSync === 'function';
   }
 
   getDreamBacklogStatus(projectId?: string): DreamBacklogStatus {
@@ -3334,17 +2641,6 @@ export class MemoryKernel {
 
   promoteDreamCandidates(options: DreamGovernanceRunOptions = {}): DreamGovernanceRunResult {
     this.deepWriteCandidateStore.recoverStalePromoting(Date.now() - 5 * 60_000, Date.now());
-    const countNeurons = (): number => {
-      try {
-        const row = this.factStore.getDatabase()
-          .prepare(`SELECT COUNT(*) AS total FROM neurons WHERE is_deleted=0`)
-          .get() as { total?: number } | null;
-        return Number(row?.total ?? 0);
-      } catch {
-        return 0;
-      }
-    };
-    const neuronsBefore = countNeurons();
     const decisions = this.deepWritePromotionPolicy.promotePending(options.limit ?? 100, {
       projectId: options.projectId,
     });
@@ -3355,11 +2651,10 @@ export class MemoryKernel {
     return {
       projectId: options.projectId,
       decisions,
-      // Promotion records a governance decision on a candidate; it does not
-      // create neurons. Reporting only `queue.promoted` read as "92 memories
-      // entered the compiled layer" (#105).
+      // Promotion records a governance decision on a candidate; the neuron
+      // layer it used to feed was deleted in #343.
       promotedCandidates,
-      neuronsWritten: countNeurons() - neuronsBefore,
+      neuronsWritten: 0,
       queue: this.getDreamCandidateQueue(options.projectId),
     };
   }
@@ -3380,12 +2675,8 @@ export class MemoryKernel {
     const rawPage = this.eventStore.queryEvents(1, 1, {
       projectId: projectId !== undefined ? [projectId] : undefined,
     });
-    const projectNeurons = projectId !== undefined
-      ? this.memoryGraph.getNeuronIdsByProject(projectId).length
-      : this.memoryGraph.getStats().neuronCount;
     const dreamBacklog = this.getDreamBacklogStatus(projectId);
     const dreamCandidateQueue = this.getDreamCandidateQueue(projectId);
-    const activationHotspots = this.activationStore.getTop({ projectId, limit: 20 });
     const memoryBindingStats = this.getMemoryBindingStats(projectId);
     const episodes = this.listEpisodes({ projectId, limit: 1000 });
     const episodeDream = this.getEpisodeDreamStatus(projectId);
@@ -3403,12 +2694,6 @@ export class MemoryKernel {
           currentCount: rawPage.total,
         },
         {
-          id: 'compiled_graph',
-          name: 'Compiled semantic graph',
-          role: 'governed neurons, synapses, topology, and cognitive graph for associative recall',
-          currentCount: projectNeurons,
-        },
-        {
           id: 'belief_cases',
           name: 'Belief cases',
           role: 'active beliefs plus support, supersession, and contradiction history',
@@ -3417,12 +2702,6 @@ export class MemoryKernel {
           id: 'entity_cards',
           name: 'Entity cards',
           role: 'resolved people, projects, devices, aliases, attributes, and mention timelines',
-        },
-        {
-          id: 'activation',
-          name: 'Activation layer',
-          role: 'host-visible hot memory traces used by recall packs and maintenance tick',
-          currentCount: activationHotspots.length,
         },
         {
           id: 'memory_binding',
@@ -3458,13 +2737,13 @@ export class MemoryKernel {
         {
           id: 'agent_recall_pack',
           name: 'Agent recall pack',
-          route: 'KernelAgentMemoryBackend.recallPack()',
-          useWhen: 'Before an agent answer that needs direct memory, beliefs, entities, and associative neighbors.',
+          route: 'KernelAgentMemoryBackend.recall()',
+          useWhen: 'Before an agent answer that needs the raw ledger, the binding graph, beliefs, entities and the Atlas.',
         },
         {
           id: 'collection_routing',
           name: 'Collection routing',
-          route: 'collection:<name> tags on raw events and neurons',
+          route: 'collection:<name> tags on raw events',
           useWhen: 'Store creative Theseus artifacts without polluting default operational recall.',
         },
         {
@@ -3515,7 +2794,7 @@ export class MemoryKernel {
           'cogmem dream tick --project <id> --mode auto --json',
         ],
         agentUsage: [
-          'Call recallPack() before answering when the host wants direct recall plus associative, belief, and entity context.',
+          'Call recall() before answering; it is the one agent-facing recall entry point (raw ledger, binding graph, Atlas).',
           'Use collection "theseus" for creative artifacts and collection "anchor" or no collection for operational memory.',
           'Use memory map for self-inspection; use maintenance tick for explicit host-owned upkeep signals.',
           'Run memory bind when maintenance tick reports bind_raw_events for imported or adapter-written raw user events.',
@@ -3527,9 +2806,6 @@ export class MemoryKernel {
       },
       counters: {
         rawEvents: rawPage.total,
-        neurons: projectNeurons,
-        vectors: this.vectorStore.getCurrentCount(),
-        activationHotspots: activationHotspots.length,
         memoryBindings: memoryBindingStats.bindings,
         memoryBindingTopics: memoryBindingStats.topics,
         memoryBindingEntities: memoryBindingStats.entities,
@@ -3547,12 +2823,6 @@ export class MemoryKernel {
   runMaintenanceTick(options: MaintenanceTickOptions = {}): MaintenanceTickResult {
     const projectId = options.projectId;
     const ranAt = options.now ?? Date.now();
-    const activationDecay = this.activationStore.decay({
-      projectId,
-      factor: options.activationDecayFactor,
-      floor: options.activationFloor,
-      now: ranAt,
-    });
     // `refreshed: false` means "the projection was already current". A pass that did not
     // run and a pass that failed are two further states, and both say which they are:
     // reporting either as "current" is how a missing pass reads as a working one.
@@ -3608,9 +2878,6 @@ export class MemoryKernel {
           || this.entityStore.listTimeline({ entityId, projectId, limit: 1 }).length > 0;
       });
     }).length;
-    const hotspots = this.activationStore.getTop({ projectId, limit: 10 });
-    const reEmbedding = this.getReEmbeddingStatus();
-    const staleVectors = this.getHealthStatus().hasStaleVectors ? reEmbedding.total - reEmbedding.completed : 0;
     const candidateQueue = queue.candidate + queue.needsConfirmation + queue.shadow;
     const unboundRawEvents = this.countUnboundBindableRawEvents(projectId);
     const bindingFailures = this.pipelineMetrics.getNonFatalCount('memory_binding_failed', { projectId });
@@ -3627,13 +2894,6 @@ export class MemoryKernel {
       command: [executable, ...args.map(cliArg)].join(' '),
       reason,
     });
-
-    if (projectId !== undefined && !this.topologyStore.hasUsableTimeProjection(projectScope(projectId), this.projectClock.timeZone)) {
-      suggestedActions.push(suggestedAction(
-        'rebuild_topology', 'cogmem', ['memory', 'rebuild-topology', '--project', projectId, '--json'],
-        'The project time projection is dirty or uses a different timezone; recall remains on non-temporal lanes until explicit rebuild.',
-      ));
-    }
 
     if (episodeDream.pending + episodeDream.failed > 0) {
       suggestedActions.push(suggestedAction('dream_curator', 'cogmem', [
@@ -3653,10 +2913,6 @@ export class MemoryKernel {
     if (entityConflicts > 0) {
       suggestedActions.push(suggestedAction('resolve_entities', 'cogmem', ['memory', 'map', '--json'], `${entityConflicts} active entity alias conflicts need host or agent review.`));
     }
-    if (staleVectors > 0) {
-      suggestedActions.push(suggestedAction('re_embed', 'cogmem', ['doctor', '--storage', '--json'],
-        `${staleVectors} embeddings are stale for the configured embedding model; re-embedding runs in the host through ReEmbeddingPipeline.run(), and this reports backfill progress.`));
-    }
     if (unboundRawEvents > 0) {
       suggestedActions.push(suggestedAction('bind_raw_events', 'cogmem', [
         'memory', 'bind', ...(projectId !== undefined ? ['--project', projectId] : []), '--json'
@@ -3667,11 +2923,6 @@ export class MemoryKernel {
         'memory', 'tick', ...(projectId !== undefined ? ['--project', projectId] : []), '--json'
       ], `${bindingFailures} non-fatal memory binding failures were recorded; raw ledger writes were preserved.`));
     }
-    if (hotspots.length > 0) {
-      suggestedActions.push(suggestedAction('inspect_hotspots', 'cogmem', [
-        'memory', 'map', ...(projectId !== undefined ? ['--project', projectId] : []), '--json'
-      ], `${hotspots.length} activation hotspots remain after decay.`));
-    }
     return {
       version: 'maintenance_tick.v1',
       projectId,
@@ -3681,8 +2932,6 @@ export class MemoryKernel {
         dreamBacklog: dreamBacklog.undreamedRawCount,
         candidateQueue,
         entityConflicts,
-        activationHotspots: hotspots.length,
-        staleVectors,
         unboundRawEvents,
         bindingFailures,
         expiredConfirmationCandidates: reviewQueueAging.expired,
@@ -3690,7 +2939,6 @@ export class MemoryKernel {
         unassignedEpisodeRawEvents,
       },
       executed: {
-        activationDecay,
         episodeSealing,
         memoryAtlasRefresh,
         memoryAtlasActivationDecay,
@@ -3701,7 +2949,6 @@ export class MemoryKernel {
         },
         hiddenDaemonStarted: false,
       },
-      hotspots,
       suggestedActions,
     };
   }
@@ -3734,93 +2981,66 @@ export class MemoryKernel {
       status: 'ok',
       package: 'cogmem',
       dbPath: this.dbPath,
-      stats: this.memoryGraph.getStats(),
-      vectorRecall: this.getVectorRecallStatus(),
+      stats: this.getStats(),
+      vectorRecall: 'disabled' as const,
       embeddingModelId: this.embeddingProvider?.modelId,
-      hasStaleVectors: this.embeddingProvider
-        ? this.neuronEmbeddingStore.hasStaleVectors(this.embeddingProvider.modelId)
-        : false,
+      hasStaleVectors: false,
       pipelineLastRunAt: lastRun?.completedAt,
       pipelineP99Ms: pipelineP99Ms > 0 ? pipelineP99Ms : undefined,
       pipelineLastRunAborted: lastRun?.aborted ?? false,
-      reEmbedding: this.getReEmbeddingStatus(),
       extensionCount: this.extensions.size,
     };
   }
 
-  getReEmbeddingStatus(): ReEmbeddingStatus {
-    const progress = this.neuronEmbeddingStore.getProgress();
-    const completedOrFailed = progress.completed + progress.failed;
-    const remaining = Math.max(0, progress.total - completedOrFailed);
-    const throughput = this.reEmbeddingPipeline?.getRecentThroughput() ?? null;
+  getStats() {
+    const db = this.factStore.getDatabase();
+    const count = (sql: string): number => Number((db.prepare(sql).get() as { count?: number } | null)?.count ?? 0);
     return {
-      isRunning: this.reEmbeddingPipeline?.isRunning() ?? false,
-      total: progress.total,
-      completed: progress.completed,
-      failed: progress.failed,
-      percentComplete: progress.total === 0 ? 100 : Math.min(100, (completedOrFailed / progress.total) * 100),
-      estimatedRemainingMs: progress.completed === 0 || throughput === null ? null : Math.ceil(remaining / throughput),
-      lastUpdatedAt: progress.lastUpdatedAt,
+      rawEventCount: count(`SELECT COUNT(*) AS count FROM memory_events WHERE event_type = 'RAW_EVENT_RECORDED'`),
+      episodeCount: count(`SELECT COUNT(*) AS count FROM memory_episodes`),
+      beliefCount: count(`SELECT COUNT(*) AS count FROM beliefs WHERE status IN ('active','verified')`),
+      frameCount: count(`SELECT COUNT(*) AS count FROM memory_frames WHERE status = 'active'`),
     };
   }
 
-  getStats() {
-    return this.memoryGraph.getStats();
-  }
-
   getMetrics() {
-    const stats = this.memoryGraph.getStats();
+    const stats = this.getStats();
     return {
       queryLatency: 0,
       queryType: 'STANDARD',
-      neuronCount: stats.neuronCount,
-      synapseCount: stats.synapseCount,
+      rawEventCount: stats.rawEventCount,
+      beliefCount: stats.beliefCount,
       energyPropagation: 0,
       memoryUsage: 0,
-      modelInferenceHealth: this.embedder.isReady() ? 1 : 0,
+      modelInferenceHealth: 1,
       chainIntegrityScore: 1,
       fallbackCount: 0,
     };
   }
 
-  async startMetabolism(): Promise<void> {
-    await this.metabolism.start();
-  }
-
-  stopMetabolism(): void {
-    this.metabolism.stop();
-  }
-
-  getHotMemories(): Neuron[] {
-    return this.metabolism.getHotMemories();
-  }
-
   async forgetUser(projectId: string, _reason = 'unspecified'): Promise<ForgetUserResult> {
     const db = this.factStore.getDatabase();
     const scope = projectScope(projectId);
-    const neuronIds = this.memoryGraph.getNeuronIdsByProject(scope);
+    const sourceEventIds = (db.prepare(`
+      SELECT event_id FROM memory_events WHERE COALESCE(project_id, '') = ?
+    `).all(scope) as Array<{ event_id: string }>).map((row) => row.event_id);
     const auditId = `audit-${randomUUID()}`;
     const auditScope = `sha256:${createHash('sha256').update(scope).digest('hex')}`;
     const deleted = {
-      neurons: neuronIds.length,
-      synapses: 0,
       events: 0,
       facts: 0,
       compiledEvents: 0,
-      embeddings: 0,
-      vectors: 0,
-      activations: 0,
       memoryBindings: 0,
       episodes: 0,
       brainProjections: 0,
       entityRecords: 0,
     };
 
-    const projectMentionRows = (neuronIds.length > 0
+    const projectMentionRows = (sourceEventIds.length > 0
       ? db.prepare(`
           SELECT DISTINCT entity_id FROM entity_mentions
-          WHERE COALESCE(project_id, '') = ? OR neuron_id IN (${neuronIds.map(() => '?').join(', ')})
-        `).all(scope, ...neuronIds)
+          WHERE COALESCE(project_id, '') = ? OR neuron_id IN (${sourceEventIds.map(() => '?').join(', ')})
+        `).all(scope, ...sourceEventIds)
       : db.prepare(`SELECT DISTINCT entity_id FROM entity_mentions WHERE COALESCE(project_id, '') = ?`).all(scope)
     ) as Array<{ entity_id: string }>;
     const projectMentionEntityIds = new Set(projectMentionRows.map((row) => row.entity_id));
@@ -3849,7 +3069,7 @@ export class MemoryKernel {
       `).all(...projectMentionEntityIds) as Array<{ canonical_entity_id: string }>).map((row) => row.canonical_entity_id)),
     ]);
 
-    const placeholders = neuronIds.map(() => '?').join(', ');
+    const placeholders = sourceEventIds.map(() => '?').join(', ');
     const runDelete = (sql: string, params: Array<string | number> = []): number => {
       try {
         return Number(db.prepare(sql).run(...params).changes ?? 0);
@@ -3871,18 +3091,14 @@ export class MemoryKernel {
     db.transaction(() => {
       Object.assign(deleted, { privacyTables: deleteRegisteredProjectContent({
         scope,
-        neuronIds,
+        neuronIds: sourceEventIds,
         runDelete,
         listPersistentTables: () => (db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`).all() as Array<{ name: string }>).map((row) => row.name),
         hasColumn: (table, column) => Boolean(db.prepare(`SELECT 1 FROM pragma_table_info(?) WHERE name=?`).get(table, column)),
       }) });
-      if (neuronIds.length > 0) {
-        deleted.synapses += runDelete(`DELETE FROM synapses WHERE source_id IN (${placeholders}) OR target_id IN (${placeholders})`, [...neuronIds, ...neuronIds]);
-        deleted.facts += runDelete(`DELETE FROM facts WHERE neuron_id IN (${placeholders})`, neuronIds);
-        deleted.compiledEvents += runDelete(`DELETE FROM compiled_events WHERE neuron_id IN (${placeholders})`, neuronIds);
-        deleted.embeddings += runDelete(`DELETE FROM neuron_embeddings WHERE neuron_id IN (${placeholders})`, neuronIds);
-        deleted.vectors += runDelete(`DELETE FROM vector_index WHERE neuron_id IN (${placeholders})`, neuronIds);
-        runDelete(`DELETE FROM neurons_fts WHERE id IN (${placeholders})`, neuronIds);
+      if (sourceEventIds.length > 0) {
+        deleted.facts += runDelete(`DELETE FROM facts WHERE neuron_id IN (${placeholders})`, sourceEventIds);
+        deleted.compiledEvents += runDelete(`DELETE FROM compiled_events WHERE neuron_id IN (${placeholders})`, sourceEventIds);
       }
       deleted.episodes += this.episodeStore.deleteByProject(scope);
       for (const table of [
@@ -3895,35 +3111,7 @@ export class MemoryKernel {
       runDelete(`DELETE FROM memory_event_cjk_terms WHERE event_id IN (SELECT event_id FROM memory_events WHERE COALESCE(project_id, '') = ?)`, [scope]);
       deleted.events += deleteScoped('memory_events');
       deleteScoped('compiler_confidence_runs');
-      if (neuronIds.length > 0) {
-        runDelete(`DELETE FROM pending_bindings WHERE unit_id IN (
-          SELECT unit_id FROM interaction_units
-          WHERE EXISTS (
-            SELECT 1 FROM json_each(interaction_units.message_neuron_ids_json)
-            WHERE json_each.value IN (${placeholders})
-          )
-        )`, neuronIds);
-        runDelete(`DELETE FROM interaction_units WHERE EXISTS (
-          SELECT 1 FROM json_each(interaction_units.message_neuron_ids_json)
-          WHERE json_each.value IN (${placeholders})
-        )`, neuronIds);
-      }
-      deleted.activations += this.activationStore.deleteByProject(scope);
       deleted.memoryBindings += this.memoryBindingStore.deleteByProject(scope);
-      for (const table of [
-        'time_bucket_entries', 'temporal_adjacency', 'time_buckets', 'topology_time_rebuild_jobs',
-        'topology_projection_state', 'topology_source_revisions'
-      ]) deleteScoped(table);
-      runDelete(`DELETE FROM branch_links WHERE parent_branch_id IN (SELECT branch_id FROM project_branches WHERE COALESCE(project_id, '') = ?) OR child_branch_id IN (SELECT branch_id FROM project_branches WHERE COALESCE(project_id, '') = ?)`, [scope, scope]);
-      runDelete(`DELETE FROM branch_entries WHERE branch_id IN (SELECT branch_id FROM project_branches WHERE COALESCE(project_id, '') = ?)`, [scope]);
-      deleteScoped('project_branches');
-      runDelete(`DELETE FROM task_branch_entries WHERE task_id IN (SELECT task_id FROM task_branches WHERE COALESCE(project_id, '') = ?)`, [scope]);
-      deleteScoped('task_branches');
-      runDelete(`DELETE FROM event_cluster_entries WHERE cluster_id IN (SELECT cluster_id FROM event_clusters WHERE COALESCE(project_id, '') = ?)`, [scope]);
-      deleteScoped('event_clusters');
-      deleteScoped('topology_membership');
-      deleteScoped('cognitive_edges');
-      deleteScoped('cognitive_nodes');
 
       deleted.brainProjections += runDelete(`DELETE FROM prospective_memory_transitions WHERE candidate_id IN (SELECT candidate_id FROM prospective_memories WHERE COALESCE(project_id, '') = ?)`, [scope]);
       for (const table of ['prospective_memories', 'context_strategy_outcomes', 'context_activation_receipts', 'memory_timeline_entries']) {
@@ -3963,25 +3151,22 @@ export class MemoryKernel {
         deleted.entityRecords += runDelete(`DELETE FROM entity_instances WHERE instance_id IN (${entityPlaceholders})`, projectEntityIds);
         scrubEntityAliasConflicts(db, projectEntityIds);
       }
-      if (neuronIds.length > 0) {
-        deleted.entityRecords += runDelete(`DELETE FROM entity_attributes WHERE source_neuron_id IN (${placeholders})`, neuronIds);
-        deleted.entityRecords += runDelete(`DELETE FROM entity_relations WHERE source_neuron_id IN (${placeholders})`, neuronIds);
-        deleted.entityRecords += runDelete(`DELETE FROM pending_entity_resolution WHERE context_neuron_id IN (${placeholders})`, neuronIds);
+      if (sourceEventIds.length > 0) {
+        deleted.entityRecords += runDelete(`DELETE FROM entity_attributes WHERE source_neuron_id IN (${placeholders})`, sourceEventIds);
+        deleted.entityRecords += runDelete(`DELETE FROM entity_relations WHERE source_neuron_id IN (${placeholders})`, sourceEventIds);
+        deleted.entityRecords += runDelete(`DELETE FROM pending_entity_resolution WHERE context_neuron_id IN (${placeholders})`, sourceEventIds);
       }
       for (const canonicalEntityId of affectedCanonicalEntityIds) {
         rebuildCanonicalEntityAfterForget(db, canonicalEntityId, runDelete);
       }
       const residualPrivacyTables = deleteResidualProjectOwnedContent({
         scope,
-        neuronIds,
+        neuronIds: sourceEventIds,
         runDelete,
         listPersistentTables: () => (db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`).all() as Array<{ name: string }>).map((row) => row.name),
         hasColumn: (table, column) => Boolean(db.prepare(`SELECT 1 FROM pragma_table_info(?) WHERE name=?`).get(table, column)),
       });
       Object.assign((deleted as typeof deleted & { privacyTables?: Record<string, number> }).privacyTables ??= {}, residualPrivacyTables);
-      if (neuronIds.length > 0) {
-        runDelete(`DELETE FROM neurons WHERE id IN (${placeholders})`, neuronIds);
-      }
       runDelete(`DELETE FROM governance_audit_log WHERE COALESCE(project_id,'') IN (?,?)`, [scope, auditScope]);
       db.prepare(`
         INSERT INTO governance_audit_log (
@@ -4013,12 +3198,6 @@ export class MemoryKernel {
     // until a later checkpoint, and a copy of that file still contains the deleted text.
     db.exec(`PRAGMA wal_checkpoint(TRUNCATE)`);
 
-    for (const neuronId of neuronIds) {
-      this.vectorStore.removePoint(neuronId);
-    }
-    this.memoryGraph.rebuildIndexes();
-    this.reflection.forgetNeurons(neuronIds);
-    this.topicRegistry.invalidate(scope);
     return { projectId: scope, auditId, deleted };
   }
 
@@ -4065,10 +3244,6 @@ export class MemoryKernel {
     return { eventId, tier };
   }
 
-  getProjectMemories(projectId: string): Neuron[] {
-    return this.memoryGraph.getAllNeurons().filter((neuron) => matchesProjectScope(projectId, neuron.metadata.projectId));
-  }
-
   registerExtension(name: string, implementation: unknown): void {
     this.extensions.set(name, implementation);
     if (name === 'relationStore') {
@@ -4086,53 +3261,8 @@ export class MemoryKernel {
     return this.extensions.get(name) as T | undefined;
   }
 
-  private async normalizeIngestInput(
-    input: IngestInput | { content: string; projectId?: string; tags?: string[] }
-  ): Promise<IngestInput> {
-    const base = input as IngestInput;
-    const content = this.piiRedactor ? this.piiRedactor.redact(base.content ?? '').text : base.content ?? '';
-    const resolvedTopicPath = base.topicPath ?? (await this.topicClassifier.classifyAsync(content, base.projectId)).topicPath;
-    return {
-      ...base,
-      content,
-      topicPath: resolvedTopicPath,
-      type: base.type ?? 'chat',
-    };
-  }
-
-  private queueEmbedding(neuron: Neuron): void {
-    if (!this.embeddingProvider) return;
-    this.embeddingProvider.embed(neuron.content)
-      .then((vector) => {
-        if (vector.length !== this.embeddingProvider!.dimensions) {
-          throw new Error(`Embedding dimension mismatch for ${this.embeddingProvider!.modelId}: expected ${this.embeddingProvider!.dimensions}, got ${vector.length}`);
-        }
-        this.neuronEmbeddingStore.upsert(
-          neuron.id,
-          this.embeddingProvider!.modelId,
-          new Float32Array(vector),
-          neuron.metadata.projectId
-        );
-        this.lastEmbedSuccessAt = Date.now();
-      })
-      .catch(() => {
-        this.lastEmbedErrorAt = Date.now();
-      });
-  }
-
-  private getVectorRecallStatus(): 'disabled' | 'degraded' | 'active' {
-    if (!this.embeddingProvider) return 'disabled';
-    if (
-      typeof this.lastEmbedErrorAt === 'number'
-      && (typeof this.lastEmbedSuccessAt !== 'number' || this.lastEmbedErrorAt > this.lastEmbedSuccessAt)
-    ) {
-      return 'degraded';
-    }
-    return 'active';
-  }
-
   private getEmbeddingDimension(): number {
-    return this.embeddingProvider?.dimensions ?? this.vectorStore.getStats().dimension;
+    return this.embeddingProvider?.dimensions ?? config.vector.dimension;
   }
 
   /**
@@ -4530,44 +3660,6 @@ function extractNavigationTerms(query: string): string[] {
       .map((token) => token.trim())
       .filter((token) => token.length >= 2)
   );
-}
-
-function selectRecallableEvidence(
-  neurons: Neuron[],
-  limit: number,
-): RecallableEvidenceSelection {
-  const recallable = neurons.filter((neuron) => isRecallableMemoryEvidence(neuron));
-  const filteredEvidence = uniqueFilteredEvidence([
-    ...neurons
-      .filter((neuron) => !isRecallableMemoryEvidence(neuron))
-      .map((neuron) => ({
-        neuron,
-        reason: 'status_suppressed' as const,
-        governanceReason: recallSuppressionReasonFor(neuron),
-      })),
-    ...recallable
-      .slice(limit)
-      .map((neuron) => ({ neuron, reason: 'over_context_limit' as const })),
-  ]);
-
-  return {
-    rawEvidence: recallable.slice(0, limit),
-    filteredEvidence,
-  };
-}
-
-function uniqueFilteredEvidence(
-  items: NonNullable<MemoryKernelNavigationResult['filteredEvidence']>,
-): NonNullable<MemoryKernelNavigationResult['filteredEvidence']> {
-  const seen = new Set<string>();
-  const uniqueItems: NonNullable<MemoryKernelNavigationResult['filteredEvidence']> = [];
-  for (const item of items) {
-    const key = `${item.neuron.id}:${item.reason}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    uniqueItems.push(item);
-  }
-  return uniqueItems;
 }
 
 function requireProjectId(projectId: string): string {

@@ -25,7 +25,6 @@ test('agent backend can record a raw-only turn without creating compiled vectors
   expect(result.reason).toBe('raw_archive_only');
   expect(result.rawEventIds).toHaveLength(2);
   expect(kernel.eventStore.getEventCount()).toBe(2);
-  expect(kernel.vectorStore.getCurrentCount()).toBe(0);
   expect(kernel.getThreadEvents('session-raw').map((event) => event.payload.text)).toEqual(['在吗', '在。']);
 
   kernel.close();
@@ -52,7 +51,6 @@ test('agent backend recall falls back to bounded raw ledger search for raw-only 
     limit: 3,
   });
 
-  expect(kernel.vectorStore.getCurrentCount()).toBe(0);
   expect(recalled.recallMode).toBe('raw_ledger_fallback');
   expect(recalled.fallbackUsed).toBe(true);
   expect(recalled.items).toHaveLength(1);
@@ -89,7 +87,6 @@ test('agent backend raw fallback finds multilingual Hermes terms without hot vec
     limit: 5,
   });
 
-  expect(kernel.vectorStore.getCurrentCount()).toBe(0);
   expect(events.some((event) => String((event.payload as { text?: string }).text).includes('PRECIOUS FRUITS'))).toBe(true);
   expect(recalled.recallMode).toBe('raw_ledger_fallback');
   expect(recalled.items.some((item) => item.text.includes('PRECIOUS FRUITS'))).toBe(true);
@@ -164,7 +161,6 @@ test('agent backend selective mode compiles durable instructions but skips low-s
   expect(durable.compiled).toBe(true);
   expect(durable.reason).toBe('durable_signal_detected');
   expect(durable.compiledNeuronId).toBeTruthy();
-  expect(kernel.vectorStore.getCurrentCount()).toBe(1);
   expect(kernel.getThreadEvents('session-selective')).toHaveLength(4);
 
   const recalled = backend.recall({
@@ -206,7 +202,6 @@ test('agent backend selective mode uses only user text as the durable compile si
   expect(assistantOnly.reason).toBe('low_signal_turn');
   expect(userSignal.compiled).toBe(true);
   expect(userSignal.reason).toBe('durable_signal_detected');
-  expect(kernel.vectorStore.getCurrentCount()).toBe(1);
 
   kernel.close();
 });
@@ -466,41 +461,6 @@ test('agent backend historical discussion recall prefers original memory-context
   kernel.close();
 });
 
-test('agent backend compiled memory recall includes source locator and bounded surrounding raw context', async () => {
-  const dir = makeTempDir('agent-backend-compiled-source-context-');
-  const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
-  const backend = new KernelAgentMemoryBackend(kernel);
-
-  const remembered = await backend.rememberTurnWithResult({
-    agentId: 'openclaw',
-    projectId: 'demo',
-    sessionId: 'session-compiled-source',
-    userText: '重要：如果 CogMem 只注入摘要，agent 需要知道原始内容在哪。',
-    assistantText: '我会把 source locator 和 surrounding context 放进 recall item。',
-    timestamp: 1_700_000_000_000,
-    ingestMode: 'immediate_compile',
-  });
-
-  const recalled = backend.recall({
-    agentId: 'openclaw',
-    projectId: 'demo',
-    query: 'CogMem 摘要 原始内容 source locator',
-    limit: 3,
-  });
-  const item = recalled.items.find((candidate) => candidate.id === remembered.compiledNeuronId);
-
-  expect(item).toBeDefined();
-  expect(item?.sourceType).toBe('compiled_memory');
-  expect(item?.canAnswerExactQuote).toBe(false);
-  expect(item?.sourceAnchor?.eventId).toBe(remembered.rawEventIds[0]);
-  expect(item?.sourceContext?.event.eventId).toBe(remembered.rawEventIds[0]);
-  expect(item?.sourceContext?.event.text).toContain('只注入摘要');
-  expect(item?.sourceContext?.after[0].text).toContain('source locator');
-  expect(item?.sourceContext?.locator.command).toContain(remembered.rawEventIds[0]);
-
-  kernel.close();
-});
-
 test('agent backend source context annotates labels, source positions, and strict window semantics', () => {
   const dir = makeTempDir('agent-backend-source-window-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
@@ -635,46 +595,6 @@ test('agent backend remembers and recalls a project-scoped turn', async () => {
   kernel.close();
 });
 
-test('agent backend recall uses universe navigation as the default first path', async () => {
-  const dir = makeTempDir('agent-backend-universe-');
-  const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
-  const backend = new KernelAgentMemoryBackend(kernel);
-  const day = Date.parse('2026-05-07T09:00:00+09:00');
-
-  await backend.rememberTurn({
-    agentId: 'openclaw',
-    projectId: 'demo',
-    sessionId: 'session-1',
-    userText: 'Bluetooth protocol project used a GATT configuration service.',
-    assistantText: 'I will keep the Bluetooth protocol project context.',
-    timestamp: day,
-  });
-  await backend.rememberTurn({
-    agentId: 'openclaw',
-    projectId: 'demo',
-    sessionId: 'session-1',
-    userText: 'Bluetooth headset pairing was discussed in the same work session.',
-    assistantText: 'I will keep the neighboring Bluetooth memory available.',
-    timestamp: day + 60_000,
-  });
-
-  const recalled = backend.recall({
-    agentId: 'openclaw',
-    projectId: 'demo',
-    query: 'Bluetooth protocol project',
-    limit: 5,
-  });
-
-  expect(recalled.recallMode).toBe('universe_navigation');
-  expect(recalled.narrative?.headline).toContain('universe navigation');
-  expect(recalled.pulseTrace?.some((item) => item.stage === 'evidence_fusion')).toBe(true);
-  expect(recalled.temporalTraversal?.labels).toContain('2026-05-07');
-  expect(recalled.items.some((item) => item.text.includes('GATT configuration service'))).toBe(true);
-  expect(recalled.items.some((item) => item.text.includes('Bluetooth headset pairing'))).toBe(true);
-
-  kernel.close();
-});
-
 test('agent backend recall overfetches before agent tag filtering', async () => {
   const dir = makeTempDir('agent-backend-scope-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
@@ -735,46 +655,6 @@ test('agent backend recalls project-scoped imported evidence without requiring a
   expect(item).toBeDefined();
   expect(item?.tags).not.toContain('agent:openclaw');
   expect(item?.source).toMatch(/^evt-/);
-
-  kernel.close();
-});
-
-test('agent backend suppresses archived and suspect memory from recall context', async () => {
-  const dir = makeTempDir('agent-backend-status-filter-');
-  const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
-  const backend = new KernelAgentMemoryBackend(kernel);
-
-  const active = await kernel.ingest({
-    projectId: 'demo',
-    content: 'Release governance policy says active scoped evidence may enter agent context.',
-    tags: ['agent:openclaw', 'release'],
-  });
-  const archived = await kernel.ingest({
-    projectId: 'demo',
-    content: 'Release governance policy says archived stale evidence must stay out of agent context.',
-    tags: ['agent:openclaw', 'release'],
-  });
-  const suspect = await kernel.ingest({
-    projectId: 'demo',
-    content: 'Release governance policy says suspect disputed evidence must stay out of agent context.',
-    tags: ['agent:openclaw', 'release'],
-  });
-
-  kernel.memoryGraph.updateNeuronStatus(archived.id, 'archived');
-  kernel.memoryGraph.updateNeuronMetadata(suspect.id, { status: 'suspect' });
-
-  const recalled = backend.recall({
-    agentId: 'openclaw',
-    projectId: 'demo',
-    query: 'release governance policy evidence',
-    limit: 10,
-  });
-
-  expect(recalled.items.some((item) => item.id === active.id)).toBe(true);
-  expect(recalled.items.some((item) => item.id === archived.id)).toBe(false);
-  expect(recalled.items.some((item) => item.id === suspect.id)).toBe(false);
-  expect(JSON.stringify(recalled.items)).not.toContain('archived stale evidence');
-  expect(JSON.stringify(recalled.items)).not.toContain('suspect disputed evidence');
 
   kernel.close();
 });
@@ -900,6 +780,7 @@ test('recall says whether a semantic index was available (#135)', async () => {
       modelId: 'test/embedding',
       embedBatch: async (texts: string[]) => texts.map(() => new Float32Array([1, 0, 0])),
       embed: async () => new Float32Array([1, 0, 0]),
+      embedSync: () => new Float32Array([1, 0, 0]),
     },
   });
   try {

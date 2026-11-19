@@ -22,7 +22,7 @@ import { emitRefusalDocument } from './RefusalDocument.js';
 
 interface MemoryArgs {
   command?: 'status' | 'plan' | 'list' | 'search' | 'recall' | 'show'  | 'govern' | 'candidates' | 'review' | 'map' | 'tick' | 'bind'
-    | 'graph' | 'graph-search' | 'graph-explore' | 'graph-plan' | 'graph-node' | 'graph-neighbors' | 'graph-path' | 'graph-timeline' | 'graph-reindex' | 'rebuild-topology' | 'frame' | 'frame-backfill' | 'frame-review'
+    | 'graph' | 'graph-search' | 'graph-explore' | 'graph-plan' | 'graph-node' | 'graph-neighbors' | 'graph-path' | 'graph-timeline' | 'graph-reindex' | 'frame' | 'frame-backfill' | 'frame-review'
     | 'belief-history';
   query?: string;
   eventId?: string;
@@ -175,7 +175,6 @@ function usage(): string {
     '  graph-path           find a bounded path from --from to --to [--max-hops <n>]',
     '  graph-timeline       reconstruct entity/time/action history for --query',
     '  graph-reindex        reproject one Atlas episode/card by --event or --episode without rebuilding the whole graph',
-    '  rebuild-topology     explicitly rebuild project or global time and cognitive projections',
     '',
     'Common options:',
     '  --promote-limit <n>  governance candidate limit for `memory govern`, default follows --limit or 100',
@@ -243,7 +242,6 @@ function isMemoryCommand(value: string | undefined): value is NonNullable<Memory
     || value === 'graph-path'
     || value === 'graph-timeline'
     || value === 'graph-reindex'
-    || value === 'rebuild-topology'
     || value === 'frame'
     || value === 'frame-backfill'
     || value === 'frame-review'
@@ -647,8 +645,6 @@ function runStatus(kernel: MemoryKernel, args: MemoryArgs): Record<string, unkno
   return {
     rawEventCount: page.total,
     rawEvents: page.total,
-    vectorCount: kernel.vectorStore.getCurrentCount(),
-    vectors: kernel.vectorStore.getCurrentCount(),
     dreamedRawCount: dreamBacklog.dreamedRawCount,
     undreamedRawCount: dreamBacklog.undreamedRawCount,
     dreamCoverageRate: dreamBacklog.dreamCoverageRate,
@@ -743,7 +739,6 @@ function runRecall(kernel: MemoryKernel, args: MemoryArgs): Record<string, unkno
     queryPlan: result.queryPlan,
     decisionTrace: result.decisionTrace,
     strategyCapsule,
-    narrative: result.narrative,
     atlasCards: result.atlasCards,
     relatedButNotSelected: result.relatedButNotSelected,
     relaxationTrace: result.relaxationTrace,
@@ -768,11 +763,6 @@ function runBind(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown
     sinceGlobalSeq: args.sinceGlobalSeq,
     limit: args.limit || 500,
   }) as unknown as Record<string, unknown>;
-}
-
-function runTopologyRebuild(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown> {
-  if (Boolean(args.projectId) === args.global) throw new Error(`rebuild-topology requires exactly one of --project or --global.\n${usage()}`);
-  return kernel.rebuildProjectTimeTopology(args.global ? undefined : args.projectId) as unknown as Record<string, unknown>;
 }
 
 function runFrame(kernel: MemoryKernel, args: MemoryArgs): Record<string, unknown> {
@@ -988,8 +978,7 @@ function printHuman(command: NonNullable<MemoryArgs['command']>, payload: Record
       return;
     }
     console.log(`rawEvents: ${payload.rawEventCount}`);
-    console.log(`vectors: ${payload.vectorCount}`);
-    console.log(`dreamBacklog: ${JSON.stringify(payload.dreamBacklog)}`);
+      console.log(`dreamBacklog: ${JSON.stringify(payload.dreamBacklog)}`);
     console.log(`episodeDream: ${JSON.stringify(payload.episodeDream)}`);
     console.log(`dreamCandidateQueue: ${JSON.stringify(payload.dreamCandidateQueue)}`);
     if (payload.queueSummary) console.log(`queueSummary: ${JSON.stringify(payload.queueSummary)}`);
@@ -1043,7 +1032,6 @@ function printHuman(command: NonNullable<MemoryArgs['command']>, payload: Record
     const counters = payload.counters as Record<string, unknown> | undefined;
     console.log(`memoryMap: ${payload.version}`);
     console.log(`rawEvents: ${counters?.rawEvents}`);
-    console.log(`neurons: ${counters?.neurons}`);
     console.log(`bounds: ${JSON.stringify(payload.bounds)}`);
     return;
   }
@@ -1061,14 +1049,6 @@ function printHuman(command: NonNullable<MemoryArgs['command']>, payload: Record
     console.log(`createdBindings: ${payload.createdBindings}`);
     console.log(`skippedAlreadyBound: ${payload.skippedAlreadyBound}`);
     console.log(`failedEvents: ${payload.failedEvents}`);
-    return;
-  }
-  if (command === 'rebuild-topology') {
-    console.log(`project: ${payload.projectId || '__global__'}`);
-    console.log(`timeZone: ${payload.timeZone}`);
-    console.log(`neurons: ${payload.neurons}`);
-    console.log(`buckets: ${payload.buckets}`);
-    console.log(`rebuiltAt: ${payload.rebuiltAt}`);
     return;
   }
   if (command === 'belief-history') {
@@ -1151,7 +1131,7 @@ async function main(): Promise<void> {
     return;
   }
   const clockSensitiveCommands = new Set<MemoryArgs['command']>([
-    'recall', 'graph', 'graph-search', 'graph-explore', 'graph-plan', 'graph-timeline', 'rebuild-topology'
+    'recall', 'graph', 'graph-search', 'graph-explore', 'graph-plan', 'graph-timeline'
   ]);
   if (args.dbPath && !args.timeZone && clockSensitiveCommands.has(args.command)) {
     throw new Error(`${args.command} with --db requires --timezone <IANA> so date recall does not depend on the host environment`);
@@ -1181,8 +1161,6 @@ async function main(): Promise<void> {
                         ? runTick(kernel, kernelArgs)
                       : kernelArgs.command === 'bind'
                         ? runBind(kernel, kernelArgs)
-                        : kernelArgs.command === 'rebuild-topology'
-                          ? runTopologyRebuild(kernel, kernelArgs)
                         : kernelArgs.command === 'frame' || kernelArgs.command === 'frame-backfill' || kernelArgs.command === 'frame-review'
                           ? runFrame(kernel, kernelArgs)
                         : kernelArgs.command === 'belief-history'

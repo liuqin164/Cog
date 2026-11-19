@@ -232,34 +232,30 @@ async function runFamily(kernel: ReturnType<typeof createMemoryKernel>, scenario
   const recent: PerItem[] = [];
   const vector: PerItem[] = [];
   const paths = new Map<string, number>();
+  const backend = new KernelAgentMemoryBackend(kernel, { agentId: 'scorecard' });
 
   for (const scenario of scenarios) {
     for (const turn of scenario.turns) {
-      await kernel.ingest({ content: turn.content, projectId: scenario.projectId, tags: [turn.turnId, ...(turn.tags ?? [])] });
+      await backend.rememberTurn({
+        agentId: 'scorecard',
+        projectId: scenario.projectId,
+        sessionId: `${scenario.projectId}-seed`,
+        userText: turn.content,
+        assistantText: '',
+        metadata: { tags: [turn.turnId, ...(turn.tags ?? [])] },
+      });
     }
 
-    // The arm under test: cogmem's own recall, measured on its own.
+    // The arm under test: the real agent-facing path (raw ledger + Atlas + graph).
     const before = performance.now();
-    const recalled = kernel.evidenceFor(scenario.query, { projectId: scenario.projectId, includeRawEvidence: true, now });
+    const recalled = backend.recall({ agentId: 'scorecard', projectId: scenario.projectId, query: scenario.query, limit: 8, now });
     const latencyMs = performance.now() - before;
-    paths.set(recalled.strategy.primaryLevel, (paths.get(recalled.strategy.primaryLevel) ?? 0) + 1);
-    // Provenance is "the returned item says where it came from": a stable identity
-    // plus the ledger link. A raw neuron carries `id`, `self_hash` and `prev_hash` —
-    // not `projectId`, which an earlier version of this file wrongly read and
-    // reported as 0% for a path that attributed every item.
-    const recalledTexts: ContextItem[] = [
-      ...recalled.compiledMemory.facts.map((fact) => ({
-        text: String((fact as { statement?: string }).statement ?? JSON.stringify(fact)),
-        hasProvenance: Boolean((fact as { factId?: string }).factId ?? (fact as { id?: string }).id),
-      })),
-      ...recalled.compiledMemory.events.map((event) => ({
-        text: String((event as { summary?: string }).summary ?? JSON.stringify(event)),
-        hasProvenance: Boolean((event as { eventId?: string }).eventId ?? (event as { id?: string }).id),
-      })),
-      ...recalled.rawEvidence.map((neuron) => ({ text: neuron.content, hasProvenance: Boolean(neuron.id && neuron.self_hash) })),
-      ...recalled.fallbackSnippets.map((snippet) => ({ text: snippet.text ?? '', hasProvenance: Boolean(snippet.sourceId) })),
-    ];
-    cogmem.push(measure(recalledTexts, latencyMs, scenario));
+    paths.set(recalled.recallMode, (paths.get(recalled.recallMode) ?? 0) + 1);
+    cogmem.push(measure(
+      recalled.items.map((item) => ({ text: item.text, hasProvenance: Boolean(item.sourceAnchor?.eventId ?? item.source) })),
+      latencyMs,
+      scenario,
+    ));
 
     {
       const context = scenario.turns.slice(-4).map((turn) => ({ text: turn.content, hasProvenance: true }));
@@ -281,7 +277,7 @@ async function runFamily(kernel: ReturnType<typeof createMemoryKernel>, scenario
   console.error(`recall paths used: ${[...paths.entries()].map(([path, count]) => `${path}=${count}`).join(', ') || 'none'}`);
   const count = scenarios.length;
   return [
-    score('evidence_layer', cogmem, count),
+    score('agent_backend', cogmem, count),
     score('fixed_recent_window_4', recent, count),
     score('vector_topk_3_hashing', vector, count),
   ];
@@ -383,7 +379,7 @@ async function runHostPath(kernel: ReturnType<typeof createMemoryKernel>, scenar
     const plan = kernel.contextCortex.plan({
       query: scenario.query,
       projectId: scenario.projectId,
-      currentSessionId: `${scenario.projectId}-s`,
+      currentSessionId: `${scenario.projectId}-query`,
       availableTokens: 16000,
       maxMemoryRatio: 0.25,
       candidates: result.items.map((item) => contextCandidateFromRecallItem(item as never)),
@@ -424,7 +420,14 @@ export async function measureHostPathSupersession(options: { items: number; seed
     const scenarios = buildSupersessionScenarios(options.items, options.seed);
     for (const scenario of scenarios) {
       for (const turn of scenario.turns) {
-        await kernel.ingest({ content: turn.content, projectId: scenario.projectId, tags: [turn.turnId, ...(turn.tags ?? [])] });
+        await kernel.recordRawEvent({
+          projectId: scenario.projectId,
+          threadId: `${scenario.projectId}-seed`,
+          sessionId: `${scenario.projectId}-seed`,
+          role: 'user',
+          content: turn.content,
+          metadata: { tags: [turn.turnId, ...(turn.tags ?? [])] },
+        });
       }
     }
     const arms = await runHostPath(kernel, scenarios, now);
@@ -516,7 +519,7 @@ async function main(): Promise<void> {
   console.log(`scenarios: ${result.scenarios} per family (synthetic, generated here) | seed: ${seed} | model: none (rule_only)`);
   console.log('');
   console.log('**Primary metric: Family C — the host path (`KernelAgentMemoryBackend.recall`).**');
-  console.log('Families A/B measure the evidence layer (`MemoryKernel.evidenceFor`, internal); it is a component, not the path a host takes.');
+  console.log('Families A/B measure the agent-facing path (`KernelAgentMemoryBackend.recall`), the same entry point the shell calls.');
   console.log('');
   console.log('### Family A — one fact among distractors, queried with its own words');
   console.log('');

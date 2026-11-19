@@ -188,9 +188,9 @@ describe('a memory is attached to a person, and a wrong attachment is undone', (
 
     expect(kernel.persons.memories(wang.personId, projectId).map((memory) => memory.neuronId)).toEqual([tea.id]);
     expect(kernel.persons.memories(li.personId, projectId).map((memory) => memory.neuronId)).toEqual([guitar.id]);
-    // The recalled memory is the compiled one, read through the injected lookup.
+    // The recalled memory is the ledger event it points at, read through the injected lookup.
     expect(kernel.persons.recall(wang.personId, { projectId }).memories[0]!.content)
-      .toBe(kernel.memoryGraph.getNeuron(tea.id)?.content);
+      .toBe((kernel.getEventContext(tea.id)?.event.payload as { text: string }).text);
 
     // Filed under the wrong person: the correction is visible on the very next read.
     kernel.persons.attachMemory({ personId: wang.personId, projectId, neuronId: guitar.id });

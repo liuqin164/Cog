@@ -82,8 +82,6 @@ export interface ImportBridgeResult {
   skippedRecords: number;
   emptyEpisodesSkipped: number;
   processedSourceIds: string[];
-  /** #168: the offline consolidation's blocked decisions, the same array `kernel.consolidate()` returns. */
-  blockedConsolidations?: Awaited<ReturnType<MemoryKernel['consolidate']>>['blockedConsolidations'];
   diagnostics: SourceAdapterDiagnostic[];
   sourceResults: ImportBridgeSourceResult[];
 }
@@ -217,21 +215,11 @@ async function runIncrementalImport(input: {
   let emptyEpisodesSkipped = 0;
   const processor = new InstalledBatchProcessor({
     cursorStore: kernel.cursorStore,
-    ingestBatch: async (items) => {
-      const neurons = [];
-      for (const item of items) neurons.push(await kernel.ingest(item));
-      return neurons;
-    },
     recordRawEvidence: async (envelope) => {
       const anchored = await recordRawImportedEvidence(kernel, request.projectId, envelope);
       if (anchored.episodeId) importedEpisodeIds.add(anchored.episodeId);
       return anchored.event;
     },
-    runOfflineWindow: (window) => kernel.consolidate({
-      projectId: request.projectId,
-      startTime: window.start,
-      endTime: window.end,
-    }),
     onProgress: undefined,
   });
 
@@ -257,9 +245,6 @@ async function runIncrementalImport(input: {
     rawRecordsAnchored: summary.recordsIngested,
     skippedRecords: summary.skippedRecords,
     emptyEpisodesSkipped,
-    // #168: without it a caller reading this result cannot tell a blocked consolidation from a
-    // batch that had nothing to consolidate.
-    blockedConsolidations: summary.offline.blockedConsolidations,
     processedSourceIds: summary.processedSourceIds,
     diagnostics: summary.adapterDiagnostics,
     sourceResults: summary.sourceResults.map((item) => ({

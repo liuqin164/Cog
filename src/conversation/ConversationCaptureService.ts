@@ -13,7 +13,7 @@
 import type Database from 'bun:sqlite';
 
 import { excludeExplicitSpans } from '../context/ExplicitExclusion.js';
-import type { MemoryEvent, MemoryEventRole, IngestInput } from '../types/index.js';
+import type { MemoryEvent, MemoryEventRole } from '../types/index.js';
 import type { RawMemoryEventInput } from '../factory.js';
 
 export const CONVERSATION_CAPTURE_CONTRACT_VERSION = 1;
@@ -45,16 +45,10 @@ export const CONVERSATION_SPEAKER_ROLES: Readonly<Record<ConversationSpeaker, Me
   agent: 'assistant',
 };
 
-const SPEAKER_LABELS: Readonly<Record<ConversationSpeaker, string>> = {
-  owner: 'Owner',
-  other: 'Other',
-  agent: 'Agent',
-};
-
 /** The record's field set, frozen by `docs/conversation-capture.md`. */
 export const CONVERSATION_TURN_FIELDS = [
   'eventId', 'projectId', 'agentId', 'sessionId', 'threadId', 'turnId', 'turnSeq',
-  'speaker', 'speakerLabel', 'channel', 'lane', 'role', 'text', 'occurredAt', 'compiledNeuronId',
+  'speaker', 'speakerLabel', 'channel', 'lane', 'role', 'text', 'occurredAt',
 ] as const;
 
 /** The refusals this face names, frozen by the contract document. */
@@ -103,8 +97,6 @@ export interface ConversationTurnRecord {
   role: MemoryEventRole;
   text: string;
   occurredAt: number;
-  /** Set when the turn also reached the compile path; the ledger row exists either way. */
-  compiledNeuronId?: string;
 }
 
 export interface ConversationTurnQuery {
@@ -129,19 +121,14 @@ export interface ConversationCapturePorts {
     events: MemoryEvent[],
     context: { projectId: string; sessionId: string; sourceAgent: string; conversationThreadId: string; now: number },
   ): void;
-  ingest(input: IngestInput): Promise<{ id: string }>;
 }
 
 export class ConversationCaptureService {
   constructor(private readonly db: Database, private readonly ports: ConversationCapturePorts) {}
 
   /**
-   * Write the turn, then let the compile path see it.
-   *
-   * The ledger row is written first and is authoritative: if the compile below throws, the turn is
-   * still captured and the caller sees the error (the same shape the tool-observation face has).
-   * `ingest` is the kernel's one ingest entry point, so this face is on the same path #199 measured
-   * rather than a second, slower one.
+   * Write the turn to the ledger. The ledger row is the record; there is no second
+   * compiled copy of it to keep in sync (#343).
    */
   async captureTurn(input: ConversationTurnInput): Promise<ConversationTurnRecord> {
     const projectId = requireText(input.projectId, 'project_id_required');
@@ -196,20 +183,6 @@ export class ConversationCaptureService {
       now: occurredAt,
     });
 
-    const neuron = await this.ports.ingest({
-      content: `${SPEAKER_LABELS[speaker]}: ${written}`,
-      projectId,
-      createdAt: occurredAt,
-      source: `${agentId}:${sessionId}`,
-      tags: [
-        `agent:${agentId}`,
-        `session:${sessionId}`,
-        `channel:${channel}`,
-        `speaker:${speaker}`,
-        'record:conversation_turn',
-      ],
-    });
-
     return {
       eventId: event.eventId,
       projectId,
@@ -225,7 +198,6 @@ export class ConversationCaptureService {
       role: CONVERSATION_SPEAKER_ROLES[speaker],
       text: written,
       occurredAt,
-      compiledNeuronId: neuron.id,
     };
   }
 

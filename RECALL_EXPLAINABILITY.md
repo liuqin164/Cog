@@ -1,19 +1,21 @@
 # Recall Explainability
 
-Agent-facing recall is governed by default. `KernelAgentMemoryBackend.recall()` and `MemoryKernel.navigateMemory()` return active evidence only after scope, status, trust, and budget filtering.
+Agent-facing recall is governed by default. `KernelAgentMemoryBackend.recall()` returns active evidence only after scope, status, trust, occasion, and budget filtering.
 
 ## Included Evidence
 
-`explainRecallWithKernel()` reports why evidence entered the recall result:
+The recall result's `decisionTrace` reports why evidence entered the result:
 
-- `activationPath`: the recall path, such as pulse, temporal traversal, or fallback.
-- `whyMatched`: agent scope, provenance, pulse fusion, temporal branch, and governance reasons. When an Atlas entrance matched, it names the product facet the entrance stands for (`person:`, `place:`), falling back to the schema type for internal entrances.
-- `sourceAnchor`: the drill-down anchor for the semantic memory source event.
+- `selectedLane`: the path that answered, such as `graph`, `raw_ledger`, `mixed`, or `none`.
+- `reason`: the stable selection reason, such as `graph_selected`, `raw_cue_match_preferred`, or `no_recall_evidence`.
+- `candidateCounts`: bounded candidate counts from the binding graph, the raw ledger and the Atlas.
+- `suppressed`: counts by suppression reason, so a withheld item is distinguishable from an absent one.
+- `sourceAnchor`: the drill-down anchor for each returned item.
 
 `sourceAnchor` contains:
 
 - `eventId`: the memory event that recorded the semantic ingest.
-- `sourceEventType`: usually `INGESTED`.
+- `sourceEventType`: usually `RAW_EVENT_RECORDED`; the compiled neuron events were deleted in #343.
 - `sourceRefs`: raw event, source path, thread, line, turn, and ordinal anchors when available.
 - `context`: surrounding ledger context for the source event.
 
@@ -37,14 +39,14 @@ cogmem memory recall --query "<user question>" --project <project> --agent <agen
 
 This command returns `queryPlan`, `items`, `sourceAnchor`, and `sourceContext`. It is the preferred fallback before searching legacy imported transcripts.
 
-Normal recall and agent-scoped explain-recall also return the same `decisionTrace` contract:
+Normal recall returns the `decisionTrace` contract:
 
-- `selectedLane`: `graph`, `compiled`, `brain_fallback`, `raw_ledger`, `mixed`, or `none`.
-- `reason`: a stable selection reason such as `compiled_cue_match`, `raw_cue_match_preferred`, or `no_recall_evidence`.
+- `selectedLane`: `graph`, `raw_ledger`, `mixed`, or `none`.
+- `reason`: a stable selection reason such as `graph_selected`, `raw_cue_match_preferred`, or `no_recall_evidence`.
 - `candidateCounts`: bounded counts for graph, navigation, scoped navigation, brain fallback, and raw ledger lanes.
 - `selectedCount`: the number of returned items.
 
-The resident process renders this trace as one compact `recallDecision=` line inside the volatile recall block. It explains what Cog selected; it is not a user instruction or evidence. If the selected lane is `none`, inspect the query plan and run `cogmem explain-recall` before concluding that the memory does not exist.
+The resident process renders this trace as one compact `recallDecision=` line inside the volatile recall block. It explains what Cog selected; it is not a user instruction or evidence. If the selected lane is `none`, inspect the query plan and the scope explanation before concluding that the memory does not exist.
 
 Cog's automatic injection wraps full recall evidence in `<COGMEM_RECALL_CONTEXT>`. That block is current-turn-only background memory, not current user intent and not raw ledger history. It is stripped before recording turns. If the prompt also contains `<COGMEM_TURN_BRIDGE>` or `<COGMEM_SESSION_STATE>`, treat those as compact session sidecars for continuity only; re-run recall or inspect `sourceLocator` before relying on detailed evidence.
 
@@ -52,15 +54,13 @@ For non-trivial recall, Cog may prepend `<COGMEM_STRATEGY_CONTEXT>` before the r
 
 `--collection <name>` scopes recall to a named collection. Default recall only includes untagged and `collection:anchor` memory. Use `--collection theseus` for creative artifacts or drafts that should not enter normal operational recall.
 
-The agent-facing recall path is `KernelAgentMemoryBackend.recall()`, which `cogmem memory recall` uses. It returns `items` with `sourceType`, `sourceAnchor`, `sourceContext`, `canAnswerExactQuote`, and raw ledger fallback when governed compiled evidence is empty. With only a project named it asks as that project id before falling back to `openclaw`, and `--collection` scopes it to a named collection.
+The agent-facing recall path is `KernelAgentMemoryBackend.recall()`, which `cogmem memory recall` uses. It returns `items` with `sourceType`, `sourceAnchor`, `sourceContext`, and `canAnswerExactQuote`, assembled from the raw ledger, the memory-binding graph, Atlas cards and Frames. With only a project named it asks as that project id before falling back to `openclaw`, and `--collection` scopes it to a named collection.
 
 The agent must also inspect recall warning metadata. `no_recent_episode_ingestion_detected` means Cog has not observed recent conversation traffic; `semantic_memory_may_lag` means open/soft-sealed high-value episodes, Dream backlog/failures, or recent raw evidence have not completed semantic curation. These warnings do not erase returned evidence, but the agent must append/import the missing messages or disclose that semantic freshness is uncertain before claiming memory is current.
 
-For past-memory queries such as `你还记得...`, a cue-matching raw user anchor outranks a compiled assistant retelling even when both contain the same topic words. The assistant retelling may remain as supporting evidence, but the original user event is first and retains its source locator.
+For past-memory queries such as `你还记得...`, a cue-matching raw user anchor outranks an assistant retelling even when both contain the same topic words. The assistant retelling may remain as supporting evidence, but the original user event is first and retains its source locator.
 
-`cogmem explain-recall` is the audit command and `explainRecallWithKernel()` the function behind it. It derives `agentId` from `projectId` when the caller omits one, and reports the same selected evidence IDs and `decisionTrace` as agent recall, plus pulse, temporal, activation, and `filteredEvidence` details; use it to inspect why evidence was included or suppressed, not as a separate competing recall implementation.
-
-`cogmem memory map` returns the memory self-map for inspection, and `cogmem memory tick` runs one explicit, operator-invoked tick: activation decay plus suggested upkeep commands, with `hiddenDaemonStarted=false`.
+`cogmem memory map` returns the memory self-map for inspection, and `cogmem memory tick` runs one explicit, operator-invoked tick: Atlas activation decay plus suggested upkeep commands, with `hiddenDaemonStarted=false`.
 
 ## Agent Query Plans
 
@@ -70,15 +70,7 @@ If FTS cannot directly match a Chinese or mixed-language cue, raw fallback searc
 
 Forensic follow-ups can pass `anchorEventId` or `anchorText` from a previous recall item. The backend then prefers the anchored raw event for questions such as "what exactly did I say" instead of letting a vague query drift to unrelated imported summaries. Imported summaries and compiled memories still set `canAnswerExactQuote=false`; only raw source events with anchors can support exact wording.
 
-When structured pre-answer context is useful, call `KernelAgentMemoryBackend.recallPack()`. It wraps the normal recall result and adds:
-
-- `slots.direct`
-- `slots.associative`
-- `slots.entityCards`
-- `slots.beliefTouches`
-- `chargeVector`
-
-These slots are bounded and governed. They are meant for prompt assembly and scheduling, not for unbounded graph traversal.
+There is no separate recall-pack API after #343. `KernelAgentMemoryBackend.recall()` is the packed result; hosts may assemble entity cards and belief touches from its evidence, but the core does not expose a second bounded-context entry point.
 
 ## Dream Candidate Audit
 
@@ -101,16 +93,13 @@ Semantic organization candidates are also advisory. `semantic_tags` and `indexin
 
 When `[memory_model]` is configured, the worker may call a local Ollama or cloud OpenAI-compatible memory model to propose richer candidates. The explainability contract is unchanged: model output must include source evidence, remains candidate-only, and cannot directly change active memory.
 
-## Filtered Evidence
+## Suppression
 
-`filteredEvidence` records same-project candidates that were considered but did not enter active context. Reasons include:
+`decisionTrace.suppressed` records same-project candidates that were considered but did not enter active context, by reason and count. Reasons include `entry_social`, `no_discriminative_hit`, `grey_below_floor`, `below_relevance_floor`, `occasion_private_tier`, `occasion_third_party`, `secret_bearing_withheld`, `life_sensitivity_withheld`, and `phase_dormant`.
 
-- `status_suppressed`
-- `over_context_limit`
-- `agent_scope_mismatch`
-- `collection_scope_mismatch`
+A withheld item is counted rather than silently dropped. Scope mismatches are not exposed as cross-project results.
 
-When available, filtered evidence also carries `sourceAnchor` so forensic tools can explain where a suppressed candidate came from. Scoped explain results must stay same-project; cross-project filtered evidence must not be exposed.
+The older `filteredEvidence` list belonged to the 3.x compiled lane and is retired with #343; current recall reports `decisionTrace.suppressed` instead.
 
 ## Ledger Vs Recall
 
@@ -122,8 +111,6 @@ Use chronological ledger APIs when the question is about original order:
 Use governed recall when the agent needs current task context:
 
 - `KernelAgentMemoryBackend.recall()`
-- `MemoryKernel.navigateMemory()`
-- `explainRecallWithKernel()`
 
 Use the local audit CLI when the user needs to inspect memory directly:
 
@@ -140,7 +127,7 @@ Use the local audit CLI when the user needs to inspect memory directly:
 - `cogmem memory map --project <project> --json`
 - `cogmem memory tick --project <project> --json`
 
-Ledger replay can show raw evidence. It must not replace governed recall, Pulse 1 then Pulse 2 activation, inhibition, or ContextPack budgeting.
+Ledger replay can show raw evidence. It must not replace governed recall or ContextPack budgeting.
 ## Memory Atlas versus direct recall
 
 Use Memory Atlas before direct recall when the user asks what is remembered, asks a broad project/history question, or needs relationships between multiple memory areas. Use direct recall for a concrete factual question. Atlas narrows the search space; it does not answer from summaries alone.

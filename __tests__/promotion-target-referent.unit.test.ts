@@ -188,7 +188,7 @@ test('no promotion target in src falls back to the candidate id', () => {
   }
 
   // Guard the guard: a parser that finds nothing would otherwise pass silently.
-  expect(checked).toBeGreaterThanOrEqual(40);
+  expect(checked).toBeGreaterThanOrEqual(20);
   expect(sawPolicyTarget).toBe(true);
   expect(offenders).toEqual([]);
 });

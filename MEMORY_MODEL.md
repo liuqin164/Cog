@@ -1,12 +1,12 @@
 # Memory Model
 
-Cog is a resident companion agent with a governed long-term memory kernel on your own machine. It stores experience, compiles durable memory at write time, recalls in one Pulse of two waves — a direct hit, then an associative spread — and keeps active context governed and bounded.
+Cog is a resident companion agent with a governed long-term memory kernel on your own machine. It stores experience, compiles durable memory at write time, recalls in one Pulse of two waves — a direct raw-ledger hit, then a binding-graph and Atlas spread — and keeps active context governed and bounded.
 
 It is not a vector RAG store, a knowledge-base application, a wiki, an Obsidian replacement, or an agent runtime.
 
 ## Language
 
-A person locates a memory by one of six **Facets**: time, person, place, event, topic, state. The thirteen **Dimensions** are the fixed keys a stored node carries; they are storage vocabulary and never reach a user. Recall is one **Pulse** in two waves: **Pulse 1** is the direct hit, **Pulse 2** the associative spread that brings back context the cue never mentioned. [GLOSSARY.md](./GLOSSARY.md) holds the authoritative definitions.
+A person locates a memory by one of six **Facets**: time, person, place, event, topic, state. The thirteen **Dimensions** are the fixed keys a stored node carries; they are storage vocabulary and never reach a user. Recall is one **Pulse** in two waves: **Pulse 1** is the direct raw-ledger hit, **Pulse 2** the associative spread along binding-graph edges and Atlas cards that brings back context the cue never mentioned. [GLOSSARY.md](./GLOSSARY.md) holds the authoritative definitions.
 
 ## Memory Tiers
 
@@ -30,12 +30,12 @@ A person locates a memory by one of six **Facets**: time, person, place, event, 
 - Dream Candidates: curator output such as user preference candidates, project memories, long-term goals, boundaries, failure lessons, diagnostic conclusions, session/topic summaries, corrections, causal/tool-observation links, temporal invalidation suggestions, and conflict candidates. These remain candidates with source refs, confidence, and governance status; an LLM helper must not directly rewrite verified memory.
 - Active Core: a very small current operating context maintained by the agent, not all history.
 - Collection Routing: `collection:<name>` tags split operational anchor memory from specialized lanes such as `collection:theseus` creative artifacts.
-- Associative Graph: local graph, topic, entity, temporal, and cognitive adjacency candidates activated by Pulse 2.
-- Activation Store: persistent, decaying hot-memory traces touched by recall packs and inspected by explicit maintenance ticks.
-- Recall Pack / ContextPack: the limited governed context returned for the current agent task. `KernelAgentMemoryBackend.recallPack()` adds direct memory, associative neighbors, entity cards, belief touches, and a charge vector.
+- Graph Recall: the Pulse 2 associative spread along the memory-binding graph, returning the raw ledger events the graph anchors.
+- Atlas Activation: visibility ranking on Atlas nodes, decayed by explicit maintenance ticks; it is not a separate memory store.
+- Recall pack / ContextPack: the limited governed context returned for the current agent task. `KernelAgentMemoryBackend.recall()` is the one entry point; it returns direct raw-ledger and Atlas items, with entity cards and belief touches available to hosts that assemble them.
 - Filtered Evidence: same-project candidates that were considered but suppressed by status, trust, scope, or budget.
 
-Vector pruning is not memory pruning. Compaction may delete hot vector blobs, temporary embeddings, or stale indexes, but it must not delete raw ledger events, chronological order, sourceRefs, content hashes, or tool-call parent/child links unless the user explicitly requests a privacy deletion.
+The raw-event vector index is derived from ledger rows. An index entry may be deleted or rebuilt, but that must not delete raw ledger events, chronological order, sourceRefs, content hashes, or tool-call parent/child links unless the user explicitly requests a privacy deletion.
 
 ## Chronological Memory Ledger
 
@@ -60,7 +60,7 @@ Use `MemoryKernel.getThreadEvents(threadId)` for replay, `MemoryKernel.getEventC
 Provider facades record raw lifecycle events without importing host runtimes:
 
 - `recordRawEvent()` / `KernelAgentMemoryBackend.rememberTurn()` record user and assistant messages.
-- `KernelAgentMemoryBackend.rememberTurnWithResult()` supports `ingestMode: "immediate_compile" | "selective_compile" | "raw_archive_only" | "raw_then_dream"`. `immediate_compile` preserves legacy behavior; the other modes preserve raw ledger evidence while limiting immediate high-dimensional vector writes.
+- `KernelAgentMemoryBackend.rememberTurnWithResult()` supports `ingestMode: "immediate_compile" | "selective_compile" | "raw_archive_only" | "raw_then_dream"`. `immediate_compile` writes the raw ledger row and compiles facts, beliefs and the raw-event vector index at once; `selective_compile` compiles only durable signals; `raw_archive_only` and `raw_then_dream` defer compilation to Dream.
 - `recordToolCall()` / `KernelAgentMemoryBackend.ingestToolCall()` record assistant tool calls with `rawEventType: "tool_call"`.
 - `recordToolResult()` / `KernelAgentMemoryBackend.ingestToolObservation()` record tool results with `rawEventType: "tool_result"` and `causalityType: "tool_result_for"`.
 - `recordTaskEvent()` / `KernelAgentMemoryBackend.ingestTaskEvent()` record task events with source refs.
@@ -101,38 +101,27 @@ The worker can be run manually or by an operator's schedule, but the schedule on
 
 chronological order is not recall ranking.
 
-Chronological order is for replay and audit. Recall ranking is for selecting useful current context. Agent-facing recall still uses governed universe navigation: query compilation, Pulse 1 then Pulse 2 activation, temporal traversal, graph expansion, inhibition, and evidence budgeting.
+Chronological order is for replay and audit. Recall ranking is for selecting useful current context. Agent-facing recall is a governed read over the raw ledger, the memory-binding graph, Atlas cards and Frames. Pulse 1 retrieves directly from the raw ledger; Pulse 2 follows binding-graph edges and Atlas cards. Scope, intent, suppression and the context budget decide which raw events are returned.
 
 Do not use vector topK to reconstruct conversation order. Do not use ledger replay to bypass governed recall. Do not inject an entire thread, day, or transcript into prompt context unless a forensic/audit tool explicitly requests replay.
 
-Cold recall should reactivate evidence in layers: first governed compiled memory and summaries, then bounded raw FTS/metadata search, then optional on-demand reranking of a small raw window. `KernelAgentMemoryBackend.recall()` compiles long user questions into a bounded query plan before raw search, so filler text does not drown out cues such as `CogMem Memory Context`, `记忆`, and `黑盒`. The plan also carries `semanticCuePhrases` and `temporalHints`; for example, a later query about `记忆黑盒` can search raw evidence that originally used `对话存档位置属于黑盒`. If prompt injection is absent or too thin, agents should call `cogmem memory recall --query "<question>" --project <project> --agent <agent> --json` before claiming they do not remember. Forensic follow-ups can pass `anchorEventId` or `anchorText` from the previous recall item to answer "what were my exact words" from the raw ledger instead of guessing from an imported summary. The backend uses raw ledger fallback only after governed universe navigation and BrainRecall fail to produce scoped evidence. Do not restore the old pattern of embedding every raw sentence just to make fuzzy search easier.
+Cold recall reactivates evidence in layers: first governed Atlas cards and Frames, then bounded raw-ledger FTS and metadata search, then optional vector similarity over the raw events themselves. `KernelAgentMemoryBackend.recall()` compiles long user questions into a bounded query plan before search, so filler text does not drown out cues such as `CogMem Memory Context`, `记忆`, and `黑盒`. The plan also carries `semanticCuePhrases` and `temporalHints`; for example, a later query about `记忆黑盒` can search raw evidence that originally used `对话存档位置属于黑盒`. If prompt injection is absent or too thin, agents should call `cogmem memory recall --query "<question>" --project <project> --agent <agent> --json` before claiming they do not remember. Forensic follow-ups can pass `anchorEventId` or `anchorText` from the previous recall item to answer "what were my exact words" from the raw ledger instead of guessing from an imported summary. There is no compiled fallback: if the Atlas and the raw ledger do not hold scoped evidence, recall returns nothing with an explanation. The raw-event vector index (when an embedding provider is configured) ranks ledger rows; it never writes a second copy of the memory.
 
 Graph Recall v1 runs before the vector/FTS fallback path inside `KernelAgentMemoryBackend.recall()`. It classifies the query into stable binding topics, follows fused clusters and graph edges to raw ledger `eventId` anchors, and returns normal raw-ledger recall items with `sourceContext` and `canAnswerExactQuote=true`. Graph Recall v1.1 uses CPU-owned `BindingClassifier` decisions, project aliases, topic keyword maps, claim keys, and query-overlap reranking; an LLM may suggest candidates in later layers, but it must not directly decide `stablePath`. Correction events create `CORRECTS` / `CONTRADICTS` edges and `reviewFlags` instead of turning a whole active cluster into a conflict. It still obeys agent, project, collection, operational-noise, and `excludeSessionId` filters. A graph recall item means "this raw event belongs to the same organized topic"; it does not mean the cluster summary is a verified user fact.
 
-For pre-answer agent context, prefer `KernelAgentMemoryBackend.recallPack()` when the host can consume structured slots. The pack preserves normal governed recall results while adding:
+Agent context is the ordered list `KernelAgentMemoryBackend.recall()` returns. It is assembled from the raw ledger, the memory-binding graph, Atlas cards and Frames; there is no separate pack of compiled-neuron slots.
 
-- `slots.direct`: bounded agent-facing recall items.
-- `slots.associative`: graph/activation neighbors related to direct items.
-- `slots.entityCards`: resolved entity aliases, attributes, and mention timelines.
-- `slots.beliefTouches`: active beliefs with support/conflict history counts.
-- `chargeVector`: slot counts and activation signal for host scheduling.
+Collection routing is enforced in the raw-ledger, memory-binding-graph and Atlas paths. Default recall includes untagged and `collection:anchor` memory. Specialized collections such as `collection:theseus` must be requested explicitly with `collection: "theseus"` or `--collection theseus`.
 
-Collection routing is enforced in compiled and raw fallback paths. Default recall includes untagged and `collection:anchor` memory. Specialized collections such as `collection:theseus` must be requested explicitly with `collection: "theseus"` or `--collection theseus`.
-
-`MemoryKernel.buildMemoryMap()` and `cogmem memory map` expose a static self-map: anatomy, data lanes, hard bounds, counters, and commands. The map includes episode counts, unassigned raw evidence, and the sealed Episode Dream backlog. Core schema version 28 includes project-scoped topic nodes, aliases, relations and operations; episode cross-references and repair audit; ingest lifecycle state; per-episode Dream failure details; and best-effort episode boundary decision audit rows. Production initialization creates the final schema on a new database; `EpisodeStore.initializeSchema` is compatibility bootstrap for direct tests only, with a parity test against episode migrations 22–28. 4.0 does not upgrade a pre-4.0 database: opening one is refused with an error code beginning `no_upgrade_path:` and the file is left unchanged, so point 4.0 at a new database path instead.
+`MemoryKernel.buildMemoryMap()` and `cogmem memory map` expose a static self-map: anatomy, data lanes, hard bounds, counters, and commands. The map includes episode counts, unassigned raw evidence, and the sealed Episode Dream backlog. Core schema version 34 includes project-scoped topic nodes, aliases, relations and operations; episode cross-references and repair audit; ingest lifecycle state; per-episode Dream failure details; and best-effort episode boundary decision audit rows. Production initialization creates the final schema on a new database; `EpisodeStore.initializeSchema` is compatibility bootstrap for direct tests only, with a parity test against episode migrations 22–28. 4.0 does not upgrade a pre-4.0 database: opening one is refused with an error code beginning `no_upgrade_path:` and the file is left unchanged, so point 4.0 at a new database path instead.
 
 Graph edge confidence, stability, and activation are separate. Recall and maintenance may decay activation, but they must not decay provenance confidence or the stability of `SUPPORTS`, `CORRECTS`, `CONTRADICTS`, and `SUPERSEDES` evidence. `BrainGraphView` is a bounded read-only traversal surface; it cannot mutate canonical memory.
 
-### Two layers, two recall entry points — know which one you are measuring
+### One recall entry point
 
-4.0 keeps the compiled neuron layer (`neurons`) that 3.x wrote, and adds Frames plus the Atlas on top of the raw ledger. **Agent-facing recall reads the raw ledger, the Atlas and the Frames; it does not read the legacy neuron layer.** Two entry points therefore answer different questions:
+`KernelAgentMemoryBackend.recall()` is the only agent-facing recall entry point. It reads the raw ledger, the memory-binding graph, Atlas cards and Frames. The 3.x compiled layers — `neurons`, `synapses`, `topology_*` and `cognitive_nodes` — were deleted (#343), and with them the `INGESTED`, `TOPOLOGY_COMPILED` and `COGNITIVE_GRAPH_COMPILED` ledger events. There is no `evidenceFor()` and no second "compiled lane" that a benchmark could measure by mistake.
 
-| entry point | reads | use it for |
-| --- | --- | --- |
-| `KernelAgentMemoryBackend.recall()` / `.recallPack()` | raw ledger lanes, Atlas, Frames, graph | anything the agent asks |
-| `MemoryKernel.evidenceFor()` — **internal** (`BrainRecall`) | `neurons` (the legacy compiled layer) | the evidence layer: `KernelAgentMemoryBackend.recall()` calls it, and so does the LongMemEval benchmark. Not an entry point. |
-
-The kernel-level method used to be called `recall`, which made it look like a peer of the agent-facing path and caused exactly the confusion below. It is now `evidenceFor()` and marked `@internal`; **`recall` names one entry point only.** Measuring the internal one and concluding "recall finds nothing" is the mistake this note exists to prevent: on a corpus produced by the 4.0 pipeline the neuron layer is nearly empty by construction (`cogmem memory govern` promotes candidate *status*; it writes a neuron only when a candidate carries a source neuron), while `KernelAgentMemoryBackend.recall()` returns the right evidence in milliseconds. `cogmem memory govern` reports `promoted_candidates` and `neurons_written` separately for the same reason.
+### Collection routing
 
 ## SourceRefs
 
@@ -145,7 +134,7 @@ Semantic memories remain traceable through `sourceRefs`. A source ref may point 
 - parent/previous event links
 - ordering confidence
 
-Imported Markdown records preserve line order and block ordinal when available. OpenClaw/Hermes importers also create raw ledger anchor events for imported records before compiled ingest, so old memory files can be searched and shown through `cogmem memory search/show/recall`. Normalized JSON array, JSONL, CSV, and TSV transcript imports emit per-message source anchors before Markdown ingestion so `sourceRefs` can preserve original array index, row line, or block ordinal instead of only the normalized Markdown line. If a source lacks reliable ordering, importers should set `orderingConfidence: "low"` rather than inventing certainty.
+Imported Markdown records preserve line order and block ordinal when available. OpenClaw/Hermes importers also create raw ledger anchor events for imported records before semantic compilation, so old memory files can be searched and shown through `cogmem memory search/show/recall`. Normalized JSON array, JSONL, CSV, and TSV transcript imports emit per-message source anchors before Markdown ingestion so `sourceRefs` can preserve original array index, row line, or block ordinal instead of only the normalized Markdown line. If a source lacks reliable ordering, importers should set `orderingConfidence: "low"` rather than inventing certainty.
 
 Agent-facing recall items include `sourceAnchor` and, when available, `sourceContext`. `sourceContext` carries the raw event, bounded before/after events, parent/child links, strict window metadata, per-event labels, optional source/character ranges, and a local `cogmem memory show --event <eventId> --before 2 --after 2` locator. The before/after windows are chronological, exclude the anchor, and are de-duplicated with `overlapHandling: "drop_from_after"`. If `canAnswerExactQuote=false`, the item can still guide the agent to raw evidence, but it must not be quoted as user wording until the raw event is inspected.
 
@@ -155,7 +144,7 @@ Prompt injection is not a core memory tier. Cog uses four bounded, Cog-owned blo
 
 - `<COGMEM_RECALL_CONTEXT>`: volatile current-turn recall evidence. It is stripped before raw ledger recording and must not be re-ingested.
 - `<COGMEM_TURN_BRIDGE>`: compact memory-use receipt for same-topic follow-ups. It is session sidecar state, not recalled evidence and not a dream/governance candidate.
-- `<COGMEM_SESSION_STATE>`: short current-session working state. It is useful for continuity but is not a user preference, belief, or durable compiled memory.
+- `<COGMEM_SESSION_STATE>`: short current-session working state. It is useful for continuity but is not a user preference, belief, or durable memory.
 - `<COGMEM_STRATEGY_CONTEXT>`: canonical current-turn memory policy with no instruction authority. It is stripped before recording and cannot be evidence, tool authorization, or a governance operation.
 
 Long-term compilation in `selective_compile` is driven by user text only. Assistant conclusions, tool results, task events, bridge text, session state, and recalled memory are evidence or sidecar state, not durable user-owned signals by default.
