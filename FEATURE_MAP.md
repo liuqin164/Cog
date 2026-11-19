@@ -11,7 +11,7 @@
 |---|---|---|---|---|
 | 账本 | 一切记忆的原始记录，只追加不改 | 捕获写、召回/装配读（KernelAgentMemoryBackend） | 根套件 2329 测试；box 纠正传播实测 | ✅ |
 | 捕获 | 每轮结束把对话写进账本 | app.ts 三处 rememberTurnWithResult + capture 插件 | 壳 capture 测试；box 对话后复述 | ⚠️ 只在轮末捕获，崩溃丢当轮；大工具结果捕获慢 — #348/#359 |
-| 召回 | 按相关性捞回旧事（raw 账本＋Atlas＋Frames；#343 删编译基底后） | recall 插件每轮装进 recall 车道（limit 3） | A6 基线（嵌入 @5 93.3%，rule-only 33.3%）；记分卡长会话 592/600 | Atlas 已接召回前按天和解＋命中反馈（#356 关，round 125）；首次构建无同伴触发点 — #361；模型变更后旧事件不重嵌 — #360（在飞） |
+| 召回 | 按相关性捞回旧事（raw 账本＋Atlas＋Frames；#343 删编译基底后） | recall 插件每轮装进 recall 车道（limit 3）；命中的 profile 摘要在 working_set 展开为原文 | A6 基线（嵌入 @5 93.3%，rule-only 33.3%）；记分卡长会话 592/600；#72 超代四例＋#253 展开正向例（round 128，关掉超代过滤即红） | Atlas 按天和解＋命中反馈已接（#356 关）；首次构建无同伴触发点 — #361；Atlas 条目在合并层被丢弃 — #362（round 128 实测发现） |
 | 画像 | 关于主人的稳定事实册 | 装配器 profile 车道每轮注入 | 提取质量探针（4 条事实命中率） | ⚠️ 质量下限未达 — #329 |
 | 做法册 | 做成过的事沉淀成步骤 | declare_task end 时编译；装配时按任务匹配 | #265 实测（浮现不提升，定为不主动推） | ⚠️ 弱模型上生产者不触发（box 实测 declare 0 次） |
 | 承诺 | 答应过的事，到期提醒一次 | emergence 插件查到期 + working_set 车道 | F16 测试；记分卡 A2 | ✅ |
@@ -32,7 +32,7 @@
 | 时间 | 每轮注入分钟级当前时间，保前缀缓存 | clock 插件 | #320 测试（相邻请求前缀 100% 一致） | ✅ |
 | 秘密脱敏 | 密钥类文本进账本前抹掉 | capture 插件＋模型路由的 redactSecretText | 根套件脱敏测试 | ✅（捕获成本问题在 #359） |
 | 模型接入 | 自定义 OpenAI 协议端点＋mg 路由 | provider 插件每轮调用 | box/生产多路由实测 | ✅ |
-| 嵌入 | 本地 bge 向量，可换 ollama/OpenAI 协议 | 召回车道算向量 | #313 测试 | ⚠️ 换模型/维度后旧事件不重嵌（#313 的自动重嵌随 #343 删除丢失）— #360（在飞，round 126） |
+| 嵌入 | 本地 bge 向量，可换 ollama/OpenAI 协议 | 召回车道算向量；壳启动 warm 成功后调 backfillEventEmbeddings 补嵌旧事件 | #313 测试；round 128 补嵌判别测试（换模型重开后 nearest 由空转命中、stale 转 false） | ✅ 换模型/维度后旧事件自动补嵌（#360 关）；仅壳本地嵌入 warm 成功后执行，失败不致命 |
 | 观测台（星海） | 网页看记忆/图谱、改灵魂 | kernel-host 挂 observatory，令牌文件鉴权 | #308 令牌测试；日常人工使用 | ✅ |
 | 终端 | `cog` TUI＋远程 attach | channels/terminal＋attach server | TUI 测试 | ✅ |
 | 网页工具 | 抓网页/搜索（插件） | 默认不加载，显式启用才挂 | #306 测试（默认零 fetch） | ✅ 可选 |
@@ -50,5 +50,5 @@
 |---|---|---|---|---|
 | 健康与备份 | 整脑快照（夜）＋健康自检 | 快照落 snapshots/；/health 面 | F19 恢复演练 13/13 | ✅ |
 | 升级 | 预告→静默期→分阶段装→健康门→失败回滚 | upgrade/supervisor | 升级单元测试 | ⚠️ 实机升级考试未做 — 生存跑阶段验 |
-| 安装/doctor | 一条命令装好＋自检 | install/installer＋doctor | box 六步自检实测 | ⚠️ 与内核侧安装栈重复 — #354 待定 |
+| 安装/doctor | 一条命令装好＋自检 | install/installer＋doctor | box 六步自检实测；core-cli 的 doctor --storage 断言（含 embeddings 覆盖读数，round 128 恢复） | doctor 嵌入覆盖读数已恢复（#360）；⚠️ 与内核侧安装栈重复 — #354 待定 |
 | 行为评测 | F13 场景集＋连续性记分卡 | eval/behavior＋记分卡 | F13 box 16/16；记分卡基线 2/6 | ⚠️ 记分卡全绿等队列清空后复测 |
