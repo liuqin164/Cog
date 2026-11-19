@@ -58,7 +58,7 @@ describe('the memory tool (#323)', () => {
     }
   });
 
-  test('recent pages this session only and returns the newest n turns', async () => {
+  test('recent pages this session only and returns the newest n entries', async () => {
     const shell = makeShell(makeTempDir('memory-tool-recent-'), new ScriptedProvider([
       { text: '第一答。', toolCalls: [] },
       { text: '第二答。', toolCalls: [] },

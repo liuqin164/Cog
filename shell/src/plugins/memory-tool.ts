@@ -42,7 +42,7 @@ function memoryTool(
   return {
     name: 'memory',
     description:
-      'Search or read Cogmem memory on demand. action="search" with query runs the same kernel recall as the lane and returns up to 5 entries, each with a mem:<eventId> key. action="read" with eventId opens that ledger row verbatim; it is the same as read mem:<eventId>. action="recent" with n (1-200) returns the newest n turns of this session, newest first. Use search when the recall lane did not answer, and say whether it found the memory or not.',
+      'Search or read Cogmem memory on demand. action="search" with query runs the same kernel recall as the lane and returns up to 5 entries, each with a mem:<eventId> key. action="read" with eventId opens that ledger row verbatim; it is the same as read mem:<eventId>. action="recent" with n (1-200) returns the newest n entries of this session, newest first. Use search when the recall lane did not answer, and say whether it found the memory or not.',
     replay: 'safe',
     parameters: {
       type: 'object',
@@ -88,7 +88,7 @@ function memoryTool(
         });
         if (page.items.length === 0) return '[memory recent: no turns in this session]';
         return [
-          `[memory recent: ${page.items.length} turn(s), newest first]`,
+          `[memory recent: ${page.items.length} entries, newest first]`,
           ...page.items.map((item) => `- ${item.speaker}: ${item.text}\n  mem:${item.eventId}`),
         ].join('\n');
       }
