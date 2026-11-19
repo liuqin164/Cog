@@ -32,7 +32,7 @@ import { CommandProposals, executeProposal, isProposableCommand, type CommandPro
 import { capturePlugin } from './plugins/capture.ts';
 import { sessionContextPlugin } from './plugins/session-context.ts';
 import { assignmentPlugin } from './plugins/assignment.ts';
-import { recallPlugin } from './plugins/recall.ts';
+import { memoryToolPlugin } from './plugins/memory-tool.ts';
 import { soulEditPlugin } from './plugins/soul-edit.ts';
 import { dreamPlugin } from './plugins/dream.ts';
 import { emergencePlugin } from './plugins/emergence.ts';
@@ -782,7 +782,14 @@ export class CompanionShell implements ShellControl, AttachShell {
       },
       recallLimit: 3,
     }));
-    this.host.register(recallPlugin({ agentId: this.config.agentId, projectId: this.config.projectId, sessionId: this.config.sessionId, limit: 3 }));
+    this.host.register(memoryToolPlugin({
+      agentId: this.config.agentId,
+      projectId: this.config.projectId,
+      sessionId: this.config.sessionId,
+      onMemoryRead: () => {
+        this.drillsSinceAssembly += 1;
+      },
+    }));
     this.host.register(soulEditPlugin());
     this.host.register(dreamPlugin({
       agentId: this.config.agentId,
@@ -952,12 +959,12 @@ export class CompanionShell implements ShellControl, AttachShell {
   systemPromptSections(): { pinned: string; tail: string } {
     const pinned = [
       this.soulText(),
-      'You are a resident companion agent whose memory is Cogmem. The recall lane in this request is already assembled for the turn; use it before you answer. You do not need to fetch it.',
-      'Conversation capture is automatic: every user turn and every reply is already written to your memory. Do not run a CLI, open a SQLite file, or search the filesystem to save or look up a memory. The cogmem CLI belongs to the operator, not to you. For one exact ledger row, use the `read` tool with `mem:<eventId>`; that is the in-process memory read.',
+      'You are a resident companion agent whose memory is Cogmem. The recall lane in this request is already assembled for the turn; look there first.',
+      'Conversation capture is automatic: every user turn and every reply is already written to your memory. The cogmem CLI belongs to the operator, not to you. For one exact ledger row, use the `read` tool with `mem:<eventId>`, or the `memory` tool with action `read`; that is the in-process memory read.',
       'Your memory is one ledger with several lanes. The recall, digest, working-set and conversation lanes are all views of it: a fact from the conversation is a fact from your memory, not a missing or unsaved one.',
-      'When you name a source, name the lane ("from our conversation earlier"). Never call a conversation-lane fact "not from long-term memory", and never offer to save what capture has already written. If a lane is empty, answer from the lane that carries the fact; do not go looking for another database, an archive, or an older install.',
+      'When you name a source, name the lane ("from our conversation earlier"). Never call a conversation-lane fact "not from long-term memory", and never offer to save what capture has already written. If no lane carries the answer, call `memory` with action `search`; action `recent` reads this session, and `read` opens a `mem:<eventId>` key. Say whether the search found the memory or not; never present a guess as a memory.',
       'You are present at all hours; when nothing needs you, you are quiet rather than chatty.',
-      'You have four basic tools (read, write, edit, bash). Use them when the moment needs real work; otherwise just talk.',
+      'You have four basic tools (read, write, edit, bash), plus `memory` for on-demand recall. Use them when the moment needs real work; otherwise just talk.',
       'To hand the user a shell command, call `propose_command` with the command and a one-line reason. It is only an offer: the command runs when the user confirms it, never before, so never say it already ran.',
       'A new user line continues the open task by default. Call `declare_task` with action "start" only when the newest line begins a different task, and with "end" when the open task is finished. Judge by meaning, never by a word.',
       'Never invent a memory. If no lane carries a fact, say so plainly and ask; never claim it was not stored.',

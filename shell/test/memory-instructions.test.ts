@@ -12,15 +12,19 @@ const NO_DREAM = { runKernelNight: false, maxEpisodes: 5, windowStartHour: 3, wi
 const asText = (messages: Array<{ content: unknown }> | undefined) => (messages ?? []).map((message) => String(message.content)).join('\n');
 
 describe('the model is told that capture and recall are already done (#277)', () => {
-  test('the pinned prompt names automatic capture and forbids CLI/sqlite archaeology', async () => {
+  test('the pinned prompt names automatic capture and on-demand memory search', async () => {
     const shell = makeShell(makeTempDir('memory-prompt-'), new ScriptedProvider([{ text: '好。', toolCalls: [] }]), { dream: NO_DREAM });
     await shell.start();
     try {
       const prompt = shell.systemPromptSections().pinned;
       expect(prompt).toContain('Conversation capture is automatic');
-      expect(prompt).toContain('Do not run a CLI, open a SQLite file, or search the filesystem');
       expect(prompt).toContain('mem:<eventId>');
       expect(prompt).toContain('The recall lane in this request is already assembled');
+      expect(prompt).toContain('look there first');
+      expect(prompt).toContain('call `memory` with action `search`');
+      expect(prompt).toContain('Say whether the search found the memory or not');
+      expect(prompt).not.toContain('Do not run a CLI, open a SQLite file, or search the filesystem');
+      expect(prompt).not.toContain('do not go looking for another database');
       expect(prompt).not.toContain('recall before you answer');
     } finally {
       await shell.stop();

@@ -11,7 +11,7 @@
 |---|---|---|---|---|
 | 账本 | 一切记忆的原始记录，只追加不改 | 捕获写、召回/装配读（KernelAgentMemoryBackend） | 根套件 2329 测试；box 纠正传播实测 | ✅ |
 | 捕获 | 消息与工具结果产生即写账本（raw 事件），轮末只做 episode/编译；中断轮可从账本恢复 | capture 插件逐事件 recordRawEvent/ingestTool* + agent_end finalize | 壳 capture 测试＋capture-durability（轮内 mem:、kill -9 后会话含中断轮）＋capture-perf（40/12 KB 原样入账不编译） | ✅ 大工具结果由 #343 删掉编译基底后恢复线性（#359 加门）；增量落盘 #348 |
-| 召回 | 按相关性捞回旧事（raw 账本＋Atlas＋Frames；#343 删编译基底后） | recall 插件每轮装进 recall 车道（limit 3）；命中的 profile 摘要在 working_set 展开为原文 | A6 基线（嵌入 @5 93.3%，rule-only 33.3%）；记分卡长会话 592/600；#72 超代四例＋#253 展开正向例（round 128，关掉超代过滤即红）；#362 根层复现（atlas=1/selected=0 → 命中并 touch，round 132） | Atlas 按天和解＋命中反馈已接（#356 关）；首次构建由召回兜底（#361 关）；合并层丢弃已修 — #362 关（round 132） |
+| 召回 | 按相关性捞回旧事（raw 账本＋Atlas＋Frames；#343 删编译基底后） | session-context 每轮装进 recall 车道（limit 3）；memory 工具在车道没答案时按需 search 同一内核召回；命中的 profile 摘要在 working_set 展开为原文 | A6 基线（嵌入 @5 93.3%，rule-only 33.3%）；记分卡长会话 592/600；#72 超代四例＋#253 展开正向例（round 128，关掉超代过滤即红）；#362 根层复现（atlas=1/selected=0 → 命中并 touch，round 132）；#323 壳 memory-tool 5 测（search/read/recent/信任分层/端到端同义问法） | Atlas 按天和解＋命中反馈已接（#356 关）；首次构建由召回兜底（#361 关）；合并层丢弃已修 — #362 关（round 132）；按需检索已接 — #323 |
 | 信任分层 | 工具观察（`tool_result`/`tool_call`）默认不进召回候选；显式提升（`metadata.toolObservationPromoted`，主人「记住」＋工具引用触发）才可进，带 `trust=tool_observation`、`whyMatched=tool observation (untrusted)` 并排在最后；同一内容不与原文重复；捕获超过 48,000 字符截断 | recall raw 准入（`isRawEventInRecallScope`）＋ capture 插件 | #325 根测试 5 条（含新进程 B 探针）；壳 `tool-trust-recall` 2 条；`capture-perf` 40/12 KB 原样、60 KB 截断；真实账本候选字节 79.6% → 0%（#325） | ✅ |
 | 画像 | 关于主人的稳定事实册 | 装配器 profile 车道每轮注入 | 提取质量探针（4 条事实命中率） | ⚠️ 质量下限未达 — #329 |
 | 做法册 | 做成过的事沉淀成步骤 | declare_task end 时编译；装配时按任务匹配 | #265 实测（浮现不提升，定为不主动推） | ⚠️ 弱模型上生产者不触发（box 实测 declare 0 次） |
@@ -27,7 +27,7 @@
 |---|---|---|---|---|
 | 状态机 | DORMANT→WAKING→IDLE⇄RUNNING／DREAMING／SUSPENDED | 一切回合的骨架；table.ts 迁移表，非法迁移抛错 | machine 测试；每迁移 checkpoint 落盘；box kill -9 恢复实测 | ✅ |
 | 上下文装配 | 六车道（pinned/profile/digest/working_set/recall/tail）按预算拼每轮请求；assignment 只在 working_set 出现一次，无 assignment 时不出现（#334） | session-context 插件每轮调用 | 记分卡长会话 592/600（#343 后复核）；#319/#320 预算与前缀缓存测试；context-continuity 探针（闲聊 0 块／declare 后恰好 1 块） | ✅ |
-| 工具面 | 默认 8 工具：read/write/edit/bash＋declare_task/ask_user/propose_command/propose_soul_edit；declare_task start 是唯一的 assignment 构造点，普通消息不再隐式创建（#334）；propose_command 只可提议 13 个白名单命令，破坏性五命令（/forget /plugins /upgrade /export /correct）永不可提议（#335） | 每轮挂载；/context 可见清单 | #333 实测 schema ≈1,336 token/请求；壳测试；context-continuity 的 declare start/end 用例；round 129 白名单探针（五命令逐个被拒、描述与白名单集合相等、/pause 端到端确认） | installPlugin 安装路径无 hygiene 门 — #363；自治运行共用全量工具 — #349 待定 |
+| 工具面 | 默认 9 工具：read/write/edit/bash＋declare_task/ask_user/propose_command/propose_soul_edit＋memory（search/read/recent）；declare_task start 是唯一的 assignment 构造点，普通消息不再隐式创建（#334）；propose_command 只可提议 13 个白名单命令，破坏性五命令（/forget /plugins /upgrade /export /correct）永不可提议（#335） | 每轮挂载；/context 可见清单 | #333 实测 schema ≈1,336 token/请求；壳测试；context-continuity 的 declare start/end 用例；round 129 白名单探针（五命令逐个被拒、描述与白名单集合相等、/pause 端到端确认）；#323 工具数 8→9、memory-tool 三动作 | installPlugin 安装路径无 hygiene 门 — #363；自治运行共用全量工具 — #349 待定 |
 | 笼子 | 回合/令牌预算＋工具白名单，超限暂停到 SUSPENDED | cage 插件在钩子点拦截 | cage.test.ts；#222 预算档位 | ✅ |
 | 浮现 | 到期承诺/意图在合适时机冒出来 | emergence 插件（nextWakeAt/surfacingCandidates） | F6/F7/F8/F10 门测试 | ⚠️ 反馈环未接（无人调 recordSurfacingFeedback/snooze）— #330 |
 | 时间 | 每轮注入分钟级当前时间，保前缀缓存 | clock 插件 | #320 测试（相邻请求前缀 100% 一致） | ✅ |

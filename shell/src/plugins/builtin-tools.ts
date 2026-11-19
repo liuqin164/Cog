@@ -267,11 +267,7 @@ function tailBytes(text: string, maxBytes: number): string {
   return buffer.subarray(start).toString('utf8');
 }
 
-/**
- * A ledger event's text by `mem:<eventId>`. The read is idempotent and the same 256 KiB cap as a
- * file read; an event past it is cut and the cut is traced rather than retried through bash.
- */
-function readMemoryEvent(
+export function readMemoryEvent(
   eventId: string,
   kernel: MemoryKernel | undefined,
   trace?: TraceLog,

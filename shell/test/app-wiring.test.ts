@@ -15,9 +15,10 @@ describe('shell wiring', () => {
         'DORMANT->WAKING:boot',
         'WAKING->IDLE:context_injected',
       ]);
-      for (const service of ['clock', 'model', 'cage', 'builtinTools', 'capture', 'recall', 'dream', 'emergence']) {
+      for (const service of ['clock', 'model', 'cage', 'builtinTools', 'capture', 'dream', 'emergence']) {
         expect(shell.host.hasService(service)).toBe(true);
       }
+      expect(shell.host.tools.has('memory')).toBe(true);
       expect(shell.machine.runtime.lastTimeContext).toContain('<time-context>');
       expect(shell.systemPrompt()).toContain('<time-context>');
     } finally {

@@ -292,7 +292,7 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
     budgets: overrides.budgets ?? {
       ...autonomous,
       // The web plugin is opt-in; it adds its three names when its spec is registered (#338).
-      toolWhitelist: ['read', 'write', 'edit', 'bash', 'propose_command', 'propose_soul_edit', 'ask_user', 'declare_task'],
+      toolWhitelist: ['read', 'write', 'edit', 'bash', 'propose_command', 'propose_soul_edit', 'ask_user', 'declare_task', 'memory'],
     },
     workBudget: overrides.workBudget ?? work,
     dailyBudget: overrides.dailyBudget ?? daily,
