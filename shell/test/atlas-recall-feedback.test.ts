@@ -69,4 +69,46 @@ describe('Atlas on the companion recall path (#356)', () => {
       await shell.stop();
     }
   });
+
+  test('a shell recall builds an Atlas that was never built (#361)', async () => {
+    const dir = makeTempDir();
+    const provider = new ScriptedProvider([{ text: '七年。', toolCalls: [] }]);
+    const shell = makeShell(dir, provider, {
+      dream: NO_DREAM,
+      projectId: 'p',
+      agentId: 'a',
+      sessionId: 's',
+    });
+    await shell.start();
+    try {
+      const old = Date.now() - 2 * 60 * 60 * 1000;
+      shell.kernel.appendEpisodeMessage({
+        projectId: 'p',
+        sessionId: 'past',
+        sourceAgent: 'a',
+        role: 'user',
+        text: '我们决定把归档保留期定成七年，第八年统一销毁。',
+        timestamp: old,
+      });
+      shell.kernel.appendEpisodeMessage({
+        projectId: 'p',
+        sessionId: 'past',
+        sourceAgent: 'a',
+        role: 'assistant',
+        text: '记下了：归档保留期七年。',
+        timestamp: old + 500,
+      });
+      shell.kernel.runMaintenanceTick({ projectId: 'p', now: Date.now(), atlasRefresh: false });
+      expect(shell.kernel.memoryAtlasStore.getProjectionState('p')?.lastRebuildAt).toBeUndefined();
+      expect(shell.kernel.memoryAtlasStore.countDocuments('p')).toBe(0);
+
+      await shell.submit('归档保留期定成七年，是第几年销毁？');
+
+      expect(provider.calls.length).toBe(1);
+      expect(shell.kernel.memoryAtlasStore.getProjectionState('p')?.lastRebuildAt).toBeNumber();
+      expect(shell.kernel.memoryAtlasStore.countDocuments('p')).toBeGreaterThan(0);
+    } finally {
+      await shell.stop();
+    }
+  });
 });

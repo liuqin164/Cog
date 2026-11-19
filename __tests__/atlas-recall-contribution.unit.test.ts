@@ -52,6 +52,7 @@ test('a query with no atlas match still answers, and says the lane was empty (#1
   const dir = makeTempDir('cogmem-atlas-recall-none-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
   kernel.appendEpisodeMessage({ projectId: 'p', sessionId: 's1', sourceAgent: 'a', role: 'user', text: '限流阈值定在每秒八百次。', timestamp: Date.now() - 7_200_000 });
+  kernel.memoryAtlasStore.markProjectionClean('p');
   const recall = new KernelAgentMemoryBackend(kernel).recall({ query: '限流阈值', projectId: 'p', agentId: 'a', limit: 3, now: Date.now() });
   const counts = (recall as unknown as { decisionTrace: { candidateCounts: Record<string, number> } }).decisionTrace.candidateCounts;
   expect(counts.atlas).toBe(0);
