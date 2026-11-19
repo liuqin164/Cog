@@ -1348,7 +1348,6 @@ export class MemoryKernel {
             continue;
           }
           this.eventEmbeddingStore.upsert(entry.event_id, provider.modelId, vector, entry.project_id ?? undefined);
-          db.prepare(`DELETE FROM memory_event_embeddings WHERE event_id=? AND model_id<>?`).run(entry.event_id, provider.modelId);
           completed += 1;
         }
       } catch (error) {
@@ -1363,6 +1362,7 @@ export class MemoryKernel {
         }
       }
     }
+    db.prepare(`DELETE FROM memory_event_embeddings WHERE model_id<>?`).run(provider.modelId);
     return { completed, failed };
   }
 
