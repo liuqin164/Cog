@@ -295,6 +295,7 @@ export interface AgentRecallItem {
   sourceType?: 'compiled_memory' | 'imported_summary' | 'raw_ledger' | 'raw_ledger_session';
   sourceAnchor?: AgentRecallSourceAnchor;
   sourceContext?: AgentRecallSourceContext;
+  evidenceEventIds?: string[];
   confidence?: number;
   whyMatched?: string;
   canAnswerExactQuote?: boolean;
@@ -1346,19 +1347,14 @@ export class KernelAgentMemoryBackend {
     return this.itemChainEvents(item).some((event) => eventHoldsLifeSensitivityMark(event));
   }
 
-  /**
-   * The events an item's own chain points at (#142, #144, #143): its anchor, then the raw events a compile-layer
-   * anchor was built from.
-   *
-   * A compiled item anchors an event that carries no turn of its own (measured: `turn_id` null, no mark), while
-   * both the secret mark and the source agent sit on the turn's events. The link between them is in the ledger
-   * already — that event's payload lists the raw events it was built from — so the questions are asked of those
-   * events rather than answered by scanning text, which is what dropped a legitimate record that merely looked
-   * like a key (#144). One walk, shared by the secret gate and the agent scope, because two walks would drift
-   * apart; bounded by one event's own source refs.
-   */
   private itemChainEvents(item: AgentRecallItem): MemoryEvent[] {
-    return occasionChainEvents(this.kernel, (item.sourceAnchor as { eventId?: string } | undefined)?.eventId);
+    const chain = new Map<string, MemoryEvent>();
+    const anchor = (item.sourceAnchor as { eventId?: string } | undefined)?.eventId;
+    for (const id of [anchor, ...(item.evidenceEventIds ?? [])]) {
+      if (!id) continue;
+      for (const event of occasionChainEvents(this.kernel, id)) chain.set(event.eventId, event);
+    }
+    return [...chain.values()];
   }
 
   /**
@@ -2013,6 +2009,7 @@ export class KernelAgentMemoryBackend {
       sourceType: card.origin === 'legacy_facet' ? 'raw_ledger' : 'compiled_memory',
       sourceAnchor: allowRaw ? (anchorEvent ? this.toAgentSourceAnchorFromContextEvent(anchorEvent) : eventId ? { eventId } : undefined) : undefined,
       sourceContext: allowRaw ? sourceContext : undefined,
+      evidenceEventIds: eventIds,
       confidence: Math.min(1, 0.7 + card.matchedFacets.length * 0.08),
       whyMatched: card.whyMatched,
       canAnswerExactQuote: Boolean(sourceContext),
@@ -2039,6 +2036,7 @@ export class KernelAgentMemoryBackend {
       sourceType: 'compiled_memory',
       sourceAnchor: allowRaw ? this.toAgentSourceAnchor(event) : undefined,
       sourceContext: allowRaw ? this.toAgentSourceContext(eventId, query) : undefined,
+      evidenceEventIds: (node.evidence ?? []).map((evidence) => evidence.eventId),
       confidence: node.confidence,
       whyMatched: `atlas_${node.nodeType}`,
       canAnswerExactQuote: false,
@@ -2341,13 +2339,14 @@ export class KernelAgentMemoryBackend {
     const semanticAtlas = secondary.find((item) => item.source === 'memory_atlas' && (item.tags.includes('atlas_node') || item.tags.includes('facet_graph') || item.tags.includes('atlas_path')));
     const hasSemanticAtlas = primary.some((item) => item.source === 'memory_atlas' && (item.tags.includes('atlas_node') || item.tags.includes('facet_graph') || item.tags.includes('atlas_path')));
     const hasScopedPrimary = primary.some((item) => item.tags.some((tag) => tag.startsWith('agent:')));
-    const prioritizedPrimary = semanticAtlas && !hasSemanticAtlas && !hasScopedPrimary && primary.length >= limit
-      ? [...primary.slice(0, Math.max(0, limit - 1)), semanticAtlas]
+    const promotesAtlas = Boolean(semanticAtlas) && !hasSemanticAtlas && !hasScopedPrimary && primary.length >= limit;
+    const prioritizedPrimary = promotesAtlas
+      ? [...primary.slice(0, Math.max(0, limit - 1)), semanticAtlas!]
       : primary;
     const merged: AgentRecallItem[] = [];
     const seen = new Set<string>();
     const keptByKey = new Map<string, AgentRecallItem>();
-    for (const item of [...prioritizedPrimary, ...secondary.filter((candidate) => candidate !== semanticAtlas)]) {
+    for (const item of [...prioritizedPrimary, ...secondary.filter((candidate) => candidate !== semanticAtlas || !promotesAtlas)]) {
       const keys = [item.canonicalId, item.sourceAnchor?.eventId, item.id].filter((value): value is string => Boolean(value));
       const duplicate = keys.map((key) => keptByKey.get(key)).find((candidate): candidate is AgentRecallItem => Boolean(candidate));
       if (keys.some((key) => seen.has(key))) {
@@ -2362,16 +2361,10 @@ export class KernelAgentMemoryBackend {
       for (const key of keys) { seen.add(key); keptByKey.set(key, item); }
       merged.push(item);
     }
-    // Supersession is decided before the list is cut: a stale statement that
-    // occupies a slot is a stale statement the statement replacing it cannot
-    // take (#72, measured at 95.8% leakage when nothing tagged the old value).
     return filterSuperseded(merged, (item) => ({
       id: item.id,
       content: item.text,
       createdAt: item.sourceAnchor?.turnSeq ?? item.sourceAnchor?.eventOrdinal ?? 0,
-      // Deliberately no `topicPath`: on this path many unrelated records share
-      // one, and grouping by it collapsed the recall floor from 4/18 to 2/18.
-      // The subject phrase is the signature the rule is stated in.
       tags: item.tags,
       projectId: item.projectId,
     })).slice(0, limit);
