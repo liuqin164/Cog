@@ -5,12 +5,6 @@ export interface EventEmbeddingHit {
   score: number;
 }
 
-/**
- * The semantic arm of raw-ledger recall (#343).
- *
- * A vector belongs to one ledger event, never to a compiled neuron: the event is
- * the identity and the evidence, so deleting an event deletes its vector too.
- */
 export class EventEmbeddingStore {
   constructor(private readonly db: Database) {}
 

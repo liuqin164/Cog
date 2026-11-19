@@ -126,10 +126,6 @@ export interface ConversationCapturePorts {
 export class ConversationCaptureService {
   constructor(private readonly db: Database, private readonly ports: ConversationCapturePorts) {}
 
-  /**
-   * Write the turn to the ledger. The ledger row is the record; there is no second
-   * compiled copy of it to keep in sync (#343).
-   */
   async captureTurn(input: ConversationTurnInput): Promise<ConversationTurnRecord> {
     const projectId = requireText(input.projectId, 'project_id_required');
     const agentId = requireText(input.agentId, 'agent_id_required');

@@ -164,7 +164,6 @@ export interface MemoryKernelOptions {
   /** Phase projection (#130): a research sample, off unless a caller turns it on. */
   phaseProjectionEnabled?: boolean;
   dbPath?: string;
-  /** Ignored: the 3.x vector store was removed in #343. Kept for config-file compatibility. */
   vectorBackend?: string;
   vectorDimension?: number;
   embeddingProvider?: EmbeddingProvider;
@@ -335,7 +334,6 @@ export interface MemorySelfMap {
 
 export interface MaintenanceTickOptions {
   projectId?: string;
-  /** Shared by the Atlas activation decay below; the neuron activation store is gone (#343). */
   activationDecayFactor?: number;
   confirmationTtlMs?: number;
   now?: number;
@@ -1220,13 +1218,6 @@ export class MemoryKernel {
     Bun.gc(true);
   }
 
-  /**
-   * Compile one already-recorded ledger event into the 4.x cognition layer.
-   *
-   * The returned `Neuron` is a transient value object: it is the compiler's input and the
-   * caller's handle, never a row. The ledger event is the identity and the evidence chain
-   * (`sourceEventId` / `sourceRefs`), and Frames + the Atlas are the durable products.
-   */
   compileMemory(input: IngestInput, sourceEventId?: string): Neuron {
     const createdAt = input.createdAt ?? Date.now();
     const eventId = sourceEventId ?? input.sourceEventId ?? `compiled-${randomUUID()}`;
@@ -1285,7 +1276,6 @@ export class MemoryKernel {
       });
   }
 
-  /** Raw-event ids whose indexed vector is nearest the query, for the raw ledger lane. */
   nearestRawEventIds(query: string, projectId: string | undefined, limit: number): string[] {
     if (!this.embeddingProvider) return [];
     const embedSync = (this.embeddingProvider as EmbeddingProvider & {
@@ -1303,13 +1293,6 @@ export class MemoryKernel {
     }
   }
 
-  /**
-   * Record a raw memory event and compile its 4.x cognition.
-   *
-   * The old 3.x write path also stored a neuron row plus topology and cognitive-graph
-   * projections. Those tables and their three ledger events are gone (#343): the raw
-   * event is the only identity, and it is the only row this method writes.
-   */
   async ingest(input: IngestInput | { content: string; projectId?: string; tags?: string[] }): Promise<Neuron> {
     await this.initialize();
     const normalizedInput: IngestInput = {
@@ -1351,13 +1334,6 @@ export class MemoryKernel {
     return this.compileMemory({ ...normalizedInput, sourceRefs }, event.eventId);
   }
 
-  /**
-   * The Atlas half of recall, without the retired compiled-neuron lane.
-   *
-   * `KernelAgentMemoryBackend.recall()` composes this with the raw ledger and the
-   * binding graph; the return shape stays close to the old evidence builder so the
-   * Atlas projection and its degradation path are unchanged (#105, #343).
-   */
   searchAtlas(query: string, options: {
     projectId?: string;
     limit?: number;
@@ -1624,8 +1600,6 @@ export class MemoryKernel {
    * and the misses are the ones whose words are not in the fact).
    */
   semanticIndexEnabled(): boolean {
-    // The memory index now belongs to the raw ledger itself (#343). It is only a semantic
-    // lane when the configured provider can answer a query synchronously.
     return this.embeddingProvider !== undefined
       && typeof (this.embeddingProvider as { embedSync?: unknown }).embedSync === 'function';
   }
@@ -2651,8 +2625,6 @@ export class MemoryKernel {
     return {
       projectId: options.projectId,
       decisions,
-      // Promotion records a governance decision on a candidate; the neuron
-      // layer it used to feed was deleted in #343.
       promotedCandidates,
       neuronsWritten: 0,
       queue: this.getDreamCandidateQueue(options.projectId),
@@ -2982,9 +2954,11 @@ export class MemoryKernel {
       package: 'cogmem',
       dbPath: this.dbPath,
       stats: this.getStats(),
-      vectorRecall: 'disabled' as const,
+      vectorRecall: this.semanticIndexEnabled() ? 'active' : 'disabled',
       embeddingModelId: this.embeddingProvider?.modelId,
-      hasStaleVectors: false,
+      hasStaleVectors: this.embeddingProvider
+        ? this.eventEmbeddingStore.hasStaleVectors(this.embeddingProvider.modelId)
+        : false,
       pipelineLastRunAt: lastRun?.completedAt,
       pipelineP99Ms: pipelineP99Ms > 0 ? pipelineP99Ms : undefined,
       pipelineLastRunAborted: lastRun?.aborted ?? false,
