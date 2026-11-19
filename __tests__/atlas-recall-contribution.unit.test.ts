@@ -59,3 +59,34 @@ test('a query with no atlas match still answers, and says the lane was empty (#1
   expect((recall.items ?? []).length).toBeGreaterThan(0);
   kernel.close();
 });
+
+test('an Atlas node survives the merge when no raw lane answers (#362)', () => {
+  const dir = makeTempDir('cogmem-atlas-merge-');
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db'), vectorBackend: 'sqlite-vec' });
+  const event = kernel.appendEpisodeMessage({
+    projectId: 'p', sessionId: 's1', sourceAgent: 'a', role: 'user',
+    text: '今天天气不错。', timestamp: Date.now() - 7_200_000,
+  });
+  kernel.memoryAtlasStore.upsertDocument({
+    id: 'episode:atlas-only', projectId: 'p', nodeType: 'episode', sourceId: 'atlas-only',
+    label: '海象协议上线窗口', summary: '海象协议在十一月二十日上线', confidence: 0.9,
+    supportCount: 1, status: 'active', evidenceEventIds: [event.eventId],
+  });
+  kernel.memoryAtlasStore.markProjectionClean('p');
+
+  const result = new KernelAgentMemoryBackend(kernel).recall({
+    query: '海象协议上线窗口', projectId: 'p', agentId: 'a', limit: 4, now: Date.now(),
+  });
+  const trace = (result as unknown as { decisionTrace: { candidateCounts: Record<string, number>; selectedCount: number } }).decisionTrace;
+
+  expect(trace.candidateCounts.atlas).toBe(1);
+  expect(trace.selectedCount).toBe(1);
+  const item = result.items.find((candidate) => candidate.canonicalId === 'episode:atlas-only');
+  expect(item).toBeDefined();
+  expect(item!.canonicalId).toBeString();
+  const activation = kernel.memoryAtlasStore.db.prepare(`
+    SELECT usage_count FROM memory_atlas_activation WHERE project_id=? AND node_id=?
+  `).get('p', 'episode:atlas-only') as { usage_count: number } | null;
+  expect(activation?.usage_count).toBeGreaterThan(0);
+  kernel.close();
+});

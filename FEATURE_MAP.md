@@ -11,7 +11,7 @@
 |---|---|---|---|---|
 | 账本 | 一切记忆的原始记录，只追加不改 | 捕获写、召回/装配读（KernelAgentMemoryBackend） | 根套件 2329 测试；box 纠正传播实测 | ✅ |
 | 捕获 | 消息与工具结果产生即写账本（raw 事件），轮末只做 episode/编译；中断轮可从账本恢复 | capture 插件逐事件 recordRawEvent/ingestTool* + agent_end finalize | 壳 capture 测试＋capture-durability（轮内 mem:、kill -9 后会话含中断轮）＋capture-perf（40/12 KB 原样入账不编译） | ✅ 大工具结果由 #343 删掉编译基底后恢复线性（#359 加门）；增量落盘 #348 |
-| 召回 | 按相关性捞回旧事（raw 账本＋Atlas＋Frames；#343 删编译基底后） | recall 插件每轮装进 recall 车道（limit 3）；命中的 profile 摘要在 working_set 展开为原文 | A6 基线（嵌入 @5 93.3%，rule-only 33.3%）；记分卡长会话 592/600；#72 超代四例＋#253 展开正向例（round 128，关掉超代过滤即红） | Atlas 按天和解＋命中反馈已接（#356 关）；首次构建由召回兜底（#361 关）；Atlas 条目在合并层被丢弃 — #362（round 128 实测发现） |
+| 召回 | 按相关性捞回旧事（raw 账本＋Atlas＋Frames；#343 删编译基底后） | recall 插件每轮装进 recall 车道（limit 3）；命中的 profile 摘要在 working_set 展开为原文 | A6 基线（嵌入 @5 93.3%，rule-only 33.3%）；记分卡长会话 592/600；#72 超代四例＋#253 展开正向例（round 128，关掉超代过滤即红）；#362 根层复现（atlas=1/selected=0 → 命中并 touch，round 132） | Atlas 按天和解＋命中反馈已接（#356 关）；首次构建由召回兜底（#361 关）；合并层丢弃已修 — #362 关（round 132） |
 | 画像 | 关于主人的稳定事实册 | 装配器 profile 车道每轮注入 | 提取质量探针（4 条事实命中率） | ⚠️ 质量下限未达 — #329 |
 | 做法册 | 做成过的事沉淀成步骤 | declare_task end 时编译；装配时按任务匹配 | #265 实测（浮现不提升，定为不主动推） | ⚠️ 弱模型上生产者不触发（box 实测 declare 0 次） |
 | 承诺 | 答应过的事，到期提醒一次 | emergence 插件查到期 + working_set 车道 | F16 测试；记分卡 A2 | ✅ |
