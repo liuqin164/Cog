@@ -67,7 +67,9 @@ export class SessionContextService {
   assemble(input: AssembleSessionContextInput): SessionContextAssembly {
     const { projectId, agentId, sessionId } = requireScope(input);
     const read = readSessionTurns(this.db, { projectId, agentId, sessionId, limit: SESSION_DIGEST_MAX_TURNS });
-    const digest = buildSessionDigest(read.turns, { sessionId, tailTurns: input.tailTurns, truncated: read.truncated });
+    const excluded = new Set(input.excludeTurnIds ?? []);
+    const turns = excluded.size === 0 ? read.turns : read.turns.filter((turn) => !excluded.has(turn.turnId));
+    const digest = buildSessionDigest(turns, { sessionId, tailTurns: input.tailTurns, truncated: read.truncated });
     const openLoops = [...(input.openLoops ?? []), ...this.openLoops({ projectId, agentId, sessionId })];
     const protectedIds = [
       ...this.protectedEventIds(projectId, sessionId),

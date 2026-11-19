@@ -46,7 +46,7 @@ export function sessionContextPlugin(config: SessionContextPluginConfig): Native
       const backend = ctx.getService<KernelAgentMemoryBackend>('memory');
       let pendingBlock = '';
 
-      ctx.on('prepareRequest', (value: unknown) => {
+      ctx.on('prepareRequest', (value: unknown, busCtx?: { runId?: string }) => {
         if (!value || typeof value !== 'object') return value;
         const request = value as { messages?: AgentMessage[]; systemPrompt?: string; [key: string]: unknown };
         const messages = Array.isArray(request.messages) ? request.messages : [];
@@ -69,6 +69,7 @@ export function sessionContextPlugin(config: SessionContextPluginConfig): Native
             sessionId: config.sessionId,
             targetTokens: Math.max(1, Math.floor(config.targetTokens())),
             tailTurns: config.tailTurns,
+            excludeTurnIds: busCtx?.runId ? [`${busCtx.runId}:0`] : undefined,
             pinned: config.pinned(),
             profile: config.profile(),
             workingSet: config.workingSet?.() ?? [],

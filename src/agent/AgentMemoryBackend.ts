@@ -125,6 +125,7 @@ export interface AgentTurnMemory {
   projectTimeZone?: string;
   ingestMode?: AgentTurnIngestMode;
   metadata?: Record<string, unknown>;
+  prewritten?: { userEventId: string; assistantEventIds?: string[] };
 }
 
 export interface AgentTurnMemoryResult {
@@ -629,21 +630,13 @@ export class KernelAgentMemoryBackend {
   }
 
   async rememberTurnWithResult(turn: AgentTurnMemory): Promise<AgentTurnMemoryResult> {
-    // A read-only database is a mode, not an error to discover halfway through the write (#196).
     this.kernel.health.assertWritable();
-    // Explicit exclusion (#133) runs here, at the one place every write path inside the kernel calls, and in the
-    // order the host bridge already uses: a passage the user marked is never stored, so it must not be claimed,
-    // scanned, compiled or written either. The bridge strips before calling this and reports the counts; by the
-    // time the text arrives here the markers are gone, which makes this pass a no-op rather than a second policy
-    // (#152: the MCP tool reached the store without ever asking).
+    if (turn.prewritten) return this.finalizePrewrittenTurn(turn);
     const excludedUser = excludeExplicitSpans(turn.userText);
     const occurredAt = turn.timestamp ?? Date.now();
     const threadId = turn.threadId || turn.sessionId;
     const sourceId = `${turn.agentId}:${turn.sessionId}`;
     const mode = turn.ingestMode ?? 'immediate_compile';
-    // A named turn is an identity: the same id means the same turn, so a retry returns
-    // what is already recorded instead of writing it again. This runs before the turn
-    // sequence is drawn, because a replay must not consume one (#113).
     const claim = turn.turnId
       ? this.kernel.claimAgentTurn({
         projectId: turn.projectId,
@@ -666,13 +659,6 @@ export class KernelAgentMemoryBackend {
     }
     const turnSeq = turn.turnSeq ?? this.kernel.eventStore.getNextTurnSeq(threadId, turn.projectId ?? '');
     const turnId = turn.turnId || `${turn.agentId}:${turn.sessionId}:${turnSeq}:${occurredAt}`;
-    // ponytail: the claim and this insert are two statements, so another process writing
-    // the same turn between them reaches the primary key instead of the claim. Re-asking
-    // the claim turns that into the answer the caller can act on — already recorded, or
-    // this id reused for different text. Forcing the interleaving in-process is not
-    // possible (no await between the two), so this branch is covered by the sequential
-    // conflict and replay tests plus this comment, not by a race test that would restate
-    // the id derivation.
     const writeUserEvent = () => this.kernel.recordRawEvent({
       eventId: claim?.userEventId,
       projectId: turn.projectId,
@@ -691,8 +677,6 @@ export class KernelAgentMemoryBackend {
       sourceId,
       metadata: {
         ...this.metadataWithCollection({ ...(turn.metadata || {}), sourceAgent: turn.agentId }, turn.collection),
-        // The secret mark belongs to this event and is written where every write routes (#142), not only in
-        // the host bridge: an MCP write used to reach the ledger unmarked and recall returned it verbatim.
         ...secretFindingsMetadata(excludedUser.text),
       },
     });
@@ -740,9 +724,6 @@ export class KernelAgentMemoryBackend {
         prevEventId: userEvent.eventId,
         causalityType: 'replies_to',
         sourceId,
-        // This event carries its own findings only. The turn metadata channel is shared with the user
-        // event, so spreading it would put the user's mark on the assistant turn as well, and the
-        // event marks would then disagree with the hygiene summary that counts them.
         metadata: {
           ...this.metadataWithCollection({ ...omitSecretFindings(turn.metadata), sourceAgent: turn.agentId }, turn.collection),
           ...secretFindingsMetadata(turn.assistantText, 'secretFindingsAssistant'),
@@ -752,10 +733,65 @@ export class KernelAgentMemoryBackend {
     if (assistantEvent) {
       this.kernel.eventStore.updateNextEventId(userEvent.eventId, assistantEvent.eventId);
     }
+    return this.finalizeTurn({
+      turn,
+      userEvent,
+      assistantEvents: assistantEvent ? [assistantEvent] : [],
+      mode,
+      sourceId,
+      threadId,
+      userText: excludedUser.text,
+      assistantText: turn.assistantText ?? '',
+      occurredAt,
+      turnId,
+    });
+  }
+
+  private finalizePrewrittenTurn(turn: AgentTurnMemory): AgentTurnMemoryResult {
+    const prewritten = turn.prewritten!;
+    const userEvent = this.kernel.eventStore.getEvent(prewritten.userEventId);
+    if (!userEvent) throw new Error('captured_turn_user_event_missing');
+    const assistantEvents = (prewritten.assistantEventIds ?? [])
+      .map((eventId) => this.kernel.eventStore.getEvent(eventId))
+      .filter((event): event is MemoryEvent => Boolean(event));
+    const userText = (userEvent.payload as { text?: string }).text ?? '';
+    const assistantText = assistantEvents
+      .map((event) => (event.payload as { text?: string }).text ?? '')
+      .filter(Boolean)
+      .join('\n');
+    const threadId = turn.threadId || userEvent.threadId || turn.sessionId;
+    const occurredAt = turn.timestamp ?? userEvent.occurredAt;
+    const turnId = turn.turnId ?? userEvent.turnId ?? `${turn.agentId}:${turn.sessionId}:${turn.turnSeq ?? 0}:${occurredAt}`;
+    return this.finalizeTurn({
+      turn,
+      userEvent,
+      assistantEvents,
+      mode: turn.ingestMode ?? 'immediate_compile',
+      sourceId: `${turn.agentId}:${turn.sessionId}`,
+      threadId,
+      userText,
+      assistantText,
+      occurredAt,
+      turnId,
+    });
+  }
+
+  private finalizeTurn(input: {
+    turn: AgentTurnMemory;
+    userEvent: MemoryEvent;
+    assistantEvents: MemoryEvent[];
+    mode: AgentTurnIngestMode;
+    sourceId: string;
+    threadId: string;
+    userText: string;
+    assistantText: string;
+    occurredAt: number;
+    turnId: string;
+  }): AgentTurnMemoryResult {
+    const { turn, userEvent, assistantEvents, mode, sourceId, threadId, userText, assistantText, occurredAt, turnId } = input;
     try {
       this.kernel.bindMemoryEvent(userEvent);
     } catch (error) {
-      // Binding is an organizational side index; raw ledger writes must remain authoritative.
       this.kernel.pipelineMetrics.recordNonFatal('memory_binding_failed', {
         projectId: turn.projectId,
         message: error instanceof Error ? error.message : String(error),
@@ -767,7 +803,7 @@ export class KernelAgentMemoryBackend {
       });
     }
     try {
-      this.kernel.assembleEpisodeTurn([userEvent, assistantEvent].filter((event): event is NonNullable<typeof event> => Boolean(event)), {
+      this.kernel.assembleEpisodeTurn([userEvent, ...assistantEvents], {
         projectId: turn.projectId,
         sessionId: turn.sessionId,
         sourceAgent: turn.agentId,
@@ -777,36 +813,36 @@ export class KernelAgentMemoryBackend {
       this.kernel.pipelineMetrics.recordNonFatal('episode_assembly_failed', {
         projectId: turn.projectId,
         message: error instanceof Error ? error.message : String(error),
-        details: { eventIds: [userEvent.eventId, assistantEvent?.eventId].filter(Boolean), sessionId: turn.sessionId },
+        details: { eventIds: [userEvent.eventId, ...assistantEvents.map((event) => event.eventId)], sessionId: turn.sessionId },
       });
     }
 
-    const sourceRefs = [userEvent, assistantEvent].filter(Boolean).map((event) => ({
-      eventId: event!.eventId,
+    const sourceRefs = [userEvent, ...assistantEvents].map((event) => ({
+      eventId: event.eventId,
       eventType: 'message',
       sourceId,
-      contentHash: event!.contentHash,
+      contentHash: event.contentHash,
       threadId,
       sessionId: turn.sessionId,
       turnId,
-      role: event!.role,
-      threadSeq: event!.threadSeq,
-      turnSeq: event!.turnSeq,
-      eventOrdinal: event!.eventOrdinal,
-      parentEventId: event!.parentEventId,
-      prevEventId: event!.prevEventId,
-      nextEventId: event!.nextEventId,
-      causalityType: event!.causalityType,
-      orderingConfidence: event!.orderingConfidence,
+      role: event.role,
+      threadSeq: event.threadSeq,
+      turnSeq: event.turnSeq,
+      eventOrdinal: event.eventOrdinal,
+      parentEventId: event.parentEventId,
+      prevEventId: event.prevEventId,
+      nextEventId: event.nextEventId,
+      causalityType: event.causalityType,
+      orderingConfidence: event.orderingConfidence,
     }));
     const content = [
-      `User: ${excludedUser.text}`,
-      turn.assistantText ? `Agent: ${turn.assistantText}` : '',
+      `User: ${userText}`,
+      assistantText ? `Agent: ${assistantText}` : '',
     ].filter(Boolean).join('\n');
-    const compileSignalText = `User: ${excludedUser.text}`;
+    const compileSignalText = `User: ${userText}`;
 
     const decision = this.shouldCompileTurn(mode, compileSignalText);
-    const rawEventIds = [userEvent, assistantEvent].filter(Boolean).map((event) => event!.eventId);
+    const rawEventIds = [userEvent, ...assistantEvents].map((event) => event.eventId);
     const named = turn.turnId ? { turnId: turn.turnId } : {};
     if (!decision.compile) {
       return {

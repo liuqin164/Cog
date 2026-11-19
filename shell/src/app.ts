@@ -1086,14 +1086,9 @@ export class CompanionShell implements ShellControl, AttachShell {
     }
   }
 
-  /**
-   * The digest stubs finished tasks left behind (#263). The stub is built from ledger rows, so it
-   * is written after the run's turn is captured; a restart between the declaration and the write
-   * retries here on the next assembly.
-   */
   private laneDigestStubs(): SessionDigestEntry[] {
     this.materializeTaskProcedure(false);
-    this.materializeTaskEndStub();
+    this.materializeTaskEndStub(undefined, undefined, this.machine.activeRunId);
     return [...(this.machine.runtime.taskStubs ?? [])];
   }
 
@@ -1222,13 +1217,10 @@ export class CompanionShell implements ShellControl, AttachShell {
     }
   }
 
-  /**
-   * Build the one stub a declared task end leaves in the digest lane. `turnId` is the end
-   * declaration's run when the caller has the summary; without it the checkpointed turn id is used.
-   */
-  private materializeTaskEndStub(turnId?: string, runId?: string): void {
+  private materializeTaskEndStub(turnId?: string, runId?: string, deferRunId?: string): void {
     const pending = this.machine.runtime.lastEndedTask;
     if (!pending) return;
+    if (deferRunId !== undefined && pending.runId === deferRunId) return;
     const resolvedTurnId = pending.turnId
       ?? (pending.runId !== undefined && pending.runId === runId ? turnId : undefined);
     if (!resolvedTurnId) {
@@ -3372,11 +3364,8 @@ function buildTaskStub(
   const taskTurns = turns.filter((turn) => turn.occurredAt >= input.startedAt);
   if (taskTurns.length === 0) return undefined;
   const currentUser = taskTurns.find((turn) => turn.turnId === input.turnId && turn.role === 'user');
-  // The end declaration runs inside its own turn, but capture writes that turn's rows only at
-  // `agent_end`. A later turn of the same run can assemble before that, so without this gate the
-  // stub would quote the previous task's rows and clear `lastEndedTask` too early.
   if (!currentUser) return undefined;
-  const currentAssistant = [...taskTurns].reverse().find((turn) => turn.turnId === input.turnId && turn.role === 'assistant');
+  const currentAssistant = taskTurns.find((turn) => turn.turnId === input.turnId && turn.role === 'assistant');
   const priorAssistant = [...taskTurns.slice(0, taskTurns.indexOf(currentUser))].reverse().find((turn) => turn.role === 'assistant');
   const opening = taskTurns.find((turn) => turn.role === 'user') ?? taskTurns[0]!;
   const closing = priorAssistant ?? currentAssistant ?? opening;

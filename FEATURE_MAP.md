@@ -10,7 +10,7 @@
 | 功能 | 是什么 | 谁在用 | 靠什么证明 | 状态 |
 |---|---|---|---|---|
 | 账本 | 一切记忆的原始记录，只追加不改 | 捕获写、召回/装配读（KernelAgentMemoryBackend） | 根套件 2329 测试；box 纠正传播实测 | ✅ |
-| 捕获 | 每轮结束把对话写进账本 | app.ts 三处 rememberTurnWithResult + capture 插件 | 壳 capture 测试；box 对话后复述 | ⚠️ 只在轮末捕获，崩溃丢当轮；大工具结果捕获慢 — #348/#359 |
+| 捕获 | 消息与工具结果产生即写账本（raw 事件），轮末只做 episode/编译；中断轮可从账本恢复 | capture 插件逐事件 recordRawEvent/ingestTool* + agent_end finalize | 壳 capture 测试＋capture-durability（轮内 mem:、kill -9 后会话含中断轮）＋capture-perf（40/12 KB 原样入账不编译） | ✅ 大工具结果由 #343 删掉编译基底后恢复线性（#359 加门）；增量落盘 #348 |
 | 召回 | 按相关性捞回旧事（raw 账本＋Atlas＋Frames；#343 删编译基底后） | recall 插件每轮装进 recall 车道（limit 3）；命中的 profile 摘要在 working_set 展开为原文 | A6 基线（嵌入 @5 93.3%，rule-only 33.3%）；记分卡长会话 592/600；#72 超代四例＋#253 展开正向例（round 128，关掉超代过滤即红） | Atlas 按天和解＋命中反馈已接（#356 关）；首次构建由召回兜底（#361 关）；Atlas 条目在合并层被丢弃 — #362（round 128 实测发现） |
 | 画像 | 关于主人的稳定事实册 | 装配器 profile 车道每轮注入 | 提取质量探针（4 条事实命中率） | ⚠️ 质量下限未达 — #329 |
 | 做法册 | 做成过的事沉淀成步骤 | declare_task end 时编译；装配时按任务匹配 | #265 实测（浮现不提升，定为不主动推） | ⚠️ 弱模型上生产者不触发（box 实测 declare 0 次） |
@@ -30,7 +30,7 @@
 | 笼子 | 回合/令牌预算＋工具白名单，超限暂停到 SUSPENDED | cage 插件在钩子点拦截 | cage.test.ts；#222 预算档位 | ✅ |
 | 浮现 | 到期承诺/意图在合适时机冒出来 | emergence 插件（nextWakeAt/surfacingCandidates） | F6/F7/F8/F10 门测试 | ⚠️ 反馈环未接（无人调 recordSurfacingFeedback/snooze）— #330 |
 | 时间 | 每轮注入分钟级当前时间，保前缀缓存 | clock 插件 | #320 测试（相邻请求前缀 100% 一致） | ✅ |
-| 秘密脱敏 | 密钥类文本进账本前抹掉 | capture 插件＋模型路由的 redactSecretText | 根套件脱敏测试 | ✅（捕获成本问题在 #359） |
+| 秘密脱敏 | 密钥类文本进账本前抹掉 | capture 插件＋模型路由的 redactSecretText | 根套件脱敏测试 | ✅ |
 | 模型接入 | 自定义 OpenAI 协议端点＋mg 路由 | provider 插件每轮调用 | box/生产多路由实测 | ✅ |
 | 嵌入 | 本地 bge 向量，可换 ollama/OpenAI 协议 | 召回车道算向量；壳启动 warm 成功后调 backfillEventEmbeddings 补嵌旧事件 | #313 测试；round 128 补嵌判别测试（换模型重开后 nearest 由空转命中、stale 转 false） | ✅ 换模型/维度后旧事件自动补嵌（#360 关）；仅壳本地嵌入 warm 成功后执行，失败不致命 |
 | 观测台（星海） | 网页看记忆/图谱、改灵魂 | kernel-host 挂 observatory，令牌文件鉴权 | #308 令牌测试；日常人工使用 | ✅ |
