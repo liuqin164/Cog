@@ -1658,6 +1658,19 @@ export class EventStore {
     return true;
   }
 
+  markToolObservationPromoted(eventId: string): boolean {
+    const row = this.db.prepare('SELECT payload_json FROM memory_events WHERE event_id=?').get(eventId) as { payload_json: string } | undefined;
+    if (!row) return false;
+    const payload = JSON.parse(this.decodePayload(row.payload_json)) as Record<string, unknown>;
+    const metadata = (payload.metadata && typeof payload.metadata === 'object' ? payload.metadata : {}) as Record<string, unknown>;
+    if (metadata.toolObservationPromoted === true) return false;
+    payload.metadata = { ...metadata, toolObservationPromoted: true };
+    const payloadJson = JSON.stringify(payload);
+    this.db.prepare('UPDATE memory_events SET payload_json=?, payload_hash=? WHERE event_id=?')
+      .run(this.encodePayload(payloadJson), createHash('sha256').update(payloadJson).digest('hex'), eventId);
+    return true;
+  }
+
   /**
    * Correct the life-sensitivity mark on one event (#164), or clear the correction with `null`.
    *

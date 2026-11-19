@@ -94,6 +94,25 @@ import { eventHoldsLifeSensitivityMark } from '../security/LifeSensitivity.js';
 import { RecallDecisionTrace, type RecallTraceSuppression } from '../observability/RecallDecisionTrace.js';
 import { TraceStore } from '../observability/TraceStore.js';
 
+export const TOOL_OBSERVATION_TRUST = 'tool_observation' as const;
+export const TOOL_OBSERVATION_WHY_MATCHED = 'tool observation (untrusted)';
+export const TOOL_OBSERVATION_PROMOTED_KEY = 'toolObservationPromoted';
+
+function isToolObservationEvent(event: MemoryEvent): boolean {
+  return event.rawEventType === 'tool_result' || event.rawEventType === 'tool_call' || event.role === 'tool';
+}
+
+function isPromotedToolObservation(event: MemoryEvent): boolean {
+  const metadata = (event.payload as { metadata?: Record<string, unknown> }).metadata;
+  return metadata?.[TOOL_OBSERVATION_PROMOTED_KEY] === true;
+}
+
+function sameRecallContent(left: string, right: string): boolean {
+  const a = left.trim().replace(/\s+/g, ' ');
+  const b = right.trim().replace(/\s+/g, ' ');
+  return a.length >= 12 && b.length >= 12 && (a.includes(b) || b.includes(a));
+}
+
 export type AgentTurnIngestMode =
   | 'immediate_compile'
   | 'selective_compile'
@@ -300,6 +319,7 @@ export interface AgentRecallItem {
   confidence?: number;
   whyMatched?: string;
   canAnswerExactQuote?: boolean;
+  trust?: typeof TOOL_OBSERVATION_TRUST;
   /**
    * Present when this item's text has been through redaction: how many values were
    * removed and how many characters they held. Without it a caller cannot tell an
@@ -1512,6 +1532,9 @@ export class KernelAgentMemoryBackend {
     // so it cannot apply to some lanes and not others. Off by default; with it off this is the identity.
     const phased = this.projectPhases(agentKept, query);
     const zeroExplanation = phased.items.length === 0 ? this.explainZeroResult(query) : undefined;
+    const ordered = [...phased.items].sort((left, right) => (
+      Number(left.trust === TOOL_OBSERVATION_TRUST) - Number(right.trust === TOOL_OBSERVATION_TRUST)
+    ));
     const suppressions = mergeSuppressions(
       mergeSuppressions(result.decisionTrace?.suppressed, gated.suppressed),
       phased.suppressed,
@@ -1519,7 +1542,7 @@ export class KernelAgentMemoryBackend {
     return {
       result: {
         ...result,
-        items: phased.items.map(withRedactionMarks),
+        items: ordered.map(withRedactionMarks),
         decisionTrace: result.decisionTrace
           ? {
             ...result.decisionTrace,
@@ -2382,7 +2405,9 @@ export class KernelAgentMemoryBackend {
     const merged: AgentRecallItem[] = [];
     const seen = new Set<string>();
     const keptByKey = new Map<string, AgentRecallItem>();
-    for (const item of [...prioritizedPrimary, ...secondary.filter((candidate) => candidate !== semanticAtlas || !promotesAtlas)]) {
+    const candidates = [...prioritizedPrimary, ...secondary.filter((candidate) => candidate !== semanticAtlas || !promotesAtlas)]
+      .sort((left, right) => Number(left.trust === TOOL_OBSERVATION_TRUST) - Number(right.trust === TOOL_OBSERVATION_TRUST));
+    for (const item of candidates) {
       const keys = [item.canonicalId, item.sourceAnchor?.eventId, item.id].filter((value): value is string => Boolean(value));
       const duplicate = keys.map((key) => keptByKey.get(key)).find((candidate): candidate is AgentRecallItem => Boolean(candidate));
       if (keys.some((key) => seen.has(key))) {
@@ -2395,6 +2420,10 @@ export class KernelAgentMemoryBackend {
         continue;
       }
       for (const key of keys) { seen.add(key); keptByKey.set(key, item); }
+      if (item.trust === TOOL_OBSERVATION_TRUST
+        && merged.some((existing) => existing.trust !== TOOL_OBSERVATION_TRUST && sameRecallContent(existing.text, item.text))) {
+        continue;
+      }
       merged.push(item);
     }
     return filterSuperseded(merged, (item) => ({
@@ -2562,9 +2591,7 @@ export class KernelAgentMemoryBackend {
   }
 
   private isRawEventInRecallScope(event: MemoryEvent, query: AgentRecallQuery, effectiveIntent?: AgentRecallIntent): boolean {
-    // A turn that holds a secret is stored verbatim and marked, never redacted, so the default lanes
-    // do not hand it back. A question about the words someone used still may — that is the caller's
-    // explicit intent — and both outcomes are counted for the trace.
+    if (isToolObservationEvent(event) && !isPromotedToolObservation(event)) return false;
     if (eventHoldsSecretMark(event) && !FORENSIC_SOCIAL_EXEMPT_INTENTS.has(String(effectiveIntent ?? ''))) {
       SECRET_WITHHELD_EVENT_IDS.set(this, (SECRET_WITHHELD_EVENT_IDS.get(this) ?? new Set()).add(event.eventId));
       return false;
@@ -2650,6 +2677,7 @@ export class KernelAgentMemoryBackend {
     const sourceRef = metadata.sourceRef && typeof metadata.sourceRef === 'object'
       ? metadata.sourceRef as { sourcePath?: string }
       : undefined;
+    const toolObservation = isToolObservationEvent(event);
     return {
       id: event.eventId,
       text: typeof payload.text === 'string' ? payload.text : JSON.stringify(event.payload),
@@ -2660,8 +2688,11 @@ export class KernelAgentMemoryBackend {
       sourceAnchor: this.toAgentSourceAnchor(event),
       sourceContext: this.toAgentSourceContext(event.eventId),
       confidence: importedSummary ? 0.45 : 1,
-      whyMatched: importedSummary ? 'imported_summary_raw_source_fallback' : options.whyMatched,
+      whyMatched: importedSummary
+        ? 'imported_summary_raw_source_fallback'
+        : toolObservation ? TOOL_OBSERVATION_WHY_MATCHED : options.whyMatched,
       canAnswerExactQuote: importedSummary ? false : options.canAnswerExactQuote,
+      ...(toolObservation ? { trust: TOOL_OBSERVATION_TRUST } : {}),
     };
   }
 
@@ -2685,6 +2716,7 @@ export class KernelAgentMemoryBackend {
     const event = this.toAgentSourceContextEvent(context.event);
     const occasion = this.kernel.occasionScope.resolve(this.binding).occasion;
     const inScope = (candidate: MemoryEvent) => {
+      if (isToolObservationEvent(candidate) && !isPromotedToolObservation(candidate)) return false;
       if (!secretExempt && eventHoldsSecretMark(candidate)) return false;
       // A window is part of the answer: a daily item's neighbours must obey the same occasion as
       // the item, or a group query reaches a private turn through the two turns around it (#162).

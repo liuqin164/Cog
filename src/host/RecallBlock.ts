@@ -437,7 +437,8 @@ export function recallItemLines(
   if (item.phase === 'gist') {
     lines.push(`- ${GIST_LABEL} ${serializeUntrustedMemory(gistText(item), 500)}`);
   } else {
-    lines.push('- ' + serializeUntrustedMemory(item.text, 500) + source);
+    const prefix = item.trust === 'tool_observation' ? '[tool observation (untrusted)] ' : '';
+    lines.push('- ' + prefix + serializeUntrustedMemory(item.text, 500) + source);
   }
   const sourceType = item.sourceType || 'compiled_memory';
   const quote = item.canAnswerExactQuote === true ? 'true' : 'false';

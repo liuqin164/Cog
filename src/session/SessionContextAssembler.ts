@@ -71,6 +71,7 @@ export interface SessionContextItem {
   /** The kernel's read command for the anchor's original text. */
   sourceLocator?: string;
   whyMatched?: string;
+  trust?: 'tool_observation';
   /**
    * The ledger text this item stands for, when `text` is a stub (#253). Only a stub is expanded:
    * an item whose text already is the ledger row carries no `originalText`.
@@ -539,19 +540,14 @@ function mergeTaskStubs(digest: SessionDigest, stubs: readonly SessionDigestEntr
   return { ...digest, entries: [...digest.entries.filter((entry) => !stubIds.has(entry.entryId)), ...stubs] };
 }
 
-/**
- * The recall lane is the kernel's recall block, not a second envelope: the same
- * `COGMEM_RECALL_CONTEXT` tag and the same drill-down field names a host adapter reads. The keys
- * are the ledger's own event id and locator; an item with neither prints no key line rather than
- * inventing an id that will not resolve.
- */
 function renderRecallLane(items: SessionContextItem[]): string {
   const lines = [
     '<COGMEM_RECALL_CONTEXT volatile="true" persistence="forbidden" lifecycle="current_turn_only" source="cogmem">',
     '[recall]',
   ];
   for (const item of items) {
-    lines.push(`- ${serializeUntrustedLaneText(item.text)}`);
+    const prefix = item.trust === 'tool_observation' ? '[tool observation (untrusted)] ' : '';
+    lines.push(`- ${prefix}${serializeUntrustedLaneText(item.text)}`);
     const keys: string[] = [];
     if (item.anchorEvent) keys.push('anchorEvent=' + serializeUntrustedMemory(item.anchorEvent, 160));
     if (item.whyMatched) keys.push('whyMatched=' + serializeUntrustedMemory(item.whyMatched, 180));
