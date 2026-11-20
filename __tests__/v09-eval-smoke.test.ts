@@ -1,11 +1,7 @@
 import { describe, expect, mock, test } from 'bun:test';
-import Database from 'bun:sqlite';
 import type { EvalSuiteName } from '../../eval/runners/EvalRunner.js';
-import { ProposalBoard } from '../src/boards/ProposalBoard.js';
-import { BoardEventBus } from '../src/boards/BoardEventBus.js';
 import { BenchmarkRunner } from '../src/benchmark/BenchmarkRunner.js';
 import { BENCHMARK_GROUPS } from '../src/benchmark/BenchmarkRegistry.js';
-import { ProposalLedger } from '../src/meta/ProposalLedger.js';
 
 const KNOWN_BASELINE_METRICS = {
   brain_vs_dump_token_ratio: 0.049,
@@ -79,58 +75,5 @@ describe('v0.9 eval baselines regression', () => {
     expect(KNOWN_BASELINE_METRICS.delivery_rate).toBe(1.0);
     expect(KNOWN_BASELINE_METRICS.continuity_rate).toBe(1.0);
     expect(mockEvalRunner.runAll).toHaveBeenCalledTimes(0);
-  });
-});
-
-describe('ProposalBoard smoke', () => {
-  test('snapshot returns proposals board data with numeric totalProposals', async () => {
-    const db = new Database(':memory:');
-    const ledger = new ProposalLedger(db);
-    ledger.initSchema();
-    const board = new ProposalBoard(ledger);
-
-    const snapshot = await board.snapshot();
-
-    expect(snapshot.boardId).toBe('proposals');
-    expect(typeof snapshot.data.totalProposals).toBe('number');
-  });
-
-  test('stream unsubscribe prevents future callbacks', () => {
-    const db = new Database(':memory:');
-    const ledger = new ProposalLedger(db);
-    ledger.initSchema();
-    const eventBus = new BoardEventBus();
-    const board = new ProposalBoard(ledger, eventBus);
-    const callback = mock(() => {});
-
-    const unsubscribe = board.stream(callback);
-    unsubscribe();
-    eventBus.emit({
-      boardId: 'proposals',
-      eventType: 'proposal.applied',
-      payload: { proposalId: 'proposal-1' },
-      timestamp: Date.now()
-    });
-
-    expect(callback).toHaveBeenCalledTimes(0);
-  });
-
-  test('proposal.applied events are forwarded to stream subscribers', () => {
-    const db = new Database(':memory:');
-    const ledger = new ProposalLedger(db);
-    ledger.initSchema();
-    const eventBus = new BoardEventBus();
-    const board = new ProposalBoard(ledger, eventBus);
-    const callback = mock(() => {});
-
-    board.stream(callback);
-    eventBus.emit({
-      boardId: 'proposals',
-      eventType: 'proposal.applied',
-      payload: { proposalId: 'proposal-1' },
-      timestamp: Date.now()
-    });
-
-    expect(callback).toHaveBeenCalledTimes(1);
   });
 });

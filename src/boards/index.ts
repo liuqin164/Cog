@@ -7,5 +7,3 @@ export * from './ProcessBoard.js';
 export * from './MemoryBoard.js';
 export * from './ContextBoard.js';
 export * from './ApprovalBoard.js';
-export * from './ProposalBoard.js';
-export * from './ReasoningTraceBoard.js';

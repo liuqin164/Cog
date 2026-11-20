@@ -28,7 +28,6 @@ export * from './boards/BoardEventBus.js';
 export * from './boards/ContextBoard.js';
 export * from './boards/MemoryBoard.js';
 export * from './boards/ProcessBoard.js';
-export * from './boards/ProposalBoard.js';
 export * from './boards/TaskBoard.js';
 export * from './boards/index.js';
 export * from './core/IntentParser.js';
