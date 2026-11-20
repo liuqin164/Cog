@@ -6,6 +6,7 @@ import { printJsonDocument } from './CliJson.js';
 import { join, resolve } from 'node:path';
 
 import { loadCogmemConfig, resolveCogmemConfigPath } from '../config/CogmemConfig.js';
+import { companionCliConfigPath } from '../config/ConfigPath.js';
 import { createMemoryKernelFromConfig } from '../factory.js';
 import { EventEmbeddingStore } from '../embedding/EventEmbeddingStore.js';
 import type { SharedCollection } from '../ports/index.js';
@@ -406,6 +407,9 @@ if (envPath) {
     // No config is the state every fresh install is in. It is not a failure:
     // it is the gate saying "now configure it", with the command that does it.
     const bin = resolveCogmemInvocation();
+    const steps = companionCliConfigPath(process.env)
+      ? installPathSteps(bin).filter((step) => step.id === 'install_gate')
+      : installPathSteps(bin);
     if (!json) {
       console.log(`cogmem is installed but not configured yet (looked for ${resolution.path}).`);
     }
@@ -413,7 +417,7 @@ if (envPath) {
       buildGate(
         'not_installed',
         [{ code: 'missing_config', message: `no cogmem config at ${resolution.path}` }],
-        [...pathSteps, ...installPathSteps(bin)],
+        [...pathSteps, ...steps],
       ),
       { configPath: null, resolvedConfigPath: resolution.path },
     );

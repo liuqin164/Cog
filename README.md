@@ -30,7 +30,7 @@ cogmem install
 cog
 ```
 
-`install.sh` installs the released package from the npm registry and links the CLI; it never runs the wizard and never writes config. `cogmem install` does the rest, in six steps:
+`install.sh` installs the released package from the npm registry and links the CLI; it never runs the wizard. `cogmem install` does the rest, in six steps:
 
 1. **preflight** — system, Bun runtime, disk space, and the loopback port.
 2. **place** — the data directory, an empty kernel database, and the default soul.
@@ -38,6 +38,10 @@ cog
 4. **rhythm** — timezone, the Dream window, and an optional quiet window.
 5. **resident** — a user-level service (systemd user unit on Linux, launchd agent on macOS; no sudo), then `doctor` and the observatory address.
 6. **awake** — write a probe memory through the resident, restart it, and recall the probe. A failure here means the install did not happen.
+
+After `cogmem install`, `cogmem` works directly: the management CLI resolves the companion's own
+database, so `cogmem doctor` and `cogmem memory recall` operate on that install without
+`cogmem init` and without a `~/.cogmem/config.toml`.
 
 The default data directory is `~/.cogmem/companion` (mode 0700), with `memory.sqlite` and a `snapshots/` directory inside it. The resident listens on loopback only.
 

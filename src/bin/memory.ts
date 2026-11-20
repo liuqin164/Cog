@@ -4,7 +4,8 @@ import { setTimeout as sleep } from 'node:timers/promises';
 
 import { KernelAgentMemoryBackend, type AgentRecallIntent } from '../agent/index.js';
 import { createMemoryKernel, createMemoryKernelFromConfig, type MemoryKernel } from '../factory.js';
-import { loadCogmemConfig, resolveWorkspaceRoot } from '../config/CogmemConfig.js';
+import { loadCogmemConfig, resolveCogmemConfigPath, resolveWorkspaceRoot } from '../config/CogmemConfig.js';
+import { companionIdentityForConfig } from '../config/ConfigPath.js';
 import { workspaceScope } from '../host/IntegrationScope.js';
 import {
   memoryEventCharRange,
@@ -697,14 +698,19 @@ function runRecall(kernel: MemoryKernel, args: MemoryArgs): Record<string, unkno
   const backend = new KernelAgentMemoryBackend(kernel, {
     binding: kernel.occasionScope.register({ channelId: 'cli', occasion: 'private' }),
   });
-  const projectId = args.projectId || workspaceScope(resolveWorkspaceRoot({ configPath: args.configPath }));
+  const resolvedConfig = resolveCogmemConfigPath({ configPath: args.configPath });
+  const companion = args.dbPath ? undefined : companionIdentityForConfig(resolvedConfig.path);
+  const projectId = args.projectId || companion?.projectId
+    || workspaceScope(resolveWorkspaceRoot({ configPath: args.configPath }));
   // Asking for a project's memory asks as the agent that project's writes are recorded
   // under, which is what the recall path already does (`agentId || projectId`): a
   // record with no agent name is scoped to the project it is bound to (ADR-0006, #85).
   // Defaulting to a literal instead meant the CLI could not read back a workspace's own
   // writes — the memory was there, and `memory search` found it (#88). The default is
   // now the Workspace's own scope, the same value `cogmem import` writes into (#207).
-  const agentId = args.agentId || projectId;
+  const agentId = args.agentId
+    || (companion && projectId === companion.projectId ? companion.agentId : undefined)
+    || projectId;
   const strategyCapsule = kernel.strategyCortex.plan({
     query: args.query,
     intent: kernel.contextCortex.classifyIntent(args.query),

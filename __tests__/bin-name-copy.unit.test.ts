@@ -29,6 +29,8 @@ const NOT_COMMANDS: Record<string, string> = {
   'cogmem-import': 'log line prefix',
   'cogmem-checkpoint': 'episode checkpoint file suffix',
   'cogmem-temp-probe': 'temporary directory prefix',
+  'cogmem-cli': 'companion CLI config filename',
+  'cogmem-companion': 'default companion agent id',
   'cogmem-normalized': 'generated frontmatter key',
   'cogmem-normalized-source-family': 'generated frontmatter key',
   'cogmem-normalized-from': 'generated frontmatter key',
