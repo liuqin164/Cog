@@ -6,10 +6,9 @@
  * shell, a due intent re-injects the clock, the cage's overrun leaves RUNNING. Plugins decide
  * behaviour; the app decides which transition that behaviour is.
  */
-import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { ChannelContract, createMemoryKernel, digestAnchors, KernelAgentMemoryBackend, readSessionToolCalls, readSessionTurns, type ChannelSession, type DeliveryCandidateInput, type EmbeddingProvider, type MemoryKernel, type SessionContextAssembly, type SessionContextItem, type SessionDigestEntry, type SessionToolCall, type SessionTurn, type SurfacingSource } from 'cogmem';
+import { ChannelContract, createMemoryKernel, KernelAgentMemoryBackend, type ChannelSession, type EmbeddingProvider, type MemoryKernel, type SessionContextAssembly, type SurfacingSource } from 'cogmem';
 import { ModelRegistry, type ModelRoleConfig, type ModelRoleName, type ModelTextUsage } from 'cogmem/internal';
 import { defaultShellConfig, type ShellConfig } from './config.ts';
 import { StateMachine } from './state/machine.ts';
@@ -28,7 +27,7 @@ import { builtinToolsPlugin } from './plugins/builtin-tools.ts';
 import { coreCommandFor, availableCoreCommand, unknownCommandReply, type CommandHost, type CommandReply } from './commands.ts';
 import { proposalPlugin } from './plugins/proposal.ts';
 import { askPlugin } from './plugins/ask.ts';
-import { CommandProposals, executeProposal, isProposableCommand, type CommandProposal, type ProposalConfirmation } from './proposals.ts';
+import { CommandProposals, isProposableCommand, type CommandProposal } from './proposals.ts';
 import { capturePlugin } from './plugins/capture.ts';
 import { sessionContextPlugin } from './plugins/session-context.ts';
 import { assignmentPlugin } from './plugins/assignment.ts';
@@ -37,14 +36,11 @@ import { soulEditPlugin } from './plugins/soul-edit.ts';
 import { dreamPlugin } from './plugins/dream.ts';
 import { emergencePlugin } from './plugins/emergence.ts';
 import { terminalPlugin, TerminalChannel, type ShellControl } from './channels/terminal.ts';
-import { AgentRuntime, type AgentMessage, type ModelProvider, type RunSummary } from './state/agent-loop.ts';
+import { AgentRuntime, type ModelProvider, type RunSummary } from './state/agent-loop.ts';
 import type { ToolOutputAccount } from './state/context-budget.ts';
 import { laneAssemblyView, type ContextMetrics } from './state/session-lanes.ts';
-import { SecretRedactor, startKernelHttpFace, type HttpFaceHandle } from './kernel-host.ts';
-import { formatBytes, memoryPressureAction, readMemoryUsage } from './memory.ts';
-import { rotateLogFile, SERVICE_LOG_MAX_BYTES } from './log-rotation.ts';
+import { startKernelHttpFace, type HttpFaceHandle } from './kernel-host.ts';
 import { AttachServer, defaultSocketPath, type AttachShell } from './attach/server.ts';
-import { enqueueAway } from './presence.ts';
 import { loadNativePlugins, type PluginLoadResult } from './plugins/load.ts';
 import { UpgradeAdmin } from './upgrade/admin.ts';
 import type { StageUpgradeInput, StagedTree } from './upgrade/stage.ts';
@@ -59,30 +55,8 @@ import { RunLoop } from './run-loop.ts';
 import { ProposalsHandlers } from './proposals-handlers.ts';
 import { SovereigntyCommands } from './sovereignty.ts';
 import { StatusFace } from './status-face.ts';
+import { ResidentTick } from './resident-tick.ts';
 
-/**
- * A task-exit stub (#263) quotes each source ledger row as an exact prefix; the full row stays one
- * `read mem:<eventId>` away. The list is bounded because a resident may finish tasks forever.
- */
-const MAX_TASK_STUB_QUOTE_CHARS = 240;
-const MAX_TASK_STUBS = 20;
-/** If the run's ledger row never arrives (capture paused), stop retrying the stub after an hour. */
-const TASK_STUB_RETRY_MS = 60 * 60_000;
-const DREAM_RETRY_BASE_MS = 5 * 60_000;
-const DREAM_RETRY_CAP_MS = 30 * 60_000;
-const DREAM_MAX_ATTEMPTS_PER_NIGHT = 5;
-const SNAPSHOT_INTERVAL_MS = 24 * 60 * 60_000;
-
-/**
- * Emergence's stop-bleed (#229): a candidate is spoken or queued at most once, and at most eight
- * times in a configured-zone day (#285). The count is checkpointed, so a restart cannot reset
- * today's silence. Per-source frequency is F7's job.
- *
- * shortcut: the consumed-key list keeps the newest 500; an event older than that may surface once
- * more. Raise the cap if a resident ever accumulates candidates faster than 500 per lifetime.
- */
-const EMERGENCE_DAILY_LIMIT = 8;
-const MAX_EMERGENCE_CONSUMED = 500;
 
 export interface CompanionShellOptions {
   config?: Partial<ShellConfig>;
@@ -149,11 +123,12 @@ export class CompanionShell implements ShellControl, AttachShell {
   readonly statusFace: StatusFace;
   readonly contextLanes: ContextLanes;
   readonly runLoop: RunLoop;
+  readonly residentTick: ResidentTick;
   runtime?: AgentRuntime;
   cage?: RunCage;
   clock?: ClockService;
-  private dream?: { integrate(...args: [string, string, number?]): Promise<{ localDate: string; eventCount: number; sourceRefs: unknown[]; summary: string; memoryModelUsed?: boolean; memoryModelDegraded?: string; kernelNightRan?: boolean }> };
-  private emergence?: {
+  dream?: { integrate(...args: [string, string, number?]): Promise<{ localDate: string; eventCount: number; sourceRefs: unknown[]; summary: string; memoryModelUsed?: boolean; memoryModelDegraded?: string; kernelNightRan?: boolean }> };
+  emergence?: {
     hasDue?(now?: number): boolean;
     decide(now?: number): {
       candidates: Array<{
@@ -171,7 +146,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     };
   };
   /** The last candidate spoken per F6 source, so the owner's next line can close F7's loop. */
-  private readonly surfacedByType = new Map<SurfacingSource, {
+  readonly surfacedByType = new Map<SurfacingSource, {
     candidateId: string;
     sourceRefs: Array<{ eventId?: string; sourceId?: string; contentHash?: string }>;
   }>();
@@ -197,9 +172,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   /** `mem:` reads since the previous assembly; the next trace reports and clears it. */
   private drillsSinceAssembly = 0;
   /** The latest project event the compiled books were last brought up to. */
-  private compiledThroughEventId?: string;
-  /** Whether a soul-read failure has been traced; the read itself is retried on the next turn. */
-  private soulFailureTraced = false;
+  compiledThroughEventId?: string;
   workLabel = '';
   runTurns = 0;
   runTokens = 0;
@@ -223,7 +196,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   /** An upgrade outcome already spoken by this process; attaches read it once, then it is gone. */
   lastUpgrade?: UpgradeOutcome;
   /** One memory notice per crossing, reset after we drop below 90% of the ceiling. */
-  private memoryWarned = false;
+  memoryWarned = false;
   /** The day whose daily-budget stop was already spoken to the user (#233). */
   dailyNotifiedDay?: string;
   /** The Dream model's spend for the current night, charged to the same day counter (#231). */
@@ -242,7 +215,6 @@ export class CompanionShell implements ShellControl, AttachShell {
    * not carry the assignment block either — otherwise the model would try anyway.
    */
   hideAssignmentContext = false;
-  private readonly redactor = new SecretRedactor();
   /**
    * The CLI config this process writes for its own bash children. `COGMEM_CONFIG` points at it, so a
    * `cogmem` invocation inside the companion resolves `<dataDir>/memory.sqlite` rather than the
@@ -338,6 +310,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.statusFace = new StatusFace(this);
     this.contextLanes = new ContextLanes(this);
     this.runLoop = new RunLoop(this);
+    this.residentTick = new ResidentTick(this);
     this.proposals = new CommandProposals(
       (command) =>
         isProposableCommand(command) &&
@@ -545,7 +518,7 @@ export class CompanionShell implements ShellControl, AttachShell {
         // below; the closure reads it lazily.
         health: () => ({
           state: this.machine.state,
-          plugins: this.pluginHealth(),
+          plugins: this.pluginsAdmin.pluginHealth(),
           embedding: this.embeddingStatus(),
           memoryModel: this.statusFace.memoryModelHealth(),
           contextAssembly: {
@@ -579,7 +552,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.machine.updateRuntime({ declaredTools: this.executableToolNames() });
     if (this.machine.state === 'DORMANT') {
       await this.machine.dispatch('boot', { reason: 'process_start' });
-      this.injectTimeContext('process_start');
+      this.residentTick.injectTimeContext('process_start');
       await this.machine.dispatch('context_injected', { reason: 'waking_complete' });
     }
     // The upgrade's report is owed to the user, not to the next command: it is settled here and on
@@ -619,7 +592,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       });
     }
     this.started = true;
-    this.rotateServiceLog();
+    this.residentTick.rotateServiceLog();
     this.trace.append('shell_started', { state: this.machine.state, mi: this.machine.wakeIntents.length });
     // Loading the model (and the one-time download on an upgrade) is deliberately not awaited: the
     // health face and the first turns must be ready before the 99 MiB arrives. Until it does, recall
@@ -627,12 +600,12 @@ export class CompanionShell implements ShellControl, AttachShell {
     void this.warmEmbedding();
     // The offer is in-memory, the pause is not: a restart re-offers the approval for a budget pause.
     if (this.machine.state === 'SUSPENDED' && this.machine.runtime.suspension?.kind === 'budget') {
-      this.offerResume(this.machine.runtime.suspension.id);
+      this.proposalsHandlers.offerResume(this.machine.runtime.suspension.id);
     }
     // A restart the plugin surface asked for is the one restart that continues the open assignment
     // on its own. Deferred so the HTTP/attach faces are serving before the run begins; a kill (no
     // request) never sets the flag, so recovery still lands in IDLE and waits.
-    this.resumeAfterRequestedRestart();
+    this.pluginsAdmin.resumeAfterRequestedRestart();
   }
 
   /** The embedder's state for `/health`; a missing embedder says so rather than looking active. */
@@ -754,10 +727,10 @@ export class CompanionShell implements ShellControl, AttachShell {
       sessionId: this.config.sessionId,
       targetTokens: () => this.targetTokens(),
       tailTurns: this.config.tailTurns,
-      pinned: () => this.lanePinned(),
-      profile: () => this.laneProfile(),
-      openLoops: () => this.laneOpenLoops(),
-      digestStubs: () => this.laneDigestStubs(),
+      pinned: () => this.contextLanes.lanePinned(),
+      profile: () => this.contextLanes.laneProfile(),
+      openLoops: () => this.contextLanes.laneOpenLoops(),
+      digestStubs: () => this.contextLanes.laneDigestStubs(),
       ledgerSeq: () => this.kernel.eventStore.getLatestGlobalSeq(),
       variablePrompt: () => this.systemPromptSections().tail,
       onAssembly: (assembly) => {
@@ -835,7 +808,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.runtime = new AgentRuntime({
       bus: this.host.bus,
       // Pi #10000: the whole prompt is durable before the model call, redacted before it reaches the trace.
-      onPrompt: (input) => this.recordPrompt(input),
+      onPrompt: (input) => this.contextLanes.recordPrompt(input),
       tools: this.host.tools,
       provider: model,
       budget: this.cage,
@@ -950,44 +923,8 @@ export class CompanionShell implements ShellControl, AttachShell {
     return this.contextLanes.targetTokens();
   }
 
-  lanePinned(): string[] {
-    return this.contextLanes.lanePinned();
-  }
-
-  laneProfile(): string[] {
-    return this.contextLanes.laneProfile();
-  }
-
-  laneOpenLoops(): SessionContextItem[] {
-    return this.contextLanes.laneOpenLoops();
-  }
-
-  laneProcedures(): SessionContextItem[] {
-    return this.contextLanes.laneProcedures();
-  }
-
-  laneDigestStubs(): SessionDigestEntry[] {
-    return this.contextLanes.laneDigestStubs();
-  }
-
-  materializeTaskProcedure(final: boolean): void {
-    this.contextLanes.materializeTaskProcedure(final);
-  }
-
-  materializeTaskEndStub(turnId?: string, runId?: string, deferRunId?: string): void {
-    this.contextLanes.materializeTaskEndStub(turnId, runId, deferRunId);
-  }
-
-  private recordPrompt(input: { runId: string; sessionId: string; text: string }): void {
-    this.contextLanes.recordPrompt(input);
-  }
-
   async submit(text: string): Promise<RunSummary | undefined> {
     return this.runLoop.submit(text);
-  }
-
-  private async wakeIfNeeded(trigger: 'message_received' | 'wake_intent_due' | 'emergence_due'): Promise<void> {
-    return this.runLoop.wakeIfNeeded(trigger);
   }
 
   async executeRun(
@@ -1001,457 +938,11 @@ export class CompanionShell implements ShellControl, AttachShell {
   }
 
   async tick(at = this.now()): Promise<void> {
-    this.rotateServiceLog();
-    // An owed upgrade report is not gated on the lifecycle: a promise that came due has to be
-    // honoured whatever else is happening.
-    this.settleUpgradeReport(at);
-    // A paused shell is waiting for its owner, not for the clock: no wake intent, dream window or
-    // emergence decision may fire out of SUSPENDED (#228).
-    if (this.machine.state === 'RUNNING' || this.machine.state === 'WAKING' || this.machine.state === 'SUSPENDED') return;
-    this.reportHealth(at);
-    if (this.machine.state === 'DORMANT') {
-      await this.maybeSnapshot(at);
-      await this.applyDueWakeIntent(at);
-      return;
-    }
-    if (this.machine.state === 'DREAMING') return;
-    await this.applyDueWakeIntent(at);
-    const quiet = this.clock!.quietWindowOpen(at);
-    if (!quiet && this.machine.state === 'IDLE') {
-      const queue = [...(this.machine.runtime.awayQueue ?? [])];
-      const deferred = queue.findIndex((entry) => entry.deferred === 'quiet');
-      if (deferred >= 0) {
-        const [entry] = queue.splice(deferred, 1);
-        this.machine.updateRuntime({ awayQueue: queue });
-        this.consumeEmergence({ id: entry!.id, source: entry!.source, observedAt: entry!.observedAt, sourceRefs: entry!.sourceRefs }, at);
-        await this.speakEmergence({
-          id: entry!.id,
-          text: entry!.text,
-          reason: entry!.reason,
-          ...(entry!.source === undefined ? {} : { source: entry!.source as SurfacingSource }),
-          ...(entry!.sourceRefs === undefined ? {} : { sourceRefs: entry!.sourceRefs }),
-        }, at);
-        this.trace.append('emergence_quiet_delivered', { projectId: this.config.projectId, id: entry!.id, at });
-        return;
-      }
-    }
-    if (this.dreamDue(at)) {
-      const empty = this.emptyCatchupTarget(at);
-      if (empty) {
-        this.trace.append('dream_catchup', { dream_catchup: true, localDate: empty, skippedDays: this.dreamSkippedDays(empty), empty: true });
-        this.clock!.markDreamed(at);
-      } else {
-        await this.runDream(at);
-        await this.maybeSnapshot(at);
-        return;
-      }
-    }
-    await this.maybeSnapshot(at);
-    if (this.machine.state === 'IDLE') {
-      this.compileProactiveBooks(at);
-      // The candidate query must run before F2's tick: a due wake intention is still pending at
-      // the query, while the tick that follows marks it fired. A prospective memory stays listed
-      // after its notification, so both first-class lanes are seen once.
-      // A test double without `hasDue` is asked every tick, which is the old injected behaviour.
-      const due = this.emergence!.hasDue?.(at) ?? true;
-      const allowed = due && this.emergenceAllowed(at);
-      const decision = allowed ? this.emergence!.decide(at) : undefined;
-      if (due) this.runKernelWakeTick(at);
-      if (decision) {
-        const absent = this.statusFace.shouldHoldForAbsence();
-        const userState = quiet ? 'night-dnd' : absent ? 'idle' : 'in-conversation';
-        const channel = { reachability: 'online' as const, interruptibility: quiet || absent ? 'low' as const : 'high' as const };
-        const routed = new Map<string, ReturnType<KernelAgentMemoryBackend['deliveryRoute']>>();
-        if (decision.candidates.length === 1) {
-          const only = decision.candidates[0]!;
-          routed.set(only.id, this.backend.deliveryRoute({ projectId: this.config.projectId, candidate: this.deliveryInput(only, at), userState, channel, now: at }));
-        } else {
-          const batch = this.backend.deliveryRouteBatch({
-            projectId: this.config.projectId,
-            candidates: decision.candidates.map((item) => this.deliveryInput(item, at)),
-            userState,
-            channel,
-            now: at,
-          });
-          for (const entry of batch.decisions) routed.set(entry.candidateId, entry);
-        }
-        for (const item of decision.candidates) {
-          if (this.emergenceConsumed(item)) continue;
-          const delivery = routed.get(item.id);
-          if (delivery?.decision === 'deliver') {
-            // Consume before acting: a crash during the run must not free the same candidate to run again.
-            this.consumeEmergence(item, at);
-            await this.speakEmergence(item, at);
-            break;
-          }
-          if (delivery?.decision === 'accumulate') {
-            if (!quiet) this.consumeEmergence(item, at);
-            if (!(this.machine.runtime.awayQueue ?? []).some((entry) => entry.id === item.id)) {
-              this.machine.updateRuntime({
-                awayQueue: enqueueAway(this.machine.runtime, {
-                  id: item.id,
-                  text: item.text,
-                  reason: item.reason,
-                  at,
-                  ...(item.source ? { source: item.source } : {}),
-                  ...(item.observedAt === undefined ? {} : { observedAt: item.observedAt }),
-                  ...(item.sourceRefs ? { sourceRefs: item.sourceRefs } : {}),
-                  deferred: quiet ? 'quiet' : 'absence',
-                }),
-              });
-            }
-            this.trace.append('emergence_accumulated', {
-              projectId: this.config.projectId,
-              id: item.id,
-              reason: item.reason,
-              at,
-              destination: delivery.destination,
-              ...(quiet ? { reason: 'quiet_window' } : {}),
-            });
-            break;
-          }
-        }
-      } else if (due && !allowed) {
-        this.trace.append('emergence_skipped', {
-          projectId: this.config.projectId,
-          at,
-          reason: this.statusFace.dailyBudgetExceeded(at) ? 'daily_token_budget' : 'cooldown_or_daily_cap',
-        });
-      }
-    }
-  }
-
-  private compileProactiveBooks(at: number): void {
-    const projectId = this.config.projectId;
-    try {
-      const latest = this.latestEventId(projectId);
-      if (latest === (this.compiledThroughEventId ?? '')) return;
-      this.kernel.commitments.compile({ projectId, now: at });
-      this.kernel.intentions.compile({ projectId, now: at });
-      for (const intention of this.kernel.intentions.list({ projectId, statuses: ['active'], now: at })) {
-        if (intention.dueAt === undefined || intention.wakeIntentionId !== undefined) continue;
-        this.kernel.intentions.schedule({ projectId, intentionId: intention.intentionId, now: at });
-        this.trace.append('intention_scheduled_for_wake', { intentionId: intention.intentionId, dueAt: intention.dueAt, at });
-      }
-      const profile = this.kernel.profile.compile({ projectId, now: at });
-      this.trace.append('profile_compiled', { projectId, at, written: profile.written, entries: profile.entries });
-      this.compiledThroughEventId = this.latestEventId(projectId);
-    } catch (error) {
-      this.trace.append('proactive_compile_failed', { at, message: error instanceof Error ? error.message : String(error) });
-    }
-  }
-
-  private latestEventId(projectId: string): string {
-    return this.kernel.eventStore.queryEvents(1, 1, { projectId: [projectId], order: 'desc' }).records[0]?.eventId ?? '';
-  }
-
-  /** F2's clock: fire due intentions and announce due prospective memories. It never speaks. */
-  private runKernelWakeTick(at: number): void {
-    try {
-      const result = this.backend.runWakeTick({ projectId: this.config.projectId, agentId: this.config.agentId, now: at });
-      if (result.emitted > 0) {
-        this.trace.append('wake_tick', {
-          at,
-          firedWakeIntentions: result.firedWakeIntentions.map((intention) => intention.intentionId),
-          prospectiveDue: result.prospectiveDue.map((entry) => entry.candidateId),
-        });
-      }
-    } catch (error) {
-      this.trace.append('wake_tick_failed', { at, message: error instanceof Error ? error.message : String(error) });
-    }
-  }
-
-  /**
-   * The event, when the candidate names one, is a stabler key than a lane's own id. The observed
-   * instant rides along because a snoozed commitment resumes as the same id at a new occurrence.
-   */
-  private emergenceKey(candidate: { id: string; source?: string; observedAt?: number; sourceRefs?: Array<{ eventId?: string }> }): string {
-    if (candidate.source === 'commitment') {
-      const commitmentId = candidate.id.slice('surfacing:commitment:'.length);
-      const entry = this.kernel.commitments
-        .list({ projectId: this.config.projectId, now: this.now() })
-        .find((item) => item.commitmentId === commitmentId);
-      if (entry) return `${candidate.id}@${entry.resumeAt ?? entry.dueAt ?? ''}`;
-    }
-    return `${candidate.sourceRefs?.[0]?.eventId ?? candidate.id}@${candidate.observedAt ?? ''}`;
-  }
-
-  private emergenceConsumed(candidate: { id: string; source?: string; observedAt?: number; sourceRefs?: Array<{ eventId?: string }> }): boolean {
-    return (this.machine.runtime.emergence?.consumed ?? []).includes(this.emergenceKey(candidate));
-  }
-
-  /** The configured day's count; it survives a restart because it lives in the checkpoint. */
-  private emergenceAllowed(at: number): boolean {
-    // #233 and #229 share one day boundary and one hard stop: when the day's tokens are gone,
-    // autonomy does not start another run, exactly as the emergence count cap does.
-    if (this.statusFace.dailyBudgetExceeded(at)) return false;
-    const state = this.machine.runtime.emergence;
-    if (!state) return true;
-    return state.day !== this.statusFace.localDay(at) || state.count < EMERGENCE_DAILY_LIMIT;
-  }
-
-  private consumeEmergence(candidate: { id: string; source?: string; observedAt?: number; sourceRefs?: Array<{ eventId?: string }> }, at: number): void {
-    const key = this.emergenceKey(candidate);
-    const day = this.statusFace.localDay(at);
-    const prior = this.machine.runtime.emergence;
-    const count = prior?.day === day ? prior.count + 1 : 1;
-    const consumed = [...(prior?.consumed ?? []).filter((entry) => entry !== key), key].slice(-MAX_EMERGENCE_CONSUMED);
-    this.machine.updateRuntime({ emergence: { day, count, consumed } });
-    this.trace.append('emergence_consumed', { projectId: this.config.projectId, id: candidate.id, key, day, count });
-  }
-
-  private deliveryInput(candidate: { id: string; source?: SurfacingSource; sensitivity?: 'daily' | 'private' | 'high'; confidence?: number; freshness?: { observedAt: number; ageMs: number; expiresAt: number | null; expired: boolean }; observedAt?: number }, at: number): DeliveryCandidateInput {
-    return {
-      candidateId: candidate.id,
-      source: candidate.source ?? 'commitment',
-      sensitivity: candidate.sensitivity ?? 'daily',
-      confidence: candidate.confidence ?? 0.9,
-      freshness: candidate.freshness ?? { observedAt: candidate.observedAt ?? at, ageMs: 0, expiresAt: null, expired: false },
-    };
-  }
-
-  private async speakEmergence(candidate: { id: string; text: string; reason: string; source?: SurfacingSource; sourceRefs?: Array<{ eventId?: string; sourceId?: string; contentHash?: string }> }, at: number): Promise<void> {
-    if (candidate.source !== undefined && candidate.sourceRefs !== undefined) {
-      const prior = this.surfacedByType.get(candidate.source);
-      if (prior && prior.candidateId !== candidate.id) this.writeSurfacingFeedback(prior, 'ignored');
-      this.surfacedByType.set(candidate.source, { candidateId: candidate.id, sourceRefs: candidate.sourceRefs });
-    }
-    void this.host.bus.emit('companion_emergence', { id: candidate.id, reason: candidate.reason, text: candidate.text });
-    let ok = false;
-    try {
-      const summary = await this.executeRun(candidate.text, 'emergence_due', `emergence:${candidate.id}`);
-      ok = summary.stopReason === 'run_complete';
-    } finally {
-      this.trace.append('emergence_run', { projectId: this.config.projectId, id: candidate.id, ok });
-    }
-  }
-
-  private writeSurfacingFeedback(prior: { candidateId: string; sourceRefs: Array<{ eventId?: string; sourceId?: string; contentHash?: string }> }, outcome: 'engaged' | 'ignored' | 'stopped'): void {
-    try {
-      this.backend.recordSurfacingFeedback({
-        projectId: this.config.projectId,
-        candidateId: prior.candidateId,
-        outcome,
-        sourceRefs: prior.sourceRefs,
-        now: this.now(),
-      });
-      this.trace.append('surfacing_feedback', { projectId: this.config.projectId, candidateId: prior.candidateId, outcome });
-    } catch (error) {
-      this.trace.append('surfacing_feedback_failed', { candidateId: prior.candidateId, outcome, message: error instanceof Error ? error.message : String(error) });
-    }
-  }
-
-  /** The owner's next line closes F7's loop for the last thing the companion said on its own. */
-  acknowledgeSurfacing(): void {
-    for (const [source, prior] of [...this.surfacedByType]) {
-      this.writeSurfacingFeedback(prior, 'engaged');
-      this.surfacedByType.delete(source);
-    }
-  }
-
-  /**
-   * The kernel's own condition (#196, F19): refresh the four checks, and once per failed Dream
-   * streak route the health notice through F18's highest tier. Delivery reuses the existing
-   * emergence speak path; when the owner is away the notice accumulates instead of talking to an
-   * empty room. The decision trace is written so the notice is auditable, not just felt.
-   */
-  private reportHealth(at: number): void {
-    try {
-      this.kernel.health.check({ now: at });
-      if (this.clock!.quietWindowOpen(at)) return;
-      this.reportMemoryPressure(at);
-      const away = this.statusFace.shouldHoldForAbsence();
-      const notice = this.backend.healthNotice({
-        projectId: this.config.projectId,
-        userState: away ? 'idle' : 'in-conversation',
-        channel: { reachability: 'online', interruptibility: away ? 'low' : 'high' },
-        now: at,
-      });
-      if (!notice.due || !notice.decision) return;
-      this.trace.append('health_notice', {
-        streak: notice.streak,
-        decision: notice.decision.decision,
-        destination: notice.decision.destination,
-        urgency: notice.decision.urgency,
-        reasonCode: notice.decision.reasonCode,
-        trace: notice.decision.decisionTrace,
-      });
-      if (notice.decision.decision !== 'deliver') return;
-      const text = `我最近 ${notice.streak} 晚的夜间整合都失败了，记忆可能不完整。我不会假装正常——你回来时我们先补这一块。`;
-      void this.host.bus.emit('companion_emergence', { id: 'health:dream-streak', reason: 'health_notice', text });
-    } catch (error) {
-      this.trace.append('health_check_failed', { message: error instanceof Error ? error.message : String(error) });
-    }
-  }
-
-  /**
-   * The process half of the health face (#226). The kernel's frozen four checks stay four; this
-   * reads the resident's own RSS against the unit ceiling and routes one notice through the same
-   * emergence path the Dream-streak notice uses. The reading itself is also on `GET /health`.
-   */
-  private reportMemoryPressure(at: number): void {
-    const memory = readMemoryUsage();
-    const action = memoryPressureAction(memory, this.memoryWarned);
-    if (action === 'reset') {
-      this.memoryWarned = false;
-      return;
-    }
-    if (action === 'hold') return;
-    const ceiling = (memory.highBytes ?? memory.limitBytes)!;
-    this.memoryWarned = true;
-    const kind = memory.highBytes === undefined ? '硬顶' : '高水位';
-    const text = `常驻进程占用 ${formatBytes(memory.rssBytes)}，已到安装时设的 ${formatBytes(ceiling)} ${kind}；再涨会被限流或重启。我先说一声。`;
-    this.trace.append('memory_pressure', {
-      rssBytes: memory.rssBytes,
-      limitBytes: memory.limitBytes,
-      highBytes: memory.highBytes,
-      source: memory.source,
-    }, at);
-    void this.host.bus.emit('companion_emergence', { id: 'health:memory-pressure', reason: 'memory_notice', text });
-  }
-
-  /** Keep the inherited stdout/stderr file bounded between restarts. */
-  private rotateServiceLog(): void {
-    const path = join(this.config.dataDir, 'service.log');
-    try {
-      if (!rotateLogFile(path, SERVICE_LOG_MAX_BYTES)) return;
-      this.trace.append('service_log_rotated', { path, maxBytes: SERVICE_LOG_MAX_BYTES, rotated: `${path}.1` });
-    } catch (error) {
-      this.trace.append('service_log_rotate_failed', { path, message: error instanceof Error ? error.message : String(error) });
-    }
-  }
-
-  /** WAKING means the block is written into runtime state, not just into the trace. */
-  injectTimeContext(reason: string, at = this.now()): void {
-    let kernelLine: string[] = [];
-    try {
-      const context = this.backend.temporalContext({ projectId: this.config.projectId, now: at });
-      kernelLine = [`activity: ${context.rhythm.phase}; density: ${context.density.label}`];
-    } catch (error) {
-      this.trace.append('temporal_context_failed', { message: error instanceof Error ? error.message : String(error) });
-    }
-    const block = this.clock!.timeContextBlock(at, kernelLine);
-    this.machine.updateRuntime({ lastTimeContext: block });
-    this.trace.append('time_context_injected', { block, reason });
-  }
-
-  /** One due intent is one WAKING->IDLE pass; both the dormant and the standby path use it. */
-  private async applyDueWakeIntent(at: number): Promise<void> {
-    const due = this.clock!.dueWakeIntent(at);
-    if (!due) return;
-    this.clock!.consumeWakeIntent(due.id);
-    await this.machine.dispatch('wake_intent_due', { reason: due.reason });
-    this.injectTimeContext(`wake_intent:${due.id}`, at);
-    await this.machine.dispatch('context_injected', { reason: 'wake_intent' });
-  }
-
-  private async maybeSnapshot(at: number): Promise<void> {
-    const last = this.machine.runtime.lastSnapshotAt;
-    if (last !== undefined && at - last < SNAPSHOT_INTERVAL_MS) return;
-    this.machine.updateRuntime({ lastSnapshotAt: at });
-    try {
-      const manifest = await this.kernel.backup.snapshot();
-      if (manifest) {
-        this.trace.append('snapshot_taken', {
-          file: manifest.snapshot.file,
-          createdAt: manifest.createdAt,
-          verification: manifest.verification.ok,
-        });
-      }
-    } catch (error) {
-      this.trace.append('snapshot_failed', { message: error instanceof Error ? error.message : String(error) });
-    }
-  }
-
-  private dreamDue(at: number): boolean {
-    const clock = this.clock!;
-    if (clock.dreamedNight(at)) return false;
-    const retry = this.machine.runtime.dreamRetry;
-    return !retry
-      || retry.night !== clock.dreamNightDate(at)
-      || (!retry.gaveUp && retry.nextAt <= at);
-  }
-
-  private emptyCatchupTarget(at: number): string | undefined {
-    if (this.clock!.dreamWindowOpen(at)) return undefined;
-    const localDate = this.clock!.dreamTargetDate(at);
-    const events = this.kernel.getThreadEvents(`companion-day:${localDate}`, {
-      projectId: this.config.projectId,
-      limit: 1,
-    });
-    return events.length === 0 ? localDate : undefined;
-  }
-
-  private dreamSkippedDays(localDate: string): number {
-    const last = this.machine.runtime.lastDreamDate;
-    return last ? Math.max(0, this.clock!.daysBetween(last, localDate) - 1) : 0;
-  }
-
-  private scheduleDreamRetry(night: string, at: number): { attempts: number; nextAt?: number; gaveUp: boolean } {
-    const prior = this.machine.runtime.dreamRetry;
-    const attempts = prior?.night === night ? prior.attempts + 1 : 1;
-    if (attempts >= DREAM_MAX_ATTEMPTS_PER_NIGHT) {
-      this.machine.updateRuntime({ dreamRetry: { night, attempts, nextAt: at, gaveUp: true } });
-      this.trace.append('dream_retry_scheduled', { night, attempts, gaveUp: true, clockAt: at });
-      return { attempts, gaveUp: true };
-    }
-    const nextAt = at + Math.min(DREAM_RETRY_BASE_MS * 2 ** (attempts - 1), DREAM_RETRY_CAP_MS);
-    this.machine.updateRuntime({ dreamRetry: { night, attempts, nextAt } });
-    this.trace.append('dream_retry_scheduled', { night, attempts, nextAt, delayMs: nextAt - at, gaveUp: false, clockAt: at });
-    return { attempts, nextAt, gaveUp: false };
+    return this.residentTick.tick(at);
   }
 
   async runDream(at = this.now()): Promise<void> {
-    const localDate = this.clock!.dreamTargetDate(at);
-    const night = this.clock!.dreamNightDate(at);
-    const catchup = !this.clock!.dreamWindowOpen(at);
-    const skippedDays = this.dreamSkippedDays(localDate);
-    if (catchup) this.trace.append('dream_catchup', { dream_catchup: true, localDate, skippedDays });
-    await this.machine.dispatch('dream_window_open', { reason: 'dream_window' });
-    try {
-      const result = await this.dream!.integrate(localDate, `companion-day:${localDate}`, at);
-      if (result.memoryModelDegraded === 'semantic_processor_failed') this.memoryModelFailed = true;
-      else if (result.memoryModelUsed) this.memoryModelFailed = false;
-      this.clock!.markDreamed(at);
-      try {
-        const promotion = this.kernel.promoteDreamCandidates({ projectId: this.config.projectId, limit: 100 });
-        this.trace.append('dream_promotion', { promoted: promotion.promotedCandidates, decisions: promotion.decisions.length });
-      } catch (error) {
-        this.trace.append('dream_promotion_failed', { message: error instanceof Error ? error.message : String(error) });
-      }
-      this.machine.updateRuntime({
-        dreamRetry: undefined,
-        ...(result.kernelNightRan ? { lastSnapshotAt: at } : {}),
-      });
-      this.clock!.setWakeIntent(at + 8 * 60 * 60_000, 'morning_after_dream');
-      this.trace.append('dream_complete', {
-        localDate,
-        eventCount: result.eventCount,
-        sourceRefs: result.sourceRefs.length,
-        dream_catchup: catchup,
-        skippedDays,
-      });
-      void this.host.bus.emit('companion_dream', { product: { localDate, eventCount: result.eventCount, summary: result.summary } });
-      // A message that arrived while the integration was awaiting wakes the shell out of DREAMING.
-      // The product is already written; the transition belongs to whoever moved the state, not to us.
-      if (this.machine.state !== 'DREAMING') {
-        this.trace.append('dream_finished_after_wake', { localDate, state: this.machine.state });
-        return;
-      }
-      await this.machine.dispatch('dream_complete', { reason: `dream:${localDate}` });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const retry = this.scheduleDreamRetry(night, at);
-      this.trace.append('dream_failed', {
-        localDate,
-        message,
-        clockAt: at,
-        attempt: retry.attempts,
-        nextAt: retry.nextAt ?? null,
-        gaveUp: retry.gaveUp,
-      });
-      await this.machine.dispatch('run_error', { reason: `dream_failed:${message}` });
-    }
+    return this.residentTick.runDream(at);
   }
 
   currentStatus(): StatusState {
@@ -1566,7 +1057,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     const source = (type ?? last?.[0]) as SurfacingSource | undefined;
     const entry = type === undefined ? last?.[1] : this.surfacedByType.get(type as SurfacingSource);
     if (!entry) return { text: '还没有浮现过该来源，无法停下。', receipt: true };
-    this.writeSurfacingFeedback(entry, 'stopped');
+    this.residentTick.writeSurfacingFeedback(entry, 'stopped');
     if (source !== undefined) this.surfacedByType.delete(source);
     return { text: `已停下 ${source} 的主动浮现；/surfacing resume <来源> 恢复。`, receipt: true };
   }
@@ -1625,26 +1116,6 @@ export class CompanionShell implements ShellControl, AttachShell {
     }
   }
 
-
-  forgetPreview(start: number, end: number): CommandReply {
-    return this.sovereignty.forgetPreview(start, end);
-  }
-
-  forgetConfirm(): CommandReply {
-    return this.sovereignty.forgetConfirm();
-  }
-
-  exportMemory(path: string | undefined): CommandReply {
-    return this.sovereignty.exportMemory(path);
-  }
-
-  correctProfile(key: string, value: string): Promise<CommandReply> {
-    return this.sovereignty.correctProfile(key, value);
-  }
-
-  confirmProcedureCorrection(): Promise<CommandReply> {
-    return this.sovereignty.confirmProcedureCorrection();
-  }
 
   /** The TUI route list; with no router (an injected provider) it is just the one label, as before. */
   modelRoutes(): string[] {
@@ -1713,18 +1184,6 @@ export class CompanionShell implements ShellControl, AttachShell {
     return this.proposalsHandlers.currentProposals();
   }
 
-  offerResume(suspensionId: string): void {
-    this.proposalsHandlers.offerResume(suspensionId);
-  }
-
-  continueSuspended(): CommandReply {
-    return this.proposalsHandlers.continueSuspended();
-  }
-
-  supersedeSuspension(reason: string): void {
-    this.proposalsHandlers.supersedeSuspension(reason);
-  }
-
   askUser(input: { question: string; context?: string }): { ok: boolean; text: string } {
     return this.proposalsHandlers.askUser(input);
   }
@@ -1746,7 +1205,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     contextLanes: () => (this.lastLaneAssembly ? laneAssemblyView(this.lastLaneAssembly) : undefined),
     contextMetrics: () => this.lastContextMetrics,
     promptCache: () => this.promptCache,
-    lastDream: () => this.lastDreamProduct(),
+    lastDream: () => this.pluginsAdmin.lastDreamProduct(),
     contextTools: () => this.executableToolNames(),
     commitments: () => this.commitments(),
     candidateQueue: () => this.candidateQueue(),
@@ -1763,12 +1222,12 @@ export class CompanionShell implements ShellControl, AttachShell {
       this.trace.append(paused ? 'capture_paused_command' : 'capture_resumed_command', { at: this.now() });
       this.statusFace.emitStatus();
     },
-    continueSuspended: () => this.continueSuspended(),
-    forgetPreview: (start: number, end: number) => this.forgetPreview(start, end),
-    forgetConfirm: () => this.forgetConfirm(),
-    exportMemory: (path: string | undefined) => this.exportMemory(path),
-    correctProfile: (key: string, value: string) => this.correctProfile(key, value),
-    confirmProcedureCorrection: () => this.confirmProcedureCorrection(),
+    continueSuspended: () => this.proposalsHandlers.continueSuspended(),
+    forgetPreview: (start: number, end: number) => this.sovereignty.forgetPreview(start, end),
+    forgetConfirm: () => this.sovereignty.forgetConfirm(),
+    exportMemory: (path: string | undefined) => this.sovereignty.exportMemory(path),
+    correctProfile: (key: string, value: string) => this.sovereignty.correctProfile(key, value),
+    confirmProcedureCorrection: () => this.sovereignty.confirmProcedureCorrection(),
     sessionModel: () => this.modelLabel,
     modelRoutes: () => this.modelRoutes(),
     modelRouter: () =>
@@ -1786,7 +1245,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     switchRoute: (name: string) => this.switchModelRoute(name),
     sleep: () => this.sleep(),
     upgrade: (source: string) => this.upgrade(source),
-    pluginReport: () => this.pluginReport(),
+    pluginReport: () => this.pluginsAdmin.pluginReport(),
     installPlugin: (spec: string) => this.installPlugin(spec),
   };
 
@@ -1795,38 +1254,19 @@ export class CompanionShell implements ShellControl, AttachShell {
     return this.host.commands.list().map(({ name, description, argumentHint }) => ({ name, description, argumentHint }));
   }
 
-  pluginReport(): CommandReply {
-    return this.pluginsAdmin.pluginReport();
-  }
-
-  pluginHealth(): {
-    registered: string[];
-    results: Array<{ spec: string; status: string; version?: string; reason?: string; tools: string[]; commands: string[] }>;
-  } {
-    return this.pluginsAdmin.pluginHealth();
-  }
-
   installPlugin(spec: string): Promise<CommandReply> {
     return this.pluginsAdmin.installPlugin(spec);
-  }
-
-  resumeAfterRequestedRestart(): void {
-    this.pluginsAdmin.resumeAfterRequestedRestart();
   }
 
   whyReport(): string {
     return this.pluginsAdmin.whyReport();
   }
 
-  private lastDreamProduct(): { localDate: string; eventCount: number; summary: string } | undefined {
-    return this.pluginsAdmin.lastDreamProduct();
-  }
-
   upgrade(source: string): Promise<CommandReply> {
     return this.upgradeAdmin.upgrade(source);
   }
 
-  private settleUpgradeReport(at: number): void {
+  settleUpgradeReport(at: number): void {
     this.upgradeAdmin.settleUpgradeReport(at);
   }
 

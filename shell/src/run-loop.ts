@@ -32,7 +32,7 @@ export class RunLoop {
       this.shell.statusFace.emitSteering();
       return undefined;
     }
-    this.shell.acknowledgeSurfacing();
+    this.shell.residentTick.acknowledgeSurfacing();
     if (this.shell.statusFace.dailyBudgetExceeded()) this.shell.statusFace.announceDailyBudget('user_message');
     if (this.shell.machine.state === 'SUSPENDED') return this.submitWhileSuspended(text);
     this.beginUserAssignment(text);
@@ -50,7 +50,7 @@ export class RunLoop {
    * There is no timeout for either kind — see `Suspension`'s comment.
    */
   private async submitWhileSuspended(text: string): Promise<RunSummary | undefined> {
-    this.shell.acknowledgeSurfacing();
+    this.shell.residentTick.acknowledgeSurfacing();
     const suspension = this.shell.machine.runtime.suspension;
     this.shell.clock!.markInteraction(this.shell.now());
     if (suspension?.kind === 'question') {
@@ -58,7 +58,7 @@ export class RunLoop {
       this.shell.trace.append('suspension_answered', { id: suspension.id, assignmentId: suspension.assignmentId, chars: text.trim().length });
       return this.executeRun(text, 'message_received', 'question_answered', 'answer_received');
     }
-    if (suspension) this.shell.supersedeSuspension('new_input');
+    if (suspension) this.shell.proposalsHandlers.supersedeSuspension('new_input');
     this.beginUserAssignment(text);
     return this.executeRun(text, 'message_received', 'user_message');
   }
@@ -67,7 +67,7 @@ export class RunLoop {
     if (this.shell.machine.state === 'DORMANT') await this.shell.machine.dispatch('message_received', { reason: 'message_while_dormant' });
     if (this.shell.machine.state === 'DREAMING') await this.shell.machine.dispatch('message_received', { reason: 'message_while_dreaming' });
     if (this.shell.machine.state === 'WAKING') {
-      this.shell.injectTimeContext(trigger);
+      this.shell.residentTick.injectTimeContext(trigger);
       await this.shell.machine.dispatch('context_injected', { reason: `${trigger}_time_context` });
     }
   }
@@ -115,14 +115,14 @@ export class RunLoop {
     // `agent_end` capture has written this run's rows by the time `run()` returns, so the declared
     // task end's procedure (#262) and stub (#263) can read them here instead of waiting for the
     // next request.
-    this.shell.materializeTaskProcedure(true);
-    this.shell.materializeTaskEndStub(summary.turnId, summary.runId);
+    this.shell.contextLanes.materializeTaskProcedure(true);
+    this.shell.contextLanes.materializeTaskEndStub(summary.turnId, summary.runId);
     if (summary.stopReason === 'run_error' && summary.error?.startsWith('model_timeout:')) this.announceModelTimeout(summary);
     if (summary.stopReason === 'run_error' && summary.error?.startsWith('no_progress:')) this.announceNoProgress(summary);
     if (summary.stopReason === 'run_error' && summary.error?.startsWith('mg_gateway_error:')) this.announceProviderFailure(summary);
     await this.shell.machine.dispatch(outcome, { reason: summary.error ?? reason, runId });
     if (this.shell.machine.state === 'SUSPENDED' && this.shell.machine.runtime.suspension?.kind === 'budget') {
-      this.shell.offerResume(this.shell.machine.runtime.suspension.id);
+      this.shell.proposalsHandlers.offerResume(this.shell.machine.runtime.suspension.id);
     }
     if (!this.shell.clock!.nextPendingIntent()) this.shell.clock!.scheduleIdleWake();
     return summary;
