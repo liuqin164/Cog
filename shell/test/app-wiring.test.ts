@@ -119,7 +119,7 @@ describe('shell wiring', () => {
     await second.start();
     try {
       expect(second.state).toBe('IDLE');
-      // The runtime half of continuity survives: the last topic is still there for the emergence check.
+      // The runtime half of continuity survives: the last interaction time is still there for the emergence check.
       expect(second.machine.runtime.lastInteractionAt).toBeGreaterThan(0);
       // A clean restart boots; it is not a kill recovery.
       expect(second.trace.read().some((record) => record.kind === 'recovery')).toBe(false);

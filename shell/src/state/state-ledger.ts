@@ -1,10 +1,6 @@
 import { redactSecretText, type MemoryKernel } from 'cogmem';
 
-export interface RuntimeTextLedger {
-  record(kind: string, text: string): string;
-  read(eventId: string): string | undefined;
-  has(eventId: string, text: string): boolean;
-}
+import type { RuntimeTextLedger } from './checkpoint.ts';
 
 export class ShellStateLedger implements RuntimeTextLedger {
   private readonly byText = new Map<string, string>();
