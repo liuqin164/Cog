@@ -26,3 +26,17 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## Embedding model (`Xenova/bge-base-zh-v1.5`)
+
+- Upstream model: `BAAI/bge-base-zh-v1.5`, MIT License —
+  https://huggingface.co/BAAI/bge-base-zh-v1.5. The model card declares
+  `license: mit` and its License section names the MIT License.
+- ONNX conversion used at runtime: `Xenova/bge-base-zh-v1.5` —
+  https://huggingface.co/Xenova/bge-base-zh-v1.5. Its card declares
+  `BAAI/bge-base-zh-v1.5` as the base model.
+- Distribution: the weights are not vendored in this repository or the npm
+  package. They are downloaded from Hugging Face at install or first start into
+  `<dataDir>/models/` (`shell/src/embedding/worker.ts`,
+  `shell/src/embedding/model.ts`), so this repository redistributes no model
+  weights or model license text.
