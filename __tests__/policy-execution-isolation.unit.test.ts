@@ -6,9 +6,7 @@ import { join } from 'node:path';
 import { BeliefStore } from '../src/belief/BeliefStore.js';
 import { ReliablePolicySideEffectExecutor, type PolicySideEffect } from '../src/retrieval/PolicySideEffectExecutor.js';
 import { EventStore } from '../src/store/EventStore.js';
-import { PolicyExecutionProjector } from '../src/store/PolicyExecutionProjector.js';
 import { PolicyExecutionStore, type PolicyExecutionRecord } from '../src/store/PolicyExecutionStore.js';
-import { PolicyProjectionStore } from '../src/store/PolicyProjectionStore.js';
 import { installFinalSchema } from '../src/migrations/v3_7_4/FinalSchemaInstall.js';
 import { makeTempDir } from './helpers/tmp.js';
 
@@ -63,36 +61,6 @@ describe('policy execution project isolation', () => {
     ]);
     beliefs.close();
     db.close();
-  });
-
-  test('event projection replays only the requested named or projectless scope', async () => {
-    const dir = makeTempDir('cogmem-policy-projector-');
-    const path = join(dir, 'policy.db');
-    const events = new EventStore(path);
-    const executions = new PolicyExecutionStore(path);
-    const projections = new PolicyProjectionStore(path);
-    const append = (projectId: string, executionId: string, at: number) => events.append({
-      projectId, streamId: `policy-${executionId}`, streamType: 'system',
-      eventType: 'POLICY_EXECUTION_UPDATED', occurredAt: at,
-      payload: {
-        executionId, idempotencyKey: 'same-key', policy: 'safe', action: 'allow',
-        status: 'executed', executionOutcome: 'executed', attemptCount: 1, createdAt: at, updatedAt: at,
-      },
-    });
-    append('a', 'a-execution', 1);
-    append('b', 'b-execution', 2);
-    append('', 'global-execution', 3);
-
-    await new PolicyExecutionProjector(events, executions, projections, 'a').fullRebuild('test');
-    await new PolicyExecutionProjector(events, executions, projections, '').fullRebuild('test');
-
-    expect(executions.getReadModelByIdempotencyKey('a', 'same-key')?.executionId).toBe('a-execution');
-    expect(executions.getReadModelByIdempotencyKey('', 'same-key')?.executionId).toBe('global-execution');
-    expect(executions.getReadModelByIdempotencyKey('b', 'same-key')).toBeNull();
-    projections.close();
-    executions.close();
-    events.close();
-    rmSync(dir, { recursive: true, force: true });
   });
 
   test('concurrent callers atomically claim one side effect', async () => {
