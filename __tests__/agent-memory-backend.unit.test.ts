@@ -30,6 +30,30 @@ test('agent backend can record a raw-only turn without creating compiled vectors
   kernel.close();
 });
 
+test('task procedure lookup keeps its project scope and json_valid guard', async () => {
+  const dir = makeTempDir('agent-backend-task-procedure-');
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db') });
+  const backend = new KernelAgentMemoryBackend(kernel);
+
+  expect(backend.taskProcedureRecorded({ projectId: 'demo', declarationEventId: 'decl-1' })).toBe(false);
+
+  const event = kernel.recordTaskEvent({
+    projectId: 'demo',
+    threadId: 'thread-1',
+    content: 'task completed',
+    occurredAt: 1_700_000_000_000,
+    metadata: { procedure: { declarationEventId: 'decl-1' } },
+  });
+  expect(backend.taskProcedureRecorded({ projectId: 'demo', declarationEventId: 'decl-1' })).toBe(true);
+  expect(backend.taskProcedureRecorded({ projectId: 'other', declarationEventId: 'decl-1' })).toBe(false);
+
+  kernel.factStore.getDatabase().query(`UPDATE memory_events SET payload_json = ? WHERE event_id = ?`)
+    .run('{not json', event.eventId);
+  expect(backend.taskProcedureRecorded({ projectId: 'demo', declarationEventId: 'decl-1' })).toBe(false);
+
+  kernel.close();
+});
+
 test('agent backend recall falls back to bounded raw ledger search for raw-only memories', async () => {
   const dir = makeTempDir('agent-backend-raw-fallback-');
   const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });

@@ -1,7 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { TraceStore } from 'cogmem/internal';
 import type { CompanionShell } from './app.ts';
 import type { CommandReply } from './commands.ts';
 import { defaultRunner } from './install/installer.ts';
@@ -247,21 +246,14 @@ export class PluginsAdmin {
   whyReport(): string {
     const emergence = this.shell.trace.read().filter((record) => record.kind === 'emergence_decision').pop();
     try {
-      const db = this.shell.kernel.factStore.getDatabase();
-      const hasTraceTable = (db.query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'trace_events'`).all() as unknown[]).length > 0;
-      if (!hasTraceTable) {
+      const trace = this.shell.backend.recentRecallDecision({
+        projectId: this.shell.config.projectId,
+        agentId: this.shell.config.agentId,
+      });
+      if (trace.state === 'untraced') {
         return emergence ? this.emergenceWhyReport(emergence) : '本会话尚无召回决策痕迹（内核还没有 trace_events 表）。不编造。';
       }
-      const store = new TraceStore(db);
-      const rows = store.queryByEventType('recall.result').filter((event) => {
-        if (event.projectId !== undefined && event.projectId !== this.shell.config.projectId) return false;
-        // The trace table has no agent column, so the payload is where an owner can be named (the same
-        // reading the observatory uses): an unnamed row is project-level and shown, a named other is not.
-        const payload = event.payload as Record<string, unknown>;
-        const named = [payload.agentId, payload.agent, payload.sourceAgent].filter((value): value is string => typeof value === 'string');
-        return named.length === 0 || named.includes(this.shell.config.agentId);
-      });
-      const last = rows[rows.length - 1];
+      const last = trace.decision;
       if (!last) return emergence ? this.emergenceWhyReport(emergence) : '本会话尚无召回决策痕迹。不编造。';
       // Whichever decision is newer is the one the receipt answers with: an asked recall after a
       // surfaced candidate is the recall; the emergence step is shown until something newer lands.
@@ -271,7 +263,6 @@ export class PluginsAdmin {
       const payload = last.payload as Record<string, unknown>;
       const selected = Array.isArray(payload.selectedIds) ? payload.selectedIds.map(String) : [];
       const suppressed = Array.isArray(payload.suppressed) ? (payload.suppressed as Array<Record<string, unknown>>) : [];
-      const chain = store.getDecisionChain(last.id);
       const lines = [
         `最近一次召回决策 · ${new Date(last.timestamp).toISOString()}`,
         `查询：${typeof payload.query === 'string' && payload.query !== '' ? payload.query : '（空）'}`,
@@ -281,7 +272,7 @@ export class PluginsAdmin {
       if (suppressed.length > 0) {
         lines.push(`抑制 ${suppressed.length} 类：${suppressed.map((entry) => `${String(entry.reason ?? 'unknown')}×${Number(entry.count ?? 0)}`).join('、')}`);
       }
-      lines.push(`来源链：${chain.length <= 1 ? '无父事件' : chain.map((event) => event.eventType).join(' ← ')}`);
+      lines.push(`来源链：${trace.chain.length <= 1 ? '无父事件' : trace.chain.join(' ← ')}`);
       return lines.join('\n');
     } catch (error) {
       // A read that failed is not "no trace": the receipt says which it was, or a broken database

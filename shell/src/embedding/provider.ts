@@ -5,8 +5,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { EmbeddingProvider } from 'cogmem';
-import { OllamaEmbeddingProvider } from 'cogmem/internal';
+import { OllamaEmbeddingProvider, type EmbeddingProvider } from 'cogmem';
 import {
   EMBEDDING_DIMENSIONS,
   type EmbeddingConfig,

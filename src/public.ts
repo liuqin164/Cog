@@ -913,6 +913,15 @@ export type {
  */
 export type { EmbeddingProvider } from './embedding/EmbeddingProvider.js';
 export { EmbeddingUnavailableError, embedOne } from './embedding/EmbeddingProvider.js';
+export { OllamaEmbeddingProvider } from './embedding/OllamaEmbeddingProvider.js';
+export { QwenAPIEmbeddingProvider } from './embedding/QwenAPIEmbeddingProvider.js';
+
+/**
+ * Model role registry and its role configuration types.
+ * @beta @since 5.0.0
+ */
+export { ModelRegistry } from './models/ModelRegistry.js';
+export type { ModelRoleConfig, ModelRoleName, ModelTextUsage } from './models/ModelRole.js';
 
 /**
  * Re-embedding status for observability.

@@ -31,7 +31,7 @@ export class SovereigntyCommands {
     }
     const projectId = this.shell.config.projectId;
     // The same half-open occurredAt filter deleteRange applies; this is a read, not a second rule.
-    const count = this.shell.kernel.eventStore.queryEvents(1, 1, { projectId: [projectId], startTime: start, endTime: end }).total;
+    const count = this.shell.backend.countEventsBetween({ projectId, startTime: start, endTime: end });
     this.pendingForget = { start, end };
     return {
       text: [

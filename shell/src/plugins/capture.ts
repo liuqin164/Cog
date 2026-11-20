@@ -78,7 +78,7 @@ export class CaptureService {
     if (this.paused()) return undefined;
     const { kernel, agentId, projectId, sessionId } = this.options;
     const marked = this.redactor.mark(input.content);
-    const turnSeq = input.turnSeq ?? kernel.eventStore.getNextTurnSeq(input.threadId, projectId);
+    const turnSeq = input.turnSeq ?? this.options.backend.nextTurnSeq(input.threadId, projectId);
     const event = kernel.recordRawEvent({
       projectId,
       workspaceId: projectId,
@@ -516,7 +516,7 @@ export function capturePlugin(config: CapturePluginConfig): NativePlugin {
         const content = event.message?.content ?? '';
         if (event.message?.role === 'user') {
           if (promotesToolObservations(content) && previousToolResultEventIds.length > 0) {
-            for (const eventId of previousToolResultEventIds) kernel.eventStore.markToolObservationPromoted(eventId);
+            for (const eventId of previousToolResultEventIds) backend.markToolObservationPromoted(eventId);
             previousToolResultEventIds = [];
           }
           buffer.userText = content;
