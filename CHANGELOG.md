@@ -220,6 +220,7 @@
   its host-path family with a local copy of the recall-item adapter. User-visible effect, in one
   line: the package no longer exports the host recall-block renderers or `recallForHost` /
   `rememberForHost`, and nothing behind them remains.
+- **Batch 3 of the old evaluation assets is settled (#337).** The benchmark and old eval-framework groups named by the ticket were already absent from this tree (9 of the 12 audited files); the surviving `src/benchmark/` and `src/eval/` files belong to the live proposal-eval and eval lines and stay. The ImportBridge group is removed: `src/import/ImportBridge.ts` (`previewImport`/`applyImport`), its `cogmem/internal` re-export, and the two tests that covered it leave together. No table, column, migration, dependency, bin or CLI command changes; the import CLI path (`src/bin/import-support.ts`) is untouched. User-visible effect, in one line: `cogmem/internal` no longer exports the unused `previewImport`/`applyImport` helpers.
 
 ## 4.1.0
 
