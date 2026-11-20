@@ -12,6 +12,7 @@
  * (`isContextOverflow`). They are ported rather than imported because pi-ai is a devDependency of the
  * spike and the adapter layer must stay removable; the pin test still guards the version they came
  * from.
+ * License: MIT, Copyright (c) 2025 Mario Zechner; see THIRD-PARTY-NOTICES.md at the repository root.
  */
 
 export interface RetryPolicy {
