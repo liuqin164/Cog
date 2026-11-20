@@ -478,8 +478,8 @@ function renderMarkdown(results: ScenarioResult[]): string {
     '',
     '- Scenario 1 is the #316 cliff probe: 600 turns, 6,000-token target, default 8-turn tail.',
     '- Scenario 2 scans every file under the data directory, including SQLite, WAL, checkpoint, trace and snapshots.',
-    '- Scenario 3 starts the process at 01:00, stops it, restarts at 06:00, then ticks once.',
-    '- Scenario 4 seeds one due commitment before each tick; the ticks are 3 minutes apart, so the fixed 2-minute cooldown allows a fourth surfacing today.',
+    '- Scenario 3 starts the process at 23:00, so its turn belongs to the day the 02:00 window folds; it stops before the window, restarts at 06:00, then ticks once.',
+    '- Scenario 4 seeds one due commitment before each tick, five ticks three minutes apart: the fourth surfacing is where the third ignore is learned, and the fifth must wait for F7\'s six-hour cooldown.',
     '- Scenario 6 crosses a real SIGKILL; the fixture opens the assignment and the away queue through the shell\'s own paths.',
     '',
   );
