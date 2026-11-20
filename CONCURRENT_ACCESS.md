@@ -22,7 +22,7 @@ Cog uses SQLite as the durable source of truth. The 2.0 vector backend keeps vec
 - Let the resident process own that writer. Run one maintenance writer at a time; do not overlap Dream, governance, import, re-embedding, or repair jobs.
 - Status/candidate inspection does not require stopping the resident server. If a writer reports `SQLITE_BUSY`, wait for the active writer to finish instead of starting another full kernel.
 - Use snapshot export/import for backups and promotion between environments.
-- Prefer `vectorBackend: 'sqlite-vec'` for durable local deployments. Use `vectorBackend: 'hnswlib'` only when you explicitly need the legacy in-memory index behavior.
+- Use `vectorBackend: 'sqlite-vec'` for durable local deployments; it is the only backend.
 
 ## Measured behaviour (2026-10-23)
 

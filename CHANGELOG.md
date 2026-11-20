@@ -191,6 +191,17 @@
 
 - **The 46-slim leftovers are gone (#165).** Re-checked at `b1587cd` for readers, then removed: the eight declarations with no readers (`MODEL_BACKED_PHASE2_REVIEW_VERSION`, `AlgorithmReviewMetricsSummary`, `WorkspaceFilter`, `StaleFilter`, `StatusFilter`, `CredibilityFilter`, `DegradationState`, `RuntimeAuditTrail`), `BoardRegistry` (no instantiations; its `@public stable` was self-applied and 5.0 is unreleased), and `DeepWriteConfig`'s write-only `modelRole`/`allowCloud` fields together with the `COGMEM_DEEP_WRITE_ALLOW_CLOUD` read that only fed the latter. 101 lines across 9 files. No behaviour, dependency, bin, table or migration changed; `TopicFilter`, `DeepWriteConfig` itself and `DeepWriteMemoryOrchestrator`'s real consumption are untouched. Three declarations this round left without a reader — `AlgorithmReviewMetricsSnapshot`, `BrainMode`, `RuntimeDiagnosticsHistoryPage` — were outside the frozen list and are named here for the next decision rather than deleted silently.
 
+- **Four runtime dependencies nothing imported are gone (#339).** `mammoth`, `pdfjs-dist` and `xlsx`
+  had no code importer anywhere in the tree — the document loaders they once served were deleted
+  in an earlier round — so they leave `package.json` and the lockfile, and with them the
+  `@xmldom/xmldom` override that existed only because `mammoth` declared `^0.8.6`, and `SECURITY.md`'s
+  xlsx CDN-tarball note. `hnswlib-node` was an optional dependency no code required either; the
+  `cogmem init` vector-backend step no longer offers it and `sqlite-vec` is the only backend in the
+  wizard and the docs. The web plugin's `@mozilla/readability`, `linkedom` and `turndown` stay:
+  the plugin remains in the tree and is loaded on demand, so it still imports all three. No code
+  path changed. User-visible effect, in one line: an install no longer downloads four dependencies
+  the product cannot use, and `cogmem init` no longer asks for a backend that does not exist.
+
 ## 4.1.0
 
 Scope for this line, in the order it is worked: the shared-memory design comparison (#134, whose

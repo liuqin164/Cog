@@ -979,8 +979,7 @@ export { EntityGovernanceService } from './entity/index.js';
 export type { EntityMergeCandidate, EntityMergeCandidateStatus, ProposeEntityMergeInput } from './entity/index.js';
 
 /**
- * Vector store backends — choose between durable sqlite-vec (recommended)
- * and the legacy in-process hnswlib backend.
+ * Durable vector store — sqlite-vec.
  * @beta @since 1.12.0
  */
 export { MemoryBindingStore } from './store/MemoryBindingStore.js';
