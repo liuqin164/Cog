@@ -3,9 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
 import { createMemoryKernel } from '../src/factory.js';
-import { rememberForHost, type HostIdentity } from '../src/host/bridge/HostBridge.js';
 import {
   SECRET_PATTERNS,
   countSecretFindings,
@@ -65,7 +63,7 @@ describe('the public redaction face is frozen', () => {
 });
 
 describe('the primitive and the write paths agree', () => {
-  test('direct kernel and HostBridge both store the redacted form and the mark', async () => {
+  test('the direct kernel write path stores the redacted form and the mark', async () => {
     const dir = makeTempDir('cogmem-secret-public-');
     const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db') });
     try {
@@ -84,16 +82,6 @@ describe('the primitive and the write paths agree', () => {
       expect(directPayload.text).toBe(redacted.text);
       expect(directPayload.text).not.toContain('ABCDEFGHIJKLMNOPQRSTUVWXYZ012345');
       expect(directPayload.metadata.secretFindings?.total).toBeGreaterThan(0);
-
-      const identity: HostIdentity = { agentId: 'host', projectId: 'bridge', sessionId: 's', memorySource: 'test' };
-      const result = await rememberForHost({ kernel, memory: new KernelAgentMemoryBackend(kernel) }, {
-        sessionId: 's',
-        userText: 'run the check',
-        assistantText: 'done',
-        toolCalls: [{ toolCallId: 't1', input: 'cat env' }],
-        toolResults: [{ toolCallId: 't1', output: RAW }],
-      }, {}, identity);
-      expect(result.hygiene.secretFindings.total).toBeGreaterThan(0);
 
       const rows = kernel.factStore.getDatabase().prepare(
         `SELECT json_extract(payload_json, '$.text') AS text,

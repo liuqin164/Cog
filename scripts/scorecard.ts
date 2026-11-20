@@ -35,7 +35,26 @@ import { join } from 'node:path';
 
 import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
 import { createMemoryKernel } from '../src/factory.js';
-import { contextCandidateFromRecallItem } from '../src/host/RecallBlock.js';
+
+/** Adapt a recall item into the shape the context planner reasons about. */
+function contextCandidateFromRecallItem(item: any): any {
+  const sourceType = String(item && item.sourceType || 'compiled_memory');
+  const raw = sourceType.startsWith('raw_ledger');
+  const graph = item && item.whyMatched === 'memory_binding_graph';
+  const sourceRole = item && item.sourceAnchor && item.sourceAnchor.role;
+  return {
+    id: String(item && item.id || 'recall-item'),
+    layer: graph ? 'graph' : raw ? 'raw_source' : 'belief',
+    content: String(item && item.text || ''),
+    estimatedTokens: Math.max(1, Math.ceil(String(item && item.text || '').length / 4)),
+    confidence: Number.isFinite(item && item.confidence) ? item.confidence : 0.5,
+    projectId: item && item.projectId,
+    sessionId: item && item.sourceAnchor && item.sourceAnchor.sessionId,
+    sourceRoles: sourceRole ? [sourceRole] : [],
+    superseded: Array.isArray(item && item.tags) && item.tags.includes('status:superseded'),
+    recallItem: item,
+  };
+}
 
 const TOPICS = [
   'deployment window', 'backup vault rotation', 'certificate renewal', 'index rebuild',
