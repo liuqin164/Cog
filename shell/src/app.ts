@@ -13,7 +13,7 @@ import { ChannelContract, createMemoryKernel, digestAnchors, KernelAgentMemoryBa
 import { ModelRegistry, type ModelRoleConfig, type ModelRoleName, type ModelTextUsage } from 'cogmem/internal';
 import { defaultShellConfig, type ShellConfig } from './config.ts';
 import { StateMachine } from './state/machine.ts';
-import { CheckpointStore, type InFlightToolCall, type Suspension } from './state/checkpoint.ts';
+import { CheckpointStore, type InFlightToolCall } from './state/checkpoint.ts';
 import { ShellStateLedger } from './state/state-ledger.ts';
 import type { Trigger } from './state/table.ts';
 import { ProcessLock } from './process-lock.ts';
@@ -23,7 +23,7 @@ import { clockPlugin, ClockService } from './plugins/clock.ts';
 import { providedModelPlugin } from './plugins/mg-provider.ts';
 import { ModelRouter, modelRouterPlugin, routeLine } from './model/router.ts';
 import { BUILTIN_ROUTE_NAME, RouteStore, redactUrl, type ModelRoute } from './model/routes.ts';
-import { cagePlugin, estimateBudgetGrant, RunCage, type CageTier } from './plugins/cage.ts';
+import { cagePlugin, RunCage, type CageTier } from './plugins/cage.ts';
 import { builtinToolsPlugin } from './plugins/builtin-tools.ts';
 import { coreCommandFor, availableCoreCommand, unknownCommandReply, type CommandHost, type CommandReply } from './commands.ts';
 import { proposalPlugin } from './plugins/proposal.ts';
@@ -39,7 +39,6 @@ import { emergencePlugin } from './plugins/emergence.ts';
 import { terminalPlugin, TerminalChannel, type ShellControl } from './channels/terminal.ts';
 import { AgentRuntime, type AgentMessage, type ModelProvider, type RunSummary } from './state/agent-loop.ts';
 import type { ToolOutputAccount } from './state/context-budget.ts';
-import { classifyEndpointFailure } from './state/retry.ts';
 import { laneAssemblyView, type ContextMetrics } from './state/session-lanes.ts';
 import { SecretRedactor, startKernelHttpFace, type HttpFaceHandle } from './kernel-host.ts';
 import { formatBytes, memoryPressureAction, readMemoryUsage } from './memory.ts';
@@ -56,12 +55,10 @@ import type { EmbeddingStatus } from './embedding/model.ts';
 import { createEmbeddingProvider, resolveEmbeddingDimensions, type ShellEmbeddingProvider } from './embedding/provider.ts';
 import { ContextLanes } from './context-lanes.ts';
 import { PluginsAdmin } from './plugins-admin.ts';
+import { RunLoop } from './run-loop.ts';
 import { ProposalsHandlers } from './proposals-handlers.ts';
 import { SovereigntyCommands } from './sovereignty.ts';
 import { StatusFace } from './status-face.ts';
-
-/** The findings handoff is a prompt line, not a transcript: one bounded paragraph. */
-const MAX_ASSIGNMENT_FINDINGS = 600;
 
 /**
  * A task-exit stub (#263) quotes each source ledger row as an exact prefix; the full row stays one
@@ -75,16 +72,6 @@ const DREAM_RETRY_BASE_MS = 5 * 60_000;
 const DREAM_RETRY_CAP_MS = 30 * 60_000;
 const DREAM_MAX_ATTEMPTS_PER_NIGHT = 5;
 const SNAPSHOT_INTERVAL_MS = 24 * 60 * 60_000;
-
-/**
- * Autonomous continuation backoff (#228): 5 min × 2^n, capped at 6 h. The base is the shortest wait
- * that still lets a transient provider failure clear; the cap is what a stuck task costs at most —
- * after the ladder saturates, an unattended assignment is retried about four times a day instead of
- * every wake, which is the repeated-recon burn the ticket names. A user line, an approved budget, or
- * a successful tool result resets the count, so the cap never applies to work that is moving.
- */
-const RESUME_BACKOFF_BASE_MS = 5 * 60_000;
-const RESUME_BACKOFF_CAP_MS = 6 * 60 * 60_000;
 
 /**
  * Emergence's stop-bleed (#229): a candidate is spoken or queued at most once, and at most eight
@@ -161,8 +148,9 @@ export class CompanionShell implements ShellControl, AttachShell {
   readonly upgradeAdmin: UpgradeAdmin;
   readonly statusFace: StatusFace;
   readonly contextLanes: ContextLanes;
+  readonly runLoop: RunLoop;
   runtime?: AgentRuntime;
-  private cage?: RunCage;
+  cage?: RunCage;
   clock?: ClockService;
   private dream?: { integrate(...args: [string, string, number?]): Promise<{ localDate: string; eventCount: number; sourceRefs: unknown[]; summary: string; memoryModelUsed?: boolean; memoryModelDegraded?: string; kernelNightRan?: boolean }> };
   private emergence?: {
@@ -349,6 +337,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.upgradeAdmin = new UpgradeAdmin(this);
     this.statusFace = new StatusFace(this);
     this.contextLanes = new ContextLanes(this);
+    this.runLoop = new RunLoop(this);
     this.proposals = new CommandProposals(
       (command) =>
         isProposableCommand(command) &&
@@ -981,11 +970,11 @@ export class CompanionShell implements ShellControl, AttachShell {
     return this.contextLanes.laneDigestStubs();
   }
 
-  private materializeTaskProcedure(final: boolean): void {
+  materializeTaskProcedure(final: boolean): void {
     this.contextLanes.materializeTaskProcedure(final);
   }
 
-  private materializeTaskEndStub(turnId?: string, runId?: string, deferRunId?: string): void {
+  materializeTaskEndStub(turnId?: string, runId?: string, deferRunId?: string): void {
     this.contextLanes.materializeTaskEndStub(turnId, runId, deferRunId);
   }
 
@@ -994,49 +983,11 @@ export class CompanionShell implements ShellControl, AttachShell {
   }
 
   async submit(text: string): Promise<RunSummary | undefined> {
-    if (this.machine.state === 'RUNNING') {
-      this.runtime!.steer(text);
-      this.statusFace.emitSteering();
-      return undefined;
-    }
-    this.acknowledgeSurfacing();
-    if (this.statusFace.dailyBudgetExceeded()) this.statusFace.announceDailyBudget('user_message');
-    if (this.machine.state === 'SUSPENDED') return this.submitWhileSuspended(text);
-    this.beginUserAssignment(text);
-    this.clock!.markInteraction(this.now());
-    await this.wakeIfNeeded('message_received');
-    if (this.machine.state !== 'IDLE') throw new Error(`submit_requires_idle: state is ${this.machine.state}`);
-    return this.executeRun(text, 'message_received', 'user_message');
-  }
-
-  /**
-   * A line typed while paused (#228). For a question the line is the answer: the same assignment
-   * continues, no new assignment record is written, and the object is marked answered so the
-   * resumed prompt can still name the question. For a budget request a typed line is a new
-   * instruction: the paused task closes as budget_exceeded (traced) and the line starts fresh work.
-   * There is no timeout for either kind — see `Suspension`'s comment.
-   */
-  private async submitWhileSuspended(text: string): Promise<RunSummary | undefined> {
-    this.acknowledgeSurfacing();
-    const suspension = this.machine.runtime.suspension;
-    this.clock!.markInteraction(this.now());
-    if (suspension?.kind === 'question') {
-      this.machine.updateRuntime({ suspension: { ...suspension, answeredAt: this.now() } });
-      this.trace.append('suspension_answered', { id: suspension.id, assignmentId: suspension.assignmentId, chars: text.trim().length });
-      return this.executeRun(text, 'message_received', 'question_answered', 'answer_received');
-    }
-    if (suspension) this.supersedeSuspension('new_input');
-    this.beginUserAssignment(text);
-    return this.executeRun(text, 'message_received', 'user_message');
+    return this.runLoop.submit(text);
   }
 
   private async wakeIfNeeded(trigger: 'message_received' | 'wake_intent_due' | 'emergence_due'): Promise<void> {
-    if (this.machine.state === 'DORMANT') await this.machine.dispatch('message_received', { reason: 'message_while_dormant' });
-    if (this.machine.state === 'DREAMING') await this.machine.dispatch('message_received', { reason: 'message_while_dreaming' });
-    if (this.machine.state === 'WAKING') {
-      this.injectTimeContext(trigger);
-      await this.machine.dispatch('context_injected', { reason: `${trigger}_time_context` });
-    }
+    return this.runLoop.wakeIfNeeded(trigger);
   }
 
   async executeRun(
@@ -1046,280 +997,9 @@ export class CompanionShell implements ShellControl, AttachShell {
     dispatchTrigger: Trigger = trigger,
     grant?: { tokens: number; turns: number },
   ): Promise<RunSummary> {
-    const runId = `run-${this.now().toString(36)}-${randomUUID().slice(0, 8)}`;
-    const origin = trigger === 'emergence_due' ? 'emergence' : 'user';
-    const tier = this.budgetTier(trigger);
-    this.runTier = tier;
-    this.currentRunUserText = text;
-    // The owner's grant widens this one run's cage and is spent when it settles (#228).
-    this.cage!.beginRun(runId, tier, tier === 'work' ? (grant ?? this.machine.runtime.openAssignment?.grant) : undefined);
-    // A backed-off autonomous wake still runs (F7's surfacing decision is untouched) but it does not
-    // inherit the work tier or the assignment, so it cannot keep retrying the same continuation.
-    this.hideAssignmentContext = trigger === 'emergence_due' && tier === 'autonomous' && this.machine.runtime.openAssignment !== undefined;
-    if (this.hideAssignmentContext) {
-      const assignment = this.machine.runtime.openAssignment!;
-      this.trace.append('assignment_resume_deferred', {
-        assignmentId: assignment.id,
-        attempts: assignment.attempts ?? 0,
-        nextResumeAt: assignment.nextResumeAt ?? null,
-        now: this.now(),
-      });
-    }
-    await this.machine.dispatch(dispatchTrigger, { runId, reason });
-
-    let summary: RunSummary;
-    try {
-      summary = await this.runtime!.run({
-        runId,
-        sessionId: this.config.sessionId,
-        userText: text,
-        origin,
-      });
-    } finally {
-      this.hideAssignmentContext = false;
-    }
-    const outcome = this.settleAssignment(summary, tier, trigger);
-    // `agent_end` capture has written this run's rows by the time `run()` returns, so the declared
-    // task end's procedure (#262) and stub (#263) can read them here instead of waiting for the
-    // next request.
-    this.materializeTaskProcedure(true);
-    this.materializeTaskEndStub(summary.turnId, summary.runId);
-    if (summary.stopReason === 'run_error' && summary.error?.startsWith('model_timeout:')) this.announceModelTimeout(summary);
-    if (summary.stopReason === 'run_error' && summary.error?.startsWith('no_progress:')) this.announceNoProgress(summary);
-    if (summary.stopReason === 'run_error' && summary.error?.startsWith('mg_gateway_error:')) this.announceProviderFailure(summary);
-    await this.machine.dispatch(outcome, { reason: summary.error ?? reason, runId });
-    if (this.machine.state === 'SUSPENDED' && this.machine.runtime.suspension?.kind === 'budget') {
-      this.offerResume(this.machine.runtime.suspension.id);
-    }
-    if (!this.clock!.nextPendingIntent()) this.clock!.scheduleIdleWake();
-    return summary;
+    return this.runLoop.executeRun(text, trigger, reason, dispatchTrigger, grant);
   }
 
-  /**
-   * Which cage this run gets. An autonomous wake inherits the work tier only when the ledger still
-   * holds an unfinished user-assigned task; the check reads that task's `origin`, never the wake's
-   * words.
-   */
-  private budgetTier(trigger: 'message_received' | 'emergence_due'): CageTier {
-    if (trigger === 'message_received') return 'work';
-    const assignment = this.machine.runtime.openAssignment;
-    if (assignment?.origin !== 'user_message') return 'autonomous';
-    // A continuation that keeps failing waits longer (#228); while it waits, an autonomous wake is a
-    // plain surfacing run, not a retry of the assignment.
-    if (assignment.nextResumeAt !== undefined && assignment.nextResumeAt > this.now()) return 'autonomous';
-    return 'work';
-  }
-
-  private beginUserAssignment(text: string): void {
-    const trimmed = text.trim();
-    if (!trimmed) return;
-    const open = this.machine.runtime.openAssignment;
-    if (open) {
-      this.machine.updateRuntime({ openAssignment: { ...open, latestUserText: trimmed.slice(0, 500) } });
-      this.trace.append('assignment_attached', { assignmentId: open.id, chars: trimmed.length });
-    }
-  }
-
-  /**
-   * A whole-turn timeout stops the run instead of retrying (#240), so the transcript says why and
-   * with which cap; otherwise a stopped turn leaves only the idle status behind.
-   */
-  private announceModelTimeout(summary: RunSummary): void {
-    const seconds = Math.round(this.config.model.timeoutMs / 1_000);
-    const reason = (summary.error ?? '').replace(/^model_timeout:\s*/u, '');
-    const text = `模型超时（整轮上限 ${seconds} 秒），已停止本轮、不再重试${reason ? `：${reason}` : ''}`;
-    void this.host.bus.emit('terminal_print', { text: `${text}\n` });
-    void this.host.bus.emit('companion_notice', { text, tone: 'warn' });
-  }
-
-  /**
-   * The no-progress stop (#241): name the turn it stopped on and the tool call it was repeating, so
-   * the stop is not mistaken for the cage's budget or a provider failure.
-   */
-  private announceNoProgress(summary: RunSummary): void {
-    const lastCall = summary.toolCalls.at(-1);
-    const where = lastCall
-      ? `${lastCall.toolName} ${truncate(JSON.stringify(lastCall.input ?? {}), 120)}`
-      : `turn ${summary.turns}`;
-    const text = `连续 ${this.config.maxIdleTurns} 回合无用户可见产出，已停止本轮（无进展判据 maxIdleTurns=${this.config.maxIdleTurns}）；停在 ${where}`;
-    void this.host.bus.emit('terminal_print', { text: `${text}\n` });
-    void this.host.bus.emit('companion_notice', { text, tone: 'warn' });
-  }
-
-  /**
-   * A run the provider ended (#282): the provider retried 429/5xx within its budget and still failed,
-   * so the user gets a line instead of a silently missing answer. The reason is truncated; the trace
-   * keeps the same account.
-   */
-  private announceProviderFailure(summary: RunSummary): void {
-    const reason = summary.error ?? 'provider_error';
-    const kind = classifyEndpointFailure(reason);
-    const retryable = kind === 'rate_limit' || /mg_gateway_error:\s*5\d\d/u.test(reason);
-    const head = kind === 'rate_limit'
-      ? '模型网关限流（429），壳已按预算重试仍未恢复'
-      : retryable
-        ? '模型网关临时失败（5xx），壳已按预算重试仍未恢复'
-        : `模型调用失败（${kind}）`;
-    const tail = retryable
-      ? '；这句话可以稍后重发，记忆和已完成的工具结果都还在。'
-      : '；这不是可重试的网络抖动，先看原因再发。';
-    const text = `${head}${tail} 原因：${truncate(reason, 300)}`;
-    void this.host.bus.emit('terminal_print', { text: `${text}\n` });
-    void this.host.bus.emit('companion_notice', { text, tone: 'warn' });
-    this.trace.append('run_failure_announced', { runId: summary.runId, kind, retryable, reason: truncate(reason, 300) });
-  }
-
-  /**
-   * A completed run closes the assignment; a budget stop keeps it open and writes the place and the
-   * next move. A run without an assignment pauses without one. A run error or abort keeps the
-   * assignment open too: the work is unfinished, and the next wake must not mistake it for a fresh
-   * autonomous idea.
-   */
-  private settleAssignment(summary: RunSummary, tier: CageTier, trigger: 'message_received' | 'emergence_due'): Trigger {
-    const question = this.pendingQuestion;
-    this.pendingQuestion = undefined;
-    const assignment = this.machine.runtime.openAssignment;
-    // A question can only be waited on by a work run; the tool refuses the autonomous tier, and this
-    // is the second half of that guard rather than a second policy.
-    if (tier !== 'work') return summary.stopReason;
-    if (summary.stopReason === 'run_complete' && question) {
-      const suspension: Suspension = {
-        id: `suspension-${this.now().toString(36)}-${randomUUID().slice(0, 8)}`,
-        kind: 'question',
-        assignmentId: assignment?.id ?? '',
-        createdAt: this.now(),
-        runId: summary.runId,
-        question,
-      };
-      this.machine.updateRuntime({
-        suspension,
-        ...(assignment ? { openAssignment: { ...assignment, lastRunId: summary.runId, stoppedAt: this.now(), nextStep: 'continue the open task with the answer' } } : {}),
-      });
-      this.trace.append('assignment_paused', {
-        runId: summary.runId,
-        assignmentId: assignment?.id ?? '',
-        suspensionId: suspension.id,
-        kind: 'question',
-        questionChars: question.text.length,
-      });
-      return 'question_paused';
-    }
-    if (summary.stopReason === 'run_complete') {
-      this.machine.updateRuntime({ openAssignment: undefined, suspension: undefined });
-      return 'run_complete';
-    }
-    // The run's own closing words are the handoff: bounded, collapsed to one line, and carried into
-    // the next run's prompt so a continuation does not re-read the same sources. A run that ends
-    // without text (an abort mid-tool) keeps the earlier findings rather than erasing them.
-    const findings = assignment ? this.captureFindings(summary, assignment) : undefined;
-    // Only an autonomous continuation counts an attempt, and a successful tool result is the
-    // progress that resets it (#228). A user-driven run resets the count: the owner is present.
-    const progressed = summary.toolResults.some((result) => !result.isError);
-    const attempts = trigger === 'emergence_due' && assignment && !progressed ? (assignment.attempts ?? 0) + 1 : 0;
-    const nextResumeAt = attempts > 0 ? this.now() + Math.min(RESUME_BACKOFF_BASE_MS * 2 ** (attempts - 1), RESUME_BACKOFF_CAP_MS) : undefined;
-    if (summary.stopReason !== 'budget_exceeded') {
-      // A no-progress stop is unfinished work like a budget stop, but it ends through the existing
-      // run_error edge. It writes the same handoff fields so the next run knows where it stalled.
-      const noProgress = summary.error?.startsWith('no_progress:') === true;
-      const lastCall = summary.toolCalls.at(-1);
-      const stoppedStep = noProgress
-        ? lastCall
-          ? `${lastCall.toolName} ${truncate(JSON.stringify(lastCall.input ?? {}), 240)}`
-          : `after turn ${summary.turns}`
-        : undefined;
-      const nextStep = noProgress
-        ? `continue the open task, but report user-visible progress before repeating the same tool call (the previous run stopped after ${summary.turns} turns with no output)`
-        : undefined;
-      this.machine.updateRuntime({
-        suspension: undefined,
-        ...(assignment ? {
-          openAssignment: {
-            ...assignment,
-            lastRunId: summary.runId,
-            grant: undefined,
-            attempts,
-            nextResumeAt,
-            ...(findings ? { findings } : {}),
-            ...(stoppedStep ? { stoppedStep, nextStep } : {}),
-          },
-        } : {}),
-      });
-      if (noProgress && assignment) this.trace.append('assignment_stopped', { runId: summary.runId, assignmentId: assignment.id, stoppedStep, nextStep, findingsChars: findings?.length ?? 0 });
-      if (attempts > 0 && assignment) this.trace.append('assignment_backoff', { assignmentId: assignment.id, attempts, nextResumeAt });
-      return summary.stopReason;
-    }
-    const lastCall = summary.toolCalls.at(-1);
-    const stoppedStep = lastCall
-      ? `${lastCall.toolName} ${truncate(JSON.stringify(lastCall.input ?? {}), 240)}`
-      : `after turn ${summary.turns}`;
-    const nextStep = lastCall
-      ? `resume from ${lastCall.toolName}: check its last result, then continue the user-assigned task`
-      : 'continue the user-assigned task from its next step; the budget stopped this run before it finished';
-    const estimate = estimateBudgetGrant({ tokens: summary.tokens, turns: summary.turns, limits: this.config.workBudget });
-    const violation = this.cage!.violation;
-    const suspension: Suspension = {
-      id: `suspension-${this.now().toString(36)}-${randomUUID().slice(0, 8)}`,
-      kind: 'budget',
-      assignmentId: assignment?.id ?? '',
-      userText: assignment?.text ?? this.currentRunUserText,
-      createdAt: this.now(),
-      runId: summary.runId,
-      budget: {
-        ...(violation?.violation === 'turn_budget' || violation?.violation === 'token_budget' ? { violation: violation.violation } : {}),
-        tokens: summary.tokens,
-        turns: summary.turns,
-        tokensPerTurn: estimate.tokensPerTurn,
-        additionalTokens: estimate.tokens,
-        additionalTurns: estimate.turns,
-        basis: estimate.basis,
-      },
-    };
-    this.machine.updateRuntime({
-      suspension,
-      ...(assignment ? {
-        openAssignment: {
-          ...assignment,
-          lastRunId: summary.runId,
-          stoppedAt: this.now(),
-          stoppedStep,
-          nextStep,
-          grant: undefined,
-          attempts,
-          nextResumeAt,
-          ...(findings ? { findings } : {}),
-        },
-      } : {}),
-    });
-    if (assignment) this.trace.append('assignment_stopped', { runId: summary.runId, assignmentId: assignment.id, stoppedStep, nextStep, findingsChars: findings?.length ?? 0 });
-    this.trace.append(assignment ? 'assignment_paused' : 'run_paused', {
-      runId: summary.runId,
-      assignmentId: assignment?.id ?? null,
-      suspensionId: suspension.id,
-      kind: 'budget',
-      additionalTokens: estimate.tokens,
-      additionalTurns: estimate.turns,
-      tokensPerTurn: Math.round(estimate.tokensPerTurn),
-      basis: estimate.basis,
-    });
-    return 'budget_paused';
-  }
-
-  private captureFindings(summary: RunSummary, assignment: { id: string }): string | undefined {
-    // The closing message, not the whole run: the handoff is what the run concluded, and the earlier
-    // turns are already in the transcript it can recall.
-    const text = (summary.lastAssistantText ?? summary.assistantText).replace(/\s+/gu, ' ').trim();
-    if (text === '') return undefined;
-    if (text.length <= MAX_ASSIGNMENT_FINDINGS) return text;
-    this.trace.append('assignment_findings_truncated', {
-      assignmentId: assignment.id,
-      runId: summary.runId,
-      chars: text.length,
-      kept: MAX_ASSIGNMENT_FINDINGS,
-    });
-    return `${text.slice(0, MAX_ASSIGNMENT_FINDINGS - 1)}…`;
-  }
-
-  /** One deterministic tick: due intent, then dream window, then the emergence decision point. */
   async tick(at = this.now()): Promise<void> {
     this.rotateServiceLog();
     // An owed upgrade report is not gated on the lifecycle: a promise that came due has to be
@@ -1562,7 +1242,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   }
 
   /** The owner's next line closes F7's loop for the last thing the companion said on its own. */
-  private acknowledgeSurfacing(): void {
+  acknowledgeSurfacing(): void {
     for (const [source, prior] of [...this.surfacedByType]) {
       this.writeSurfacingFeedback(prior, 'engaged');
       this.surfacedByType.delete(source);
@@ -1642,7 +1322,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   }
 
   /** WAKING means the block is written into runtime state, not just into the trace. */
-  private injectTimeContext(reason: string, at = this.now()): void {
+  injectTimeContext(reason: string, at = this.now()): void {
     let kernelLine: string[] = [];
     try {
       const context = this.backend.temporalContext({ projectId: this.config.projectId, now: at });
@@ -2179,6 +1859,3 @@ export class CompanionShell implements ShellControl, AttachShell {
   }
 }
 
-function truncate(text: string, limit: number): string {
-  return text.length <= limit ? text : `${text.slice(0, limit)}…`;
-}
