@@ -26,7 +26,7 @@
 | 功能 | 是什么 | 谁在用 | 靠什么证明 | 状态 |
 |---|---|---|---|---|
 | 状态机 | DORMANT→WAKING→IDLE⇄RUNNING／DREAMING／SUSPENDED | 一切回合的骨架；table.ts 迁移表，非法迁移抛错；checkpoint 只留进程恢复字段，对话原文存账本（#331） | machine 测试；每迁移 checkpoint 落盘；box kill -9 恢复实测；kill-matrix 与快照恢复 | ✅ |
-| 上下文装配 | 六车道（pinned/profile/digest/working_set/recall/tail）按预算拼每轮请求；assignment 只在 working_set 出现一次，无 assignment 时不出现（#334） | session-context 插件每轮调用 | 记分卡长会话 592/600（#343 后复核）；#319/#320 预算与前缀缓存测试；context-continuity 探针（闲聊 0 块／declare 后恰好 1 块） | ✅ |
+| 上下文装配 | 六车道（pinned/profile/digest/working_set/recall/tail）按预算拼每轮请求；一轮内复用装配，账本 global_seq 前进才整份重算，working_set 的 auto-expansion 可按最新文本重算；assignment 只在 working_set 出现一次，无 assignment 时不出现（#334/#351） | session-context 插件每轮调用 | 记分卡长会话 592/600（#343 后复核）；#319/#320 预算与前缀缓存测试；#351 assembly-cache 探针（无落盘 4 次调用 recall=1；工具落盘后每次失效点重算）；context-continuity 探针（闲聊 0 块／declare 后恰好 1 块） | ✅ |
 | 工具面 | 默认 9 工具：read/write/edit/bash＋declare_task/ask_user/propose_command/propose_soul_edit＋memory（search/read/recent）；declare_task start 是唯一的 assignment 构造点，普通消息不再隐式创建（#334）；propose_command 只可提议 13 个白名单命令，破坏性五命令（/forget /plugins /upgrade /export /correct）永不可提议（#335） | 每轮挂载；/context 可见清单 | #333 实测 schema ≈1,336 token/请求；壳测试；context-continuity 的 declare start/end 用例；round 129 白名单探针（五命令逐个被拒、描述与白名单集合相等、/pause 端到端确认）；#323 工具数 8→9、memory-tool 三动作 | installPlugin 安装路径无 hygiene 门 — #363；自治运行共用全量工具 — #349 待定 |
 | 笼子 | 回合/令牌预算＋工具白名单，超限暂停到 SUSPENDED | cage 插件在钩子点拦截 | cage.test.ts；#222 预算档位 | ✅ |
 | 浮现 | 到期承诺/意图在合适时机冒出来；勿扰窗内只排队、不主动开口 | emergence 插件（nextWakeAt/surfacingCandidates）＋ F18 deliveryRoute(Batch) | F6/F7/F8/F10 门测试；壳 surfacing-loop 4 测（忽略降频、/wake 到期、/snooze 顺延、/surfacing 停源）＋ quiet-window 2 测（窗口内排队、窗口后首 tick 送达） | ✅ 反馈环已接 — #330；勿扰窗已生效 — #328 |
@@ -49,7 +49,7 @@
 
 | 功能 | 是什么 | 谁在用 | 靠什么证明 | 状态 |
 |---|---|---|---|---|
-| 健康与备份 | 整脑快照（距上次 ≥24h 触发，不依赖 Dream）＋健康自检 | 快照落 snapshots/；/health 面 | F19 恢复演练 13/13；#327 假时钟 48h 无 Dream 仍写 1 次快照 | ✅ |
+| 健康与备份 | 整脑快照（距上次 ≥24h 触发，不依赖 Dream）＋健康自检；上下文装配失败进 /health、doctor 与 daily 报告，连续 3 次读作 degraded（#350） | 快照落 snapshots/；/health 面 | F19 恢复演练 13/13；#327 假时钟 48h 无 Dream 仍写 1 次快照；#350 context-assembly-health 探针（必抛错车道仍发请求、计数递增、3 次降级、恢复清零） | ✅ |
 | 升级 | 预告→静默期→分阶段装→健康门→失败回滚 | upgrade/supervisor | 升级单元测试 | ⚠️ 实机升级考试未做 — 生存跑阶段验 |
 | 安装/doctor | 一条命令装好＋自检 | install/installer＋doctor | box 六步自检实测；core-cli 的 doctor --storage 断言（含 embeddings 覆盖读数，round 128 恢复） | doctor 嵌入覆盖读数已恢复（#360）；⚠️ 与内核侧安装栈重复 — #354 待定 |
 | 行为评测 | F13 场景集＋连续性记分卡 | eval/behavior＋记分卡 | F13 box 16/16；记分卡基线 2/6 | ⚠️ 记分卡全绿等队列清空后复测 |

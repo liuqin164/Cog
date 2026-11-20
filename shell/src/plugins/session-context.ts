@@ -7,10 +7,11 @@
  * downgrade rule and the browse-only pointers; this plugin only supplies the shell's material and
  * places the result where the provider reads it.
  *
- * The split between `prepareRequest` and `transformContext` is deliberate. The assembly runs once
- * per turn at `prepareRequest`, where the request's system prompt can be replaced. The message block
- * is injected later at `transformContext`, after the loop has appended any tool-loadout declaration
- * to the transcript — replacing messages at `prepareRequest` would drop that declaration.
+ * The split between `prepareRequest` and `transformContext` is deliberate. `prepareRequest` assembles
+ * the turn once and reuses it until the ledger's newest sequence advances; it is where the request's
+ * system prompt can be replaced. The message block is injected later at `transformContext`, after
+ * the loop has appended any tool-loadout declaration to the transcript — replacing messages at
+ * `prepareRequest` would drop that declaration.
  */
 import { renderBrowseStub, type AgentRecallItem, type KernelAgentMemoryBackend, type SessionContextAssembly, type SessionContextItem, type SessionContextLane, type SessionDigestEntry } from 'cogmem';
 import type { AgentMessage } from '../state/agent-loop.ts';
@@ -33,7 +34,10 @@ export interface SessionContextPluginConfig {
   variablePrompt: () => string;
   /** Finished tasks' digest stubs (#263), built from ledger rows and kept across restarts. */
   digestStubs?: () => readonly SessionDigestEntry[];
+  ledgerSeq: () => number;
   onAssembly?: (assembly: SessionContextAssembly) => void;
+  onAssemblyFailure?: (message: string) => void;
+  onAssemblySuccess?: () => void;
   recallLimit?: number;
 }
 
@@ -45,6 +49,36 @@ export function sessionContextPlugin(config: SessionContextPluginConfig): Native
     apply(ctx) {
       const backend = ctx.getService<KernelAgentMemoryBackend>('memory');
       let pendingBlock = '';
+      let turn:
+        | { runId?: string; seq: number; query?: string; recent: string[]; recall: SessionContextItem[]; assembly: SessionContextAssembly; pendingBlock: string; stablePrompt: string }
+        | undefined;
+      const assemble = (recall: SessionContextItem[], recent: string[], runId?: string, cachedDigest?: SessionContextAssembly['digest']): SessionContextAssembly =>
+        backend.assembleSessionContext({
+          projectId: config.projectId,
+          agentId: config.agentId,
+          sessionId: config.sessionId,
+          targetTokens: Math.max(1, Math.floor(config.targetTokens())),
+          tailTurns: config.tailTurns,
+          excludeTurnIds: runId ? [`${runId}:0`] : undefined,
+          pinned: config.pinned(),
+          profile: config.profile(),
+          workingSet: config.workingSet?.() ?? [],
+          openLoops: config.openLoops?.() ?? [],
+          recall,
+          digestStubs: config.digestStubs?.() ?? [],
+          recentText: recent,
+          ...(cachedDigest ? { cachedDigest } : {}),
+        });
+      const accept = (assembly: SessionContextAssembly): string => {
+        config.onAssembly?.(assembly);
+        pendingBlock = assembly.lanes
+          .filter((lane) => !lane.stable)
+          .map(requestLaneText)
+          .filter(Boolean)
+          .join('\n');
+        config.onAssemblySuccess?.();
+        return stableSystemPrompt(assembly);
+      };
 
       ctx.on('prepareRequest', (value: unknown, busCtx?: { runId?: string }) => {
         if (!value || typeof value !== 'object') return value;
@@ -52,7 +86,23 @@ export function sessionContextPlugin(config: SessionContextPluginConfig): Native
         const messages = Array.isArray(request.messages) ? request.messages : [];
         pendingBlock = '';
         const query = newestUserText(messages);
+        const recent = recentText(messages);
+        const seq = config.ledgerSeq();
         try {
+          if (busCtx?.runId && turn && turn.runId === busCtx.runId && turn.query === query && turn.seq === seq) {
+            if (turn.recent.join('\n') !== recent.join('\n')) {
+              const assembly = assemble(turn.recall, recent, busCtx?.runId, turn.assembly.digest);
+              turn.assembly = assembly;
+              turn.recent = recent;
+              turn.stablePrompt = accept(assembly);
+              turn.pendingBlock = pendingBlock;
+            }
+            pendingBlock = turn.pendingBlock;
+            return {
+              ...request,
+              systemPrompt: [turn.stablePrompt, config.variablePrompt()].filter(Boolean).join('\n\n'),
+            };
+          }
           const recall = query
             ? backend.recall({
                 agentId: config.agentId,
@@ -63,33 +113,19 @@ export function sessionContextPlugin(config: SessionContextPluginConfig): Native
                 limit: config.recallLimit ?? 3,
               }).items.map(toContextItem)
             : [];
-          const assembly = backend.assembleSessionContext({
-            projectId: config.projectId,
-            agentId: config.agentId,
-            sessionId: config.sessionId,
-            targetTokens: Math.max(1, Math.floor(config.targetTokens())),
-            tailTurns: config.tailTurns,
-            excludeTurnIds: busCtx?.runId ? [`${busCtx.runId}:0`] : undefined,
-            pinned: config.pinned(),
-            profile: config.profile(),
-            workingSet: config.workingSet?.() ?? [],
-            openLoops: config.openLoops?.() ?? [],
-            recall,
-            digestStubs: config.digestStubs?.() ?? [],
-            recentText: recentText(messages),
-          });
-          config.onAssembly?.(assembly);
-          pendingBlock = assembly.lanes
-            .filter((lane) => !lane.stable)
-            .map(requestLaneText)
-            .filter(Boolean)
-            .join('\n');
+          const assembly = assemble(recall, recent, busCtx?.runId);
+          const stablePrompt = accept(assembly);
+          turn = busCtx?.runId
+            ? { runId: busCtx.runId, seq, query, recent, recall, assembly, pendingBlock, stablePrompt }
+            : undefined;
           return {
             ...request,
-            systemPrompt: [stableSystemPrompt(assembly), config.variablePrompt()].filter(Boolean).join('\n\n'),
+            systemPrompt: [stablePrompt, config.variablePrompt()].filter(Boolean).join('\n\n'),
           };
         } catch (error) {
-          ctx.logger.warn('context_lanes_failed', { message: error instanceof Error ? error.message : String(error) });
+          const message = error instanceof Error ? error.message : String(error);
+          ctx.logger.error('context_lanes_failed', { message });
+          config.onAssemblyFailure?.(message);
           return value;
         }
       });

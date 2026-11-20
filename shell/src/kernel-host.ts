@@ -48,6 +48,7 @@ export interface HttpFaceOptions {
   hostname: string;
   /** Extra health fields the host wants reported (lifecycle state, version, ...). */
   health?: () => Record<string, unknown>;
+  healthStatus?: () => string;
   /** The companion's own identity, listed in the roster before it has written a ledger row. */
   connectedAgents?: () => string[];
   /** The shell's trace file; the observatory reads its surfacing counts from it. */
@@ -128,7 +129,7 @@ export async function startKernelHttpFace(kernel: unknown, options: HttpFaceOpti
       // first how it is would be two writers on one file, which CONCURRENT_ACCESS.md forbids.
       if (url.pathname === '/health') {
         return Response.json({
-          status: 'ok',
+          status: options.healthStatus?.() ?? 'ok',
           service: 'cogmem-companion-shell',
           version: productVersion(),
           bind: options.hostname,

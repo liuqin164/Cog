@@ -22,6 +22,11 @@ export interface HealthPayload {
   state?: string;
   kernel?: { status?: string; package?: string; dbPath?: string };
   memory?: { rssBytes?: number; limitBytes?: number; highBytes?: number; source?: string };
+  contextAssembly?: {
+    failures: number;
+    consecutive: number;
+    lastFailure: { at: number; message: string } | null;
+  };
 }
 
 export interface DoctorContext {
@@ -90,10 +95,15 @@ export async function runDoctor(ctx: DoctorContext): Promise<DoctorReport> {
   try {
     const health = await ctx.fetchHealth();
     const kernelOk = health.kernel?.status === 'ok' && health.kernel?.package === 'cogmem';
+    const assembly = health.contextAssembly;
     checks.push({
       id: 'resident-health',
       ok: health.status === 'ok' && kernelOk && health.kernel?.dbPath === ctx.dbPath,
-      detail: `${ctx.healthUrl} state=${health.state ?? '?'} kernel=${health.kernel?.status ?? '?'}/${health.kernel?.package ?? '?'} db=${health.kernel?.dbPath ?? '?'}`,
+      detail: `${ctx.healthUrl} state=${health.state ?? '?'} kernel=${health.kernel?.status ?? '?'}/${health.kernel?.package ?? '?'} db=${health.kernel?.dbPath ?? '?'}`
+        + (assembly
+          ? ` contextAssembly=${assembly.consecutive >= 3 ? 'degraded' : 'ok'} failures=${assembly.failures} consecutive=${assembly.consecutive}`
+            + (assembly.lastFailure ? ` last=${new Date(assembly.lastFailure.at).toISOString()}:${assembly.lastFailure.message}` : '')
+          : ''),
     });
     checks.push({
       id: 'loopback-only',
