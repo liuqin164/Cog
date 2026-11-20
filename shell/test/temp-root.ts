@@ -8,6 +8,8 @@ import { mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { sweepLegacyTempDirs } from '../../scripts/temp-prefixes.ts';
+
 export const RUN_ROOT_PREFIX = 'companion-run-';
 
 export function runRoot(pid = process.pid): string {
@@ -25,7 +27,7 @@ export function isAlive(pid: number): boolean {
 }
 
 /** Create this run's root and remove only roots whose owning process is gone. */
-export function prepareRunRoot(): string {
+export function prepareRunRoot(startedAt = Date.now()): string {
   const root = runRoot();
   mkdirSync(root, { recursive: true });
   for (const entry of readdirSync(tmpdir())) {
@@ -33,5 +35,6 @@ export function prepareRunRoot(): string {
     if (isAlive(Number(entry.slice(RUN_ROOT_PREFIX.length)))) continue;
     rmSync(join(tmpdir(), entry), { recursive: true, force: true });
   }
+  sweepLegacyTempDirs(tmpdir(), startedAt);
   return root;
 }

@@ -1,5 +1,5 @@
 import { mkdirSync, mkdtempSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { CompanionShell, type CompanionShellOptions } from '../src/app.ts';
@@ -24,7 +24,7 @@ import { runRoot } from './temp-root.ts';
 export function makeTempDir(prefix = 'companion-shell-test-'): string {
   const root = runRoot();
   mkdirSync(root, { recursive: true });
-  return mkdtempSync(join(root, prefix));
+  return mkdtempSync(join(root, basename(prefix)));
 }
 
 /** Poll a condition a deferred run settles asynchronously (a command returns before its run ends). */
