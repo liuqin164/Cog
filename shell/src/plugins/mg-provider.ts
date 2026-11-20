@@ -105,6 +105,100 @@ function parseToolCalls(raw: unknown): ToolCall[] {
   });
 }
 
+interface StreamToolCall {
+  id?: string;
+  name?: string;
+  arguments: string;
+}
+
+async function readStreamTurn(
+  response: Response,
+  startedAt: number,
+  onDelta?: (delta: string) => void | Promise<void>,
+): Promise<ModelTurn> {
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  const toolCalls = new Map<number, StreamToolCall>();
+  let buffer = '';
+  let data = '';
+  let text = '';
+  let firstDeltaAt: number | undefined;
+  let finishReason: string | undefined;
+  let usage: RawUsage | undefined;
+
+  const handleLine = async (line: string): Promise<void> => {
+    if (line !== '') {
+      if (line.startsWith('data:')) data += (data === '' ? '' : '\n') + line.slice(5).replace(/^ /u, '');
+      return;
+    }
+    if (data === '') return;
+    const payload = data;
+    data = '';
+    if (payload === '[DONE]') return;
+    let chunk: {
+      choices?: Array<{
+        delta?: { content?: unknown; tool_calls?: unknown };
+        finish_reason?: string;
+      }>;
+      usage?: RawUsage;
+    };
+    try {
+      chunk = JSON.parse(payload);
+    } catch {
+      return;
+    }
+    const choice = chunk.choices?.[0];
+    const delta = choice?.delta;
+    if (typeof delta?.content === 'string' && delta.content.length > 0) {
+      firstDeltaAt ??= Date.now();
+      text += delta.content;
+      await onDelta?.(delta.content);
+    }
+    if (Array.isArray(delta?.tool_calls)) {
+      for (const raw of delta.tool_calls) {
+        const item = raw as { index?: unknown; id?: unknown; function?: { name?: unknown; arguments?: unknown } };
+        const index = typeof item.index === 'number' ? item.index : 0;
+        const slot = toolCalls.get(index) ?? { arguments: '' };
+        if (typeof item.id === 'string') slot.id = item.id;
+        if (typeof item.function?.name === 'string') slot.name = item.function.name;
+        if (typeof item.function?.arguments === 'string') slot.arguments += item.function.arguments;
+        toolCalls.set(index, slot);
+      }
+    }
+    if (typeof choice?.finish_reason === 'string') finishReason = choice.finish_reason;
+    if (chunk.usage) usage = chunk.usage;
+  };
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    for (let newline = buffer.indexOf('\n'); newline >= 0; newline = buffer.indexOf('\n')) {
+      const line = buffer.slice(0, newline).replace(/\r$/u, '');
+      buffer = buffer.slice(newline + 1);
+      await handleLine(line);
+    }
+  }
+  buffer += decoder.decode();
+  if (buffer.length > 0) await handleLine(buffer.replace(/\r$/u, ''));
+  await handleLine('');
+
+  const durationMs = Date.now() - startedAt;
+  return {
+    text,
+    toolCalls: parseToolCalls(
+      [...toolCalls.entries()]
+        .sort(([left], [right]) => left - right)
+        .map(([, call]) => ({ id: call.id, function: { name: call.name, arguments: call.arguments } })),
+    ),
+    stopReason: finishReason === 'length' ? 'length' : 'stop',
+    usage: parseUsage(usage),
+    streamed: true,
+    ttftMs: (firstDeltaAt ?? Date.now()) - startedAt,
+    durationMs,
+  };
+}
+
 /** The usage block as endpoints actually spell it; every field is unknown until checked. */
 export interface RawUsage {
   prompt_tokens?: unknown;
@@ -154,14 +248,16 @@ export class MgModelProvider implements ModelProvider {
     const timeout = AbortSignal.timeout(this.config.timeoutMs);
     const signal = AbortSignal.any([input.signal, timeout]);
     const startedAt = Date.now();
-    let text = '';
     let response: Response;
+    let callStartedAt = startedAt;
     for (let attempt = 1; ; attempt += 1) {
+      callStartedAt = Date.now();
       response = await fetch(url, {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${this.config.apiKey}` },
         body: JSON.stringify({
           model: this.config.model,
+          stream: true,
           messages: [{ role: 'system', content: input.systemPrompt }, ...toOpenAiMessages(input.messages)],
           tools: input.tools.length
             ? input.tools.map((tool) => ({
@@ -173,8 +269,8 @@ export class MgModelProvider implements ModelProvider {
         }),
         signal,
       });
-      text = await response.text();
       if (response.ok) break;
+      const text = await response.text();
       const elapsed = Date.now() - startedAt;
       const budgetLeft = retry.maxTotalMs - elapsed;
       const retryable = RETRYABLE_STATUS.has(response.status);
@@ -196,6 +292,11 @@ export class MgModelProvider implements ModelProvider {
         throw timeout.aborted ? new Error('TimeoutError: The operation timed out.') : new Error('aborted');
       }
     }
+    const contentType = response.headers.get('content-type') ?? '';
+    if (contentType.includes('text/event-stream') && response.body) {
+      return readStreamTurn(response, callStartedAt, input.onDelta);
+    }
+    const text = await response.text();
     let parsed: { choices?: Array<{ message?: { content?: unknown; tool_calls?: unknown }; finish_reason?: string }>; usage?: RawUsage };
     try {
       parsed = JSON.parse(text);
@@ -207,11 +308,15 @@ export class MgModelProvider implements ModelProvider {
     // The OpenAI-compatible `finish_reason: "length"` is Pi's `stopReason: "length"`: the loop voids
     // the whole tool batch rather than execute arguments the token limit may have cut in half.
     const finishReason = parsed.choices?.[0]?.finish_reason;
+    const durationMs = Date.now() - callStartedAt;
     return {
       text: contentToText(message.content),
       toolCalls: parseToolCalls(message.tool_calls),
       stopReason: finishReason === 'length' ? 'length' : 'stop',
       usage: parseUsage(parsed.usage),
+      streamed: false,
+      ttftMs: durationMs,
+      durationMs,
     };
   }
 }

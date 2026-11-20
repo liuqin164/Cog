@@ -39,6 +39,8 @@ export interface TerminalChannelOptions {
 
 export class TerminalChannel {
   private reader?: Interface;
+  private streamedText = '';
+  private streamedNewline = false;
 
   constructor(private readonly options: TerminalChannelOptions) {}
 
@@ -104,6 +106,31 @@ export class TerminalChannel {
     (this.options.output ?? process.stdout).write(text);
   }
 
+  startReply(role: string | undefined): void {
+    if (role !== 'assistant') return;
+    this.streamedText = '';
+    this.streamedNewline = false;
+  }
+
+  printDelta(payload: { message?: { role?: string }; delta?: unknown } | undefined): void {
+    if (payload?.message?.role !== 'assistant' || typeof payload.delta !== 'string' || payload.delta === '') return;
+    this.streamedText += payload.delta;
+    this.streamedNewline = true;
+    this.print(payload.delta);
+  }
+
+  endReply(payload: { message?: { role?: string } } | undefined): void {
+    if (payload?.message?.role !== 'assistant' || !this.streamedNewline) return;
+    this.print('\n');
+    this.streamedNewline = false;
+  }
+
+  claimStreamedReply(text: string): boolean {
+    if (this.streamedText === '' || text !== `${this.streamedText}\n`) return false;
+    this.streamedText = '';
+    return true;
+  }
+
   stop(): void {
     if (this.options.contract && this.options.session) {
       this.options.contract.presence(this.options.session, { reachability: 'offline', ownerActivity: 'away' });
@@ -130,7 +157,16 @@ export function terminalPlugin(options: TerminalChannelOptions): NativePlugin {
         accountId: options.accountId,
       });
       ctx.on('terminal_print', (event: { text?: string }) => {
-        if (typeof event.text === 'string') channel.print(event.text);
+        if (typeof event.text === 'string' && !channel.claimStreamedReply(event.text)) channel.print(event.text);
+      });
+      ctx.on('message_start', (event: { message?: { role?: string } }) => {
+        channel.startReply(event.message?.role);
+      });
+      ctx.on('message_update', (event: { message?: { role?: string }; delta?: unknown }) => {
+        channel.printDelta(event);
+      });
+      ctx.on('message_end', (event: { message?: { role?: string } }) => {
+        channel.endReply(event);
       });
       ctx.on('terminal_surfacing', (event: { surfacing?: ChannelSurfacingInput }) => {
         if (event.surfacing) channel.deliverSurfacing(event.surfacing);
