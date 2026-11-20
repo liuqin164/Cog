@@ -234,7 +234,7 @@ export class PluginsAdmin {
       });
       return;
     }
-    await this.shell.executeRun(assignment.text, 'message_received', 'assignment_resume');
+    await this.shell.runLoop.executeRun(assignment.text, 'message_received', 'assignment_resume');
   }
 
   /**

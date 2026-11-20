@@ -28,7 +28,7 @@ export class ResidentTick {
     this.rotateServiceLog();
     // An owed upgrade report is not gated on the lifecycle: a promise that came due has to be
     // honoured whatever else is happening.
-    this.shell.settleUpgradeReport(at);
+    this.shell.upgradeAdmin.settleUpgradeReport(at);
     // A paused shell is waiting for its owner, not for the clock: no wake intent, dream window or
     // emergence decision may fire out of SUSPENDED (#228).
     if (this.shell.machine.state === 'RUNNING' || this.shell.machine.state === 'WAKING' || this.shell.machine.state === 'SUSPENDED') return;
@@ -243,7 +243,7 @@ export class ResidentTick {
     void this.shell.host.bus.emit('companion_emergence', { id: candidate.id, reason: candidate.reason, text: candidate.text });
     let ok = false;
     try {
-      const summary = await this.shell.executeRun(candidate.text, 'emergence_due', `emergence:${candidate.id}`);
+      const summary = await this.shell.runLoop.executeRun(candidate.text, 'emergence_due', `emergence:${candidate.id}`);
       ok = summary.stopReason === 'run_complete';
     } finally {
       this.shell.trace.append('emergence_run', { projectId: this.shell.config.projectId, id: candidate.id, ok });

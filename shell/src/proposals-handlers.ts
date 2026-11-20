@@ -110,7 +110,7 @@ export class ProposalsHandlers {
       this.shell.trace.append('suspension_resume_skipped', { reason: `state:${this.shell.machine.state}` });
       return;
     }
-    await this.shell.executeRun(userText, 'message_received', 'budget_approved', 'budget_approved', grant);
+    await this.shell.runLoop.executeRun(userText, 'message_received', 'budget_approved', 'budget_approved', grant);
   }
 
   /**

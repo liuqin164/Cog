@@ -558,7 +558,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     // The upgrade's report is owed to the user, not to the next command: it is settled here and on
     // every tick until it lands. It runs *after* the plugins because the report is spoken through the
     // line channel's `terminal_print` subscription, which `startPlugins` is what installs.
-    this.settleUpgradeReport(this.now());
+    this.upgradeAdmin.settleUpgradeReport(this.now());
     this.clock!.scheduleIdleWake();
     this.terminal?.start();
     if (this.config.attach.enabled) {
@@ -927,16 +927,6 @@ export class CompanionShell implements ShellControl, AttachShell {
     return this.runLoop.submit(text);
   }
 
-  async executeRun(
-    text: string,
-    trigger: 'message_received' | 'emergence_due',
-    reason: string,
-    dispatchTrigger: Trigger = trigger,
-    grant?: { tokens: number; turns: number },
-  ): Promise<RunSummary> {
-    return this.runLoop.executeRun(text, trigger, reason, dispatchTrigger, grant);
-  }
-
   async tick(at = this.now()): Promise<void> {
     return this.residentTick.tick(at);
   }
@@ -1264,10 +1254,6 @@ export class CompanionShell implements ShellControl, AttachShell {
 
   upgrade(source: string): Promise<CommandReply> {
     return this.upgradeAdmin.upgrade(source);
-  }
-
-  settleUpgradeReport(at: number): void {
-    this.upgradeAdmin.settleUpgradeReport(at);
   }
 
   async stop(): Promise<void> {
