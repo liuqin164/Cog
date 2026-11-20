@@ -1,0 +1,459 @@
+{
+  "at": "2026-11-20T15:23:29.621Z",
+  "model": "Xenova/bge-base-zh-v1.5",
+  "dimensions": 768,
+  "semanticIndex": true,
+  "k": 3,
+  "facts": 40,
+  "scenarios": 24,
+  "positives": 16,
+  "negatives": 8,
+  "companion": {
+    "positives": 16,
+    "negatives": 8,
+    "hitRate": 0.625,
+    "precision": 0.20408163265306123,
+    "falsePositiveRatio": 0.673611111111111,
+    "negativeSurfaceRate": 0.625,
+    "tokensPerScenario": 27.583333333333332,
+    "latencyP50Ms": 428,
+    "latencyP95Ms": 743
+  },
+  "vector": {
+    "positives": 16,
+    "negatives": 8,
+    "hitRate": 0.625,
+    "precision": 0.13888888888888884,
+    "falsePositiveRatio": 0.861111111111111,
+    "negativeSurfaceRate": 1,
+    "tokensPerScenario": 39.833333333333336,
+    "latencyP50Ms": 116,
+    "latencyP95Ms": 360
+  },
+  "whyMatched": {
+    "raw_ledger_text_fallback": 49
+  },
+  "rows": [
+    {
+      "scenario": "s01",
+      "kind": "positive",
+      "target": "t01",
+      "companion": [
+        "t03",
+        "t11",
+        "d02"
+      ],
+      "vector": [
+        "t03",
+        "t11",
+        "d02"
+      ],
+      "companionTokens": 44,
+      "vectorTokens": 44,
+      "companionMs": 601,
+      "vectorMs": 360
+    },
+    {
+      "scenario": "s02",
+      "kind": "positive",
+      "target": "t02",
+      "companion": [
+        "t02",
+        "d04",
+        "t12"
+      ],
+      "vector": [
+        "t02",
+        "t12",
+        "d04"
+      ],
+      "companionTokens": 41,
+      "vectorTokens": 41,
+      "companionMs": 713,
+      "vectorMs": 117
+    },
+    {
+      "scenario": "s03",
+      "kind": "positive",
+      "target": "t03",
+      "companion": [
+        "t03",
+        "d04",
+        "d02"
+      ],
+      "vector": [
+        "d04",
+        "d02",
+        "t03"
+      ],
+      "companionTokens": 39,
+      "vectorTokens": 39,
+      "companionMs": 609,
+      "vectorMs": 178
+    },
+    {
+      "scenario": "s04",
+      "kind": "positive",
+      "target": "t04",
+      "companion": [
+        "t04",
+        "d13",
+        "d07"
+      ],
+      "vector": [
+        "t04",
+        "d13",
+        "t13"
+      ],
+      "companionTokens": 41,
+      "vectorTokens": 42,
+      "companionMs": 487,
+      "vectorMs": 113
+    },
+    {
+      "scenario": "s05",
+      "kind": "positive",
+      "target": "t05",
+      "companion": [
+        "t05",
+        "t12"
+      ],
+      "vector": [
+        "t12",
+        "d14",
+        "d19"
+      ],
+      "companionTokens": 26,
+      "vectorTokens": 40,
+      "companionMs": 381,
+      "vectorMs": 98
+    },
+    {
+      "scenario": "s06",
+      "kind": "positive",
+      "target": "t06",
+      "companion": [
+        "t06",
+        "t11",
+        "d04"
+      ],
+      "vector": [
+        "t11",
+        "d04",
+        "t06"
+      ],
+      "companionTokens": 46,
+      "vectorTokens": 46,
+      "companionMs": 398,
+      "vectorMs": 76
+    },
+    {
+      "scenario": "s07",
+      "kind": "positive",
+      "target": "t07",
+      "companion": [
+        "d20"
+      ],
+      "vector": [
+        "t01",
+        "t13",
+        "d15"
+      ],
+      "companionTokens": 9,
+      "vectorTokens": 34,
+      "companionMs": 329,
+      "vectorMs": 96
+    },
+    {
+      "scenario": "s08",
+      "kind": "positive",
+      "target": "t08",
+      "companion": [
+        "t03"
+      ],
+      "vector": [
+        "t01",
+        "t15",
+        "t09"
+      ],
+      "companionTokens": 13,
+      "vectorTokens": 37,
+      "companionMs": 428,
+      "vectorMs": 116
+    },
+    {
+      "scenario": "s09",
+      "kind": "positive",
+      "target": "t09",
+      "companion": [
+        "t03",
+        "t09"
+      ],
+      "vector": [
+        "t03",
+        "t09",
+        "d22"
+      ],
+      "companionTokens": 27,
+      "vectorTokens": 40,
+      "companionMs": 431,
+      "vectorMs": 180
+    },
+    {
+      "scenario": "s10",
+      "kind": "positive",
+      "target": "t10",
+      "companion": [],
+      "vector": [
+        "t15",
+        "d02",
+        "t03"
+      ],
+      "companionTokens": 0,
+      "vectorTokens": 37,
+      "companionMs": 452,
+      "vectorMs": 105
+    },
+    {
+      "scenario": "s11",
+      "kind": "positive",
+      "target": "t11",
+      "companion": [
+        "t03",
+        "d04",
+        "t11"
+      ],
+      "vector": [
+        "d04",
+        "t03",
+        "t11"
+      ],
+      "companionTokens": 44,
+      "vectorTokens": 44,
+      "companionMs": 460,
+      "vectorMs": 420
+    },
+    {
+      "scenario": "s12",
+      "kind": "positive",
+      "target": "t12",
+      "companion": [
+        "t03",
+        "t12",
+        "d02"
+      ],
+      "vector": [
+        "t12",
+        "t03",
+        "d02"
+      ],
+      "companionTokens": 40,
+      "vectorTokens": 40,
+      "companionMs": 889,
+      "vectorMs": 348
+    },
+    {
+      "scenario": "s13",
+      "kind": "positive",
+      "target": "t13",
+      "companion": [
+        "d07",
+        "t04"
+      ],
+      "vector": [
+        "t13",
+        "t01",
+        "t04"
+      ],
+      "companionTokens": 28,
+      "vectorTokens": 40,
+      "companionMs": 426,
+      "vectorMs": 116
+    },
+    {
+      "scenario": "s14",
+      "kind": "positive",
+      "target": "t14",
+      "companion": [
+        "t14",
+        "d07",
+        "d14"
+      ],
+      "vector": [
+        "t14",
+        "d14",
+        "d07"
+      ],
+      "companionTokens": 42,
+      "vectorTokens": 42,
+      "companionMs": 395,
+      "vectorMs": 94
+    },
+    {
+      "scenario": "s15",
+      "kind": "positive",
+      "target": "t15",
+      "companion": [
+        "t15",
+        "d07"
+      ],
+      "vector": [
+        "t15",
+        "t01",
+        "d07"
+      ],
+      "companionTokens": 23,
+      "vectorTokens": 35,
+      "companionMs": 421,
+      "vectorMs": 170
+    },
+    {
+      "scenario": "s16",
+      "kind": "positive",
+      "target": "t16",
+      "companion": [
+        "d03"
+      ],
+      "vector": [
+        "d03",
+        "d07",
+        "t01"
+      ],
+      "companionTokens": 13,
+      "vectorTokens": 36,
+      "companionMs": 392,
+      "vectorMs": 116
+    },
+    {
+      "scenario": "s17",
+      "kind": "negative",
+      "companion": [
+        "d04",
+        "t12",
+        "d22"
+      ],
+      "vector": [
+        "t12",
+        "d04",
+        "d22"
+      ],
+      "companionTokens": 40,
+      "vectorTokens": 40,
+      "companionMs": 331,
+      "vectorMs": 120
+    },
+    {
+      "scenario": "s18",
+      "kind": "negative",
+      "companion": [
+        "d05",
+        "d24",
+        "t11"
+      ],
+      "vector": [
+        "d05",
+        "d24",
+        "t01"
+      ],
+      "companionTokens": 39,
+      "vectorTokens": 34,
+      "companionMs": 743,
+      "vectorMs": 104
+    },
+    {
+      "scenario": "s19",
+      "kind": "negative",
+      "companion": [],
+      "vector": [
+        "t09",
+        "t12",
+        "t07"
+      ],
+      "companionTokens": 0,
+      "vectorTokens": 39,
+      "companionMs": 561,
+      "vectorMs": 64
+    },
+    {
+      "scenario": "s20",
+      "kind": "negative",
+      "companion": [],
+      "vector": [
+        "t12",
+        "d14",
+        "t02"
+      ],
+      "companionTokens": 0,
+      "vectorTokens": 44,
+      "companionMs": 469,
+      "vectorMs": 93
+    },
+    {
+      "scenario": "s21",
+      "kind": "negative",
+      "companion": [
+        "d21",
+        "t03",
+        "t10"
+      ],
+      "vector": [
+        "d02",
+        "d21",
+        "d11"
+      ],
+      "companionTokens": 39,
+      "vectorTokens": 39,
+      "companionMs": 373,
+      "vectorMs": 90
+    },
+    {
+      "scenario": "s22",
+      "kind": "negative",
+      "companion": [],
+      "vector": [
+        "d14",
+        "t12",
+        "d09"
+      ],
+      "companionTokens": 0,
+      "vectorTokens": 41,
+      "companionMs": 385,
+      "vectorMs": 99
+    },
+    {
+      "scenario": "s23",
+      "kind": "negative",
+      "companion": [
+        "d09",
+        "t12",
+        "d22"
+      ],
+      "vector": [
+        "d09",
+        "t12",
+        "d14"
+      ],
+      "companionTokens": 38,
+      "vectorTokens": 41,
+      "companionMs": 393,
+      "vectorMs": 121
+    },
+    {
+      "scenario": "s24",
+      "kind": "negative",
+      "companion": [
+        "t12",
+        "d14"
+      ],
+      "vector": [
+        "t12",
+        "d14",
+        "d09"
+      ],
+      "companionTokens": 30,
+      "vectorTokens": 41,
+      "companionMs": 349,
+      "vectorMs": 141
+    }
+  ]
+}

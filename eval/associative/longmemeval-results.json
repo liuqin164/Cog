@@ -1,0 +1,372 @@
+{
+  "at": "2026-11-20T15:22:00.953Z",
+  "data": "longmemeval_s_cleaned.json (huggingface.co/datasets/xiaowu0162/longmemeval-cleaned)",
+  "split": "longmemeval_s_cleaned.json",
+  "sampling": {
+    "rule": "sort by question_id, step=floor(n/limit), take limit",
+    "n": 20,
+    "dataset": 500
+  },
+  "k": 5,
+  "embedding": "Xenova/bge-base-zh-v1.5",
+  "answering": {
+    "requested": "auto/deepseek-v4.1-flash",
+    "observed": [
+      "group/auto-deepseek-v4-1-flash"
+    ]
+  },
+  "accuracy": 0.55,
+  "retrievalHitRate": 0.7,
+  "byType": {
+    "single-session-user": {
+      "n": 5,
+      "accuracy": 0.4,
+      "retrieval": 0.4
+    },
+    "temporal-reasoning": {
+      "n": 8,
+      "accuracy": 0.625,
+      "retrieval": 0.875
+    },
+    "knowledge-update": {
+      "n": 2,
+      "accuracy": 1,
+      "retrieval": 1
+    },
+    "multi-session": {
+      "n": 3,
+      "accuracy": 0.3333333333333333,
+      "retrieval": 0.6666666666666666
+    },
+    "single-session-preference": {
+      "n": 1,
+      "accuracy": 0,
+      "retrieval": 0
+    },
+    "single-session-assistant": {
+      "n": 1,
+      "accuracy": 1,
+      "retrieval": 1
+    }
+  },
+  "rows": [
+    {
+      "question_id": "001be529",
+      "question_type": "single-session-user",
+      "question": "How long did I wait for the decision on my asylum application?",
+      "answer": "over a year",
+      "hypothesis": "I don’t have that information in the recalled memories.",
+      "judged_correct": false,
+      "retrieval_hit": false,
+      "recalled_sessions": [
+        "2c1537ff",
+        "ultrachat_95472",
+        "sharegpt_HbIK81o_0",
+        "sharegpt_6cz1Sq6_328",
+        "sharegpt_g15cpiF_0"
+      ]
+    },
+    {
+      "question_id": "0bc8ad92",
+      "question_type": "temporal-reasoning",
+      "question": "How many months have passed since I last visited a museum with a friend?",
+      "answer": 5,
+      "hypothesis": "About 5 months.",
+      "judged_correct": true,
+      "retrieval_hit": true,
+      "recalled_sessions": [
+        "answer_f4ea84fb_3",
+        "sharegpt_qHeD2Bc_0",
+        "d3cc5bdc_1",
+        "0868982f_1",
+        "sharegpt_znI61kP_0"
+      ]
+    },
+    {
+      "question_id": "19b5f2b3",
+      "question_type": "single-session-user",
+      "question": "How long was I in Japan for?",
+      "answer": "two weeks",
+      "hypothesis": "You were in Japan for **two weeks**.",
+      "judged_correct": true,
+      "retrieval_hit": true,
+      "recalled_sessions": [
+        "answer_5ff494b9",
+        "ultrachat_136201",
+        "ultrachat_249978",
+        "cf530425_2",
+        "283e5c7e_1"
+      ]
+    },
+    {
+      "question_id": "2698e78f_abs",
+      "question_type": "knowledge-update",
+      "question": "How often do I see Dr. Johnson?",
+      "answer": "The information provided is not enough. You mentioned seeing Dr. Smith but not Dr. Johnson.",
+      "hypothesis": "I don’t have that information. The recalled memories mention Dr. Smith, not Dr. Johnson.",
+      "judged_correct": true,
+      "retrieval_hit": true,
+      "recalled_sessions": [
+        "cdba3d9f_1",
+        "answer_9282283d_abs_2",
+        "eae760f6",
+        "9316aae3_1",
+        "answer_9282283d_abs_1"
+      ]
+    },
+    {
+      "question_id": "37f165cf",
+      "question_type": "multi-session",
+      "question": "What was the page count of the two novels I finished in January and March?",
+      "answer": "856",
+      "hypothesis": "I don’t have that information in the recalled memories.",
+      "judged_correct": false,
+      "retrieval_hit": true,
+      "recalled_sessions": [
+        "answer_6b9b2b1e_1",
+        "20b1b65f_2",
+        "7e8e790a",
+        "ee7f5084_4",
+        "c85d1682_1"
+      ]
+    },
+    {
+      "question_id": "4dfccbf7",
+      "question_type": "temporal-reasoning",
+      "question": "How many days had passed since I started taking ukulele lessons when I decided to take my acoustic guitar to the guitar tech for servicing?",
+      "answer": "24 days. 25 days (including the last day) is also acceptable.",
+      "hypothesis": "I don’t have that information. The recalled memories mention the guitar servicing on 2023/02/25, but they do not include when you started ukulele lessons.",
+      "judged_correct": false,
+      "retrieval_hit": true,
+      "recalled_sessions": [
+        "sharegpt_uy1tLA8_0",
+        "8f2e0a53_1",
+        "sharegpt_cXkL3cR_69",
+        "87252d80_3",
+        "answer_4bebc782_2"
+      ]
+    },
+    {
+      "question_id": "5d3d2817",
+      "question_type": "single-session-user",
+      "question": "What was my previous occupation?",
+      "answer": "Marketing specialist at a small startup",
+      "hypothesis": "I don’t have that information in the recalled memories.",
+      "judged_correct": false,
+      "retrieval_hit": false,
+      "recalled_sessions": [
+        "sharegpt_bTDMt3m_64",
+        "7e6bcfa7_1",
+        "e00298a6_1",
+        "7dc6f276_1",
+        "85d16d01"
+      ]
+    },
+    {
+      "question_id": "6aeb4375",
+      "question_type": "knowledge-update",
+      "question": "How many Korean restaurants have I tried in my city?",
+      "answer": "four",
+      "hypothesis": "You’ve tried **four** Korean restaurants in your city.",
+      "judged_correct": true,
+      "retrieval_hit": true,
+      "recalled_sessions": [
+        "answer_3f9693b7_2",
+        "answer_3f9693b7_1",
+        "sharegpt_MWlvrvZ_0",
+        "1bc87711_1",
+        "402e0082_5"
+      ]
+    },
+    {
+      "question_id": "75832dbd",
+      "question_type": "single-session-preference",
+      "question": "Can you recommend some recent publications or conferences that I might find interesting?",
+      "answer": "The user would prefer suggestions related to recent research papers, articles, or conferences that focus on artificial intelligence in healthcare, particularly those that involve deep learning for medical image analysis. They would not be interested in general AI topics or those unrelated to healthcare.",
+      "hypothesis": "I don’t have any recalled recommendations for recent publications or conferences.",
+      "judged_correct": false,
+      "retrieval_hit": false,
+      "recalled_sessions": [
+        "sharegpt_dY4gqkH_0",
+        "ultrachat_533748",
+        "sharegpt_OrJDJKV_0",
+        "c51583cd_1",
+        "sharegpt_FYqt26U_0"
+      ]
+    },
+    {
+      "question_id": "89527b6b",
+      "question_type": "single-session-assistant",
+      "question": "I'm going back to our previous conversation about the children's book on dinosaurs. Can you remind me what color was the scaly body of the Plesiosaur in the image?",
+      "answer": "The Plesiosaur had a blue scaly body.",
+      "hypothesis": "The Plesiosaur’s scaly body was blue.",
+      "judged_correct": true,
+      "retrieval_hit": true,
+      "recalled_sessions": [
+        "answer_sharegpt_YkWn1Ne_0",
+        "9fa1d135_1",
+        "sharegpt_8kqJ64d_0",
+        "ultrachat_11001",
+        "765ce8a7_3"
+      ]
+    },
+    {
+      "question_id": "9a707b82",
+      "question_type": "temporal-reasoning",
+      "question": "I mentioned cooking something for my friend a couple of days ago. What was it?",
+      "answer": "a chocolate cake",
+      "hypothesis": "You mentioned baking a chocolate cake for your friend’s birthday party last weekend.",
+      "judged_correct": true,
+      "retrieval_hit": true,
+      "recalled_sessions": [
+        "7a4d00b3_2",
+        "ultrachat_466884",
+        "e627b1aa_1",
+        "answer_dba89488_1",
+        "answer_dba89488_2"
+      ]
+    },
+    {
+      "question_id": "ad7109d1",
+      "question_type": "single-session-user",
+      "question": "What speed is my new internet plan?",
+      "answer": "500 Mbps",
+      "hypothesis": "I don’t have that information in your recalled memories.",
+      "judged_correct": false,
+      "retrieval_hit": false,
+      "recalled_sessions": [
+        "f2939479_1",
+        "a041cdd4_4",
+        "d0c1453b_2",
+        "3030efec_2"
+      ]
+    },
+    {
+      "question_id": "bc8a6e93_abs",
+      "question_type": "single-session-user",
+      "question": "What did I bake for my uncle's birthday party?",
+      "answer": "You did not mention this information. You mentioned baking for your niece's birthday party but not your uncle's",
+      "hypothesis": "I don’t have that information in the recalled memories.",
+      "judged_correct": true,
+      "retrieval_hit": true,
+      "recalled_sessions": [
+        "sharegpt_MimvIAy_181",
+        "375354d1_2",
+        "ultrachat_396183",
+        "answer_e6143162_abs",
+        "de1f4aec_1"
+      ]
+    },
+    {
+      "question_id": "cc6d1ec1",
+      "question_type": "temporal-reasoning",
+      "question": "How long had I been bird watching when I attended the bird watching workshop?",
+      "answer": "Two months",
+      "hypothesis": "I don’t have that information—the recalled memories don’t mention attending a bird watching workshop.",
+      "judged_correct": false,
+      "retrieval_hit": true,
+      "recalled_sessions": [
+        "answer_be73098b_1",
+        "3cb41ab8_1",
+        "33baaaab_3",
+        "c7a5667a_2",
+        "9089a116"
+      ]
+    },
+    {
+      "question_id": "e25c3b8d",
+      "question_type": "multi-session",
+      "question": "How much did I save on the designer handbag at TK Maxx?",
+      "answer": "$300",
+      "hypothesis": "I don’t have that information in my recalled memories.",
+      "judged_correct": false,
+      "retrieval_hit": false,
+      "recalled_sessions": [
+        "c04c626c_1",
+        "ba80721c",
+        "sharegpt_Ye8MhZY_0",
+        "099c1b6c_3"
+      ]
+    },
+    {
+      "question_id": "eeda8a6d_abs",
+      "question_type": "multi-session",
+      "question": "How many fish are there in my 30-gallon tank?",
+      "answer": "The information provided is not enough. You did not mention that you have a 30-gallon tank.",
+      "hypothesis": "I don’t have that information. The memories mention a 10-gallon tank with Bubbles and a 20-gallon community tank, but not a 30-gallon tank or its fish count.",
+      "judged_correct": true,
+      "retrieval_hit": true,
+      "recalled_sessions": [
+        "answer_3e5fea0e_abs_2",
+        "answer_3e5fea0e_abs_1",
+        "sharegpt_jPlvGky_0",
+        "736f6133",
+        "da71721f"
+      ]
+    },
+    {
+      "question_id": "gpt4_1d4ab0c9",
+      "question_type": "temporal-reasoning",
+      "question": "How many days passed between the day I started watering my herb garden and the day I harvested my first batch of fresh herbs?",
+      "answer": "24 days. 25 days (including the last day) is also acceptable.",
+      "hypothesis": "24 days passed between starting to water your herb garden on March 22, 2023 and harvesting your first batch on April 15, 2023.",
+      "judged_correct": true,
+      "retrieval_hit": true,
+      "recalled_sessions": [
+        "answer_febde667_1",
+        "082b7e52_1",
+        "answer_febde667_2",
+        "sharegpt_6cz1Sq6_328",
+        "3f1d1224_3"
+      ]
+    },
+    {
+      "question_id": "gpt4_4929293b",
+      "question_type": "temporal-reasoning",
+      "question": "What was the the life event of one of my relatives that I participated in a week ago?",
+      "answer": "my cousin's wedding",
+      "hypothesis": "I don’t have that information in the recalled memories.",
+      "judged_correct": false,
+      "retrieval_hit": false,
+      "recalled_sessions": [
+        "ea8c38f8",
+        "c0dbabb8",
+        "e76430ea_3",
+        "ultrachat_326769",
+        "11d959b3_1"
+      ]
+    },
+    {
+      "question_id": "gpt4_7bc6cf22",
+      "question_type": "temporal-reasoning",
+      "question": "How many days ago did I read the March 15th issue of The New Yorker?",
+      "answer": "12 days ago. 13 days (including the last day) is also acceptable.",
+      "hypothesis": "You read it on March 20, 2023, so it was **12 days ago**.",
+      "judged_correct": true,
+      "retrieval_hit": true,
+      "recalled_sessions": [
+        "answer_e22d6aef_1",
+        "39566615_1",
+        "70b9616e",
+        "ultrachat_363172",
+        "e6cc6157_1"
+      ]
+    },
+    {
+      "question_id": "gpt4_b5700ca9",
+      "question_type": "temporal-reasoning",
+      "question": "How many days ago did I attend the Maundy Thursday service at the Episcopal Church?",
+      "answer": "4 days.",
+      "hypothesis": "4 days ago — you attended the Maundy Thursday service at the Episcopal Church on Thursday, April 6, 2023.",
+      "judged_correct": true,
+      "retrieval_hit": true,
+      "recalled_sessions": [
+        "a53c7542_1",
+        "47382adf_1",
+        "sharegpt_7qFUagj_0",
+        "answer_a17423e7_1",
+        "5053474c_2"
+      ]
+    }
+  ]
+}
