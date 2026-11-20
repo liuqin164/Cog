@@ -340,7 +340,10 @@ async function budgetPause(): Promise<Metric[]> {
   const provider = new ScriptedProvider([
     {
       text: 'working',
-      toolCalls: [{ toolCallId: 'c1', toolName: 'read', input: { path: 'missing.txt' } }],
+      toolCalls: [
+        { toolCallId: 'c0', toolName: 'declare_task', input: { action: 'start' } },
+        { toolCallId: 'c1', toolName: 'read', input: { path: 'missing.txt' } },
+      ],
       usage: { input: 1_500, output: 1 },
     },
     { text: 'finished', toolCalls: [] },
@@ -353,9 +356,10 @@ async function budgetPause(): Promise<Metric[]> {
     const stoppedStep = shell.machine.runtime.openAssignment?.stoppedStep ?? '';
     const reply = await shell.runCommand('continue');
     await waitUntil(() => shell.state === 'IDLE', 10_000);
+    const resumedPrompt = (provider.calls.at(-1)?.messages ?? []).map((message) => message.content).join('\n');
     const resumed = provider.calls.length >= 2
-      && (provider.calls[1]!.systemPrompt ?? '').includes('<open-assignment>')
-      && (provider.calls[1]!.systemPrompt ?? '').includes('stopped at:');
+      && resumedPrompt.includes('<open-assignment>')
+      && resumedPrompt.includes('stopped at:');
     const closed = shell.machine.runtime.openAssignment === undefined;
     return [
       metric('budget_stop_is_a_pause', first?.stopReason ?? 'none', paused, 'SUSPENDED / budget'),
