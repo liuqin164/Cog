@@ -17,9 +17,6 @@ export {
   type GovernedBeliefType,
 } from './belief/BeliefGovernanceService.js';
 export * from './binding/index.js';
-export * from './benchmark/BenchmarkRegistry.js';
-export * from './benchmark/BenchmarkReport.js';
-export * from './benchmark/BenchmarkRunner.js';
 export * from './boards/Board.js';
 export * from './boards/BoardEventBus.js';
 export * from './boards/index.js';
@@ -45,8 +42,6 @@ export * from './engine/LocalSemanticCompiler.js';
 export * from './engine/MemoryGate.js';
 export * from './governance/index.js';
 export * from './lexicon/coreMemoryLexicon.js';
-export * from './meta/ProposalLedger.js';
-export * from './meta/types.js';
 export * from './migrations/index.js';
 export * from './migrations/MigrationUtils.js';
 export * from './episode/index.js';
