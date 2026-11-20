@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
 
 describe('shell wiring', () => {
-  test('transitions reach the plugin bus, the companion plugins are services, and WAKING stores the time block', async () => {
+  test('transitions reach the plugin bus, the companion plugins are services, and WAKING injects the time block', async () => {
     const dir = makeTempDir();
     const shell = makeShell(dir, new ScriptedProvider([{ text: 'x', toolCalls: [] }]));
     const transitions: Array<{ from: string; to: string; trigger: string }> = [];
@@ -19,7 +19,7 @@ describe('shell wiring', () => {
         expect(shell.host.hasService(service)).toBe(true);
       }
       expect(shell.host.tools.has('memory')).toBe(true);
-      expect(shell.machine.runtime.lastTimeContext).toContain('<time-context>');
+      expect(shell.trace.read().some((record) => record.kind === 'time_context_injected' && String(record.block).includes('<time-context>'))).toBe(true);
       expect(shell.systemPrompt()).toContain('<time-context>');
     } finally {
       await shell.stop();

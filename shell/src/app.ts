@@ -2016,7 +2016,6 @@ export class CompanionShell implements ShellControl, AttachShell {
       this.trace.append('temporal_context_failed', { message: error instanceof Error ? error.message : String(error) });
     }
     const block = this.clock!.timeContextBlock(at, kernelLine);
-    this.machine.updateRuntime({ lastTimeContext: block });
     this.trace.append('time_context_injected', { block, reason });
   }
 
