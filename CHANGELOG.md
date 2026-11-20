@@ -232,6 +232,16 @@
   and `src/semantic/index.ts` keep only live exports. User-visible effect, in one line: the public API
   no longer exports the dream curator schedule helpers; nothing else behaves differently.
 
+- **The #337 residual island is gone (#365).** After rounds 143/146/147/148 removed its consumers,
+  the last seven files that only referenced each other were unreachable from `shell/src` and
+  `src/bin`: `src/meta/{ProposalLedger,types}.ts`,
+  `src/benchmark/{BenchmarkRunner,BenchmarkRegistry,BenchmarkReport}.ts` and
+  `src/eval/runners/{EvalRunner,ReportFormatter}.ts` (898 lines). Removed with them: the ten tests
+  that existed only for them, their five `src/internal.ts` re-exports, and the consumer-less
+  `ProposalLedgerLike` extension type. No table, column, migration, dependency, bin or CLI command
+  changes. User-visible effect, in one line: `cogmem/internal` no longer exports the unused
+  proposal-ledger and benchmark/eval runners; nothing else behaves differently.
+
 ## 4.1.0
 
 Scope for this line, in the order it is worked: the shared-memory design comparison (#134, whose
