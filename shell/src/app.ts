@@ -8,7 +8,6 @@
  */
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { ChannelContract, createMemoryKernel, digestAnchors, KernelAgentMemoryBackend, readSessionToolCalls, readSessionTurns, type ChannelSession, type DeliveryCandidateInput, type EmbeddingProvider, type MemoryKernel, type SessionContextAssembly, type SessionContextItem, type SessionDigestEntry, type SessionToolCall, type SessionTurn, type SurfacingSource } from 'cogmem';
 import { ModelRegistry, type ModelRoleConfig, type ModelRoleName, type ModelTextUsage } from 'cogmem/internal';
@@ -45,41 +44,19 @@ import { laneAssemblyView, type ContextMetrics } from './state/session-lanes.ts'
 import { SecretRedactor, startKernelHttpFace, type HttpFaceHandle } from './kernel-host.ts';
 import { formatBytes, memoryPressureAction, readMemoryUsage } from './memory.ts';
 import { rotateLogFile, SERVICE_LOG_MAX_BYTES } from './log-rotation.ts';
-import { defaultRunner } from './install/installer.ts';
 import { AttachServer, defaultSocketPath, type AttachShell } from './attach/server.ts';
 import { buildAwayReport, enqueueAway } from './presence.ts';
-import { readInstallState, readTreeVersion, serviceFileExists, treeOfThisProcess } from './upgrade/paths.ts';
 import { loadNativePlugins, type PluginLoadResult } from './plugins/load.ts';
-import { stageUpgradeTree, type StageUpgradeInput, type StagedTree } from './upgrade/stage.ts';
-import { spawnUpgradeSupervisor, type SpawnSupervisorResult } from './upgrade/spawn.ts';
-import {
-  clearUpgradeRequest,
-  describeUpgradeOutcome,
-  isUpgradePromise,
-  newUpgradeId,
-  readUpgradeOutcome,
-  readUpgradeRequest,
-  upgradeOutcomePath,
-  supervisorIsAlive,
-  upgradePromiseReason,
-  upgradeRequestPath,
-  writeUpgradeJson,
-  type UpgradeOutcome,
-  type UpgradeRequest,
-} from './upgrade/records.ts';
+import { UpgradeAdmin } from './upgrade/admin.ts';
+import type { StageUpgradeInput, StagedTree } from './upgrade/stage.ts';
+import type { SpawnSupervisorResult } from './upgrade/spawn.ts';
+import type { UpgradeOutcome, UpgradeRequest } from './upgrade/records.ts';
 import type { PresenceReport, StatusState, WorkState } from './tui/view.ts';
 import type { EmbeddingStatus } from './embedding/model.ts';
 import { createEmbeddingProvider, resolveEmbeddingDimensions, type ShellEmbeddingProvider } from './embedding/provider.ts';
 import { PluginsAdmin } from './plugins-admin.ts';
 import { ProposalsHandlers } from './proposals-handlers.ts';
 import { SovereigntyCommands } from './sovereignty.ts';
-
-/**
- * How long the resident gives the supervisor before the promise's due instant arrives. The report is
- * what the promise is for; this is the "how long is still working" half of it. The supervisor's own
- * pid decides the rest (see `settleUpgradeReport`).
- */
-const UPGRADE_REPORT_GRACE_MS = 60_000;
 
 /** The findings handoff is a prompt line, not a transcript: one bounded paragraph. */
 const MAX_ASSIGNMENT_FINDINGS = 600;
@@ -180,6 +157,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   readonly sovereignty: SovereigntyCommands;
   readonly proposalsHandlers: ProposalsHandlers;
   readonly pluginsAdmin: PluginsAdmin;
+  readonly upgradeAdmin: UpgradeAdmin;
   private runtime?: AgentRuntime;
   private cage?: RunCage;
   private clock?: ClockService;
@@ -252,7 +230,7 @@ export class CompanionShell implements ShellControl, AttachShell {
    */
   private interrupted?: { runId: string; text: string; chars: number };
   /** An upgrade outcome already spoken by this process; attaches read it once, then it is gone. */
-  private lastUpgrade?: UpgradeOutcome;
+  lastUpgrade?: UpgradeOutcome;
   /** One memory notice per crossing, reset after we drop below 90% of the ceiling. */
   private memoryWarned = false;
   /** The day whose daily-budget stop was already spoken to the user (#233). */
@@ -365,6 +343,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.sovereignty = new SovereigntyCommands(this);
     this.proposalsHandlers = new ProposalsHandlers(this);
     this.pluginsAdmin = new PluginsAdmin(this);
+    this.upgradeAdmin = new UpgradeAdmin(this);
     this.proposals = new CommandProposals(
       (command) =>
         isProposableCommand(command) &&
@@ -2714,206 +2693,12 @@ export class CompanionShell implements ShellControl, AttachShell {
     return this.pluginsAdmin.lastDreamProduct();
   }
 
-  // ---- The resident-form upgrade ------------------------------------------------------------------
-
-  /**
-   * `/upgrade <新版目录>`: stage the new tree, promise the report, hand the cycle to the supervisor.
-   *
-   * The gate is the first thing here and it is the requirement's own wording: only a *silent* state
-   * may be upgraded. RUNNING is someone's turn, DREAMING is the night's integration, WAKING is the
-   * instant between them — in all three the machine has work whose interruption is not this command's
-   * to decide silently. IDLE and DORMANT are the states where nothing is in flight.
-   *
-   * The resident does not stop itself. It writes the request, records the promise and returns; the
-   * supervisor stops, swaps, migrates, gates and restarts. The announcement below is what the user
-   * sees *before* that happens — the low-disturbance notice that the shell is going offline.
-   */
-  async upgrade(source: string): Promise<CommandReply> {
-    const state = this.machine.state;
-    if (state !== 'IDLE' && state !== 'DORMANT') {
-      this.trace.append('upgrade_refused', { state, reason: 'not_silent' });
-      const detail = state === 'RUNNING'
-        ? '一次对话/工作正在跑'
-        : state === 'DREAMING'
-          ? '夜间整合正在跑'
-          : '正在唤醒（时间语境注入中）';
-      return {
-        text: `现在不能升级：生命周期是 ${state}（${detail}）。升级只从静默态（IDLE / DORMANT）发起，等它回到 IDLE 再说；此刻不动，也不写快照。`,
-        receipt: true,
-      };
-    }
-    // No argument means the ordinary release path: install the next `cogmem` from npm. A directory
-    // (or a local tarball) is still accepted for developers, but it is not what a user is asked to do.
-    const trimmed = source.trim() === '' ? 'latest' : source.trim();
-    const pending = readUpgradeRequest(this.config.dataDir);
-    if (pending) {
-      this.trace.append('upgrade_refused', { reason: 'in_flight', upgradeId: pending.id });
-      return { text: `已经有一次升级在跑（${pending.fromVersion} → ${pending.toVersion}，id ${pending.id}）：它的结果还没回来，先等它报完。`, receipt: true };
-    }
-
-    let staged: { tree: string; version: string };
-    try {
-      staged = (this.options.stageUpgrade ?? stageUpgradeTree)({ source: trimmed, dataDir: this.config.dataDir, currentTree: treeOfThisProcess(), bunPath: process.execPath });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.trace.append('upgrade_stage_failed', { source: trimmed, message });
-      return { text: `升级没有开始：旁置安装失败（${message}）。没有写快照、没有动服务。`, receipt: true };
-    }
-
-    const id = newUpgradeId(this.now());
-    const fromVersion = readTreeVersion(treeOfThisProcess());
-    const request = this.buildUpgradeRequest(id, fromVersion, staged);
-    // The promise comes before anything can go offline: it is the durable statement that a report is
-    // owed, and it is closed by speaking that report (F2's own wake intention — no new bookkeeping).
-    const promise = this.machine.addWakeIntent({
-      at: this.now() + UPGRADE_REPORT_GRACE_MS,
-      reason: upgradePromiseReason(id),
-    });
-    writeUpgradeJson(upgradeRequestPath(this.config.dataDir), request);
-    this.trace.append('upgrade_announced', {
-      upgradeId: id,
-      from: fromVersion,
-      to: staged.version,
-      fromTree: request.fromTree,
-      toTree: staged.tree,
-      serviceMode: request.serviceMode,
-      promiseId: promise.id,
-    });
-
-    const requestPath = upgradeRequestPath(this.config.dataDir);
-    const spawned = await (this.options.upgradeSpawner
-      ?? ((upgradeRequest, path) => spawnUpgradeSupervisor(upgradeRequest, path, { run: defaultRunner() })))(request, requestPath);
-    if (!spawned.ok) {
-      // Nothing left this process, so nothing is owed: withdraw the request and the promise rather
-      // than leave a report that will never come.
-      clearUpgradeRequest(this.config.dataDir);
-      this.machine.consumeWakeIntent(promise.id);
-      this.trace.append('upgrade_spawn_failed', { upgradeId: id, message: spawned.detail });
-      return { text: `升级没有开始：${spawned.detail}。快照未写、服务未动，也没有留下回报承诺。`, receipt: true };
-    }
-    this.trace.append('upgrade_scheduled', { upgradeId: id, supervisor: spawned.detail });
-    return {
-      text: `好，我要短暂下线一会儿（${fromVersion} → ${staged.version}）：先给脑子整份快照，再用新版迁移 + 召回自检，过了才切换、起新版；任一步不过自动回滚旧版。回来就向你回报结果。`,
-      receipt: true,
-    };
+  upgrade(source: string): Promise<CommandReply> {
+    return this.upgradeAdmin.upgrade(source);
   }
 
-  private buildUpgradeRequest(id: string, fromVersion: string, staged: { tree: string; version: string }): UpgradeRequest {
-    const dataDir = this.config.dataDir;
-    const homeDir = process.env.HOME ?? homedir();
-    const install = readInstallState(dataDir);
-    const choices = install?.choices ?? {};
-    const base = {
-      id,
-      at: this.now(),
-      fromVersion,
-      fromTree: treeOfThisProcess(),
-      toVersion: staged.version,
-      toTree: staged.tree,
-      pid: process.pid,
-      dataDir,
-      dbPath: this.config.dbPath,
-      workspaceRoot: this.config.workspaceRoot,
-      projectId: this.config.projectId,
-      agentId: this.config.agentId,
-      httpPort: choices.httpPort ?? this.config.http.port,
-      socketPath: this.config.attach.socketPath ?? defaultSocketPath(dataDir),
-      bunPath: process.execPath,
-      homeDir,
-      serviceMode: false,
-      serviceName: choices.serviceName ?? 'cogmem-companion',
-      platform: choices.platform ?? process.platform,
-      envFile: join(dataDir, 'env'),
-      logFile: join(dataDir, 'service.log'),
-      // The reply that announces the disconnection is written right after this method returns; the
-      // supervisor waits this long before its first step so that it cannot cut the announcement off.
-      handoffGraceMs: 1_000,
-    } satisfies Omit<UpgradeRequest, 'handoffGraceMs'> & { handoffGraceMs: number };
-    // A unit/plist on disk is the fact that a manager owns this process, which decides how the
-    // supervisor has to be launched to survive the stop it performs.
-    return { ...base, serviceMode: serviceFileExists(base as UpgradeRequest) };
-  }
-
-  /**
-   * Speak an owed upgrade report, once, and close the promise with it.
-   *
-   * Three cases, and the third is the one the ticket calls a veto-level failure:
-   *
-   *  - an outcome nobody has reported → report it (this is requirement ③ and ④ in one path);
-   *  - a promise whose due instant has passed with no outcome and no live supervisor → report the
-   *    silence as a failure, because an upgrade that ends in silence is worse than one that failed;
-   *  - a request whose supervisor is still running → say nothing yet: it is mid-cycle, not silent.
-   */
   private settleUpgradeReport(at: number): void {
-    const outcome = readUpgradeOutcome(this.config.dataDir);
-    if (outcome && outcome.reportedAt === undefined) {
-      this.markUpgradeReported(outcome, at);
-      return;
-    }
-    if (outcome) return;
-    const promise = this.machine.wakeIntents.find((intent) => !intent.consumedAt && isUpgradePromise(intent.reason));
-    const request = readUpgradeRequest(this.config.dataDir);
-    if (request) {
-      if (supervisorIsAlive(this.config.dataDir)) {
-        // Mid-cycle: the supervisor owns the record and has not finished. Saying "failed" here would
-        // be a lie about an upgrade that is still running.
-        this.trace.append('upgrade_report_waiting', { upgradeId: request.id, dueAt: promise?.at });
-        return;
-      }
-      // The handoff write and the supervisor's first act are not atomic: between them there is no pid
-      // file yet. Only the promise's due instant decides that the owner is gone, so a tick landing in
-      // that window cannot declare a veto-level failure about an upgrade that just started.
-      const silenceAfter = promise?.at ?? request.at + UPGRADE_REPORT_GRACE_MS;
-      if (at < silenceAfter) return;
-      const silence: UpgradeOutcome = {
-        id: request.id,
-        fromVersion: request.fromVersion,
-        toVersion: request.toVersion,
-        fromTree: request.fromTree,
-        toTree: request.toTree,
-        status: 'failed',
-        step: 'requested',
-        startedAt: request.at,
-        finishedAt: at,
-        checks: [],
-        error: '监督进程没有留下结果就消失了（升级后沉默）',
-        rollback: '未知：没有结果文件，无法确认旧版是否仍在服务；见 shell-events.jsonl 的 upgrade_* 记录',
-      };
-      clearUpgradeRequest(this.config.dataDir);
-      this.markUpgradeReported(silence, at);
-      return;
-    }
-    // The obligation outlived both records: report the promise rather than swallowing it.
-    if (promise && promise.at <= at) {
-      this.reportUpgradeText('升级回报承诺到期，但升级记录已经不在了（既没有结果，也没有在跑的请求）——按未回报处理。');
-      this.trace.append('upgrade_promise_orphaned', { promiseId: promise.id });
-      this.machine.consumeWakeIntent(promise.id);
-    }
-  }
-
-  private markUpgradeReported(outcome: UpgradeOutcome, at: number): void {
-    // Persisted with `reportedAt` set, so a restarted resident cannot report the same outcome twice —
-    // including the silence outcome, which is the one record that would otherwise exist nowhere.
-    writeUpgradeJson(upgradeOutcomePath(this.config.dataDir), { ...outcome, reportedAt: at });
-    const promise = this.machine.wakeIntents.find((intent) => !intent.consumedAt && isUpgradePromise(intent.reason));
-    if (promise) this.machine.consumeWakeIntent(promise.id);
-    this.trace.append('upgrade_reported', {
-      upgradeId: outcome.id,
-      status: outcome.status,
-      step: outcome.step,
-      from: outcome.fromVersion,
-      to: outcome.toVersion,
-      checks: outcome.checks.length,
-      failedChecks: outcome.checks.filter((check) => !check.ok).map((check) => check.id),
-      promiseClosed: promise?.id,
-    });
-    this.lastUpgrade = outcome;
-    this.reportUpgradeText(describeUpgradeOutcome(outcome));
-  }
-
-  /** The report reaches a face that is listening: the line channel prints it, the TUI reads it on attach. */
-  private reportUpgradeText(text: string): void {
-    void this.host.bus.emit('terminal_print', { text: `${text}\n` });
+    this.upgradeAdmin.settleUpgradeReport(at);
   }
 
   async stop(): Promise<void> {
