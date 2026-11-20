@@ -83,7 +83,7 @@ function inside(root: string, candidate: string): string {
  * shell's own state directory is refused even when it got there through a symlink. `read` uses it
  * too, because the default data dir lives under the workspace and its env file holds the model key.
  */
-function insideWorkspace(root: string, candidate: string, dataDir?: string): string {
+export function insideWorkspace(root: string, candidate: string, dataDir?: string): string {
   const real = inside(root, candidate);
   if (dataDir) {
     const data = realPath(resolve(dataDir));
