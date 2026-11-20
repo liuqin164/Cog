@@ -193,6 +193,90 @@ describe('the restart is the existing service path', () => {
   });
 });
 
+describe('the install path enforces hygiene before the registry', () => {
+  test('a plugin source with a secret is refused and traced', async () => {
+    const dir = makeTempDir('native-install-secret-');
+    const plugin = join(dir, 'ws', 'plugins', 'leaky.ts');
+    mkdirSync(join(dir, 'ws', 'plugins'), { recursive: true });
+    writeFileSync(plugin, `export default { name: 'leaky', apply() {} };\nconst OPENAI_KEY = 'sk-abcdefghijklmnopqrstuvwxyz';\n`, 'utf8');
+    const shell = makeShell(dir, new ScriptedProvider([{ text: 'ok', toolCalls: [] }]));
+    await shell.start();
+    try {
+      const reply = await shell.runCommand('plugins', 'add ./plugins/leaky.ts');
+      expect(reply.text).toContain('plugin_secret_text');
+      expect(shell.trace.read().some((record) => record.kind === 'plugin_install_rejected' && String(record.reason).includes('plugin_secret_text'))).toBe(true);
+      expect(existsSync(join(dir, 'data', 'plugins.json'))).toBe(false);
+    } finally {
+      await shell.stop();
+    }
+  });
+
+  test('an oversized plugin source is refused and traced', async () => {
+    const dir = makeTempDir('native-install-large-');
+    const plugin = join(dir, 'ws', 'plugins', 'large.ts');
+    mkdirSync(join(dir, 'ws', 'plugins'), { recursive: true });
+    writeFileSync(plugin, `export default { name: 'large', apply() {} };\n// ${'x'.repeat(256 * 1024)}\n`, 'utf8');
+    const shell = makeShell(dir, new ScriptedProvider([{ text: 'ok', toolCalls: [] }]));
+    await shell.start();
+    try {
+      const reply = await shell.runCommand('plugins', 'add ./plugins/large.ts');
+      expect(reply.text).toContain('plugin_source_too_large');
+      expect(shell.trace.read().some((record) => record.kind === 'plugin_install_rejected' && String(record.reason).includes('plugin_source_too_large'))).toBe(true);
+      expect(existsSync(join(dir, 'data', 'plugins.json'))).toBe(false);
+    } finally {
+      await shell.stop();
+    }
+  });
+
+  test('a path outside the workspace and shell tree is refused and traced', async () => {
+    const dir = makeTempDir('native-install-outside-');
+    const shell = makeShell(dir, new ScriptedProvider([{ text: 'ok', toolCalls: [] }]));
+    await shell.start();
+    try {
+      const reply = await shell.runCommand('plugins', 'add /etc/passwd');
+      expect(reply.text).toContain('path_outside_workspace');
+      expect(shell.trace.read().some((record) => record.kind === 'plugin_install_rejected' && String(record.reason).includes('path_outside_workspace'))).toBe(true);
+      expect(existsSync(join(dir, 'data', 'plugins.json'))).toBe(false);
+    } finally {
+      await shell.stop();
+    }
+  });
+
+  test('a valid plugin in the workspace installs', async () => {
+    const dir = makeTempDir('native-install-valid-');
+    const plugin = join(dir, 'ws', 'plugins', 'hello.ts');
+    mkdirSync(join(dir, 'ws', 'plugins'), { recursive: true });
+    writeFileSync(plugin, `export default { name: 'hygiene-ok', apply() {} };\n`, 'utf8');
+    const shell = makeShell(dir, new ScriptedProvider([{ text: 'ok', toolCalls: [] }]));
+    await shell.start();
+    try {
+      const reply = await shell.runCommand('plugins', 'add ./plugins/hello.ts');
+      expect(reply.text).toContain('已登记 ./plugins/hello.ts');
+      expect(JSON.parse(readFileSync(join(dir, 'data', 'plugins.json'), 'utf8'))).toEqual(['./plugins/hello.ts']);
+      expect(shell.trace.read().some((record) => record.kind === 'plugin_registered')).toBe(true);
+    } finally {
+      await shell.stop();
+    }
+  });
+
+  test('an unparseable plugin entry is refused and traced', async () => {
+    const dir = makeTempDir('native-install-broken-');
+    const plugin = join(dir, 'ws', 'plugins', 'broken.ts');
+    mkdirSync(join(dir, 'ws', 'plugins'), { recursive: true });
+    writeFileSync(plugin, 'export default {\n', 'utf8');
+    const shell = makeShell(dir, new ScriptedProvider([{ text: 'ok', toolCalls: [] }]));
+    await shell.start();
+    try {
+      const reply = await shell.runCommand('plugins', 'add ./plugins/broken.ts');
+      expect(reply.text).toContain('plugin_unparseable');
+      expect(shell.trace.read().some((record) => record.kind === 'plugin_install_rejected' && String(record.reason).includes('plugin_unparseable'))).toBe(true);
+      expect(existsSync(join(dir, 'data', 'plugins.json'))).toBe(false);
+    } finally {
+      await shell.stop();
+    }
+  });
+});
+
 describe('a requested restart continues the open assignment once', () => {
   test('the next process runs the assignment with its findings in the prompt', async () => {
     const dir = makeTempDir('native-install-resume-');

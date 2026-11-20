@@ -9,8 +9,10 @@
  */
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { countSecretFindings } from 'cogmem';
+import { insideWorkspace } from './builtin-tools.ts';
 import type { NativePlugin, PluginHost } from './host.ts';
 
 export interface PluginLoadResult {
@@ -31,6 +33,7 @@ interface LoadOptions {
 }
 
 const ENTRY_FILES = ['index.ts', 'index.js', 'index.mjs', 'index.tsx'];
+const MAX_PLUGIN_SPEC_BYTES = 256 * 1024;
 
 function entryOf(base: string): string | undefined {
   if (existsSync(base) && statSync(base).isFile()) return base;
@@ -77,6 +80,73 @@ function readPackageVersion(entry: string): string | undefined {
 function isNativePlugin(value: unknown): value is NativePlugin {
   const plugin = value as NativePlugin | undefined;
   return plugin !== null && typeof plugin === 'object' && typeof plugin.name === 'string' && typeof plugin.apply === 'function';
+}
+
+function secretReason(text: string, where: string): string | undefined {
+  const findings = countSecretFindings(text);
+  if (findings.total === 0) return undefined;
+  return `plugin_secret_text: ${where} 含 ${findings.total} 处密钥类文本（${Object.keys(findings.byKind).join(', ')}）`;
+}
+
+export function checkPluginSpec(
+  spec: string,
+  options: { cwd: string; roots: readonly string[]; dataDir?: string },
+): string | undefined {
+  const specBytes = Buffer.byteLength(spec, 'utf8');
+  if (specBytes > MAX_PLUGIN_SPEC_BYTES) {
+    return `plugin_spec_too_large: spec 文本 ${specBytes} 字节（上限 ${MAX_PLUGIN_SPEC_BYTES}）`;
+  }
+  const specSecret = secretReason(spec, 'spec');
+  if (specSecret) return specSecret;
+
+  let resolved: { url: string; pathish: boolean };
+  try {
+    resolved = importSpecifier(spec, options.cwd);
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  if (!resolved.url.startsWith('file:')) return undefined;
+
+  const entry = fileURLToPath(resolved.url);
+  if (resolved.pathish) {
+    const contained = options.roots.some((root) => {
+      try {
+        insideWorkspace(root, entry, options.dataDir);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    if (!contained) return `path_outside_workspace: ${spec}`;
+  }
+
+  let size: number;
+  try {
+    size = statSync(entry).size;
+  } catch {
+    return `plugin_not_found: ${entry}`;
+  }
+  if (size > MAX_PLUGIN_SPEC_BYTES) {
+    return `plugin_source_too_large: ${entry} 是 ${size} 字节（上限 ${MAX_PLUGIN_SPEC_BYTES}）`;
+  }
+
+  let source: string;
+  try {
+    source = readFileSync(entry, 'utf8');
+  } catch (error) {
+    return `plugin_unreadable: ${entry}: ${error instanceof Error ? error.message : String(error)}`;
+  }
+  const sourceSecret = secretReason(source, entry);
+  if (sourceSecret) return sourceSecret;
+
+  const extension = extname(entry).toLowerCase();
+  const loader = extension === '.tsx' ? 'tsx' : extension === '.jsx' ? 'jsx' : extension === '.ts' || extension === '.mts' || extension === '.cts' ? 'ts' : 'js';
+  try {
+    new Bun.Transpiler({ loader }).transformSync(source);
+  } catch (error) {
+    return `plugin_unparseable: ${entry}: ${String(error)}`;
+  }
+  return undefined;
 }
 
 /**

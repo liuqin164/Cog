@@ -51,7 +51,7 @@ import { buildAwayReport, enqueueAway } from './presence.ts';
 import { readInstallState, readTreeVersion, serviceFileExists, shellDirOfTree, treeOfThisProcess } from './upgrade/paths.ts';
 import { restartService, servicePath, type Platform, type ServiceSpec } from './install/service.ts';
 import { pluginsConfigPath, readPluginRegistry, writePluginRegistry } from './plugins/registry.ts';
-import { loadNativePlugins, type PluginLoadResult } from './plugins/load.ts';
+import { checkPluginSpec, loadNativePlugins, type PluginLoadResult } from './plugins/load.ts';
 import { stageUpgradeTree, type StageUpgradeInput, type StagedTree } from './upgrade/stage.ts';
 import { spawnUpgradeSupervisor, type SpawnSupervisorResult } from './upgrade/spawn.ts';
 import {
@@ -3198,7 +3198,17 @@ export class CompanionShell implements ShellControl, AttachShell {
   async installPlugin(rawSpec: string): Promise<CommandReply> {
     const spec = rawSpec.trim();
     if (spec === '' || /[\r\n]/u.test(spec)) {
+      this.trace.append('plugin_install_rejected', { spec, reason: 'invalid_plugin_spec' });
       return { text: 'invalid_plugin_spec: 插件 spec 不能为空，也不能包含换行。', receipt: true };
+    }
+    const refused = checkPluginSpec(spec, {
+      cwd: this.config.workspaceRoot,
+      roots: [this.config.workspaceRoot, treeOfThisProcess()],
+      dataDir: this.config.dataDir,
+    });
+    if (refused) {
+      this.trace.append('plugin_install_rejected', { spec, reason: refused });
+      return { text: `插件未安装：${refused}`, receipt: true };
     }
     const path = pluginsConfigPath(this.config.dataDir);
     let registry: string[];
