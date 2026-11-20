@@ -237,7 +237,7 @@ async function forget(): Promise<Metric[]> {
 /** 3. Night: sleep across the window, then catch the Dream up once and snapshot (#327). */
 async function night(): Promise<Metric[]> {
   const dir = makeTempDir('continuity-night-');
-  const clock = { now: T0 + HOUR };
+  const clock = { now: T0 - HOUR };
   const config = { dream: DREAM_2_TO_5, idleWakeIntervalMs: DAY };
   const first = makeShell(dir, new ScriptedProvider([{ text: '好的。', toolCalls: [] }]), config, { now: () => clock.now });
   await first.start();
