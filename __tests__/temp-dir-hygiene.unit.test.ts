@@ -1,10 +1,10 @@
 import { expect, test } from 'bun:test';
 import { readdirSync, readFileSync } from 'node:fs';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { clearProjectTempRoot, makeTempDir } from './helpers/tmp.js';
+import { clearProjectTempRoot, makeTempDir, sweepStaleRunRoots } from './helpers/tmp.js';
 
 const testsRoot = dirname(fileURLToPath(import.meta.url));
 
@@ -120,4 +120,17 @@ test("the temp-root clear leaves a concurrent run's root alone", () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('the stale-root sweep removes old legacy-prefix entries and keeps fresh ones', () => {
+  const root = makeTempDir('legacy-sweep-');
+  const stale = join(root, 'tool-mount-plain-stale');
+  const live = join(root, 'tool-mount-plain-live');
+  mkdirSync(stale, { recursive: true });
+  mkdirSync(live, { recursive: true });
+  const old = new Date(Date.now() - 7_200_000);
+  utimesSync(stale, old, old);
+
+  expect(sweepStaleRunRoots(root, Date.now() - 3_600_000)).toBe(1);
+  expect(readdirSync(root)).toEqual(['tool-mount-plain-live']);
 });

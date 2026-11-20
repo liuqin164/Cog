@@ -20,9 +20,11 @@
  */
 
 import { mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
-import { resolve, sep } from 'node:path';
+import { basename, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+import { sweepLegacyTempDirs } from '../../scripts/temp-prefixes.js';
 
 const RUN_ROOT_PREFIX = 'cogmem-run-';
 
@@ -53,7 +55,7 @@ export function tempRunRoot(): string {
 
 /** A fresh directory under the run root. */
 export function makeTempDir(prefix = 'cogmem-test-'): string {
-  return mkdtempSync(join(tempRunRoot(), prefix));
+  return mkdtempSync(join(tempRunRoot(), basename(prefix)));
 }
 
 /** Remove every directory this process created under its run root. */
@@ -72,12 +74,11 @@ function removeRunRoot(root: string): void {
 /**
  * Remove run roots left by processes that are gone.
  *
- * Only ever touches names matching this module's own prefix inside the temporary
- * directory, so a test that points `TMPDIR` at a shared place cannot lose
- * anything that is not ours. A live pid is left alone: another `bun test` may be
+ * Touches this module's own run roots plus the explicitly registered legacy temp
+ * prefixes that predate them. A live pid is left alone: another `bun test` may be
  * running beside this one.
  */
-export function sweepStaleRunRoots(root = tmpdir()): number {
+export function sweepStaleRunRoots(root = tmpdir(), startedAt = Date.now()): number {
   let removed = 0;
   let entries: string[];
   try {
@@ -95,7 +96,7 @@ export function sweepStaleRunRoots(root = tmpdir()): number {
       // Leave it for the next sweep rather than failing a test run over it.
     }
   }
-  return removed;
+  return removed + sweepLegacyTempDirs(root, startedAt);
 }
 
 /**

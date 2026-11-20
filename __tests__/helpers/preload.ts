@@ -53,5 +53,5 @@ const removed = sweepStaleRunRoots();
 if (removed > 0) {
   // Not silent: a run that starts by cleaning up is telling you the last one left
   // something behind.
-  console.error(`[cogmem tests] removed ${removed} temp run root(s) left by earlier runs`);
+  console.error(`[cogmem tests] removed ${removed} temp run root(s)/legacy dir(s) left by earlier runs`);
 }
