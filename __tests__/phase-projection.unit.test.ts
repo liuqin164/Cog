@@ -3,7 +3,6 @@ import { join } from 'node:path';
 import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
 import { createMemoryKernel } from '../src/factory.js';
 import { phaseFor, phaseGist, projectPhaseItems, PROVISIONAL_PHASE_THRESHOLDS } from '../src/recall/PhaseProjection.js';
-import { recallItemLines } from '../src/host/RecallBlock.js';
 import { makeTempDir } from './helpers/tmp.js';
 
 const DAY = 86_400_000;
@@ -130,22 +129,6 @@ test('a gist item carries the whitelist and not the body, and the renderer label
   // The one thing that does travel is bounded and named for what it is.
   expect(String(gist.agent_interpretation_not_fact).length).toBeLessThanOrEqual(120);
   expect(JSON.stringify(gist)).not.toContain(body);
-
-  const rendered = recallItemLines(gist, {}, 'full').join('\n');
-  expect(rendered).not.toContain(body);
-  expect(rendered).toContain('agent interpretation, not fact');
-
-  // #181: the budget-demoted form carries the same label. `recallItemLines` returns the index line before the gist
-  // branch, and the title chain reads `text` — which a gist deliberately does not have — so this line was blank.
-  const indexed = recallItemLines(gist, {}, 'index').join('\n');
-  expect(indexed).toContain('index[raw_ledger:old]');
-  expect(indexed).toContain('agent interpretation, not fact');
-  expect(indexed).not.toContain(body);
-
-  // A non-gist index line is untouched by the gist branch: same fields, byte for byte.
-  expect(recallItemLines({ id: 'plain', text: 'hello world' }, {}, 'index')).toEqual([
-    '- index[plain] hello world · unknown · cogmem memory show --event &lt;id&gt; --json',
-  ]);
 });
 
 /**

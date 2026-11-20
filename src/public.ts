@@ -439,32 +439,6 @@ export {
 } from './agent/index.js';
 
 /**
- * The prompt-block renderers a host adapter injects: `<COGMEM_RECALL_CONTEXT>`
- * and `<COGMEM_MEMORY_ATLAS>`. Host-neutral, so every adapter shares one
- * implementation instead of carrying a copy that no test executes.
- *
- * @stable @since 4.0.0
- */
-export {
-  clampRecallContext,
-  classifyMemoryNavigationIntent,
-  compactRecallItems,
-  contextCandidateFromRecallItem,
-  contextEventLabel,
-  formatAtlasCard,
-  formatAtlasContext,
-  formatContextEvent,
-  formatRecallContext,
-  formatRecallDecision,
-  formatSourceRange,
-  formatSourceWindow,
-  truncateLineWithMeta,
-  uniqueWindowEvents,
-  type FormattedContextEvent,
-  type TruncationMeta,
-} from './host/RecallBlock.js';
-
-/**
  * Escape untrusted text that a host renders as a memory lane body (#347): the
  * same escaping as `serializeUntrustedMemory`, but line breaks are kept and a
  * line that spells a lane header cannot open another lane.
@@ -472,22 +446,6 @@ export {
  * @stable @since 5.0.0
  */
 export { serializeUntrustedLaneText } from './agent/UntrustedMemorySerializer.js';
-
-/**
- * The host-neutral half of a host adapter: recall into one injectable block, and
- * record a finished turn. An adapter supplies its own identity; nothing here
- * invents a host name. See ADR-0004.
- *
- * @stable @since 4.0.0
- */
-export {
-  recallForHost,
-  rememberForHost,
-  type HostBridgeRuntime,
-  type HostIdentity,
-  type RecallForHostResult,
-  type RememberForHostResult,
-} from './host/bridge/HostBridge.js';
 
 /**
  * Core recall pipeline.
