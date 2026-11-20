@@ -450,17 +450,6 @@ export class AgentRuntime {
         }
       : { role: 'user', content: input.userText };
     context.append(userMessage);
-    // Pi fires before_agent_start before agent_start; an extension may hand back one injected message
-    // (the shape the Cogmem pi extension uses for recall context).
-    const beforeStart = await this.options.bus.emit('before_agent_start', {
-      type: 'before_agent_start',
-      prompt: input.userText,
-      messageType: origin === 'emergence' ? 'system' : 'user',
-    }, { runId: input.runId });
-    const injected = (beforeStart as { message?: { content?: unknown } } | undefined)?.message;
-    if (injected && injected.content !== undefined) {
-      context.append({ role: 'system', content: typeof injected.content === 'string' ? injected.content : JSON.stringify(injected.content) });
-    }
     await this.options.bus.emit('agent_start', { type: 'agent_start', runId: input.runId, messages: context.project() }, { runId: input.runId });
     if (origin === 'user') await this.emitUserMessage(userMessage, input.runId);
 
