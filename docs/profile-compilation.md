@@ -15,8 +15,9 @@ fails when code and contract disagree. Version: `PROFILE_CONTRACT_VERSION = 1`.
 
 It adds no storage. Every version of an entry is a `memory_events` row on a per-entry stream
 (`profile-entry:<entryId>`), a correction is another row on the same stream, and a ledger's recompile
-leaves a `PROFILE_LEDGER_RECOMPILED` receipt — so the ledger is the state, the history and the audit,
-the way F2 stored a wake intention. **No table, no column, no migration.**
+leaves a `PROFILE_LEDGER_RECOMPILED` receipt when it wrote or carries a correction — so the ledger is
+the state, the history and the audit, the way F2 stored a wake intention. **No table, no column, no
+migration.**
 
 It does not call a model and it does not read free text. The compiler derives from evidence that is
 already governed and evidence-bound: live `facts`, active `beliefs`, declared person `relations`, and
@@ -74,7 +75,7 @@ Adding a method is an additive change and does not bump the constant. Removing o
 | `PROFILE_ENTRY_COMPILED` | A compile derives a value for a key that changed. | `entryId`, `projectId`, `ledger`, `key`, `value`, `sourceRefs`, `recordedAt`, `compiledAt`, `version` |
 | `PROFILE_ENTRY_CORRECTED` | The owner corrects an entry. | The same, with the correction turn among `sourceRefs`. |
 | `PROFILE_ENTRY_RETIRED` | A full recompile no longer derives the key. | The same, carrying the value the entry had. |
-| `PROFILE_LEDGER_RECOMPILED` | A ledger finishes compiling. | `projectId`, `ledger`, `entries`, `written`, `compiledAt` |
+| `PROFILE_LEDGER_RECOMPILED` | A ledger wrote an entry or carries a correction. | `projectId`, `ledger`, `entries`, `written`, `compiledAt` |
 
 ## Errors (frozen)
 

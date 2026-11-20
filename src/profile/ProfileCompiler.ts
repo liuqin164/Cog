@@ -311,23 +311,22 @@ export class ProfileCompiler {
     const now = input.now ?? Date.now();
     const ledgers: ProfileLedger[] = input.ledger === undefined ? [...PROFILE_LEDGERS] : [this.requireLedger(input.ledger)];
     const candidates = this.derive(projectId, ledgers);
-    // One read of the project's profile rows for the whole compile; versions appended here are folded
-    // into the same index, so a candidate never re-walks the ledger to see a sibling's new version.
     const index = this.entryGroups(projectId);
     let written = 0;
-    for (const ledger of ledgers) {
-      const forLedger = candidates.filter((candidate) => candidate.ledger === ledger);
-      let ledgerWritten = 0;
-      for (const candidate of forLedger) {
-        if (this.writeIfChanged(index, projectId, candidate, now)) ledgerWritten += 1;
+    this.events.getDatabase().transaction(() => {
+      for (const ledger of ledgers) {
+        const forLedger = candidates.filter((candidate) => candidate.ledger === ledger);
+        let ledgerWritten = 0;
+        for (const candidate of forLedger) {
+          if (this.writeIfChanged(index, projectId, candidate, now)) ledgerWritten += 1;
+        }
+        ledgerWritten += this.retireAbsent(index, projectId, ledger, new Set(forLedger.map((candidate) => candidate.key)), now);
+        written += ledgerWritten;
+        const corrected = [...index.values()].some((group) => group.versions.at(-1)?.ledger === ledger
+          && group.lastEventType === 'PROFILE_ENTRY_CORRECTED');
+        if (ledgerWritten > 0 || corrected) this.appendReceipt(projectId, ledger, now, forLedger.length, ledgerWritten);
       }
-      // Full recompile: a key the evidence no longer derives retires, instead of being left as a
-      // claim no ledger still supports. A correction is the owner's last word on the key and is not
-      // retired by the absence of the source it corrected.
-      ledgerWritten += this.retireAbsent(index, projectId, ledger, new Set(forLedger.map((candidate) => candidate.key)), now);
-      written += ledgerWritten;
-      this.appendReceipt(projectId, ledger, now, forLedger.length, ledgerWritten);
-    }
+    })();
     return { projectId, ledgers, written, entries: candidates.length, compiledAt: now };
   }
 

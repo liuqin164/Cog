@@ -95,7 +95,10 @@ export function laneReportLines(view: LaneAssemblyView, requestTokens?: number):
   }
   for (const lane of view.lanes) {
     const browse = lane.browseIds.length > 0 ? ` · 可浏览 ${lane.browseIds.length} 条` : '';
-    lines.push(`${LANE_LABELS[lane.lane]}：${lane.items} 条，约 ${lane.tokens} token，${STATUS_WORDS[lane.status]}${browse}`);
+    const empty = lane.lane === 'profile' && lane.status === 'empty'
+      ? ' · 尚无画像条目：账本里还没有可编译的证据'
+      : '';
+    lines.push(`${LANE_LABELS[lane.lane]}：${lane.items} 条，约 ${lane.tokens} token，${STATUS_WORDS[lane.status]}${browse}${empty}`);
   }
   if (view.decisionTrace.length === 0) {
     lines.push('无降级。');
