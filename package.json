@@ -46,17 +46,10 @@
     "@huggingface/transformers": "^4.3.2",
     "@mozilla/readability": "^0.6.0",
     "linkedom": "^0.18.15",
-    "mammoth": "^1.13.0",
-    "pdfjs-dist": "^6.0.227",
-    "turndown": "^7.2.5",
-    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+    "turndown": "^7.2.5"
   },
   "overrides": {
-    "protobufjs": "^7.6.6",
-    "@xmldom/xmldom": "0.8.15"
-  },
-  "optionalDependencies": {
-    "hnswlib-node": "^2.0.1"
+    "protobufjs": "^7.6.6"
   },
   "devDependencies": {
     "@types/turndown": "^5.0.6",

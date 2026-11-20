@@ -6,7 +6,7 @@ import { refusalDocumentFor } from './RefusalDocument.js';
  *
  * Guides new users through:
  *  1. Database path
- *  2. Vector backend (sqlite-vec vs hnswlib)
+ *  2. Vector backend (sqlite-vec)
  *  3. Embedding provider (auto-detected from Ollama / env keys)
  *  4. Memory & reasoning model roles
  *  5. PII redaction policy
@@ -43,7 +43,7 @@ export interface DetectionResult {
 interface WizardConfig {
   // Core
   dbPath: string;
-  vectorBackend: 'sqlite-vec' | 'hnswlib';
+  vectorBackend: 'sqlite-vec';
   vectorDimension: number;
   // Embedding
   embeddingProvider: 'deterministic_local' | 'openai_compatible';
@@ -333,15 +333,11 @@ async function stepDatabase(): Promise<string> {
   return raw || 'memory.db';
 }
 
-async function stepVectorBackend(): Promise<'sqlite-vec' | 'hnswlib'> {
+function stepVectorBackend(): 'sqlite-vec' {
   console.log('');
   console.log('  ── Step 2 of 5: Vector Backend ───────────────────────────────');
   console.log('  sqlite-vec  Pure SQLite cosine search. Zero native deps. (recommended)');
-  console.log('  hnswlib     HNSW graph. Faster at scale but requires a native addon.');
   console.log('');
-  const raw = await ask('  Backend [sqlite-vec]: ');
-  const choice = raw.toLowerCase();
-  if (choice === 'hnswlib') return 'hnswlib';
   return 'sqlite-vec';
 }
 
@@ -952,7 +948,7 @@ async function main(): Promise<void> {
 
   // Run all wizard steps
   const dbPath        = await stepDatabase();
-  const vectorBackend = await stepVectorBackend();
+  const vectorBackend = stepVectorBackend();
   const embedding     = await stepEmbedding(det);
   const models        = await stepModelRoles(det);
   const governance    = await stepGovernance();
