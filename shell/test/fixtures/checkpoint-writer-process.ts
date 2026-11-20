@@ -34,7 +34,12 @@ function atCapacity(seq: number): CheckpointState {
     wakeIntents: [{ id: `wake-${seq}`, at: 1_760_000_000_000, reason: 'kill_write', createdAt: 1_760_000_000_000 }],
     runtime: {
       // Every field carries the same seq, so a reader can tell a whole document from a mixture.
-      lastInteractionText: big ? `${seq}:`.padEnd(200_000, 'x') : 'x'.repeat(500),
+      openAssignment: {
+        id: `assignment-${seq}`,
+        origin: 'user_message',
+        text: big ? `${seq}:`.padEnd(200_000, 'x') : 'x'.repeat(500),
+        startedAt: 1_760_000_000_000,
+      },
       lastTimeContext: big ? `${seq}:`.padEnd(600_000, 'y') : 'y'.repeat(400),
       declaredTools: ['bash', 'edit', 'propose_command', 'read', 'write'],
     },

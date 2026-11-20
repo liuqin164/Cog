@@ -1,7 +1,7 @@
 # Recall baseline — #250 A6
 
-- base commit at run: `eeff6b962a88` (the corpus and harness are committed on this tree)
-- run at: 2026-11-18T19:43:47.886Z
+- base commit at run: `3d6e5a0856f2` (the corpus and harness are committed on this tree)
+- run at: 2026-11-20T05:02:18.898Z
 - bun: 1.3.14 · linux/arm64
 
 ## Corpus
@@ -57,15 +57,15 @@ Chance for a random ranker: memory @1 5.0%, @5 25.0%; procedure @1 10.0%, @5 50.
 - model: `Xenova/bge-base-zh-v1.5` (quantized ONNX; 102M parameters, 768 dimensions)
 - source: https://huggingface.co/Xenova/bge-base-zh-v1.5
 - query instruction: `为这个句子生成表示以用于检索相关文章：` (applied to queries only; documents are embedded as written)
-- cache: `/home/ubuntu/.t3/worktrees/Cogmem/t3-review4-r5-7cf306aff59071c2/.cogmem/recall-baseline/models` (gitignored); first run downloads, later runs reuse it.
+- cache: `/home/ubuntu/.t3/worktrees/Cogmem/t3-331-forget-shell-res-21b37e9e6ef1bb0c/.cogmem/recall-baseline/models` (gitignored); first run downloads, later runs reuse it.
 - on-disk size: 99 MiB total
   - `Xenova/bge-base-zh-v1.5/onnx/model_quantized.onnx`: 98 MiB
   - `Xenova/bge-base-zh-v1.5/tokenizer.json`: 429 KiB
   - `Xenova/bge-base-zh-v1.5/config.json`: 938 B
   - `Xenova/bge-base-zh-v1.5/tokenizer_config.json`: 366 B
-- load: 2654 ms (cold: includes download); index: 2481 ms; 20+10 queries: 1851 ms
-- RSS before model: 85 MiB; after load: 404 MiB; after index: 430 MiB; after queries: 477 MiB
-- peak RSS (VmHWM): 477 MiB; resident increment after queries: +391 MiB; peak increment: +392 MiB
+- load: 2471 ms (cold: includes download); index: 3005 ms; 20+10 queries: 2369 ms
+- RSS before model: 87 MiB; after load: 338 MiB; after index: 367 MiB; after queries: 409 MiB
+- peak RSS (VmHWM): 410 MiB; resident increment after queries: +322 MiB; peak increment: +323 MiB
 - dimensions: 768; process bound: `ulimit -v 16777216 KB` + 2.0 GiB RSS watchdog
 
 ## What this measures, and what it does not

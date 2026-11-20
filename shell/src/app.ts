@@ -14,7 +14,8 @@ import { ChannelContract, createMemoryKernel, digestAnchors, KernelAgentMemoryBa
 import { ModelRegistry, TraceStore, type ModelRoleConfig, type ModelRoleName, type ModelTextUsage } from 'cogmem/internal';
 import { defaultShellConfig, type ShellConfig } from './config.ts';
 import { StateMachine } from './state/machine.ts';
-import { CheckpointStore, type InFlightToolCall, type Suspension } from './state/checkpoint.ts';
+import { CheckpointStore, forgetRuntimeText, type InFlightToolCall, type Suspension } from './state/checkpoint.ts';
+import { ShellStateLedger } from './state/state-ledger.ts';
 import type { Trigger } from './state/table.ts';
 import { ProcessLock } from './process-lock.ts';
 import { TraceLog } from './trace.ts';
@@ -307,6 +308,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   private readonly embeddingProvider?: EmbeddingProvider;
   private readonly shellRegistry?: ShellModelRegistry;
   private readonly modelRegistry: ModelRegistry;
+  private readonly stateLedger: ShellStateLedger;
   private memoryModelFailed = false;
   /** A degraded provider must not claim the index; only a warm provider over a current index may. */
   private embeddingReadyAllowed = false;
@@ -317,15 +319,6 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.trace = new TraceLog(this.config.dataDir);
     this.cliConfigPath = join(this.config.dataDir, 'cogmem-cli.toml');
     this.writeCliConfig();
-    this.machine = new StateMachine({
-      checkpoint: new CheckpointStore(this.config.dataDir),
-      trace: this.trace,
-      clock: this.now,
-      onAlarm: (error) => {
-        console.error(`[companion-shell] ALARM: ${error.message}; halting`);
-        this.options.onAlarm?.(error);
-      },
-    });
     this.lock = new ProcessLock(this.config.dataDir);
     // The nightly snapshot lives beside the resident's other state, so a default install keeps the
     // last seven nights without an extra config key (#196).
@@ -345,6 +338,16 @@ export class CompanionShell implements ShellControl, AttachShell {
       exportsDir: join(this.config.dataDir, 'exports'),
       modelRegistry: registry,
       ...(embeddingProvider ? { embeddingProvider } : {}),
+    });
+    this.stateLedger = new ShellStateLedger(this.kernel.eventStore, this.config.projectId);
+    this.machine = new StateMachine({
+      checkpoint: new CheckpointStore(this.config.dataDir, this.stateLedger),
+      trace: this.trace,
+      clock: this.now,
+      onAlarm: (error) => {
+        console.error(`[companion-shell] ALARM: ${error.message}; halting`);
+        this.options.onAlarm?.(error);
+      },
     });
     // A host-supplied provider is ready by definition; the local one flips this when it loads. The
     // flip comes after the kernel is built so its write-path embedder stays deterministic.
@@ -550,8 +553,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       const recoveredRunId = this.machine.activeRunId;
       this.trace.append('recovery', { previous: restored.previous, seq: this.machine.seq, runId: recoveredRunId ?? null });
       if (restored.previous === 'RUNNING' && recoveredRunId) {
-        // Pi #10000's durable prompt is what the interrupted turn hangs on: the checkpoint's display
-        // copy stops at 500 chars, the session log does not.
+        // Pi #10000's durable prompt is what the interrupted turn hangs on; the session log holds all of it.
         const prompt = traceScan.records.find((record) => record.kind === 'run_prompt' && record.runId === recoveredRunId);
         if (prompt && typeof prompt.text === 'string') {
           this.interrupted = { runId: recoveredRunId, text: prompt.text, chars: Number(prompt.chars ?? prompt.text.length) };
@@ -859,8 +861,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     const model = this.host.getService<ModelProvider>('model');
     this.runtime = new AgentRuntime({
       bus: this.host.bus,
-      // Pi #10000: the whole prompt is durable before the model call, redacted so the log never holds a
-      // secret the ledger would have stripped. The checkpoint keeps only the 500-char display copy.
+      // Pi #10000: the whole prompt is durable before the model call, redacted before it reaches the trace.
       onPrompt: (input) => this.recordPrompt(input),
       tools: this.host.tools,
       provider: model,
@@ -1349,7 +1350,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     if (this.dailyBudgetExceeded()) this.announceDailyBudget('user_message');
     if (this.machine.state === 'SUSPENDED') return this.submitWhileSuspended(text);
     this.beginUserAssignment(text);
-    this.clock!.markInteraction(text, this.now());
+    this.clock!.markInteraction(this.now());
     await this.wakeIfNeeded('message_received');
     if (this.machine.state !== 'IDLE') throw new Error(`submit_requires_idle: state is ${this.machine.state}`);
     return this.executeRun(text, 'message_received', 'user_message');
@@ -1365,7 +1366,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   private async submitWhileSuspended(text: string): Promise<RunSummary | undefined> {
     this.acknowledgeSurfacing();
     const suspension = this.machine.runtime.suspension;
-    this.clock!.markInteraction(text, this.now());
+    this.clock!.markInteraction(this.now());
     if (suspension?.kind === 'question') {
       this.machine.updateRuntime({ suspension: { ...suspension, answeredAt: this.now() } });
       this.trace.append('suspension_answered', { id: suspension.id, assignmentId: suspension.assignmentId, chars: text.trim().length });
@@ -2556,6 +2557,10 @@ export class CompanionShell implements ShellControl, AttachShell {
       auditId: result.auditId,
       deleted: result.deleted,
     });
+    this.stateLedger.forget();
+    const scrubbed = forgetRuntimeText(this.machine.runtime, this.stateLedger);
+    this.machine.updateRuntime(scrubbed.runtime);
+    const promptsRemoved = this.trace.forgetWindow('run_prompt', pending.start, pending.end);
     const deleted = Object.entries(result.deleted)
       .filter(([, value]) => value > 0)
       .map(([field, value]) => `${field} ${value}`)
@@ -2567,7 +2572,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       `${result.artifacts.notCovered.join('、')}不在覆盖范围内`,
     ].join('；');
     return {
-      text: `已删除 ${new Date(pending.start).toISOString()} 至 ${new Date(pending.end).toISOString()}：${deleted || '没有记录'}。副本：${copies}。审计 ${result.auditId}。`,
+      text: `已删除 ${new Date(pending.start).toISOString()} 至 ${new Date(pending.end).toISOString()}：${deleted || '没有记录'}。副本：${copies}。checkpoint：文本字段只存账本引用，${scrubbed.cleared} 个失去引用的字段已清空；trace：run_prompt 记录 ${promptsRemoved} 条已删除。审计 ${result.auditId}。`,
       receipt: true,
       data: { sovereignty_delete: result },
     };

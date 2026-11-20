@@ -66,6 +66,7 @@ export interface Suspension {
   kind: 'budget' | 'question';
   assignmentId: string;
   userText?: string;
+  userTextId?: string;
   createdAt: number;
   /** The run that suspended, so the pause is attributable in the trace. */
   runId?: string;
@@ -82,7 +83,7 @@ export interface Suspension {
     basis: string;
   };
   /** Question kind: what was asked and a short reference to what it is about. */
-  question?: { text: string; contextRef?: string };
+  question?: { text: string; textId?: string; contextRef?: string };
   /** Set when the owner's answer was delivered; cleared when the resumed run settles. */
   answeredAt?: number;
 }
@@ -92,7 +93,6 @@ export interface ShellRuntimeState {
   dreamRetry?: { night: string; attempts: number; nextAt: number; gaveUp?: boolean };
   lastSnapshotAt?: number;
   lastInteractionAt?: number;
-  lastInteractionText?: string;
   /** The block injected when the shell last woke; the system prompt reuses it until the next wake. */
   lastTimeContext?: string;
   /**
@@ -125,6 +125,7 @@ export interface ShellRuntimeState {
   awayQueue?: Array<{
     id: string;
     text: string;
+    textId?: string;
     reason: string;
     at: number;
     source?: string;
@@ -151,8 +152,10 @@ export interface ShellRuntimeState {
     id: string;
     origin: 'user_message';
     text: string;
+    textId?: string;
     /** The newest user line attached to this task; `text` stays the task's original brief. */
     latestUserText?: string;
+    latestUserTextId?: string;
     startedAt: number;
     lastRunId?: string;
     stoppedAt?: number;
@@ -164,6 +167,7 @@ export interface ShellRuntimeState {
      * continuation does not re-read the same sources to rediscover the same line numbers.
      */
     findings?: string;
+    findingsId?: string;
     /**
      * The budget the owner granted at a pause (#228). Added to the work cage's limits for the
      * resumed run only; `budgets.json` stays the base cap, so an approval extends one continuation
@@ -206,12 +210,12 @@ export interface ShellRuntimeState {
    * ledger rows, never a model summary; the newest are kept, and the list is bounded so a long
    * resident does not grow its checkpoint without limit.
    */
-  taskStubs?: SessionDigestEntry[];
+  taskStubs?: Array<SessionDigestEntry & { textId?: string }>;
   /**
    * Working-set items the kernel marked `protected` at task end (#255). A constraint is not task
    * material, so it stays in the lane verbatim even though the rest of the working set exits.
    */
-  retainedConstraints?: Array<{ id: string; text: string }>;
+  retainedConstraints?: Array<{ id: string; text: string; textId?: string }>;
   /** The one paused run, present exactly while the lifecycle state is SUSPENDED. */
   suspension?: Suspension;
   /**
@@ -274,8 +278,87 @@ export interface CheckpointFallback {
 
 const MAX_HISTORY = 200;
 
+const RUNTIME_KEYS: Record<keyof ShellRuntimeState, true> = {
+  lastDreamDate: true,
+  dreamRetry: true,
+  lastSnapshotAt: true,
+  lastInteractionAt: true,
+  lastTimeContext: true,
+  declaredTools: true,
+  inFlightToolCalls: true,
+  pendingSteering: true,
+  pendingFollowUps: true,
+  lastAttachAt: true,
+  lastDetachAt: true,
+  awayQueue: true,
+  costDayDate: true,
+  costDayTokens: true,
+  dreamNightDate: true,
+  dreamNightStartTokens: true,
+  openAssignment: true,
+  lastEndedTask: true,
+  taskStubs: true,
+  retainedConstraints: true,
+  suspension: true,
+  emergence: true,
+  resumeAfterRestart: true,
+  capturePaused: true,
+};
+
+export interface RuntimeTextLedger {
+  record(kind: string, text: string): string;
+  read(eventId: string): string | undefined;
+  has(eventId: string, text: string): boolean;
+}
+
 export function emptyCheckpoint(now = Date.now()): CheckpointState {
   return { version: 1, state: 'DORMANT', seq: 0, wakeIntents: [], runtime: {}, history: [], updatedAt: now };
+}
+
+export function forgetRuntimeText(runtime: ShellRuntimeState, ledger: RuntimeTextLedger): { runtime: ShellRuntimeState; cleared: number } {
+  const gone = (eventId?: string): boolean => eventId !== undefined && ledger.read(eventId) === undefined;
+  let cleared = 0;
+  const next: ShellRuntimeState = { ...runtime };
+
+  const assignment = runtime.openAssignment;
+  if (assignment && gone(assignment.textId)) {
+    next.openAssignment = undefined;
+    cleared += 1;
+  } else if (assignment) {
+    let copy = assignment;
+    if (gone(assignment.latestUserTextId)) {
+      copy = { ...copy, latestUserText: undefined, latestUserTextId: undefined };
+      cleared += 1;
+    }
+    if (gone(assignment.findingsId)) {
+      copy = { ...copy, findings: undefined, findingsId: undefined };
+      cleared += 1;
+    }
+    next.openAssignment = copy === assignment ? assignment : copy;
+  }
+
+  for (const key of ['awayQueue', 'taskStubs', 'retainedConstraints'] as const) {
+    const entries = runtime[key];
+    if (!entries) continue;
+    const kept = entries.filter((entry) => !gone(entry.textId));
+    cleared += entries.length - kept.length;
+    next[key] = kept as never;
+  }
+
+  if (runtime.suspension) {
+    let copy = runtime.suspension;
+    if (gone(copy.userTextId)) {
+      copy = { ...copy, userText: undefined, userTextId: undefined };
+      cleared += 1;
+    }
+    if (copy.question && gone(copy.question.textId)) {
+      copy = { ...copy, question: undefined };
+      cleared += 1;
+    }
+    next.suspension = copy;
+  }
+
+  return { runtime: next, cleared };
 }
 
 export class CheckpointStore {
@@ -283,7 +366,7 @@ export class CheckpointStore {
   /** The previous generation, kept by hard link so publishing still never has a window with no file. */
   readonly previousPath: string;
 
-  constructor(readonly dir: string) {
+  constructor(readonly dir: string, private readonly ledger?: RuntimeTextLedger) {
     this.path = join(dir, 'checkpoint.json');
     this.previousPath = `${this.path}.prev`;
   }
@@ -339,7 +422,7 @@ export class CheckpointStore {
     if (value.version !== 1 || !isState(String(value.state)) || typeof value.seq !== 'number') {
       throw new CheckpointCorruptError(`checkpoint_corrupt: ${this.path}: unexpected shape`);
     }
-    return value;
+    return this.hydrate(value);
   }
 
   /** Atomic and durable: temp file, fsync, rename, fsync the directory. Throws on any failure. */
@@ -347,7 +430,7 @@ export class CheckpointStore {
     const temp = `${this.path}.tmp`;
     try {
       mkdirSync(this.dir, { recursive: true });
-      writeFileSync(temp, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+      writeFileSync(temp, `${JSON.stringify(this.persist(state), null, 2)}\n`, 'utf8');
       const fd = openSync(temp, 'r+');
       try {
         fsyncSync(fd);
@@ -393,5 +476,120 @@ export class CheckpointStore {
 
   trimHistory(history: TransitionRecord[]): TransitionRecord[] {
     return history.length > MAX_HISTORY ? history.slice(history.length - MAX_HISTORY) : history;
+  }
+
+  private textId(current: string | undefined, kind: string, text: string | undefined): string | undefined {
+    if (!text || !this.ledger) return current;
+    return current && this.ledger.has(current, text) ? current : this.ledger.record(kind, text);
+  }
+
+  private persist(state: CheckpointState): CheckpointState {
+    if (!this.ledger) return state;
+    const runtime = state.runtime;
+    const copy = Object.fromEntries(
+      (Object.keys(RUNTIME_KEYS) as Array<keyof ShellRuntimeState>).map((key) => [key, runtime[key]]),
+    ) as ShellRuntimeState;
+
+    const assignment = runtime.openAssignment;
+    if (assignment) {
+      assignment.textId = this.textId(assignment.textId, 'assignment.text', assignment.text);
+      assignment.latestUserTextId = this.textId(assignment.latestUserTextId, 'assignment.latest', assignment.latestUserText);
+      assignment.findingsId = this.textId(assignment.findingsId, 'assignment.findings', assignment.findings);
+      const { text: _text, latestUserText: _latest, findings: _findings, ...rest } = assignment;
+      copy.openAssignment = rest as ShellRuntimeState['openAssignment'];
+    }
+
+    if (runtime.awayQueue) {
+      copy.awayQueue = runtime.awayQueue.map((entry) => {
+        entry.textId = this.textId(entry.textId, 'away.text', entry.text);
+        const { text: _text, ...rest } = entry;
+        return rest as NonNullable<ShellRuntimeState['awayQueue']>[number];
+      });
+    }
+
+    if (runtime.taskStubs) {
+      copy.taskStubs = runtime.taskStubs.map((stub) => {
+        stub.textId = this.textId(stub.textId, 'task.stub', stub.text);
+        const { text: _text, ...rest } = stub;
+        return rest as SessionDigestEntry & { textId?: string };
+      });
+    }
+
+    if (runtime.retainedConstraints) {
+      copy.retainedConstraints = runtime.retainedConstraints.map((constraint) => {
+        constraint.textId = this.textId(constraint.textId, 'constraint.text', constraint.text);
+        const { text: _text, ...rest } = constraint;
+        return rest as { id: string; text: string; textId?: string };
+      });
+    }
+
+    const suspension = runtime.suspension;
+    if (suspension) {
+      suspension.userTextId = this.textId(suspension.userTextId, 'suspension.user', suspension.userText);
+      if (suspension.question) {
+        suspension.question.textId = this.textId(suspension.question.textId, 'suspension.question', suspension.question.text);
+      }
+      const { userText: _userText, question, ...rest } = suspension;
+      copy.suspension = {
+        ...rest,
+        ...(question
+          ? (() => {
+            const { text: _questionText, ...questionRest } = question;
+            return { question: questionRest };
+          })()
+          : {}),
+      } as Suspension;
+    }
+
+    return { ...state, runtime: copy };
+  }
+
+  private hydrate(state: CheckpointState): CheckpointState {
+    if (!this.ledger) return state;
+    const ledger = this.ledger;
+    const runtime = state.runtime;
+
+    const assignment = runtime.openAssignment;
+    if (assignment) {
+      const text = assignment.textId ? ledger.read(assignment.textId) : assignment.text;
+      if (text === undefined) {
+        runtime.openAssignment = undefined;
+      } else {
+        assignment.text = text;
+        if (assignment.latestUserTextId) assignment.latestUserText = ledger.read(assignment.latestUserTextId);
+        if (assignment.findingsId) assignment.findings = ledger.read(assignment.findingsId);
+      }
+    }
+
+    if (runtime.awayQueue) {
+      runtime.awayQueue = runtime.awayQueue.flatMap((entry) => {
+        const text = entry.textId ? ledger.read(entry.textId) : entry.text;
+        return text === undefined ? [] : [{ ...entry, text }];
+      });
+    }
+
+    if (runtime.taskStubs) {
+      runtime.taskStubs = runtime.taskStubs.flatMap((stub) => {
+        const text = stub.textId ? ledger.read(stub.textId) : stub.text;
+        return text === undefined ? [] : [{ ...stub, text }];
+      });
+    }
+
+    if (runtime.retainedConstraints) {
+      runtime.retainedConstraints = runtime.retainedConstraints.flatMap((constraint) => {
+        const text = constraint.textId ? ledger.read(constraint.textId) : constraint.text;
+        return text === undefined ? [] : [{ ...constraint, text }];
+      });
+    }
+
+    const suspension = runtime.suspension;
+    if (suspension?.userTextId) suspension.userText = ledger.read(suspension.userTextId);
+    if (suspension?.question?.textId) {
+      const text = ledger.read(suspension.question.textId);
+      if (text === undefined) suspension.question = undefined;
+      else suspension.question.text = text;
+    }
+
+    return state;
   }
 }
