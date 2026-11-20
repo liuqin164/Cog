@@ -4,7 +4,6 @@ export * from './config/CogmemConfig.js';
 export * from './adapters/index.js';
 export * from './algorithm/AlgorithmReviewBackend.js';
 export * from './algorithm/AlgorithmReviewMetrics.js';
-export * from './backend/SemanticBackend.js';
 export * from './batch/IngestionCursorStore.js';
 export * from './batch/InstalledBatchProcessor.js';
 export * from './belief/BeliefStore.js';
