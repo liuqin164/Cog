@@ -100,6 +100,3 @@ export interface GraphEdgeStoreLike {
   invalidateEdge(edgeRecordId: string, metadata?: Record<string, unknown>): boolean;
 }
 
-export interface ProposalLedgerLike {
-  append?(items: unknown[]): void;
-}
