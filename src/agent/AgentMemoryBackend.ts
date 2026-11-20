@@ -2,6 +2,7 @@ import type { MemoryKernel } from '../factory.js';
 import { excludeExplicitSpans } from '../context/ExplicitExclusion.js';
 import { classifySocialTurn, isSocialTurn } from '../context/SocialTurn.js';
 import { socialTurnResources } from '../config/LanguagePacks.js';
+import { hasLongTermMemorySignal } from '../lexicon/coreMemoryLexicon.js';
 import type { MemoryAtlasCard, MemoryAtlasNode, MemoryAtlasRelatedCard, MemoryAtlasRelaxationStep } from '../atlas/MemoryAtlasTypes.js';
 import {
   memoryEventCharRange,
@@ -2979,7 +2980,7 @@ export class KernelAgentMemoryBackend {
     if (mode === 'immediate_compile') return { compile: true, reason: 'immediate_compile' };
     if (mode === 'raw_archive_only') return { compile: false, reason: 'raw_archive_only' };
     if (mode === 'raw_then_dream') return { compile: false, reason: 'raw_then_dream' };
-    if (this.hasDurableTurnSignal(content)) return { compile: true, reason: 'durable_signal_detected' };
+    if (this.hasDurableTurnSignal(content) || hasLongTermMemorySignal(content.replace(/^User:\s*/i, ''))) return { compile: true, reason: 'durable_signal_detected' };
     return { compile: false, reason: 'low_signal_turn' };
   }
 

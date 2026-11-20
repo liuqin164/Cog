@@ -7,9 +7,30 @@ export interface ProjectClockContext {
   source: ProjectClockSource;
 }
 
+const DAY_FORMATTERS = new Map<string, Intl.DateTimeFormat>();
+const CIVIL_FORMATTERS = new Map<string, Intl.DateTimeFormat>();
+
+function dayFormatter(timeZone: string): Intl.DateTimeFormat {
+  let formatter = DAY_FORMATTERS.get(timeZone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' });
+    DAY_FORMATTERS.set(timeZone, formatter);
+  }
+  return formatter;
+}
+
+function civilFormatter(timeZone: string): Intl.DateTimeFormat {
+  let formatter = CIVIL_FORMATTERS.get(timeZone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
+    CIVIL_FORMATTERS.set(timeZone, formatter);
+  }
+  return formatter;
+}
+
 function assertTimeZone(timeZone: string): string {
   try {
-    new Intl.DateTimeFormat('en-US', { timeZone }).format();
+    dayFormatter(timeZone);
     return timeZone;
   } catch {
     throw new Error(`invalid_time_zone:${timeZone}`);
@@ -58,7 +79,7 @@ export function assertLocalDate(value: string, timeZone?: string): string {
 }
 
 export function localDateFor(ms: number, timeZone?: string): string {
-  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: resolveTimeZone(timeZone), year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(ms));
+  const parts = dayFormatter(resolveTimeZone(timeZone)).formatToParts(new Date(ms));
   const value = (type: string) => parts.find((part) => part.type === type)?.value ?? '01';
   return `${value('year')}-${value('month')}-${value('day')}`;
 }
@@ -95,9 +116,10 @@ function formatCivilDate(year: number, month: number, day: number): string {
 
 function zonedMidnight(year: number, month: number, day: number, timeZone?: string): number {
   const zone = resolveTimeZone(timeZone);
+  const formatter = civilFormatter(zone);
   let guess = Date.UTC(year, month - 1, day);
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const parts = new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(guess));
+    const parts = formatter.formatToParts(new Date(guess));
     const value = (type: string) => Number(parts.find((part) => part.type === type)?.value ?? 0);
     const displayed = Date.UTC(value('year'), value('month') - 1, value('day'), value('hour'), value('minute'), value('second'));
     guess += Date.UTC(year, month - 1, day) - displayed;

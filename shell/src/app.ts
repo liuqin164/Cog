@@ -1787,21 +1787,10 @@ export class CompanionShell implements ShellControl, AttachShell {
     }
   }
 
-  /**
-   * The compiled books an emergence decision reads: promised commitments (F16) and the agent's
-   * plans (F22). Both compile incrementally and are safe at a turn boundary. F22 has no F6 source,
-   * so a plan with a target instant is consumed the way its own contract says: `schedule` turns it
-   * into an F2 wake intention, which is a first-class candidate source.
-   */
   private compileProactiveBooks(at: number): void {
     const projectId = this.config.projectId;
     try {
-      const latest = this.kernel.eventStore.queryEvents(1, 1, {
-        projectId: [projectId],
-        order: 'desc',
-      }).records[0]?.eventId ?? '';
-      // Idle ticks are the common case; recompiling two books for no new turn is the kind of cost
-      // a long-lived resident pays forever.
+      const latest = this.latestEventId(projectId);
       if (latest === (this.compiledThroughEventId ?? '')) return;
       this.kernel.commitments.compile({ projectId, now: at });
       this.kernel.intentions.compile({ projectId, now: at });
@@ -1810,10 +1799,16 @@ export class CompanionShell implements ShellControl, AttachShell {
         this.kernel.intentions.schedule({ projectId, intentionId: intention.intentionId, now: at });
         this.trace.append('intention_scheduled_for_wake', { intentionId: intention.intentionId, dueAt: intention.dueAt, at });
       }
-      this.compiledThroughEventId = latest;
+      const profile = this.kernel.profile.compile({ projectId, now: at });
+      this.trace.append('profile_compiled', { projectId, at, written: profile.written, entries: profile.entries });
+      this.compiledThroughEventId = this.latestEventId(projectId);
     } catch (error) {
       this.trace.append('proactive_compile_failed', { at, message: error instanceof Error ? error.message : String(error) });
     }
+  }
+
+  private latestEventId(projectId: string): string {
+    return this.kernel.eventStore.queryEvents(1, 1, { projectId: [projectId], order: 'desc' }).records[0]?.eventId ?? '';
   }
 
   /** F2's clock: fire due intentions and announce due prospective memories. It never speaks. */

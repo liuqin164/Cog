@@ -10,6 +10,7 @@ import {
   extractExplicitNamedEntityCandidate,
   extractLatestIssueReference,
   extractNegativePreferenceCue,
+  extractOwnerProfileFacts,
   extractPreference,
   extractProjectAliasCandidates,
   extractProjectCandidate,
@@ -500,6 +501,25 @@ export class FactCompiler {
         validFrom: createdAt,
         certaintyLevel: 'certain',
         confidence: 0.84,
+        status: 'provisional',
+        sourceText,
+        metadata: {
+          fact_origin: 'original_compiler_fact'
+        }
+      });
+    }
+
+    for (const hint of isInteractionEventSemantic ? [] : extractOwnerProfileFacts(workingText)) {
+      factInputs.push({
+        neuronId: input.neuron.id,
+        unitId,
+        subject: 'user',
+        predicateFamily: hint.family,
+        predicateValue: hint.family,
+        object: this.normalizeName(hint.value),
+        validFrom: createdAt,
+        certaintyLevel: 'certain',
+        confidence: 0.85,
         status: 'provisional',
         sourceText,
         metadata: {

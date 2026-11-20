@@ -321,8 +321,21 @@ export function hasLongTermMemorySignal(text: string): boolean {
     || isPurchaseSignal(normalized)
     || isWorkedOnSignal(normalized)
     || extractPreference(normalized)
+    || extractOwnerProfileFacts(normalized).length > 0
     || includesLexiconTerm(normalized, LONG_TERM_MEMORY_SIGNAL_TERMS)
   );
+}
+
+export function extractOwnerProfileFacts(text: string): Array<{ family: string; value: string }> {
+  const normalized = normalizeLexiconText(text);
+  const out: Array<{ family: string; value: string }> = [];
+  const address = normalized.match(/我(?:家)?(?:住在|的住址是|的地址是|的家庭住址是)\s*([^\s，。,.!?！？]+)/i)?.[1];
+  if (address) out.push({ family: 'address', value: address });
+  const wakeTime = normalized.match(/我(?:每天|通常|一般|平时)?\s*([^\s，。,.!?！？]{1,12})\s*起床/)?.[1];
+  if (wakeTime) out.push({ family: 'wake_time', value: wakeTime });
+  const allergy = normalized.match(/我对\s*([^\s，。,.!?！？]{1,16})\s*过敏/)?.[1];
+  if (allergy) out.push({ family: 'allergic_to', value: allergy });
+  return out;
 }
 
 export function extractIssueHints(text: string): string[] {
