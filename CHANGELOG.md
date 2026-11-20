@@ -191,6 +191,19 @@
 
 - **The 46-slim leftovers are gone (#165).** Re-checked at `b1587cd` for readers, then removed: the eight declarations with no readers (`MODEL_BACKED_PHASE2_REVIEW_VERSION`, `AlgorithmReviewMetricsSummary`, `WorkspaceFilter`, `StaleFilter`, `StatusFilter`, `CredibilityFilter`, `DegradationState`, `RuntimeAuditTrail`), `BoardRegistry` (no instantiations; its `@public stable` was self-applied and 5.0 is unreleased), and `DeepWriteConfig`'s write-only `modelRole`/`allowCloud` fields together with the `COGMEM_DEEP_WRITE_ALLOW_CLOUD` read that only fed the latter. 101 lines across 9 files. No behaviour, dependency, bin, table or migration changed; `TopicFilter`, `DeepWriteConfig` itself and `DeepWriteMemoryOrchestrator`'s real consumption are untouched. Three declarations this round left without a reader — `AlgorithmReviewMetricsSnapshot`, `BrainMode`, `RuntimeDiagnosticsHistoryPage` — were outside the frozen list and are named here for the next decision rather than deleted silently.
 
+- **The dead proposal, board and host-bridge code is gone (#337, batch 2).** The batch-2
+  `src/routing/` files had already gone with #343; this round deletes the remaining test-only
+  files in `src/meta/` (observation collector, policy proposal generator, proposal eval runner,
+  config overlay), `src/boards/` (`ProposalBoard`, `ReasoningTraceBoard`) and `src/host/`
+  (`RecallBlock`, `bridge/HostBridge`), together with their re-exports and the tests that existed
+  only for them. `ProposalLedger` and `meta/types.ts` stay until batch 1's `ProposalApplier.ts`,
+  which still imports the ledger, lands. Tests that also covered a survivor were trimmed rather
+  than deleted (`phase38-proposal-schema`, `phase-projection`, `secret-public-surface`,
+  `explicit-exclusion`, `v09-eval-smoke`, `v09-integration-acceptance`), and the scorecard keeps
+  its host-path family with a local copy of the recall-item adapter. User-visible effect, in one
+  line: the package no longer exports the host recall-block renderers or `recallForHost` /
+  `rememberForHost`, and nothing behind them remains.
+
 ## 4.1.0
 
 Scope for this line, in the order it is worked: the shared-memory design comparison (#134, whose
