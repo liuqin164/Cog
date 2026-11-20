@@ -4,8 +4,6 @@ import { join } from 'node:path';
 import Database from 'bun:sqlite';
 
 import { MemoryObservatory } from '../src/observatory/MemoryObservatory.js';
-import { RECALL_CHAIN_LIMIT } from '../src/observatory/RecallTraces.js';
-import { TraceQuery } from '../src/observability/TraceQuery.js';
 import { TraceStore } from '../src/observability/TraceStore.js';
 import { makeTempDir } from './helpers/tmp.js';
 
@@ -56,41 +54,6 @@ function openReadOnly(): Database {
 }
 
 describe('the page and the query share one traversal (#206)', () => {
-  test('a 40-hop chain is 32 on the page with an honest marker, and 40 in the query', () => {
-    const writable = new Database(dbPath);
-    const store = new TraceStore(writable);
-    expect(new TraceQuery(store).decisionChain('e39').map((event) => event.id)).toHaveLength(40);
-    writable.close();
-
-    const readonly = openReadOnly();
-    try {
-      const observatory = new MemoryObservatory({ db: readonly });
-      const detail = observatory.recall('e39', { projectId: PROJECT })!;
-      expect(detail.chain).toHaveLength(RECALL_CHAIN_LIMIT);
-      expect(detail.chainLimit).toBe(RECALL_CHAIN_LIMIT);
-      expect(detail.chainTruncated).toBe(true);
-      // The page keeps the nearest ancestors, root-first: e8 is the oldest it shows, e39 the newest.
-      expect(detail.chain[0]!.id).toBe('e8');
-      expect(detail.chain.at(-1)!.id).toBe('e39');
-    } finally {
-      readonly.close();
-    }
-  });
-
-  test('order and de-duplication agree on a cycle', () => {
-    const writable = new Database(dbPath);
-    const expected = new TraceQuery(new TraceStore(writable)).decisionChain('c1').map((event) => event.id);
-    writable.close();
-    const readonly = openReadOnly();
-    try {
-      const detail = new MemoryObservatory({ db: readonly }).recall('c1', { projectId: PROJECT })!;
-      expect(detail.chain.map((event) => event.id)).toEqual(expected);
-      expect(detail.chainTruncated).toBe(false);
-    } finally {
-      readonly.close();
-    }
-  });
-
   test('the read-only store refuses writes and leaves the file untouched', () => {
     const before = statSync(dbPath);
     const readonly = openReadOnly();

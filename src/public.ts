@@ -919,20 +919,6 @@ export { EmbeddingUnavailableError, embedOne } from './embedding/EmbeddingProvid
  * @beta @since 1.9.8
  */
 
-/**
- * Dream curator scheduling helpers. They describe host-owned schedules; core
- * never starts a hidden daemon.
- * @beta @since 2.0.0
- */
-export {
-  describeDreamCuratorWorkflow,
-  nextDreamCuratorRunAt,
-} from './engine/DreamCuratorSchedule.js';
-export type {
-  DreamCuratorScheduleConfig,
-  DreamCuratorScheduleMode,
-  DreamCuratorWorkflowDescription,
-} from './engine/DreamCuratorSchedule.js';
 export { EntityGovernanceService } from './entity/index.js';
 export type { EntityMergeCandidate, EntityMergeCandidateStatus, ProposeEntityMergeInput } from './entity/index.js';
 
