@@ -280,6 +280,7 @@ async function emergence(): Promise<Metric[]> {
       '我 3 小时后把蓝色笔记本带给你',
       '我 3 小时后把绿色杯子送到你桌上',
       '我 3 小时后把黄色钥匙交给你',
+      '我 3 小时后把紫色围巾放到门口',
     ];
     const runsByTick: number[] = [];
     for (const [index, text] of texts.entries()) {
@@ -301,14 +302,29 @@ async function emergence(): Promise<Metric[]> {
       runsByTick.push(after - before);
     }
     const total = runsByTick.reduce((sum, count) => sum + count, 0);
+    const feedback = shell.backend
+      .surfacingFeedbackState({ projectId: shell.config.projectId, now: clock.now })
+      .types.find((entry) => entry.type === 'commitment');
     return [
       metric('first_due_surfacing', String(runsByTick[0] ?? 0), runsByTick[0] === 1, 'exactly 1'),
       metric(
         'surfacings_after_three_ignored',
         String(total),
-        total <= 3,
-        '<= 3 (the fourth waits or is suppressed)',
+        total === 4,
+        '4 (the fourth is where the third ignore is learned)',
         `per tick: ${runsByTick.join(', ')}`,
+      ),
+      metric(
+        'fifth_surfacing_withheld',
+        String(runsByTick[4] ?? 0),
+        runsByTick[4] === 0,
+        '0 (F7 cooldown holds the fifth)',
+      ),
+      metric(
+        'emergence_cooldown_active',
+        feedback?.cooldownUntil == null ? '(none)' : `L${feedback.level} until ${new Date(feedback.cooldownUntil).toISOString()}`,
+        (feedback?.level ?? 0) > 0 && feedback?.cooldownUntil !== null && feedback!.cooldownUntil > clock.now,
+        'level >= 1 with a cooldown still running',
       ),
     ];
   } finally {
