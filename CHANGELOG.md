@@ -191,6 +191,17 @@
 
 - **The 46-slim leftovers are gone (#165).** Re-checked at `b1587cd` for readers, then removed: the eight declarations with no readers (`MODEL_BACKED_PHASE2_REVIEW_VERSION`, `AlgorithmReviewMetricsSummary`, `WorkspaceFilter`, `StaleFilter`, `StatusFilter`, `CredibilityFilter`, `DegradationState`, `RuntimeAuditTrail`), `BoardRegistry` (no instantiations; its `@public stable` was self-applied and 5.0 is unreleased), and `DeepWriteConfig`'s write-only `modelRole`/`allowCloud` fields together with the `COGMEM_DEEP_WRITE_ALLOW_CLOUD` read that only fed the latter. 101 lines across 9 files. No behaviour, dependency, bin, table or migration changed; `TopicFilter`, `DeepWriteConfig` itself and `DeepWriteMemoryOrchestrator`'s real consumption are untouched. Three declarations this round left without a reader — `AlgorithmReviewMetricsSnapshot`, `BrainMode`, `RuntimeDiagnosticsHistoryPage` — were outside the frozen list and are named here for the next decision rather than deleted silently.
 
+- **The second half of #337's second batch is closed: the last unreachable files the ticket's 84-file
+  table lists in `src/store/`, `src/engine/`, `src/backend/`, `src/governance/` and
+  `src/observability/` are gone (#337).** Removed with their tests and their `src/public.ts` /
+  `src/internal.ts` re-exports: `src/store/{PolicyExecutionProjector,PolicyProjectionStore,RuntimeProjector,RuntimeProjectionStore}.ts`,
+  `src/engine/DreamCuratorSchedule.ts`, `src/backend/SemanticBackend.ts`,
+  `src/governance/{ContradictionResolver,CredibilityScorer,DecayPolicy,MemoryExplain,SupersedeChain}.ts`
+  and `src/observability/{DecisionExplainer,TraceQuery}.ts`. `DeepWriteConfig.ts` stays because
+  `DeepWriteMemoryOrchestrator` still imports it, and `src/models/index.ts`, `src/migrations/index.ts`
+  and `src/semantic/index.ts` keep only live exports. User-visible effect, in one line: the public API
+  no longer exports the dream curator schedule helpers; nothing else behaves differently.
+
 ## 4.1.0
 
 Scope for this line, in the order it is worked: the shared-memory design comparison (#134, whose
