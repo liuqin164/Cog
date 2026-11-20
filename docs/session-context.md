@@ -104,10 +104,10 @@ repeating a summary. An item with no resolvable event id prints no key rather th
 
 A lane downgraded to its browse-only pointer renders the same `evt-…` keys for the ids it left
 behind, one `anchorEvent=` line each, so `read mem:<eventId>` still resolves the text when the lane
-itself no longer fits. The key list is bounded to 20 — the trace's existing limit — and the header
-keeps the lane's full item count. A lane-local id is resolved through the item's own `anchorEvent`
-or `sourceRefs` first: `procedure:<entryId>` prints its ledger row's key, while an `assignment:` or
-`wake:` item that carries no ledger row prints none rather than a fabricated one.
+itself no longer fits. The key list keeps the newest 20 — the trace's existing limit — and the
+header keeps the lane's full item count. A lane-local id is resolved through the item's own
+`anchorEvent` or `sourceRefs` first: `procedure:<entryId>` prints its ledger row's key, while an
+`assignment:` or `wake:` item that carries no ledger row prints none rather than a fabricated one.
 
 ## Auto-expansion (#253)
 
@@ -264,5 +264,5 @@ words, and the assembly puts the pinned/profile/working-set/open-loop material b
 The acceptance is that the rebuilt context can answer three questions — what we were doing, where we
 were stuck, what comes next — with `sourceRefs` a reader can check. The F2 wake intentions and F6
 candidates that were pending at the kill are re-read from their own services and enter the
-`working_set` lane as open loops. The F16 commitment ledger is not landed; the open-loop port is the
-place it will enter.
+`working_set` lane as open loops. F16's commitment book is compiled each tick (#193); its due
+promises arrive through the surfacing path, not the `working_set` lane.

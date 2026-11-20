@@ -35,8 +35,10 @@ cogmem install \
 ```
 
 `--yes` requires `--provider` (`mg` or `openai_compatible`), `--base-url` and `--model`;
-`openai_compatible` also requires `MG_API_KEY` or `COGMEM_MODEL_KEY`. A missing flag stops the
-install before it touches the machine and names what is missing. The other flags are `--data`,
+`openai_compatible` also requires `MG_API_KEY` or `COGMEM_MODEL_KEY`. Two namespaces appear here:
+`COGMEM_*` is Cog's own configuration, while `MG_BASE_URL`, `MG_API_KEY` and `MG_MODEL` belong to
+the local mg gateway and are read only when that route is chosen. A missing flag stops the install
+before it touches the machine and names what is missing. The other flags are `--data`,
 `--workspace`, `--project`, `--agent`, `--http-port`, `--service-name`, `--home`, `--platform`,
 `--skip-service`, `--uninstall` and `--help`.
 

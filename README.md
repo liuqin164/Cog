@@ -56,7 +56,7 @@ cogmem install \
   --model your-model
 ```
 
-A missing `--provider`, `--base-url` or `--model` stops the install before it touches the machine, naming what is missing; with `--yes`, all three are required even for `mg`. The key is read from `MG_API_KEY` (or `COGMEM_MODEL_KEY`), never from an argument. The resident's default daily ceiling is 2,000,000 tokens. A hosted endpoint bills per token, so point it at a plan or spend limit you are willing to pay.
+A missing `--provider`, `--base-url` or `--model` stops the install before it touches the machine, naming what is missing; with `--yes`, all three are required even for `mg`. The key is read from `MG_API_KEY` (or `COGMEM_MODEL_KEY`), never from an argument. `MG_*` belongs to the local mg gateway; Cog's own settings use `COGMEM_*` ([installer variables](docs/install.md#4-installer-environment-variables)). The resident's default daily ceiling is 2,000,000 tokens. A hosted endpoint bills per token, so point it at a plan or spend limit you are willing to pay.
 
 Without a memory model, Cog runs in `rule_only` mode: storing and literal recall work, paraphrases do not, and `cogmem doctor` reports `WARN — installed but degraded` rather than pretending. That is a legal configuration.
 
@@ -143,7 +143,7 @@ The value is quotable exactly because the block carries the raw turn. "Why do yo
 
 Each family is 24 generated scenarios, reproducible from a fixed seed; Cog's 91.7% is 22 of 24. This is synthetic data, not LongMemEval; the method, the other families, and where the default path loses are in [BENCHMARKS.md](BENCHMARKS.md).
 
-**Context is budgeted.** A turn's context is assembled from six lanes — pinned, profile, digest, working set, recall, tail — and fitted to a token budget. Memory planning takes 25% of the available window by default, with a 30% hard ceiling. When a lane does not fit, it becomes a browse-only pointer with its ids kept, and the text stays one recall away; it is never silently dropped or paraphrased.
+**Context is budgeted.** A turn's context is assembled from six lanes — pinned, profile, digest, working set, recall, tail — and fitted to a fixed target from the model route (10,800 tokens for the built-in default), not a share of the provider window. When a lane does not fit, the lowest-priority lane becomes a browse-only pointer that keeps its item count and the newest 20 ledger keys, while a lane carrying a correction, promise, intention or prohibition keeps those protected items verbatim; freed budget is then handed back to the surviving content, newest first, and the text stays one recall away. It is never silently dropped or paraphrased.
 
 ## Your control
 
@@ -164,7 +164,7 @@ Soul is a separate face: you save a version in the observatory, the agent's `pro
 
 Budgets live in `<dataDir>/budgets.json`: the default daily ceiling is 2,000,000 tokens, the nightly Dream model cap is 200,000, and the per-run caps for autonomous and work runs sit beside them. The installer writes this file once, and a re-run does not overwrite it.
 
-Every night after Dream, the resident writes a verified snapshot of the whole database; checksum, open and row counts are checked before it is reported. Seven nightly snapshots and four weekly archives are kept. `cogmem backup list` shows them, and `cogmem snapshot import --snap <file>` restores one. A snapshot contains the whole brain — treat it like the database.
+At most once every 24 hours, independently of whether Dream ran, the resident writes a verified snapshot of the whole database; checksum, open and row counts are checked before it is reported. Seven daily snapshots and four weekly archives are kept. `cogmem backup list` shows them, and `cogmem snapshot import --snap <file>` restores one. A snapshot contains the whole brain — treat it like the database.
 
 `cogmem observatory` serves the star map on loopback. Reads write nothing; the soul editor's save and rollback routes are the only writes, and they require a token minted by the installer.
 
@@ -186,7 +186,7 @@ conversations from the old install to files, point 5.0 at a new database, and im
 `cogmem episode import --format jsonl --file <path>` for a transcript. Importing the old database
 file, or a snapshot taken from it, is not a migration: it meets the same refusal.
 
-Nightly snapshots and weekly archives under the data directory are complete copies of the SQLite
+Daily snapshots and weekly archives under the data directory are complete copies of the SQLite
 database in plaintext, not encrypted exports. Treat them as sensitive: use full-disk or volume
 encryption (LUKS, FileVault, an encrypted directory) if the machine may be lost or shared, and
 remember that deleting the live database does not delete what a snapshot already holds. See
