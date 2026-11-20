@@ -803,6 +803,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       profile: () => this.laneProfile(),
       openLoops: () => this.laneOpenLoops(),
       digestStubs: () => this.laneDigestStubs(),
+      ledgerSeq: () => this.kernel.eventStore.getLatestGlobalSeq(),
       variablePrompt: () => this.systemPromptSections().tail,
       onAssembly: (assembly) => {
         this.lastLaneAssembly = assembly;

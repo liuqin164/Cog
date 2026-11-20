@@ -119,6 +119,7 @@ export interface AssembleSessionContextInput {
    * is supplied by the caller and is not part of this input.
    */
   digestStubs?: readonly SessionDigestEntry[];
+  cachedDigest?: SessionDigest;
 }
 
 export type SessionContextLaneStatus = 'included' | 'downgraded' | 'empty';

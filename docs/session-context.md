@@ -34,6 +34,10 @@ below and fails when code and contract disagree. Version: `SESSION_CONTEXT_CONTR
    than a model-written summary: it costs no model call on the hot path and keeps the anchor
    discipline by construction. Its price is that a fact older than the window is reached by
    `recall`, not by the digest lane; `SessionDigest.truncated` says when that happened.
+   The shell assembles once per turn and reuses the result for the turn's later provider calls:
+   only a ledger `global_seq` advance invalidates it, and only the working set's auto-expansion may
+   be recomputed from new model text. The recall lane therefore stays present in every call without
+   being recomputed (#351).
 
 ## What this face does not do
 
