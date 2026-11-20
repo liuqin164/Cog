@@ -224,12 +224,12 @@ export class PluginsAdmin {
       this.shell.trace.append('assignment_resume_skipped', { assignmentId, reason: `state:${this.shell.machine.state}` });
       return;
     }
-    if (this.shell.dailyBudgetExceeded()) {
+    if (this.shell.statusFace.dailyBudgetExceeded()) {
       this.shell.trace.append('daily_budget_exceeded', {
         trigger: 'assignment_resume',
         assignmentId,
-        day: this.shell.localDay(this.shell.now()),
-        spent: this.shell.dailySpent(),
+        day: this.shell.statusFace.localDay(this.shell.now()),
+        spent: this.shell.statusFace.dailySpent(),
         limit: this.shell.config.dailyBudget.maxTokensPerDay,
       });
       return;

@@ -24,7 +24,7 @@ import { providedModelPlugin } from './plugins/mg-provider.ts';
 import { ModelRouter, modelRouterPlugin, routeLine } from './model/router.ts';
 import { BUILTIN_ROUTE_NAME, RouteStore, redactUrl, type ModelRoute } from './model/routes.ts';
 import { cagePlugin, estimateBudgetGrant, RunCage, type CageTier } from './plugins/cage.ts';
-import { bwrapUsable, builtinToolsPlugin } from './plugins/builtin-tools.ts';
+import { builtinToolsPlugin } from './plugins/builtin-tools.ts';
 import { coreCommandFor, availableCoreCommand, unknownCommandReply, type CommandHost, type CommandReply } from './commands.ts';
 import { proposalPlugin } from './plugins/proposal.ts';
 import { askPlugin } from './plugins/ask.ts';
@@ -37,7 +37,7 @@ import { soulEditPlugin } from './plugins/soul-edit.ts';
 import { dreamPlugin } from './plugins/dream.ts';
 import { emergencePlugin } from './plugins/emergence.ts';
 import { terminalPlugin, TerminalChannel, type ShellControl } from './channels/terminal.ts';
-import { AgentRuntime, type AgentMessage, type ModelProvider, type RunSummary, type TurnUsage } from './state/agent-loop.ts';
+import { AgentRuntime, type AgentMessage, type ModelProvider, type RunSummary } from './state/agent-loop.ts';
 import type { ToolOutputAccount } from './state/context-budget.ts';
 import { classifyEndpointFailure } from './state/retry.ts';
 import { laneAssemblyView, type ContextMetrics } from './state/session-lanes.ts';
@@ -45,7 +45,7 @@ import { SecretRedactor, startKernelHttpFace, type HttpFaceHandle } from './kern
 import { formatBytes, memoryPressureAction, readMemoryUsage } from './memory.ts';
 import { rotateLogFile, SERVICE_LOG_MAX_BYTES } from './log-rotation.ts';
 import { AttachServer, defaultSocketPath, type AttachShell } from './attach/server.ts';
-import { buildAwayReport, enqueueAway } from './presence.ts';
+import { enqueueAway } from './presence.ts';
 import { loadNativePlugins, type PluginLoadResult } from './plugins/load.ts';
 import { UpgradeAdmin } from './upgrade/admin.ts';
 import type { StageUpgradeInput, StagedTree } from './upgrade/stage.ts';
@@ -57,6 +57,7 @@ import { createEmbeddingProvider, resolveEmbeddingDimensions, type ShellEmbeddin
 import { PluginsAdmin } from './plugins-admin.ts';
 import { ProposalsHandlers } from './proposals-handlers.ts';
 import { SovereigntyCommands } from './sovereignty.ts';
+import { StatusFace } from './status-face.ts';
 
 /** The findings handoff is a prompt line, not a transcript: one bounded paragraph. */
 const MAX_ASSIGNMENT_FINDINGS = 600;
@@ -158,9 +159,10 @@ export class CompanionShell implements ShellControl, AttachShell {
   readonly proposalsHandlers: ProposalsHandlers;
   readonly pluginsAdmin: PluginsAdmin;
   readonly upgradeAdmin: UpgradeAdmin;
-  private runtime?: AgentRuntime;
+  readonly statusFace: StatusFace;
+  runtime?: AgentRuntime;
   private cage?: RunCage;
-  private clock?: ClockService;
+  clock?: ClockService;
   private dream?: { integrate(...args: [string, string, number?]): Promise<{ localDate: string; eventCount: number; sourceRefs: unknown[]; summary: string; memoryModelUsed?: boolean; memoryModelDegraded?: string; kernelNightRan?: boolean }> };
   private emergence?: {
     hasDue?(now?: number): boolean;
@@ -188,12 +190,12 @@ export class CompanionShell implements ShellControl, AttachShell {
   private terminal?: TerminalChannel;
   private readonly channelContract: ChannelContract;
   private readonly terminalSession: ChannelSession;
-  private attach?: AttachServer;
-  private modelLabel = 'unknown';
+  attach?: AttachServer;
+  modelLabel = 'unknown';
   /** Present only when this process built its own provider; an injected test provider has no routes. */
-  private modelRouter?: ModelRouter;
+  modelRouter?: ModelRouter;
   /** The request-side estimate, calibrated by the provider's reported prompt count. */
-  private contextTokenEstimate = 0;
+  contextTokenEstimate = 0;
   /** The newest request's tool-output account (#319), shown beside the lane budget. */
   private lastToolOutput?: ToolOutputAccount;
   /** The newest six-lane assembly; `/context` and the TUI read this, not a second accounting. */
@@ -202,16 +204,16 @@ export class CompanionShell implements ShellControl, AttachShell {
   private contextAssemblyConsecutive = 0;
   private contextAssemblyLastFailure?: { at: number; message: string };
   /** The projection actions that produced it (#268); reset when the next assembly is recorded. */
-  private lastContextMetrics?: ContextMetrics;
+  lastContextMetrics?: ContextMetrics;
   /** `mem:` reads since the previous assembly; the next trace reports and clears it. */
   private drillsSinceAssembly = 0;
   /** The latest project event the compiled books were last brought up to. */
   private compiledThroughEventId?: string;
   /** Whether a soul-read failure has been traced; the read itself is retried on the next turn. */
   private soulFailureTraced = false;
-  private workLabel = '';
-  private runTurns = 0;
-  private runTokens = 0;
+  workLabel = '';
+  runTurns = 0;
+  runTokens = 0;
   /** The tier this process last started a run with; the work bar shows that tier's limits. */
   runTier: CageTier = 'autonomous';
   currentRunUserText = '';
@@ -222,19 +224,19 @@ export class CompanionShell implements ShellControl, AttachShell {
    * provider that never reports caching cannot look like a provider that always misses. Round 17's
    * estimate is not this number and never fills it.
    */
-  private promptCache?: { hit: number; miss: number; percent: number };
-  private runStartedAt?: number;
+  promptCache?: { hit: number; miss: number; percent: number };
+  runStartedAt?: number;
   /**
    * The killed run's prompt, rebuilt from the session log at recovery (#210). Delivery is a product
    * decision the shell does not make; holding it means the interrupted turn is reconstructable.
    */
-  private interrupted?: { runId: string; text: string; chars: number };
+  interrupted?: { runId: string; text: string; chars: number };
   /** An upgrade outcome already spoken by this process; attaches read it once, then it is gone. */
   lastUpgrade?: UpgradeOutcome;
   /** One memory notice per crossing, reset after we drop below 90% of the ceiling. */
   private memoryWarned = false;
   /** The day whose daily-budget stop was already spoken to the user (#233). */
-  private dailyNotifiedDay?: string;
+  dailyNotifiedDay?: string;
   /** The Dream model's spend for the current night, charged to the same day counter (#231). */
   private nightSpent = 0;
   private nightCap = 0;
@@ -267,9 +269,9 @@ export class CompanionShell implements ShellControl, AttachShell {
   /** Any host-supplied embedder, so the install's semantic probe is not limited to the local one. */
   private readonly embeddingProvider?: EmbeddingProvider;
   private readonly shellRegistry?: ShellModelRegistry;
-  private readonly modelRegistry: ModelRegistry;
+  readonly modelRegistry: ModelRegistry;
   readonly stateLedger: ShellStateLedger;
-  private memoryModelFailed = false;
+  memoryModelFailed = false;
   /** A degraded provider must not claim the index; only a warm provider over a current index may. */
   private embeddingReadyAllowed = false;
 
@@ -344,6 +346,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.proposalsHandlers = new ProposalsHandlers(this);
     this.pluginsAdmin = new PluginsAdmin(this);
     this.upgradeAdmin = new UpgradeAdmin(this);
+    this.statusFace = new StatusFace(this);
     this.proposals = new CommandProposals(
       (command) =>
         isProposableCommand(command) &&
@@ -366,8 +369,8 @@ export class CompanionShell implements ShellControl, AttachShell {
         this.workLabel = '思考中';
       }
       void this.host.bus.emit('companion_transition', { ...record, state: record.to });
-      this.emitWork();
-      this.emitStatus();
+      this.statusFace.emitWork();
+      this.statusFace.emitStatus();
     });
   }
 
@@ -433,8 +436,8 @@ export class CompanionShell implements ShellControl, AttachShell {
   }
 
   private beginDreamModelBudget(at: number): void {
-    const day = this.localDay(at);
-    const spent = this.dailySpent(at);
+    const day = this.statusFace.localDay(at);
+    const spent = this.statusFace.dailySpent(at);
     const persisted = this.machine.runtime.dreamNightDate === day
       ? this.machine.runtime.dreamNightStartTokens
       : undefined;
@@ -463,7 +466,7 @@ export class CompanionShell implements ShellControl, AttachShell {
 
   private beforeDreamModelCall(): void {
     if (!this.dreamModelActive) return;
-    if (this.dailyBudgetExceeded()) {
+    if (this.statusFace.dailyBudgetExceeded()) {
       this.trace.append('dream_model_budget_exceeded', {
         day: this.nightDay, spent: this.nightSpent, cap: this.nightCap, reason: 'daily_token_budget',
       });
@@ -482,8 +485,8 @@ export class CompanionShell implements ShellControl, AttachShell {
     const tokens = (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0);
     if (tokens <= 0) return;
     // One counter for the day (#233). The night cap limits this run; it is not a second ledger.
-    this.chargeCost(tokens);
-    this.nightSpent = Math.max(0, this.dailySpent() - this.nightStartTokens);
+    this.statusFace.chargeCost(tokens);
+    this.nightSpent = Math.max(0, this.statusFace.dailySpent() - this.nightStartTokens);
     this.trace.append('dream_model_usage', {
       day: this.nightDay,
       inputTokens: usage.inputTokens,
@@ -553,14 +556,14 @@ export class CompanionShell implements ShellControl, AttachShell {
           state: this.machine.state,
           plugins: this.pluginHealth(),
           embedding: this.embeddingStatus(),
-          memoryModel: this.memoryModelHealth(),
+          memoryModel: this.statusFace.memoryModelHealth(),
           contextAssembly: {
             failures: this.contextAssemblyFailures,
             consecutive: this.contextAssemblyConsecutive,
             lastFailure: this.contextAssemblyLastFailure ?? null,
           },
           suspension: this.machine.runtime.suspension
-            ? { ...this.suspendedLine(this.machine.runtime.suspension), id: this.machine.runtime.suspension.id, createdAt: this.machine.runtime.suspension.createdAt }
+            ? { ...this.statusFace.suspendedLine(this.machine.runtime.suspension), id: this.machine.runtime.suspension.id, createdAt: this.machine.runtime.suspension.createdAt }
             : null,
         }),
         healthStatus: () => (this.contextAssemblyConsecutive >= 3 ? 'degraded' : 'ok'),
@@ -774,7 +777,7 @@ export class CompanionShell implements ShellControl, AttachShell {
           autoExpands: assembly.autoExpanded.length,
         };
         this.drillsSinceAssembly = 0;
-        this.emitStatus();
+        this.statusFace.emitStatus();
       },
       onAssemblyFailure: (message) => {
         this.contextAssemblyFailures += 1;
@@ -865,7 +868,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       onContextAssembled: (account, toolOutput) => {
         this.contextTokenEstimate = account.totalTokens;
         this.lastToolOutput = toolOutput;
-        this.emitStatus();
+        this.statusFace.emitStatus();
       },
       // One stated whole-request ceiling, the same number the lanes are fitted to. The tool cap
       // is a ceiling inside it, not an extra allowance on top of it (#319, #318's unit).
@@ -874,7 +877,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       contextMetrics: () => this.lastContextMetrics,
     });
     this.modelLabel = `${this.host.getService<ModelProvider>('model').name}/${model.model}`;
-    this.attachWorkListeners();
+    this.statusFace.attachWorkListeners();
     this.dream = this.host.getService('dream');
     this.emergence = this.host.getService('emergence');
     // Crash recovery needs to know what was running. The checkpoint records the calls that started and
@@ -1017,7 +1020,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   }
 
   /** The active model route's sweet spot, with the shell config as the built-in route's value. */
-  private targetTokens(): number {
+  targetTokens(): number {
     return this.modelRouter?.targetTokens ?? this.config.contextSweetSpot;
   }
 
@@ -1322,11 +1325,11 @@ export class CompanionShell implements ShellControl, AttachShell {
   async submit(text: string): Promise<RunSummary | undefined> {
     if (this.machine.state === 'RUNNING') {
       this.runtime!.steer(text);
-      this.emitSteering();
+      this.statusFace.emitSteering();
       return undefined;
     }
     this.acknowledgeSurfacing();
-    if (this.dailyBudgetExceeded()) this.announceDailyBudget('user_message');
+    if (this.statusFace.dailyBudgetExceeded()) this.statusFace.announceDailyBudget('user_message');
     if (this.machine.state === 'SUSPENDED') return this.submitWhileSuspended(text);
     this.beginUserAssignment(text);
     this.clock!.markInteraction(this.now());
@@ -1704,7 +1707,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       const decision = allowed ? this.emergence!.decide(at) : undefined;
       if (due) this.runKernelWakeTick(at);
       if (decision) {
-        const absent = this.shouldHoldForAbsence();
+        const absent = this.statusFace.shouldHoldForAbsence();
         const userState = quiet ? 'night-dnd' : absent ? 'idle' : 'in-conversation';
         const channel = { reachability: 'online' as const, interruptibility: quiet || absent ? 'low' as const : 'high' as const };
         const routed = new Map<string, ReturnType<KernelAgentMemoryBackend['deliveryRoute']>>();
@@ -1761,7 +1764,7 @@ export class CompanionShell implements ShellControl, AttachShell {
         this.trace.append('emergence_skipped', {
           projectId: this.config.projectId,
           at,
-          reason: this.dailyBudgetExceeded(at) ? 'daily_token_budget' : 'cooldown_or_daily_cap',
+          reason: this.statusFace.dailyBudgetExceeded(at) ? 'daily_token_budget' : 'cooldown_or_daily_cap',
         });
       }
     }
@@ -1830,15 +1833,15 @@ export class CompanionShell implements ShellControl, AttachShell {
   private emergenceAllowed(at: number): boolean {
     // #233 and #229 share one day boundary and one hard stop: when the day's tokens are gone,
     // autonomy does not start another run, exactly as the emergence count cap does.
-    if (this.dailyBudgetExceeded(at)) return false;
+    if (this.statusFace.dailyBudgetExceeded(at)) return false;
     const state = this.machine.runtime.emergence;
     if (!state) return true;
-    return state.day !== this.localDay(at) || state.count < EMERGENCE_DAILY_LIMIT;
+    return state.day !== this.statusFace.localDay(at) || state.count < EMERGENCE_DAILY_LIMIT;
   }
 
   private consumeEmergence(candidate: { id: string; source?: string; observedAt?: number; sourceRefs?: Array<{ eventId?: string }> }, at: number): void {
     const key = this.emergenceKey(candidate);
-    const day = this.localDay(at);
+    const day = this.statusFace.localDay(at);
     const prior = this.machine.runtime.emergence;
     const count = prior?.day === day ? prior.count + 1 : 1;
     const consumed = [...(prior?.consumed ?? []).filter((entry) => entry !== key), key].slice(-MAX_EMERGENCE_CONSUMED);
@@ -1906,7 +1909,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       this.kernel.health.check({ now: at });
       if (this.clock!.quietWindowOpen(at)) return;
       this.reportMemoryPressure(at);
-      const away = this.shouldHoldForAbsence();
+      const away = this.statusFace.shouldHoldForAbsence();
       const notice = this.backend.healthNotice({
         projectId: this.config.projectId,
         userState: away ? 'idle' : 'in-conversation',
@@ -2100,261 +2103,32 @@ export class CompanionShell implements ShellControl, AttachShell {
     }
   }
 
-  // ---- The attach surface (`AttachShell`): everything the TUI process is allowed to ask for. ----
-
-  /**
-   * The work indicator and the context gauge are fed from the same events the transcript is, so the
-   * TUI never has to poll state: a turn starts, a tool starts, tokens are charged, a run settles.
-   */
-  private attachWorkListeners(): void {
-    this.host.bus.on('agent_start', () => {
-      this.emitStatus();
-    });
-    this.host.bus.on('turn_start', (event: { turnIndex?: number }) => {
-      this.runTurns = event.turnIndex ?? this.runTurns;
-      this.workLabel = '思考中';
-      this.emitWork();
-    });
-    this.host.bus.on('turn_usage', (event: { tokens?: number; totalTokens?: number; usage?: TurnUsage }) => {
-      this.runTokens = event.totalTokens ?? this.runTokens;
-      // Charged per turn, not at `agent_end`: a kill mid-run must not refund the day's spend, and the
-      // checkpoint is what the next process reads (#233).
-      this.chargeCost(event.tokens ?? 0);
-      const cache = promptCacheAccount(event.usage);
-      if (cache) {
-        this.promptCache = cache;
-        this.emitStatus();
-      }
-      this.emitWork();
-    });
-    this.host.bus.on('tool_execution_start', (event: { toolName?: string }) => {
-      this.workLabel = event.toolName ?? '工具';
-      this.emitWork();
-    });
-    this.host.bus.on('tool_execution_end', () => {
-      this.workLabel = '思考中';
-      this.emitWork();
-    });
-    this.host.bus.on('turn_end', () => this.emitSteering());
-    this.host.bus.on('agent_settled', () => {
-      this.workLabel = '思考中';
-      this.emitWork();
-      this.emitSteering();
-      this.emitStatus();
-      this.flushDailyBudgetNotice();
-    });
-  }
-
-  private chargeCost(tokens: number): void {
-    if (tokens <= 0) return;
-    try {
-      const today = this.localDay(this.now());
-      const previous = this.machine.runtime.costDayDate === today ? this.machine.runtime.costDayTokens ?? 0 : 0;
-      const spent = previous + tokens;
-      this.machine.updateRuntime({ costDayDate: today, costDayTokens: spent });
-      if (previous < this.config.dailyBudget.maxTokensPerDay && spent >= this.config.dailyBudget.maxTokensPerDay) {
-        this.trace.append('daily_budget_crossed', { day: today, spent, limit: this.config.dailyBudget.maxTokensPerDay, tokens });
-      }
-    } catch (error) {
-      this.trace.append('cost_charge_failed', { tokens, message: error instanceof Error ? error.message : String(error) });
-    }
-  }
-
-  /** The day's spend under the same configured boundary #229's emergence count uses. */
-  dailySpent(at = this.now()): number {
-    return this.machine.runtime.costDayDate === this.localDay(at) ? this.machine.runtime.costDayTokens ?? 0 : 0;
-  }
-
-  dailyBudgetExceeded(at = this.now()): boolean {
-    return this.dailySpent(at) >= this.config.dailyBudget.maxTokensPerDay;
-  }
-
-  private dailyBudgetLine(at = this.now()): string {
-    return `已到今日预算上限（${this.dailySpent(at)} / ${this.config.dailyBudget.maxTokensPerDay} token，本日 ${this.localDay(at)}（${this.config.timeZone}））：自主运行今天不再开始；你的指令照常执行，单次运行仍受笼子上限约束。`;
-  }
-
-  /**
-   * A user line is presence: the daily stop is stated once per day rather than left to the status
-   * bar. The line still runs — the ticket stops autonomy, not the owner.
-   */
-  announceDailyBudget(trigger: string): void {
-    const day = this.localDay(this.now());
-    if (this.dailyNotifiedDay === day) return;
-    this.dailyNotifiedDay = day;
-    this.trace.append('daily_budget_exceeded', {
-      trigger,
-      day,
-      spent: this.dailySpent(),
-      limit: this.config.dailyBudget.maxTokensPerDay,
-    });
-    void this.host.bus.emit('terminal_print', { text: `${this.dailyBudgetLine()}\n` });
-  }
-
-  private flushDailyBudgetNotice(): void {
-    if (!this.dailyBudgetExceeded()) return;
-    this.announceDailyBudget('run_settled');
-  }
-
-  private emitWork(): void {
-    void this.host.bus.emit('companion_work', this.currentWork());
-  }
-
-  private emitStatus(): void {
-    void this.host.bus.emit('companion_status', { status: this.currentStatus() });
-  }
-
-  private emitSteering(): void {
-    void this.host.bus.emit('companion_steering', { queued: this.currentQueued() });
-  }
-
-  private shouldHoldForAbsence(): boolean {
-    return this.config.attach.enabled && (this.attach?.clientCount ?? 0) === 0;
-  }
-
   currentStatus(): StatusState {
-    const next = this.clock?.nextPendingIntent();
-    const today = this.localDay(this.now());
-    return {
-      name: this.config.agentId,
-      lifecycle: this.machine.state,
-      kernelConnected: !this.machine.isHalted,
-      nextWakeAt: next?.at,
-      nextWakeReason: next?.reason,
-      model: this.modelLabel,
-      memoryModel: this.memoryModelHealth(),
-      workspace: this.config.workspaceRoot,
-      showWorkspace: true,
-      contextTokens: this.contextTokenEstimate,
-      contextSweetSpot: this.targetTokens(),
-      contextLanes: this.lastLaneAssembly ? laneAssemblyView(this.lastLaneAssembly) : null,
-      contextMetrics: this.lastContextMetrics ?? null,
-      promptCache: this.promptCache ?? null,
-      costTokens: this.machine.runtime.costDayDate === today ? this.machine.runtime.costDayTokens ?? 0 : 0,
-      timeZone: this.config.timeZone,
-      quietWindow: this.config.quiet ? { ...this.config.quiet, active: this.clock?.quietWindowOpen() ?? false } : undefined,
-      sandbox: this.sandboxState(),
-      capturePaused: this.capturePaused,
-      ...(this.machine.state === 'SUSPENDED' && this.machine.runtime.suspension ? { suspended: this.suspendedLine(this.machine.runtime.suspension) } : {}),
-    };
-  }
-
-  private memoryModelHealth(): { route: string; model: string; baseUrl: string; state: 'reachable' | 'unreachable' | 'rule_only'; line: string } {
-    const role = this.modelRegistry.getRoleConfig('memory');
-    const route = this.modelRouter?.active ?? 'default';
-    const ruleOnly = role.provider !== 'openai_compatible';
-    const state = ruleOnly ? 'rule_only' : this.memoryModelFailed ? 'unreachable' : 'reachable';
-    const stateText = state === 'rule_only'
-      ? '降级为规则；夜间整合不会用模型'
-      : state === 'unreachable' ? '不可达，降级为规则；夜间整合不会用模型' : '可达';
-    return {
-      route,
-      model: role.modelName,
-      baseUrl: redactUrl(role.baseUrl, [role.apiKey]),
-      state,
-      line: `记忆模型：${route}/${role.modelName}（${stateText}）`,
-    };
-  }
-
-  /** `/status` and the status bar say whether bash is isolated; a silent degradation is the bug (#284). */
-  private sandboxState(): 'on' | 'off' {
-    return bwrapUsable() ? 'on' : 'off';
-  }
-
-  /**
-   * The token budget and the emergence count share this day boundary: the configured project time
-   * zone (#285), which is the installer's `COGMEM_SHELL_TZ`, not a hard-coded Asia/Tokyo.
-   */
-  localDay(at: number): string {
-    return new Intl.DateTimeFormat('en-CA', { timeZone: this.config.timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(at));
-  }
-
-  /** The one human line the status bar, the snapshot and `/health` all carry for a pause. */
-  private suspendedLine(suspension: Suspension): { kind: Suspension['kind']; text: string } {
-    if (suspension.kind === 'question') {
-      return { kind: 'question', text: `已暂停：等你回答「${suspension.question?.text ?? ''}」` };
-    }
-    return {
-      kind: 'budget',
-      text: `已暂停：预算到顶，等批准追加 ${suspension.budget?.additionalTokens ?? 0} token / ${suspension.budget?.additionalTurns ?? 0} 回合`,
-    };
+    return this.statusFace.currentStatus();
   }
 
   currentWork(): WorkState {
-    const budget = this.runTier === 'work' ? this.config.workBudget : this.config.budgets;
-    return {
-      active: this.machine.state === 'RUNNING',
-      label: this.workLabel,
-      startedAt: this.runStartedAt,
-      turns: this.runTurns,
-      maxTurns: budget.maxTurnsPerRun,
-      tokens: this.runTokens,
-      maxTokens: budget.maxTokensPerRun,
-    };
+    return this.statusFace.currentWork();
   }
 
   currentQueued(): string[] {
-    return [...(this.runtime?.steeringMessages ?? [])];
+    return this.statusFace.currentQueued();
   }
 
-  /** The TUI's Esc on a queued line: withdraw the newest steer the model has not seen. */
   withdrawSteering(): string | undefined {
-    const withdrawn = this.runtime?.withdrawSteering();
-    this.emitSteering();
-    return withdrawn;
+    return this.statusFace.withdrawSteering();
   }
 
-  /**
-   * The prompt of the run a kill interrupted, rebuilt from the session log (#210). `undefined` when
-   * the last start was not a recovery of a RUNNING run with a prompt on record. What to *do* with it
-   * — a new turn, the away report, or nothing — is a product decision this method does not make.
-   */
-  interruptedRun(): { runId: string; text: string; chars: number } | undefined {
-    return this.interrupted;
-  }
-
-  /** `/sleep` is the command that puts it into DORMANT; closing the window is only a detach. */
   async sleep(): Promise<void> {
-    if (this.machine.state === 'DORMANT') return;
-    if (this.machine.state !== 'IDLE') throw new Error(`sleep_requires_idle: state is ${this.machine.state}`);
-    await this.machine.dispatch('shutdown', { reason: 'sleep_command' });
-    this.trace.append('sleep_command', { state: this.machine.state });
+    return this.statusFace.sleep();
   }
 
-  /**
-   * The report shown before the conversation resumes. Building it consumes the away queue: it is
-   * reported once, because "what happened while you were away" is not a recurring banner.
-   */
   awayReport(): PresenceReport {
-    // The one production read of the session log. `recover()` is the tolerant read plus the one-time
-    // record of any damage, so a torn or corrupted log shows up in the report's own evidence instead
-    // of silently reading as "nothing happened while you were away".
-    const report = buildAwayReport({
-      projectId: this.config.projectId,
-      runtime: this.machine.runtime,
-      trace: this.trace.recover().records,
-      kernel: this.kernel,
-      now: this.now(),
-      ...(this.lastUpgrade ? { upgrade: this.lastUpgrade } : {}),
-    });
-    // Reported once: "what happened while you were away" is not a recurring banner.
-    this.lastUpgrade = undefined;
-    const patch: Record<string, unknown> = { lastAttachAt: this.now() };
-    if ((this.machine.runtime.awayQueue?.length ?? 0) > 0) patch.awayQueue = [];
-    try {
-      this.machine.updateRuntime(patch);
-    } catch (error) {
-      this.trace.append('attach_state_write_failed', { message: error instanceof Error ? error.message : String(error) });
-    }
-    return report;
+    return this.statusFace.awayReport();
   }
 
-  /** Date the absence when the last client leaves, so the next report has a window to read. */
   attachChanged(count: number): void {
-    try {
-      this.machine.updateRuntime(count > 0 ? { lastAttachAt: this.now() } : { lastDetachAt: this.now() });
-    } catch (error) {
-      this.trace.append('attach_state_write_failed', { count, message: error instanceof Error ? error.message : String(error) });
-    }
+    this.statusFace.attachChanged(count);
   }
 
   // ---- The install's first-wake probe (#203), asked over the same control socket. ----
@@ -2611,7 +2385,7 @@ export class CompanionShell implements ShellControl, AttachShell {
    */
   private readonly commandHost: CommandHost = {
     config: () => this.config,
-    lifecycle: () => ({ state: this.machine.state, seq: this.machine.seq, costDayTokens: this.machine.runtime.costDayTokens ?? 0, sandbox: this.sandboxState() }),
+    lifecycle: () => ({ state: this.machine.state, seq: this.machine.seq, costDayTokens: this.machine.runtime.costDayTokens ?? 0, sandbox: this.statusFace.sandboxState() }),
     contextTokens: () => this.contextTokenEstimate,
     contextToolOutput: () => this.lastToolOutput,
     contextLanes: () => (this.lastLaneAssembly ? laneAssemblyView(this.lastLaneAssembly) : undefined),
@@ -2632,7 +2406,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     setCapturePaused: (paused: boolean) => {
       this.machine.updateRuntime({ capturePaused: paused });
       this.trace.append(paused ? 'capture_paused_command' : 'capture_resumed_command', { at: this.now() });
-      this.emitStatus();
+      this.statusFace.emitStatus();
     },
     continueSuspended: () => this.continueSuspended(),
     forgetPreview: (start: number, end: number) => this.forgetPreview(start, end),
@@ -2728,21 +2502,6 @@ export class CompanionShell implements ShellControl, AttachShell {
       this.trace.append('shell_stopped', { state: this.machine.state });
     }
   }
-}
-
-/**
- * The reported prompt-cache ratio, or `undefined` when the provider reported no cache field. `miss`
- * is the provider's own miss count when it sends one (DeepSeek), otherwise the prompt less the hit —
- * the same denominator Pi's hit-rate display uses (`pi-coding-agent/dist/modes/interactive/components/
- * footer.js:105-107`: `cacheRead / (input + cacheRead + cacheWrite)`). A hit with no prompt size
- * yields no ratio: the divisor would be invented, and an invented ratio is worse than none.
- */
-function promptCacheAccount(usage: TurnUsage | undefined): { hit: number; miss: number; percent: number } | undefined {
-  const hit = usage?.cacheHit;
-  if (hit === undefined) return undefined;
-  const miss = usage?.cacheMiss ?? (usage?.input === undefined ? undefined : Math.max(0, usage.input - hit));
-  if (miss === undefined || hit + miss <= 0) return undefined;
-  return { hit, miss, percent: Math.round((hit / (hit + miss)) * 100) };
 }
 
 function truncate(text: string, limit: number): string {

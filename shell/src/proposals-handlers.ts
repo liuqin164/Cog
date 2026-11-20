@@ -84,7 +84,7 @@ export class ProposalsHandlers {
     const suspension = this.shell.machine.runtime.suspension;
     if (this.shell.machine.state !== 'SUSPENDED' || !suspension) return { text: '现在没有挂起的 run，不需要续跑。', receipt: true };
     if (suspension.kind !== 'budget') return { text: '这次挂起在等一个回答，不是等预算：直接回复即可。', receipt: true };
-    if (this.shell.dailyBudgetExceeded()) this.shell.announceDailyBudget('budget_approved');
+    if (this.shell.statusFace.dailyBudgetExceeded()) this.shell.statusFace.announceDailyBudget('budget_approved');
     const assignment = this.shell.machine.runtime.openAssignment;
     if (assignment && assignment.id !== suspension.assignmentId) {
       this.shell.trace.append('suspension_resume_refused', { id: suspension.id, reason: 'assignment_mismatch' });
