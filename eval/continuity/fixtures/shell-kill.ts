@@ -24,10 +24,15 @@ const providerEntered = new Promise<void>((resolvePromise) => {
   onProviderEntered = resolvePromise;
 });
 
+let turns = 0;
 const provider: ModelProvider = {
   name: 'kill-script',
   model: 'kill/script',
   async complete(): Promise<ModelTurn> {
+    turns += 1;
+    if (turns === 1) {
+      return { text: '先声明任务再继续。', toolCalls: [{ toolCallId: 'c0', toolName: 'declare_task', input: { action: 'start' } }] };
+    }
     process.stdout.write(`${JSON.stringify({ event: 'provider_entered' })}\n`);
     onProviderEntered?.();
     return await new Promise<ModelTurn>(() => {});
