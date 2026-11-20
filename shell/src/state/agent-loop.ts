@@ -77,6 +77,9 @@ export interface ModelTurn {
   text: string;
   toolCalls: ToolCall[];
   usage?: TurnUsage;
+  streamed?: boolean;
+  ttftMs?: number;
+  durationMs?: number;
   /**
    * Pi's `AssistantMessage.stopReason`, narrowed to what the loop acts on. `length` means the output
    * was cut off by the token limit, so tool-call arguments may have been silently truncated even
@@ -92,6 +95,7 @@ export interface ModelCompletionInput {
   systemPrompt: string;
   model: string;
   signal: AbortSignal;
+  onDelta?: (delta: string) => void | Promise<void>;
 }
 
 export interface ModelProvider {
@@ -559,6 +563,7 @@ export class AgentRuntime {
             ...(this.options.contextMetrics ? { metrics: this.options.contextMetrics() } : {}),
           }, this.clock());
           await this.options.bus.emit('message_start', { type: 'message_start', message: draft }, { runId: input.runId });
+          let streamed = false;
           try {
             turn = await this.options.provider.complete({
               // A copy, so each attempt sees the context as of that call. Handing the live array over
@@ -569,6 +574,11 @@ export class AgentRuntime {
               systemPrompt: request.systemPrompt,
               model: request.model,
               signal,
+              onDelta: async (delta) => {
+                streamed = true;
+                draft.content += delta;
+                await this.options.bus.emit('message_update', { type: 'message_update', message: draft, delta }, { runId: input.runId });
+              },
             });
           } catch (caught) {
             // A thrown transport failure is the same failure as a provider that reports one in its
@@ -580,6 +590,7 @@ export class AgentRuntime {
               toolCalls: [],
               stopReason: signal.aborted ? 'aborted' : 'error',
               error: caught instanceof Error ? caught.message : String(caught),
+              streamed,
             };
           }
           draft.content = turn.text;
@@ -608,7 +619,19 @@ export class AgentRuntime {
               ...turn.usage,
             }, this.clock());
           }
-          await this.options.bus.emit('message_update', { type: 'message_update', message: draft, delta: turn.text }, { runId: input.runId });
+          this.options.trace?.append('provider_call', {
+            runId: input.runId,
+            turnIndex,
+            attempt,
+            route: this.options.provider.name,
+            model: request.model,
+            provider_stream: turn.streamed === true,
+            ttftMs: turn.ttftMs ?? null,
+            durationMs: turn.durationMs ?? null,
+          }, this.clock());
+          if (!turn.streamed) {
+            await this.options.bus.emit('message_update', { type: 'message_update', message: draft, delta: turn.text }, { runId: input.runId });
+          }
           await this.options.bus.emit('message_end', { type: 'message_end', message: draft }, { runId: input.runId });
           const failedEntry = context.append(draft);
           lastDraft = draft;

@@ -32,7 +32,7 @@
 | 浮现 | 到期承诺/意图在合适时机冒出来；勿扰窗内只排队、不主动开口 | emergence 插件（nextWakeAt/surfacingCandidates）＋ F18 deliveryRoute(Batch) | F6/F7/F8/F10 门测试；壳 surfacing-loop 4 测（忽略降频、/wake 到期、/snooze 顺延、/surfacing 停源）＋ quiet-window 2 测（窗口内排队、窗口后首 tick 送达） | ✅ 反馈环已接 — #330；勿扰窗已生效 — #328 |
 | 时间 | 每轮注入分钟级当前时间，保前缀缓存 | clock 插件 | #320 测试（相邻请求前缀 100% 一致） | ✅ |
 | 秘密脱敏 | 密钥类文本进账本前抹掉 | capture 插件＋模型路由的 redactSecretText | 根套件脱敏测试 | ✅ |
-| 模型接入 | 自定义 OpenAI 协议端点＋mg 路由 | provider 插件每轮调用 | box/生产多路由实测 | ✅ |
+| 模型接入 | 自定义 OpenAI 协议端点＋mg 路由；SSE 流式，非 SSE 回退整包 | provider 插件每轮调用；delta 走既有 message_update | 3-chunk 流式测试（3 次 message_update、终文一致）与整包回退测试；真实网关 TTFT 3.46 s／总 18.8 s（上游首包 2.7 s，未达 1.5 s 目标） | ✅ 流式已接；TTFT 受上游限制 |
 | 嵌入 | 本地 bge 向量，可换 ollama/OpenAI 协议 | 召回车道算向量；壳启动 warm 成功后调 backfillEventEmbeddings 补嵌旧事件 | #313 测试；round 128 补嵌判别测试（换模型重开后 nearest 由空转命中、stale 转 false） | ✅ 换模型/维度后旧事件自动补嵌（#360 关）；仅壳本地嵌入 warm 成功后执行，失败不致命 |
 | 观测台（星海） | 网页看记忆/图谱、改灵魂 | kernel-host 挂 observatory，令牌文件鉴权 | #308 令牌测试；日常人工使用 | ✅ |
 | 终端 | `cog` TUI＋远程 attach | channels/terminal＋attach server | TUI 测试 | ✅ |
