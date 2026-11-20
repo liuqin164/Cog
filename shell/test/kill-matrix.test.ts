@@ -46,12 +46,8 @@ describe('kill matrix: every kill point comes back to one IDLE state', () => {
       expect(recovered.state, 'a killed run is retired, not resumed').toBe('IDLE');
       expect(recovered.activeRunId).toBeNull();
       expect(recovered.recoveryRecorded).toBe(1);
-      // Continuity: the streaming turn never reached `agent_end`, so nothing was captured and the
-      // ledger has no half turn. The last prompt is still in the checkpoint's runtime, truncated to
-      // its 500-char ceiling — that ceiling is a finding, not a refusal.
+      // The streaming turn never reached `agent_end`, so the ledger has no half turn.
       expect(recovered.captureRuns).toBe(0);
-      const runtime = new CheckpointStore(dir).load()!.runtime;
-      expect(runtime.lastInteractionText).toContain('stream a reply');
     } finally {
       if (!first.child.killed) first.child.kill('SIGKILL');
     }
@@ -98,11 +94,9 @@ describe('kill matrix: every kill point comes back to one IDLE state', () => {
 
       const { recovered } = await recover(dir);
       expect(recovered.state).toBe('IDLE');
-      // The display copy in the checkpoint is still the 500-char ceiling; the storage layer is not,
-      // and that is the difference #210 asked for.
+      // The checkpoint holds no prompt text; the trace holds the full prompt until a forget.
       const runtime = new CheckpointStore(dir).load()!.runtime;
-      expect(runtime.lastInteractionText!.length).toBe(500);
-      expect(runtime.lastInteractionText).not.toContain('TAIL-MARKER');
+      expect(JSON.stringify(runtime)).not.toContain('TAIL-MARKER');
 
       // The session log holds the full prompt from before the model call, and recovery says so.
       const trace = new TraceLog(dir).read();
@@ -202,9 +196,6 @@ describe('kill matrix: every kill point comes back to one IDLE state', () => {
       expect(drained.steering).toEqual([]);
       expect(drained.calls[1], 'the restored lines reach the next request in order').toEqual(['继续', '撤回前先看一眼', '第二句排在后面']);
       expect(drained.injected).toEqual([{ afterTurn: 1, beforeTurn: 2, count: 2 }]);
-      // The typed text never was the display copy; the display copy is the previous turn's mark.
-      const runtime = new CheckpointStore(dir).load()!.runtime;
-      expect(runtime.lastInteractionText ?? '').not.toContain('撤回前先看一眼');
     } finally {
       if (!first.child.killed) first.child.kill('SIGKILL');
     }

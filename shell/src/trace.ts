@@ -10,7 +10,7 @@
  * deliberate difference. Pi skips in silence; here the damage is written down (`trace_corrupt`) once
  * per damaged byte range, because this log is the evidence the kill matrix reads back.
  */
-import { appendFileSync, mkdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
+import { appendFileSync, closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 export interface TraceRecord {
@@ -95,6 +95,45 @@ export class TraceLog {
    */
   read(): TraceRecord[] {
     return this.scan().records;
+  }
+
+  forgetWindow(kind: string, start: number, end: number): number {
+    return this.rewrite(this.path, kind, start, end) + this.rewrite(`${this.path}.1`, kind, start, end);
+  }
+
+  private rewrite(path: string, kind: string, start: number, end: number): number {
+    let raw: string;
+    try {
+      raw = readFileSync(path, 'utf8');
+    } catch {
+      return 0;
+    }
+    let removed = 0;
+    const kept: string[] = [];
+    for (const line of raw.split('\n')) {
+      let record: TraceRecord | undefined;
+      try {
+        record = line === '' ? undefined : (JSON.parse(line) as TraceRecord);
+      } catch {
+        record = undefined;
+      }
+      if (record?.kind === kind && typeof record.at === 'number' && record.at >= start && record.at < end) {
+        removed += 1;
+        continue;
+      }
+      kept.push(line);
+    }
+    if (removed === 0) return 0;
+    const temp = `${path}.tmp`;
+    writeFileSync(temp, kept.join('\n'), 'utf8');
+    const fd = openSync(temp, 'r+');
+    try {
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    renameSync(temp, path);
+    return removed;
   }
 
   /**

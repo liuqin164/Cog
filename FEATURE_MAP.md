@@ -18,14 +18,14 @@
 | 承诺 | 答应过的事，到期提醒一次 | emergence 插件查到期 + working_set 车道 | F16 测试；记分卡 A2 | ✅ |
 | 意图 | 它自己打算做的事，到点自醒 | app.ts 唤醒循环扫 dueAt | F22 测试 | ✅ |
 | 灵魂 | 性格文本：主人可改，它只能提案 | pinned 车道每轮逐字注入；propose_soul_edit 只产草稿 | F17 测试（直写被拒 soul_agent_write_forbidden） | ✅ |
-| 遗忘 | 按时间窗真删账本及派生数据 | /forget 两步（预览→确认） | #303 测试（secure_delete＋VACUUM）；#332 遍历式残留测试（派生表＋FTS 影子表＋trace）；box 真删实测 | 旧库派生表按项目/事件关联删除；FTS 残留未复现，由遍历测试守住 |
+| 遗忘 | 按时间窗真删账本及派生数据，含壳侧 checkpoint 引用与 trace 的 `run_prompt`（#331） | /forget 两步（预览→确认）；checkpoint 的 assignment/away/task 文本只存账本 eventId，恢复时回读 | #303 测试（secure_delete＋VACUUM）；#332 遍历式残留测试；#331 壳探针（四个文件零命中＋快照恢复 assignment/away）；记分卡 forget 由 3 文件残留转 0；10k 窗口 629 ms／峰值 210 MB（基线 621 ms／207 MB） | 旧库派生表按项目/事件关联删除；FTS 残留未复现，由遍历测试守住 |
 | 共享与导入 | 家族共享集合、外部记忆导入桥 | 内核 [shared] 开关 + import 通道（默认关） | #143/#146 测试 | ✅ |
 
 ## 二、壳 · 会话
 
 | 功能 | 是什么 | 谁在用 | 靠什么证明 | 状态 |
 |---|---|---|---|---|
-| 状态机 | DORMANT→WAKING→IDLE⇄RUNNING／DREAMING／SUSPENDED | 一切回合的骨架；table.ts 迁移表，非法迁移抛错 | machine 测试；每迁移 checkpoint 落盘；box kill -9 恢复实测 | ✅ |
+| 状态机 | DORMANT→WAKING→IDLE⇄RUNNING／DREAMING／SUSPENDED | 一切回合的骨架；table.ts 迁移表，非法迁移抛错；checkpoint 只留进程恢复字段，对话原文存账本（#331） | machine 测试；每迁移 checkpoint 落盘；box kill -9 恢复实测；kill-matrix 与快照恢复 | ✅ |
 | 上下文装配 | 六车道（pinned/profile/digest/working_set/recall/tail）按预算拼每轮请求；assignment 只在 working_set 出现一次，无 assignment 时不出现（#334） | session-context 插件每轮调用 | 记分卡长会话 592/600（#343 后复核）；#319/#320 预算与前缀缓存测试；context-continuity 探针（闲聊 0 块／declare 后恰好 1 块） | ✅ |
 | 工具面 | 默认 9 工具：read/write/edit/bash＋declare_task/ask_user/propose_command/propose_soul_edit＋memory（search/read/recent）；declare_task start 是唯一的 assignment 构造点，普通消息不再隐式创建（#334）；propose_command 只可提议 13 个白名单命令，破坏性五命令（/forget /plugins /upgrade /export /correct）永不可提议（#335） | 每轮挂载；/context 可见清单 | #333 实测 schema ≈1,336 token/请求；壳测试；context-continuity 的 declare start/end 用例；round 129 白名单探针（五命令逐个被拒、描述与白名单集合相等、/pause 端到端确认）；#323 工具数 8→9、memory-tool 三动作 | installPlugin 安装路径无 hygiene 门 — #363；自治运行共用全量工具 — #349 待定 |
 | 笼子 | 回合/令牌预算＋工具白名单，超限暂停到 SUSPENDED | cage 插件在钩子点拦截 | cage.test.ts；#222 预算档位 | ✅ |

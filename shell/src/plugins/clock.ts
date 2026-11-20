@@ -82,8 +82,8 @@ export class ClockService {
     ].join('\n');
   }
 
-  markInteraction(text: string, at = this.now()): void {
-    this.machine.updateRuntime({ lastInteractionAt: at, lastInteractionText: text.slice(0, 500) });
+  markInteraction(at = this.now()): void {
+    this.machine.updateRuntime({ lastInteractionAt: at });
   }
 
   setWakeIntent(at: number, reason: string): WakeIntent {

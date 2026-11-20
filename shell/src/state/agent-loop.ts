@@ -287,7 +287,7 @@ export interface AgentRuntimeOptions {
   systemPrompt: () => string;
   /**
    * The prompt is durable before the model call (Pi #10000's requirement). The callback owns
-   * redaction and the log, so a crash cannot leave only the checkpoint's 500-char display copy.
+   * redaction and the log, so a crash can still rebuild the whole prompt.
    */
   onPrompt?: (prompt: { runId: string; sessionId: string; text: string }) => void;
   trace?: TraceLog;
@@ -421,7 +421,7 @@ export class AgentRuntime {
     this.running = true;
     const origin: RunOrigin = input.origin ?? 'user';
     // Pi #10000: the prompt is durable before the model call. The callback redacts and writes the
-    // session log, so an interrupted run keeps its whole prompt and not only the display copy.
+    // session log, so an interrupted run keeps its whole prompt.
     this.options.onPrompt?.({ runId: input.runId, sessionId: input.sessionId, text: input.userText });
     this.overflowRecoveryUsed = false;
     const controller = new AbortController();

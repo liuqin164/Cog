@@ -109,7 +109,7 @@ describe('shell wiring', () => {
       ingestMode: 'immediate_compile',
     });
     await first.submit('记一下：蓝色遮阳篷那家面包店');
-    expect(first.machine.runtime.lastInteractionText).toContain('蓝色遮阳篷');
+    expect(first.machine.runtime.lastInteractionAt).toBeGreaterThan(0);
     await first.stop();
     expect(first.state).toBe('DORMANT');
 
@@ -119,8 +119,8 @@ describe('shell wiring', () => {
     await second.start();
     try {
       expect(second.state).toBe('IDLE');
-      // The runtime half of continuity survives: the last topic is still there for the emergence check.
-      expect(second.machine.runtime.lastInteractionText).toContain('蓝色遮阳篷');
+      // The runtime half of continuity survives: the last interaction time is still there for the emergence check.
+      expect(second.machine.runtime.lastInteractionAt).toBeGreaterThan(0);
       // A clean restart boots; it is not a kill recovery.
       expect(second.trace.read().some((record) => record.kind === 'recovery')).toBe(false);
 

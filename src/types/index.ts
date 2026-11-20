@@ -248,6 +248,7 @@ export type MemoryEventType =
   | 'INDEX_REBUILT'
   | 'RUNTIME_STATE_UPDATED'
   | 'RUNTIME_TRANSITION_RECORDED'
+  | 'SHELL_STATE_RECORDED'
   | 'POLICY_EXECUTION_UPDATED'
   // The wake intention's lifecycle (F2 of #156). The ledger is the state and the audit: a SET row
   // opens one, a CANCELLED row closes it, and the absence of a FIRED row is what "not yet fired"
