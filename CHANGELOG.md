@@ -2,6 +2,13 @@
 
 ## 5.0.0 (unreleased)
 
+- **The first batch of unreachable files is gone (#337).** 23 files nothing could reach from
+  `shell/src` or `src/bin` were removed from `src/routing/templates/`, `src/boards/`,
+  `src/store/`, `src/meta/`, `src/engine/`, `src/recall/`, `src/models/adapters/` and
+  `src/algorithm/`, with their re-exports dropped from `src/public.ts`, `src/internal.ts`,
+  `src/boards/index.ts` and `src/models/index.ts`. No bin, table or migration changed;
+  user-visible behaviour is unchanged.
+
 - **The deterministic workflow executor is gone; the procedure book stays (#338).** Since the
   first commit of `ProcedureWorkflows` the two real archives recorded zero `list_workflows`,
   `propose_workflow` and `veto_workflow` calls across the whole workflow layer. This removes
