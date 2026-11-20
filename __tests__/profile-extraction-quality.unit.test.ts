@@ -2,6 +2,7 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
 
 import { createMemoryKernel, type MemoryKernel } from '../src/factory.js';
+import { extractOwnerProfileFacts } from '../src/lexicon/coreMemoryLexicon.js';
 import { makeTempDir } from './helpers/tmp.js';
 
 const scratch = makeTempDir('cogmem-profile-quality-');
@@ -73,5 +74,33 @@ describe('profile extraction quality (#329)', () => {
 
     kernel.profile.compile({ projectId });
     expect(covered(kernel.profile.entries({ projectId }).map((entry) => entry.value))).toBe(4);
+  });
+});
+
+describe('profile extraction precision (#364)', () => {
+  const families = (text: string, family: string): unknown[] => extractOwnerProfileFacts(text).filter((fact) => fact.family === family);
+
+  test('a one-off plan is not a wake-time habit', () => {
+    for (const text of ['我想明天七点起床。', '我明天早上七点起床。', '我打算后天七点起床。']) {
+      expect(families(text, 'wake_time')).toEqual([]);
+    }
+    expect(families('我每天早上七点起床。', 'wake_time')).toEqual([{ family: 'wake_time', value: '早上七点' }]);
+    expect(families('我平时七点起床。', 'wake_time')).toEqual([{ family: 'wake_time', value: '七点' }]);
+  });
+
+  test('a temporary stay is not a home address', () => {
+    for (const text of ['我住在东京站前的酒店。', '我住在京都的旅馆。', '我住在朋友家的民宿。']) {
+      expect(families(text, 'address')).toEqual([]);
+    }
+    expect(families('我住在东京都世田谷区三丁目十二号。', 'address')).toEqual([
+      { family: 'address', value: '东京都世田谷区三丁目十二号' },
+    ]);
+  });
+
+  test('a figure of speech is not an allergy', () => {
+    for (const text of ['我对这件事过敏。', '我对那种说法过敏。', '我对这过敏。']) {
+      expect(families(text, 'allergic_to')).toEqual([]);
+    }
+    expect(families('我对花生过敏。', 'allergic_to')).toEqual([{ family: 'allergic_to', value: '花生' }]);
   });
 });

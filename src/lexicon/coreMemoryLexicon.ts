@@ -330,11 +330,11 @@ export function extractOwnerProfileFacts(text: string): Array<{ family: string; 
   const normalized = normalizeLexiconText(text);
   const out: Array<{ family: string; value: string }> = [];
   const address = normalized.match(/我(?:家)?(?:住在|的住址是|的地址是|的家庭住址是)\s*([^\s，。,.!?！？]+)/i)?.[1];
-  if (address) out.push({ family: 'address', value: address });
-  const wakeTime = normalized.match(/我(?:每天|通常|一般|平时)?\s*([^\s，。,.!?！？]{1,12})\s*起床/)?.[1];
+  if (address && !/(?:酒店|旅馆|宾馆|民宿|青旅|客栈|招待所|度假村)/.test(address)) out.push({ family: 'address', value: address });
+  const wakeTime = normalized.match(/我\s*(?:每天|通常|一般|平时)\s*([^\s，。,.!?！？]{1,12})\s*起床/)?.[1];
   if (wakeTime) out.push({ family: 'wake_time', value: wakeTime });
   const allergy = normalized.match(/我对\s*([^\s，。,.!?！？]{1,16})\s*过敏/)?.[1];
-  if (allergy) out.push({ family: 'allergic_to', value: allergy });
+  if (allergy && !/^(?:这|那|此|它|该|其|你|我|他|她)|事$/.test(allergy)) out.push({ family: 'allergic_to', value: allergy });
   return out;
 }
 

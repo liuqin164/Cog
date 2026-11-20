@@ -28,6 +28,28 @@ It does not decide a merge's read side. Which names, memories, attributes and ed
 person is #214's modelling decision, not this round's; the profile reads relations through F4's
 `entity_relations` exactly as they stand.
 
+## Rule-based owner facts are a heuristic floor (#364)
+
+Three surface rules in `extractOwnerProfileFacts` (`src/lexicon/coreMemoryLexicon.ts`) seed `address`,
+`wake_time` and `allergic_to` facts without a model. They are a heuristic lower bound, not precise
+extraction: a false entry is written provisional at confidence `0.85`, compiles into the facts
+ledger, and stays until the owner corrects it. The correction channel (`correct` on the profile, and
+the belief/fact supersession it reaches) is the intended cleanup, so a wrong suggestion is visible
+and reversible rather than silently trusted.
+
+The guards deliberately separate what surface syntax can tell apart:
+
+- `wake_time` requires a habit marker (`每天` / `通常` / `一般` / `平时`) before the time. A one-off
+  plan such as `我想明天七点起床` extracts nothing; `我每天早上七点起床` still yields `早上七点`.
+- `address` rejects values naming temporary lodging (`酒店` / `旅馆` / `宾馆` / `民宿` / `青旅` /
+  `客栈` / `招待所` / `度假村`). `我住在东京站前的酒店` is not a home address; a street address still is.
+- `allergic_to` rejects demonstrative, pronominal and event subjects (`这件事` / `那种说法` / `这`).
+  `我对花生过敏` yields `花生`; `我对这件事过敏` yields nothing.
+
+What syntax cannot decide is left to the floor, not claimed as precision: `我对工作过敏` is still a
+figure of speech the rule cannot see, and a habit marker can precede an intention (`我打算每天…`).
+Those remain provisional; the owner's correction is the authority, not the rule.
+
 ## The ledgers (frozen)
 
 | Ledger | Compiles from | An entry is |
