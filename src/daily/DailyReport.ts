@@ -70,7 +70,7 @@ export interface DailyReport {
   corrections: { profile: number; procedure: number; applied: number; proposed: number };
   tokens: { input: number; output: number; calls: number; buckets: DailyTokenBucket[]; dreamInput: number; dreamOutput: number; dreamCalls: number };
   rss: { bytes?: number; source: string; pid?: number };
-  anomalies: { noProgress: number; budgetExhausted: number; providerFailures: number; providerRetries: number };
+  anomalies: { noProgress: number; budgetExhausted: number; providerFailures: number; providerRetries: number; assemblyFailures: number };
   dream: { status: 'success' | 'degraded' | 'failed' | 'none'; reason?: string; candidates: number; events: number; runs: number; at?: number; localDate?: string };
   sources: { ledger: string; trace: string; traceReadable: boolean; feedbackReadable: boolean };
 }
@@ -355,6 +355,7 @@ export function buildDailyReport(options: DailyReportOptions): DailyReport {
         + records.filter((entry) => entry.kind === 'daily_budget_exceeded').length,
       providerFailures: records.filter((entry) => entry.kind === 'provider_call_failed' && entry.next === 'fail').length,
       providerRetries: records.filter((entry) => entry.kind === 'provider_call_failed' && entry.next === 'retry').length,
+      assemblyFailures: records.filter((entry) => entry.kind === 'plugin_log' && entry.message === 'context_lanes_failed').length,
     };
     return {
       date: options.date,
@@ -443,7 +444,7 @@ export function renderDailyReport(report: DailyReport): string {
     '',
     '## 资源与异常',
     `- RSS 峰值: ${report.rss.bytes === undefined ? 'n/a' : formatBytes(report.rss.bytes)}（${report.rss.source}${report.rss.pid ? `，pid ${report.rss.pid}` : ''}）`,
-    `- 异常: 无进展被停 ${report.anomalies.noProgress} · 预算耗尽 ${report.anomalies.budgetExhausted} · provider 失败 ${report.anomalies.providerFailures}（重试 ${report.anomalies.providerRetries}）`,
+    `- 异常: 无进展被停 ${report.anomalies.noProgress} · 预算耗尽 ${report.anomalies.budgetExhausted} · provider 失败 ${report.anomalies.providerFailures}（重试 ${report.anomalies.providerRetries}） · 装配失败 ${report.anomalies.assemblyFailures}`,
     '',
     '## 昨夜 dream',
   );

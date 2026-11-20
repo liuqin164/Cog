@@ -224,6 +224,9 @@ export class CompanionShell implements ShellControl, AttachShell {
   private lastToolOutput?: ToolOutputAccount;
   /** The newest six-lane assembly; `/context` and the TUI read this, not a second accounting. */
   private lastLaneAssembly?: SessionContextAssembly;
+  private contextAssemblyFailures = 0;
+  private contextAssemblyConsecutive = 0;
+  private contextAssemblyLastFailure?: { at: number; message: string };
   /** The projection actions that produced it (#268); reset when the next assembly is recorded. */
   private lastContextMetrics?: ContextMetrics;
   /** `mem:` reads since the previous assembly; the next trace reports and clears it. */
@@ -590,10 +593,16 @@ export class CompanionShell implements ShellControl, AttachShell {
           plugins: this.pluginHealth(),
           embedding: this.embeddingStatus(),
           memoryModel: this.memoryModelHealth(),
+          contextAssembly: {
+            failures: this.contextAssemblyFailures,
+            consecutive: this.contextAssemblyConsecutive,
+            lastFailure: this.contextAssemblyLastFailure ?? null,
+          },
           suspension: this.machine.runtime.suspension
             ? { ...this.suspendedLine(this.machine.runtime.suspension), id: this.machine.runtime.suspension.id, createdAt: this.machine.runtime.suspension.createdAt }
             : null,
         }),
+        healthStatus: () => (this.contextAssemblyConsecutive >= 3 ? 'degraded' : 'ok'),
         connectedAgents: () => [this.config.agentId],
         tracePath: join(this.config.dataDir, 'shell-events.jsonl'),
       });
@@ -804,6 +813,14 @@ export class CompanionShell implements ShellControl, AttachShell {
         };
         this.drillsSinceAssembly = 0;
         this.emitStatus();
+      },
+      onAssemblyFailure: (message) => {
+        this.contextAssemblyFailures += 1;
+        this.contextAssemblyConsecutive += 1;
+        this.contextAssemblyLastFailure = { at: this.now(), message };
+      },
+      onAssemblySuccess: () => {
+        this.contextAssemblyConsecutive = 0;
       },
       recallLimit: 3,
     }));

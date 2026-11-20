@@ -53,6 +53,7 @@ function seed(dir: string): void {
     { kind: 'daily_budget_exceeded', at: NOON },
     { kind: 'provider_call_failed', at: NOON, next: 'fail' },
     { kind: 'provider_call_failed', at: NOON, next: 'retry' },
+    { kind: 'plugin_log', at: NOON, plugin: 'session-context', level: 'error', message: 'context_lanes_failed', data: { message: 'lane exploded' } },
     { kind: 'memory_pressure', at: NOON, rssBytes: 200 * 1024 * 1024 },
     { kind: 'dream_model_degraded', at: NOON, reason: 'semantic_processor_unavailable' },
     { kind: 'dream_complete', at: NOON, eventCount: 3, localDate: DATE },
@@ -86,13 +87,14 @@ test('daily report counts surfacing gates, feedback, corrections, tokens and the
   expect(report.tokens.buckets).toHaveLength(1);
   expect(report.tokens.buckets[0]).toMatchObject({ route: 'mg', model: 'model-a', input: 150, output: 30, calls: 2, legacy: true });
   expect(report.rss).toEqual({ bytes: 200 * 1024 * 1024, source: 'trace memory_pressure (max)' });
-  expect(report.anomalies).toEqual({ noProgress: 1, budgetExhausted: 2, providerFailures: 1, providerRetries: 1 });
+  expect(report.anomalies).toEqual({ noProgress: 1, budgetExhausted: 2, providerFailures: 1, providerRetries: 1, assemblyFailures: 1 });
   expect(report.dream).toMatchObject({ status: 'degraded', reason: 'semantic_processor_unavailable', candidates: 2, events: 3, runs: 1, localDate: DATE });
 
   const text = renderDailyReport(report);
   expect(text).toContain('# Cog 日报 — 2026-11-17');
   expect(text).toContain('F6 3 / F7 1 / F8 1 / F10 1 / shell 1');
   expect(text).toContain('RSS 峰值: 200.0 MiB');
+  expect(text).toContain('装配失败 1');
   expect(text).toContain('降级 · 候选 2 · 事件 3');
   expect(text).toContain('零模型调用');
 });

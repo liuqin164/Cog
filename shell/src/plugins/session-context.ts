@@ -34,6 +34,8 @@ export interface SessionContextPluginConfig {
   /** Finished tasks' digest stubs (#263), built from ledger rows and kept across restarts. */
   digestStubs?: () => readonly SessionDigestEntry[];
   onAssembly?: (assembly: SessionContextAssembly) => void;
+  onAssemblyFailure?: (message: string) => void;
+  onAssemblySuccess?: () => void;
   recallLimit?: number;
 }
 
@@ -84,12 +86,15 @@ export function sessionContextPlugin(config: SessionContextPluginConfig): Native
             .map(requestLaneText)
             .filter(Boolean)
             .join('\n');
+          config.onAssemblySuccess?.();
           return {
             ...request,
             systemPrompt: [stableSystemPrompt(assembly), config.variablePrompt()].filter(Boolean).join('\n\n'),
           };
         } catch (error) {
-          ctx.logger.warn('context_lanes_failed', { message: error instanceof Error ? error.message : String(error) });
+          const message = error instanceof Error ? error.message : String(error);
+          ctx.logger.error('context_lanes_failed', { message });
+          config.onAssemblyFailure?.(message);
           return value;
         }
       });
