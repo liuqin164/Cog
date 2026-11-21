@@ -60,7 +60,6 @@ export interface ObservatoryCredentialFace {
 
 /** Everything the page loads, by exact path: no directory walk, so no traversal to defend against. */
 const STATIC_FILES: Record<string, { file: string; type: string }> = {
-  '/observatory': { file: 'index.html', type: 'text/html; charset=utf-8' },
   '/observatory/': { file: 'index.html', type: 'text/html; charset=utf-8' },
   '/observatory/index.html': { file: 'index.html', type: 'text/html; charset=utf-8' },
   '/observatory/app.js': { file: 'app.js', type: 'text/javascript; charset=utf-8' },
@@ -373,6 +372,7 @@ export function createObservatoryRoutes(
       return new Response('method_not_allowed: this endpoint is read-only', { status: 405, headers: { allow: 'GET, HEAD' } });
     }
 
+    if (url.pathname === OBSERVATORY_PREFIX) return new Response(null, { status: 301, headers: { location: `${OBSERVATORY_PREFIX}/${url.search}` } });
     if (url.pathname === '/observatory/events') {
       // HEAD would open a subscription it can never drain; the stream is GET-only.
       if (request.method === 'HEAD') return new Response('method_not_allowed', { status: 405, headers: { allow: 'GET' } });

@@ -187,6 +187,16 @@ describe('the observatory read path writes nothing', () => {
 });
 
 describe('the page is served from beside the route module', () => {
+  test('the slashless page redirects so its relative assets resolve', async () => {
+    const base = handle.url.replace(/\/$/u, '');
+    const redirect = await fetch(`${base}?project=companion`, { redirect: 'manual' });
+    expect(redirect.status).toBe(301);
+    expect(redirect.headers.get('location')).toBe('/observatory/?project=companion');
+    const slash = await fetch(`${base}/?project=companion`);
+    expect(slash.status).toBe(200);
+    expect(await slash.text()).toContain('src="./app.js"');
+  });
+
   test('only GET is answered, and only on loopback', async () => {
     const base = handle.url.replace(/\/$/u, '');
     const posted = await fetch(`${base}/snapshot`, { method: 'POST' });
