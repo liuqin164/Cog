@@ -73,7 +73,7 @@ function defaultWebRoot(): string {
   return fileURLToPath(new URL('./web/', import.meta.url));
 }
 
-function isLoopbackAddress(address: string | undefined): boolean {
+export function isLoopbackAddress(address: string | undefined): boolean {
   if (!address) return false;
   const normalized = address.startsWith('::ffff:') ? address.slice('::ffff:'.length) : address;
   return normalized === '127.0.0.1'
@@ -95,7 +95,7 @@ function hostnameFrom(authority: string | null | undefined): string | undefined 
   }
 }
 
-function isLocalAuthority(authority: string | null | undefined): boolean {
+export function isLocalAuthority(authority: string | null | undefined): boolean {
   const hostname = hostnameFrom(authority);
   return hostname !== undefined && LOCAL_HOSTNAMES.has(hostname);
 }
@@ -108,7 +108,7 @@ function isLocalOrigin(origin: string): boolean {
   }
 }
 
-function jsonResponse(body: unknown, status = 200, acceptEncoding?: string | null): Response {
+export function jsonResponse(body: unknown, status = 200, acceptEncoding?: string | null): Response {
   const bytes = Buffer.from(JSON.stringify(body), 'utf8');
   const gzip = (acceptEncoding ?? '').includes('gzip');
   return new Response(gzip ? Bun.gzipSync(bytes) : bytes, {
@@ -130,7 +130,7 @@ function queryParam(url: URL, name: string): string | undefined {
 }
 
 /** A JSON object body, or `null` for malformed/non-object JSON. An empty body is an empty object. */
-async function readJsonBody(request: Request): Promise<Record<string, unknown> | null> {
+export async function readJsonBody(request: Request): Promise<Record<string, unknown> | null> {
   const text = await request.text();
   if (!text.trim()) return {};
   try {
@@ -148,7 +148,7 @@ async function readJsonBody(request: Request): Promise<Record<string, unknown> |
  * cannot be forged by another site, and the token is the credential a hostile page cannot read.
  * Returns the refusal, or null when the write may proceed.
  */
-function refuseWrite(request: Request, token: string | undefined, acceptEncoding?: string | null): Response | null {
+export function refuseWrite(request: Request, token: string | undefined, acceptEncoding?: string | null): Response | null {
   const contentType = (request.headers.get('content-type') ?? '').split(';')[0]!.trim().toLowerCase();
   if (contentType !== 'application/json') {
     return jsonResponse({ error: 'unsupported_media_type', message: 'content-type must be application/json' }, 415, acceptEncoding);

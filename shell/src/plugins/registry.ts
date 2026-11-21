@@ -8,11 +8,17 @@
  * its own unit.
  *
  * A file that exists but cannot be understood is a startup error, like `budgets.json`: a user who
- * edited it must not be left believing it applied. The installer writes `[]` on first install and
- * never overwrites it; `/plugins add` is the write path afterwards.
+ * edited it must not be left believing it applied. The installer writes the official specs on first
+ * install and never overwrites it; `/plugins add` is the write path afterwards.
  */
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+
+export const OFFICIAL_PLUGIN_SPECS = ['builtin:web-channel'] as const;
+
+export function isOfficialPluginSpec(spec: string): boolean {
+  return (OFFICIAL_PLUGIN_SPECS as readonly string[]).includes(spec);
+}
 
 export function pluginsConfigPath(dataDir: string): string {
   return join(dataDir, 'plugins.json');

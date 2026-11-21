@@ -336,11 +336,11 @@ describe('the six-step install', () => {
     expect(output).toContain('安装完成');
   });
 
-  test('the plugin registry is an empty table on first install and a re-run never overwrites it', async () => {
+  test('the plugin registry preinstalls the official channel and a re-run never overwrites it', async () => {
     const harness = makeHarness({ probeOk: true });
     expect(await harness.installer.run()).toBe(0);
     const pluginsPath = join(harness.dataDir, 'plugins.json');
-    expect(JSON.parse(readFileSync(pluginsPath, 'utf8'))).toEqual([]);
+    expect(JSON.parse(readFileSync(pluginsPath, 'utf8'))).toEqual(['builtin:web-channel']);
     expect(statSync(pluginsPath).mode & 0o777).toBe(0o600);
 
     // What `/plugins add` would have written. A re-run that goes through the place step again (a lost

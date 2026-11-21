@@ -6,7 +6,7 @@ import type { CommandReply } from './commands.ts';
 import { defaultRunner } from './install/service.ts';
 import { restartService, servicePath, type Platform, type ServiceSpec } from './install/service.ts';
 import { checkPluginSpec } from './plugins/load.ts';
-import { pluginsConfigPath, readPluginRegistry, writePluginRegistry } from './plugins/registry.ts';
+import { isOfficialPluginSpec, pluginsConfigPath, readPluginRegistry, writePluginRegistry } from './plugins/registry.ts';
 import { latestAuditForSpec, pluginWorkspaceDir } from './plugins/self-install.ts';
 import { readInstallState, shellDirOfTree, treeOfThisProcess } from './upgrade/paths.ts';
 
@@ -98,7 +98,7 @@ export class PluginsAdmin {
       return { text: 'invalid_plugin_spec: 插件 spec 不能为空，也不能包含换行。', receipt: true, data: { plugin_install: { ok: false, spec } } };
     }
     const workspace = pluginWorkspaceDir(this.shell.config.dataDir);
-    const refused = checkPluginSpec(spec, {
+    const refused = isOfficialPluginSpec(spec) ? undefined : checkPluginSpec(spec, {
       cwd: this.shell.config.workspaceRoot,
       roots: origin ? [workspace] : [this.shell.config.workspaceRoot, treeOfThisProcess()],
       ...(origin ? {} : { dataDir: this.shell.config.dataDir }),

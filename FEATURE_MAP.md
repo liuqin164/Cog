@@ -37,6 +37,7 @@
 | 模型接入 | 自定义 OpenAI 协议端点＋mg 路由；SSE 流式，非 SSE 回退整包 | provider 插件每轮调用；delta 走既有 message_update | 3-chunk 流式测试（3 次 message_update、终文一致）与整包回退测试；真实网关 TTFT 3.46 s／总 18.8 s（上游首包 2.7 s，未达 1.5 s 目标） | ✅ 流式已接；TTFT 受上游限制 |
 | 嵌入 | 本地 bge 向量，可换 ollama/OpenAI 协议 | 召回车道算向量；壳启动 warm 成功后调 backfillEventEmbeddings 补嵌旧事件；常驻 tick 每 60s 增量补嵌一批（默认 16 条，`freshness.embeddingBatch`/`intervalMs` 可配，扫完一圈从头再扫），并把未嵌入数/最老未嵌入年龄/未绑定数写入 /health 的 freshness 读数；回合级 queueEventEmbedding 失败的事件留在同一积压口径由下一轮补 | #313 测试；round 128 补嵌判别测试（换模型重开后 nearest 由空转命中、stale 转 false）；#388 常驻不重启：三类无向量事件＋未绑定事件一个 tick 归零，/health 与回合在慢嵌入等待期间照常作答；失败回合嵌入落积压后被 tick 补上 | ✅ 换模型/维度后旧事件自动补嵌（#360 关）；增量补嵌失败不致命，留在积压下一圈重试 |
 | 观测台（星海） | 网页看记忆/图谱、改灵魂；星图是 3D 力导向星云：节点=编译记忆、边=帧/图谱关系、六类角色图例筛选、点选聚焦+邻里高亮+原文出处；WebGL 不可用降级 Canvas 2D 力导向，移动端可旋转/缩放/平移 | kernel-host 挂 observatory，令牌文件鉴权 | #308 令牌测试；#385 真实账本副本 13 节点/9 边与直查一致、六类图例/点选/原文/2D 降级/手机视口实测；日常人工使用 | ✅ #385 |
+| Web 对话渠道 | 官方预装插件（`builtin:web-channel`）：页面由壳的 HTTP 面提供、复用观测台写入令牌；消息走 F12 ingest 后交 `shell.submit`，SSE 流式回复，历史读账本；流内卡片：插件提案（批准走 attach 同一 owner confirm/自装链）、承诺浮现（确认/顺延）、回复出处片跳星海原文；凭据请求打开观测台保密输入弹窗，渠道不自收；`/plugins remove builtin:web-channel` 后页面 404、SSE 断开，账本零改动，重装后历史仍在 | 壳 HTTP 面；`channels/web.ts`；`shell/web-channel/`；observatory `#node=`/`#credentials` 深链 | shell/test/web-channel.test.ts：流式/出处片/提案批准真写注册表/凭据无渠道收集端点/摘除后 404 且事件计数不变/重装历史可见；#383 凭据面测试 | ✅ #386 |
 | 终端 | `cog` TUI＋远程 attach | channels/terminal＋attach server | TUI 测试 | ✅ |
 | 网页工具 | 抓网页/搜索（插件） | 默认不加载，显式启用才挂 | #306 测试（默认零 fetch） | ✅ 可选 |
 
