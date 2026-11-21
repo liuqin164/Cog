@@ -6,6 +6,7 @@ export interface ClassificationItem {
   userText: string;
   assistantText: string;
   pair?: string;
+  group?: string;
 }
 
 export interface CompileTurn {
@@ -206,6 +207,57 @@ export const CLASSIFICATION_CORPUS: ClassificationItem[] = [
     assistantText: '好，改成下周一。',
   },
 ];
+
+const LONG_TAIL_FILLER = '项目背景说明：这段时间我们在整理记忆内核的账本、召回和编译流程，逐项核对事件写入、证据绑定与夜间整理的结果，记录每个环节的观察和疑问，方便后续复盘。';
+
+function longTail(tail: string): string {
+  return `${LONG_TAIL_FILLER.repeat(18)}${tail}`;
+}
+
+CLASSIFICATION_CORPUS.push(
+  {
+    id: 'longtail-rule-release',
+    role: 'rule',
+    group: 'long-tail',
+    userText: longTail('以后只在周五下午做对外发布，除非有紧急安全修复；其他时间一律不发版。'),
+    assistantText: '记下了，只有周五下午发版。',
+  },
+  {
+    id: 'longtail-rule-ledger',
+    role: 'rule',
+    group: 'long-tail',
+    userText: longTail('任何账本事件都不准在未经我确认的情况下删除，这条没有例外。'),
+    assistantText: '明白，删除前一律先经过你确认。',
+  },
+  {
+    id: 'longtail-condition-merge',
+    role: 'rule',
+    group: 'long-tail',
+    userText: longTail('只有在三项检查全部通过之后才允许合入 main，任何一项失败就停下来等我判断。'),
+    assistantText: '好，三项检查全过才合入。',
+  },
+  {
+    id: 'longtail-negation-retry',
+    role: 'rule',
+    group: 'long-tail',
+    userText: longTail('夜间整理失败时禁止自动重试超过两次，第三次起改为记录并等我处理。'),
+    assistantText: '明白，第三次起停下来等你。',
+  },
+  {
+    id: 'longtail-condition-credentials',
+    role: 'rule',
+    group: 'long-tail',
+    userText: longTail('凭证只在宿主注入时使用，禁止把原文写进对话或日志。'),
+    assistantText: '好，凭证原文不会出现在对话和日志里。',
+  },
+  {
+    id: 'longtail-rule-weekend',
+    role: 'rule',
+    group: 'long-tail',
+    userText: longTail('周末只处理线上事故，其他工作一律等到周一。'),
+    assistantText: '记下了，周末只接线上事故。',
+  },
+);
 
 export const COMPILE_SCENARIOS: CompileScenario[] = [
   {

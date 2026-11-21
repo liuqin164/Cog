@@ -103,6 +103,8 @@ interface DreamEvidence {
 const PREFERENCE_PATTERN = /(请以后|以后请|始终|总是|偏好|喜欢|希望|不要|别|必须|一定要|长期目标|目标是|约束|边界|本地优先|local-first|prefer|preference|always|never|must|do not|don't|goal|constraint|boundary)/iu;
 const CORRECTION_PATTERN = /((?:^|[。！？.!?\s])不[，,]|(?<!对)不对|(?<!是)不是|纠正|更正|应该是|推翻|修正|actually|correction|instead)/iu;
 const LEADING_CORRECTION_PATTERN = /^\s*不[，,]/u;
+const CURATOR_EPISODE_CHAR_BUDGET = 24000;
+const CURATOR_MIN_EVENT_CHARS = 200;
 
 export class DreamCuratorWorker {
   constructor(private readonly deps: DreamCuratorWorkerDeps) {}
@@ -538,17 +540,22 @@ export class DreamCuratorWorker {
         'semanticRelationCandidates',
         'edgeAdjustmentCandidates',
       ],
-      rawLedgerEvents: events.map((event) => ({
-        eventId: event.eventId,
-        role: event.role,
-        rawEventType: event.rawEventType,
-        threadId: event.threadId,
-        sessionId: event.sessionId,
-        projectId: event.projectId,
-        globalSeq: event.globalSeq,
-        occurredAt: event.occurredAt,
-        text: truncate(eventText(event), 1200),
-      })),
+      rawLedgerEvents: curatorPromptRows(events).map((row) => {
+        const sliced = sliceCuratorText(row.text, row.limit);
+        return {
+          eventId: row.event.eventId,
+          role: row.event.role,
+          rawEventType: row.event.rawEventType,
+          threadId: row.event.threadId,
+          sessionId: row.event.sessionId,
+          projectId: row.event.projectId,
+          globalSeq: row.event.globalSeq,
+          occurredAt: row.event.occurredAt,
+          text: sliced.text,
+          truncated: sliced.truncated,
+          originalLength: row.text.length,
+        };
+      }),
       outputContract: {
         format: 'strict JSON object',
         rule: 'LLM suggests candidates only; CPU governance decides status later.',
@@ -982,6 +989,55 @@ function isExplicitCorrectionCandidate(text: string): boolean {
 
 function eventText(event: MemoryEvent): string {
   return eventTextForMemory(event);
+}
+
+function isToolOrTaskEvent(event: MemoryEvent): boolean {
+  return event.role === 'tool'
+    || event.rawEventType === 'tool_call'
+    || event.rawEventType === 'tool_result'
+    || event.rawEventType === 'task_event';
+}
+
+function curatorRoleTextLimit(event: MemoryEvent): number {
+  if (isToolOrTaskEvent(event)) return 1200;
+  if (event.role === 'user') return 8000;
+  if (event.role === 'assistant') return 3000;
+  return 1200;
+}
+
+function sliceCuratorText(text: string, limit: number): { text: string; truncated: boolean } {
+  if (text.length <= limit) return { text, truncated: false };
+  const head = Math.ceil(limit / 2);
+  const tail = Math.floor(limit / 2);
+  const omitted = text.length - head - tail;
+  return {
+    text: `${text.slice(0, head)}\n...[${omitted} characters omitted]...\n${text.slice(-tail)}`,
+    truncated: true,
+  };
+}
+
+function curatorPromptRows(events: MemoryEvent[]): Array<{ event: MemoryEvent; text: string; limit: number }> {
+  const rows = events.map((event) => {
+    const text = eventText(event);
+    return { event, text, limit: Math.min(curatorRoleTextLimit(event), text.length) };
+  });
+  let total = rows.reduce((sum, row) => sum + sliceCuratorText(row.text, row.limit).text.length, 0);
+  const tiers = [
+    rows.filter((row) => isToolOrTaskEvent(row.event) || (row.event.role !== 'user' && row.event.role !== 'assistant')),
+    rows.filter((row) => row.event.role === 'assistant' && !isToolOrTaskEvent(row.event)),
+    rows.filter((row) => row.event.role === 'user'),
+  ];
+  for (const tier of tiers) {
+    while (total > CURATOR_EPISODE_CHAR_BUDGET) {
+      const squeeze = tier.filter((row) => row.limit > CURATOR_MIN_EVENT_CHARS);
+      if (squeeze.length === 0) break;
+      for (const row of squeeze) row.limit = Math.max(CURATOR_MIN_EVENT_CHARS, Math.floor(row.limit / 2));
+      const next = rows.reduce((sum, row) => sum + sliceCuratorText(row.text, row.limit).text.length, 0);
+      if (next >= total) break;
+      total = next;
+    }
+  }
+  return rows;
 }
 
 function summarizeEvents(events: MemoryEvent[]): string {
