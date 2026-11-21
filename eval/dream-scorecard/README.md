@@ -76,15 +76,19 @@ about a hidden classifier.
   (`needs_confirmation` + `superseded`).
 - **Confidence calibration** — model candidates bucketed at the governance thresholds
   (`0.60/0.72/0.74/0.86/0.90/0.95`) by self-reported confidence, with the promoted share per
-  bucket; deterministic candidates are reported as one separate bucket. Buckets count every
-  candidate, including the ones governance routes to `needs_confirmation` before promotion.
+  bucket; deterministic candidates are reported as one separate bucket. A candidate enters a
+  bucket only when CPU governance decided it on confidence: it was promoted, or held below one of
+  those thresholds. Candidates gated for another reason first — the #231 review gate for
+  model-proposed user-owned memory, or the inference/evidence gate — are counted separately by
+  reason. Counting them as calibration misses measured whether the policy would route a type to
+  review, not whether confidence predicted the outcome (#397).
 - **Chinese temporal updates** — for each old/new pair, `recall()` asks the topic after the night
   drain. Old retired means the old value is absent from every recalled item; hit requires the old
   value absent and the new value present.
 - **Cost** — provider calls and prompt/completion tokens from `ModelRegistry` usage hooks. The
   compile row is one night's drain.
 
-## Baseline (2026-11-22, head 37e1cf8b)
+## Baseline (2026-11-22, head 5f38615d)
 
 `results.md` is the generated baseline. Classification: **21/24 (87.5%)**. Group probes: long-tail **6/6**.
 
@@ -101,21 +105,25 @@ Worst three error categories: **soul → rule (1)**, **ordinary → soul (1)**, 
 with 0/1 new-fact false positives.
 
 Compile: **20/20 frames passed on the first pass**, **0/20 fallback need**, **16/16 gold points**.
-Final candidate queue: 108 candidates, 87 promoted (80.6%), 0 rejected (0%), 21 suppressed
-(19.4%). One night (20 episodes): **40 calls, 67,566 input tokens, 91,820 output tokens**
-(159,386 total). The whole scorecard: 72 calls, 222,939 tokens.
+Final candidate queue: 105 candidates, 84 promoted (80.0%), 0 rejected (0%), 21 suppressed
+(20.0%). One night (20 episodes): **40 calls, 67,567 input tokens, 88,459 output tokens**
+(156,026 total). The whole scorecard: 72 calls, 221,794 tokens.
 
-Confidence calibration: model survival is not monotonic in self-reported confidence —
-**0.74–<0.86: 94.7%**, **0.86–<0.90: 55.6%**, **0.90–<0.95: 44.4%**, **>=0.95: 4.2%**. The
-highest-confidence bucket has the lowest survival. Deterministic candidates: 227/230 (98.7%%).
+Confidence calibration, counting only the 39/77 model candidates governance decided on
+confidence: **0.60–<0.72: 40.0%**, **0.72–<0.74: 33.3%**, **0.74–<0.86: 81.8%**,
+**0.86–<0.90: 100.0%**, **0.90–<0.95: 100.0%**, **>=0.95: 100.0%** (2/2). The other 38 were
+gated before a confidence decision: 26 `llm_inference_requires_user_review` (#231) and 12
+`inference_or_assistant_claim_not_auto_promoted`. None of them was rejected, and none is a
+confidence miss. Deterministic candidates: 227/230 (98.7%).
 
 Chinese temporal updates: old value retired **0/4**, new value present **4/4**, hit **0/4**. All
 four old values remained recallable after the update, so the current Chinese path does not retire
 the old value.
 
-The baseline's actionable signals are the inverted confidence calibration, Chinese time updates
-that never retire the old value, and `preferenceCategory` treating the `别` inside `特别` as a
-negative constraint (the `soul-family` item was classified as rule).
+The baseline's actionable signals are Chinese time updates that never retire the old value, and
+`preferenceCategory` treating the `别` inside `特别` as a negative constraint (the `soul-family`
+item was classified as rule). The earlier apparent confidence inversion was the review gate being
+counted as a calibration miss; #397 moved those candidates to a separate count.
 
 ## Limits
 

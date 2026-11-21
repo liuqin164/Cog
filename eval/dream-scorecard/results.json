@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-11-21T20:31:58.647Z",
-  "head": "37e1cf8b",
+  "generatedAt": "2026-11-21T21:41:21.242Z",
+  "head": "5f38615d",
   "model": "auto/deepseek-v4.1-flash",
   "baseUrl": "http://127.0.0.1:3425/v1",
   "classification": {
@@ -111,13 +111,13 @@
         "correct": true,
         "pair": "rule_vs_one_off",
         "candidates": [
-          "boundary",
-          "summary",
-          "indexing_decision",
           "semantic_tags",
+          "edge_adjustment",
+          "summary",
+          "boundary",
           "semantic_relation",
           "preferences",
-          "edge_adjustment"
+          "indexing_decision"
         ],
         "correctionDetected": false
       },
@@ -128,13 +128,13 @@
         "source": "preferences.category",
         "correct": true,
         "candidates": [
-          "boundary",
-          "edge_adjustment",
           "indexing_decision",
           "summary",
-          "semantic_tags",
+          "edge_adjustment",
           "preferences",
-          "semantic_relation"
+          "semantic_tags",
+          "semantic_relation",
+          "boundary"
         ],
         "correctionDetected": false
       },
@@ -145,10 +145,10 @@
         "source": "preferences.category",
         "correct": true,
         "candidates": [
-          "semantic_relation",
           "summary",
           "indexing_decision",
           "boundary",
+          "semantic_relation",
           "preferences"
         ],
         "correctionDetected": false
@@ -160,15 +160,13 @@
         "source": "preferences.category",
         "correct": true,
         "candidates": [
-          "session_summary",
-          "semantic_tags",
-          "semantic_relation",
-          "preferences",
-          "edge_adjustment",
-          "indexing_decision",
           "boundary",
+          "preferences",
+          "indexing_decision",
+          "edge_adjustment",
           "summary",
-          "semantic_tags"
+          "semantic_tags",
+          "semantic_relation"
         ],
         "correctionDetected": false
       },
@@ -176,14 +174,15 @@
         "id": "ordinary-one-off-room",
         "role": "ordinary",
         "predicted": "ordinary",
-        "source": "summary",
+        "source": "topic_summary",
         "correct": true,
         "pair": "rule_vs_one_off",
         "candidates": [
-          "semantic_relation",
           "indexing_decision",
+          "summary",
           "session_summary",
-          "summary"
+          "semantic_relation",
+          "topic_summary"
         ],
         "correctionDetected": false
       },
@@ -195,12 +194,11 @@
         "correct": true,
         "pair": "soul_vs_preference",
         "candidates": [
-          "user_preference",
           "indexing_decision",
           "preferences",
-          "semantic_tags",
-          "semantic_relation",
-          "summary"
+          "user_preference",
+          "summary",
+          "semantic_relation"
         ],
         "correctionDetected": false
       },
@@ -211,12 +209,11 @@
         "source": "preferences.category",
         "correct": false,
         "candidates": [
-          "summary",
           "preferences",
-          "user_preference",
           "semantic_relation",
-          "boundary",
-          "indexing_decision"
+          "summary",
+          "indexing_decision",
+          "user_preference"
         ],
         "correctionDetected": false
       },
@@ -228,10 +225,10 @@
         "correct": true,
         "candidates": [
           "semantic_relation",
-          "summary",
           "indexing_decision",
           "preferences",
-          "user_preference"
+          "user_preference",
+          "summary"
         ],
         "correctionDetected": false
       },
@@ -242,11 +239,11 @@
         "source": "preferences.category",
         "correct": true,
         "candidates": [
-          "user_preference",
-          "indexing_decision",
-          "summary",
           "preferences",
-          "semantic_relation"
+          "indexing_decision",
+          "semantic_relation",
+          "summary",
+          "user_preference"
         ],
         "correctionDetected": false
       },
@@ -258,11 +255,11 @@
         "correct": false,
         "pair": "soul_vs_preference",
         "candidates": [
-          "user_preference",
+          "indexing_decision",
           "preferences",
-          "semantic_relation",
           "summary",
-          "indexing_decision"
+          "user_preference",
+          "semantic_relation"
         ],
         "correctionDetected": false
       },
@@ -274,10 +271,10 @@
         "correct": true,
         "pair": "commitment_vs_intention",
         "candidates": [
-          "summary",
           "indexing_decision",
-          "long_term_goal",
-          "semantic_relation"
+          "summary",
+          "semantic_relation",
+          "long_term_goal"
         ],
         "correctionDetected": false
       },
@@ -288,10 +285,10 @@
         "source": "long_term_goal",
         "correct": true,
         "candidates": [
-          "semantic_relation",
-          "indexing_decision",
           "long_term_goal",
-          "summary"
+          "summary",
+          "indexing_decision",
+          "semantic_relation"
         ],
         "correctionDetected": false
       },
@@ -302,10 +299,11 @@
         "source": "long_term_goal",
         "correct": true,
         "candidates": [
-          "indexing_decision",
-          "long_term_goal",
+          "session_summary",
           "summary",
-          "semantic_relation"
+          "semantic_relation",
+          "long_term_goal",
+          "indexing_decision"
         ],
         "correctionDetected": false
       },
@@ -316,9 +314,9 @@
         "source": "long_term_goal",
         "correct": true,
         "candidates": [
+          "summary",
           "long_term_goal",
           "indexing_decision",
-          "summary",
           "semantic_relation"
         ],
         "correctionDetected": false
@@ -331,10 +329,10 @@
         "correct": true,
         "pair": "commitment_vs_intention",
         "candidates": [
-          "temporal_fact_update",
+          "indexing_decision",
           "semantic_relation",
           "summary",
-          "indexing_decision"
+          "temporal_fact_update"
         ],
         "correctionDetected": false
       },
@@ -345,10 +343,10 @@
         "source": "temporal_fact_update",
         "correct": true,
         "candidates": [
-          "summary",
+          "indexing_decision",
           "temporal_fact_update",
           "semantic_relation",
-          "indexing_decision"
+          "summary"
         ],
         "correctionDetected": false
       },
@@ -361,8 +359,8 @@
         "candidates": [
           "semantic_relation",
           "summary",
-          "temporal_fact_update",
-          "indexing_decision"
+          "indexing_decision",
+          "temporal_fact_update"
         ],
         "correctionDetected": false
       },
@@ -374,9 +372,9 @@
         "correct": true,
         "candidates": [
           "temporal_fact_update",
+          "indexing_decision",
           "summary",
-          "semantic_relation",
-          "indexing_decision"
+          "semantic_relation"
         ],
         "correctionDetected": false
       },
@@ -387,9 +385,9 @@
         "source": "project_memory",
         "correct": true,
         "candidates": [
+          "indexing_decision",
           "summary",
           "edge_adjustment",
-          "indexing_decision",
           "project_memory",
           "semantic_tags",
           "semantic_relation"
@@ -403,9 +401,9 @@
         "source": "project_memory",
         "correct": true,
         "candidates": [
+          "semantic_relation",
           "summary",
           "indexing_decision",
-          "semantic_relation",
           "project_memory"
         ],
         "correctionDetected": false
@@ -417,12 +415,12 @@
         "source": "project_memory",
         "correct": true,
         "candidates": [
-          "session_summary",
           "semantic_tags",
-          "semantic_relation",
-          "edge_adjustment",
+          "session_summary",
           "project_memory",
           "indexing_decision",
+          "semantic_relation",
+          "edge_adjustment",
           "summary"
         ],
         "correctionDetected": false
@@ -434,9 +432,9 @@
         "source": "project_memory",
         "correct": true,
         "candidates": [
+          "summary",
           "semantic_relation",
           "project_memory",
-          "summary",
           "indexing_decision"
         ],
         "correctionDetected": false
@@ -462,10 +460,10 @@
         "correct": false,
         "pair": "correction_vs_new_fact",
         "candidates": [
-          "summary",
-          "project_memory",
           "semantic_relation",
-          "indexing_decision"
+          "project_memory",
+          "indexing_decision",
+          "summary"
         ],
         "correctionDetected": false
       },
@@ -477,11 +475,11 @@
         "correct": true,
         "pair": "correction_vs_new_fact",
         "candidates": [
-          "indexing_decision",
+          "semantic_relation",
           "correction",
+          "indexing_decision",
           "summary",
-          "temporal_fact_update",
-          "semantic_relation"
+          "temporal_fact_update"
         ],
         "correctionDetected": true
       },
@@ -492,11 +490,11 @@
         "source": "correction",
         "correct": true,
         "candidates": [
-          "correction",
           "summary",
           "temporal_fact_update",
-          "indexing_decision",
-          "semantic_relation"
+          "semantic_relation",
+          "correction",
+          "indexing_decision"
         ],
         "correctionDetected": true
       },
@@ -509,12 +507,12 @@
         "group": "long-tail",
         "candidates": [
           "project_memory",
-          "boundary",
           "edge_adjustment",
-          "summary",
           "semantic_relation",
           "indexing_decision",
-          "semantic_tags"
+          "semantic_tags",
+          "summary",
+          "boundary"
         ],
         "correctionDetected": false
       },
@@ -526,14 +524,13 @@
         "correct": true,
         "group": "long-tail",
         "candidates": [
-          "edge_adjustment",
-          "boundary",
           "semantic_relation",
-          "semantic_tags",
           "project_memory",
           "indexing_decision",
+          "summary",
           "semantic_tags",
-          "summary"
+          "edge_adjustment",
+          "boundary"
         ],
         "correctionDetected": false
       },
@@ -545,14 +542,13 @@
         "correct": true,
         "group": "long-tail",
         "candidates": [
-          "session_summary",
-          "project_memory",
-          "boundary",
-          "semantic_tags",
-          "summary",
           "indexing_decision",
           "semantic_relation",
-          "edge_adjustment"
+          "semantic_tags",
+          "edge_adjustment",
+          "summary",
+          "project_memory",
+          "boundary"
         ],
         "correctionDetected": false
       },
@@ -564,12 +560,12 @@
         "correct": true,
         "group": "long-tail",
         "candidates": [
-          "edge_adjustment",
           "semantic_tags",
-          "boundary",
-          "project_memory",
-          "semantic_relation",
+          "edge_adjustment",
           "indexing_decision",
+          "project_memory",
+          "boundary",
+          "semantic_relation",
           "summary"
         ],
         "correctionDetected": false
@@ -582,13 +578,14 @@
         "correct": true,
         "group": "long-tail",
         "candidates": [
-          "boundary",
           "semantic_tags",
-          "project_memory",
           "semantic_relation",
           "indexing_decision",
+          "session_summary",
+          "summary",
           "edge_adjustment",
-          "summary"
+          "boundary",
+          "project_memory"
         ],
         "correctionDetected": false
       },
@@ -600,21 +597,21 @@
         "correct": true,
         "group": "long-tail",
         "candidates": [
-          "semantic_relation",
-          "semantic_tags",
-          "edge_adjustment",
           "boundary",
+          "semantic_tags",
           "project_memory",
-          "indexing_decision",
-          "summary"
+          "semantic_relation",
+          "edge_adjustment",
+          "summary",
+          "indexing_decision"
         ],
         "correctionDetected": false
       }
     ],
     "usage": {
       "calls": 32,
-      "inputTokens": 38495,
-      "outputTokens": 25058
+      "inputTokens": 38509,
+      "outputTokens": 27259
     }
   },
   "compile": {
@@ -665,8 +662,8 @@
         "decisions": 18,
         "usage": {
           "calls": 8,
-          "inputTokens": 13520,
-          "outputTokens": 18577
+          "inputTokens": 13549,
+          "outputTokens": 17725
         },
         "temporalUpdates": []
       },
@@ -704,20 +701,20 @@
             "hit": true
           }
         ],
-        "candidates": 23,
+        "candidates": 25,
         "queue": {
           "candidate": 0,
           "needsConfirmation": 3,
-          "promoted": 20,
+          "promoted": 22,
           "rejected": 0,
           "superseded": 0,
           "shadow": 0
         },
-        "decisions": 21,
+        "decisions": 23,
         "usage": {
           "calls": 8,
-          "inputTokens": 13563,
-          "outputTokens": 22322
+          "inputTokens": 13519,
+          "outputTokens": 15330
         },
         "temporalUpdates": []
       },
@@ -755,20 +752,20 @@
             "hit": true
           }
         ],
-        "candidates": 22,
+        "candidates": 23,
         "queue": {
           "candidate": 0,
-          "needsConfirmation": 4,
+          "needsConfirmation": 5,
           "promoted": 18,
           "rejected": 0,
           "superseded": 0,
           "shadow": 0
         },
-        "decisions": 19,
+        "decisions": 20,
         "usage": {
           "calls": 8,
-          "inputTokens": 13461,
-          "outputTokens": 13893
+          "inputTokens": 13450,
+          "outputTokens": 14745
         },
         "temporalUpdates": []
       },
@@ -806,20 +803,20 @@
             "hit": true
           }
         ],
-        "candidates": 42,
+        "candidates": 36,
         "queue": {
           "candidate": 0,
-          "needsConfirmation": 10,
-          "promoted": 32,
+          "needsConfirmation": 9,
+          "promoted": 27,
           "rejected": 0,
           "superseded": 0,
           "shadow": 0
         },
-        "decisions": 42,
+        "decisions": 36,
         "usage": {
           "calls": 16,
-          "inputTokens": 27022,
-          "outputTokens": 37028
+          "inputTokens": 27049,
+          "outputTokens": 40659
         },
         "temporalUpdates": [
           {
@@ -840,7 +837,7 @@
             "oldRetired": false,
             "newPresent": true,
             "hit": false,
-            "items": 6
+            "items": 7
           },
           {
             "id": "release-time",
@@ -850,7 +847,7 @@
             "oldRetired": false,
             "newPresent": true,
             "hit": false,
-            "items": 8
+            "items": 5
           },
           {
             "id": "gym-time",
@@ -860,7 +857,7 @@
             "oldRetired": false,
             "newPresent": true,
             "hit": false,
-            "items": 6
+            "items": 8
           }
         ]
       }
@@ -875,8 +872,8 @@
       "deterministicFallbackFrames": 0,
       "goldHits": 16,
       "goldTotal": 16,
-      "candidates": 108,
-      "promoted": 87,
+      "candidates": 105,
+      "promoted": 84,
       "rejected": 0,
       "suppressed": 21,
       "temporalTotal": 4,
@@ -886,53 +883,53 @@
     },
     "usage": {
       "calls": 40,
-      "inputTokens": 67566,
-      "outputTokens": 91820
+      "inputTokens": 67567,
+      "outputTokens": 88459
     }
   },
   "calibration": {
     "model": [
       {
         "bucket": "<0.60",
-        "candidates": 1,
+        "candidates": 0,
         "promoted": 0,
-        "survival": 0
+        "survival": null
       },
       {
         "bucket": "0.60–<0.72",
-        "candidates": 8,
-        "promoted": 3,
-        "survival": 0.375
+        "candidates": 10,
+        "promoted": 4,
+        "survival": 0.4
       },
       {
         "bucket": "0.72–<0.74",
-        "candidates": 4,
+        "candidates": 3,
         "promoted": 1,
-        "survival": 0.25
+        "survival": 0.3333333333333333
       },
       {
         "bucket": "0.74–<0.86",
-        "candidates": 19,
-        "promoted": 18,
-        "survival": 0.9473684210526315
+        "candidates": 11,
+        "promoted": 9,
+        "survival": 0.8181818181818182
       },
       {
         "bucket": "0.86–<0.90",
-        "candidates": 9,
-        "promoted": 5,
-        "survival": 0.5555555555555556
+        "candidates": 6,
+        "promoted": 6,
+        "survival": 1
       },
       {
         "bucket": "0.90–<0.95",
-        "candidates": 18,
-        "promoted": 8,
-        "survival": 0.4444444444444444
+        "candidates": 7,
+        "promoted": 7,
+        "survival": 1
       },
       {
         "bucket": ">=0.95",
-        "candidates": 24,
-        "promoted": 1,
-        "survival": 0.041666666666666664
+        "candidates": 2,
+        "promoted": 2,
+        "survival": 1
       }
     ],
     "deterministic": {
@@ -941,14 +938,25 @@
       "promoted": 227,
       "survival": 0.9869565217391304
     },
-    "modelCandidates": 83,
-    "modelPromoted": 36,
+    "modelCandidates": 77,
+    "modelPromoted": 29,
+    "modelEligible": 39,
+    "excludedByReason": [
+      {
+        "reason": "llm_inference_requires_user_review",
+        "count": 26
+      },
+      {
+        "reason": "inference_or_assistant_claim_not_auto_promoted",
+        "count": 12
+      }
+    ],
     "deterministicCandidates": 230,
     "deterministicPromoted": 227
   },
   "usage": {
     "calls": 72,
-    "inputTokens": 106061,
-    "outputTokens": 116878
+    "inputTokens": 106076,
+    "outputTokens": 115718
   }
 }
