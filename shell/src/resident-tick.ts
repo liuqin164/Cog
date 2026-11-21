@@ -8,29 +8,32 @@ import { enqueueAway } from './presence.ts';
 const DREAM_RETRY_BASE_MS = 5 * 60_000;
 const DREAM_RETRY_CAP_MS = 30 * 60_000;
 const DREAM_MAX_ATTEMPTS_PER_NIGHT = 5;
+const DREAM_NIGHT_IDLE_MS = 5 * 60_000;
+const DREAM_DAY_IDLE_MS = 60 * 60_000;
+const DREAM_NIGHT_BACKLOG = 1;
+const DREAM_DAY_BACKLOG = 2;
 const SNAPSHOT_INTERVAL_MS = 24 * 60 * 60_000;
 
-/**
- * Emergence's stop-bleed (#229): a candidate is spoken or queued at most once, and at most eight
- * times in a configured-zone day (#285). The count is checkpointed, so a restart cannot reset
- * today's silence. Per-source frequency is F7's job.
- *
- * shortcut: the consumed-key list keeps the newest 500; an event older than that may surface once
- * more. Raise the cap if a resident ever accumulates candidates faster than 500 per lifetime.
- */
 const EMERGENCE_DAILY_LIMIT = 8;
 const MAX_EMERGENCE_CONSUMED = 500;
+
+interface DreamTriggerDecision {
+  start: boolean;
+  reason: 'already_dreamed' | 'gave_up' | 'retry_wait' | 'idle_short' | 'backlog_low' | 'idle_and_backlog';
+  night: boolean;
+  idleMs: number | null;
+  idleMinMs: number;
+  backlogMin: number;
+  backlogEvents: number;
+  backlogEpisodes: number;
+}
 
 export class ResidentTick {
   constructor(private readonly shell: CompanionShell) {}
 
   async tick(at = this.shell.now()): Promise<void> {
     this.rotateServiceLog();
-    // An owed upgrade report is not gated on the lifecycle: a promise that came due has to be
-    // honoured whatever else is happening.
     this.shell.upgradeAdmin.settleUpgradeReport(at);
-    // A paused shell is waiting for its owner, not for the clock: no wake intent, dream window or
-    // emergence decision may fire out of SUSPENDED (#228).
     if (this.shell.machine.state === 'RUNNING' || this.shell.machine.state === 'WAKING' || this.shell.machine.state === 'SUSPENDED') return;
     this.reportHealth(at);
     if (this.shell.machine.state === 'DORMANT') {
@@ -59,24 +62,26 @@ export class ResidentTick {
         return;
       }
     }
-    if (this.dreamDue(at)) {
-      const empty = this.emptyCatchupTarget(at);
-      if (empty) {
-        this.shell.trace.append('dream_catchup', { dream_catchup: true, localDate: empty, skippedDays: this.dreamSkippedDays(empty), empty: true });
-        this.shell.clock!.markDreamed(at);
-      } else {
-        await this.runDream(at);
-        await this.maybeSnapshot(at);
-        return;
-      }
+    const dream = this.dreamDecision(at);
+    this.shell.trace.append('dream_trigger', {
+      projectId: this.shell.config.projectId,
+      decision: dream.start ? 'start' : 'skip',
+      reason: dream.reason,
+      night: dream.night,
+      idleMs: dream.idleMs,
+      idleMinMs: dream.idleMinMs,
+      backlogMin: dream.backlogMin,
+      backlogEvents: dream.backlogEvents,
+      backlogEpisodes: dream.backlogEpisodes,
+    }, at);
+    if (dream.start) {
+      await this.runDream(at);
+      await this.maybeSnapshot(at);
+      return;
     }
     await this.maybeSnapshot(at);
     if (this.shell.machine.state === 'IDLE') {
       this.compileProactiveBooks(at);
-      // The candidate query must run before F2's tick: a due wake intention is still pending at
-      // the query, while the tick that follows marks it fired. A prospective memory stays listed
-      // after its notification, so both first-class lanes are seen once.
-      // A test double without `hasDue` is asked every tick, which is the old injected behaviour.
       const due = this.shell.emergence!.hasDue?.(at) ?? true;
       const allowed = due && this.emergenceAllowed(at);
       const decision = allowed ? this.shell.emergence!.decide(at) : undefined;
@@ -103,7 +108,6 @@ export class ResidentTick {
           if (this.emergenceConsumed(item)) continue;
           const delivery = routed.get(item.id);
           if (delivery?.decision === 'deliver') {
-            // Consume before acting: a crash during the run must not free the same candidate to run again.
             this.consumeEmergence(item, at);
             await this.speakEmergence(item, at);
             break;
@@ -169,7 +173,6 @@ export class ResidentTick {
     return this.shell.backend.latestEventId(projectId);
   }
 
-  /** F2's clock: fire due intentions and announce due prospective memories. It never speaks. */
   private runKernelWakeTick(at: number): void {
     try {
       const result = this.shell.backend.runWakeTick({ projectId: this.shell.config.projectId, agentId: this.shell.config.agentId, now: at });
@@ -185,10 +188,6 @@ export class ResidentTick {
     }
   }
 
-  /**
-   * The event, when the candidate names one, is a stabler key than a lane's own id. The observed
-   * instant rides along because a snoozed commitment resumes as the same id at a new occurrence.
-   */
   private emergenceKey(candidate: { id: string; source?: string; observedAt?: number; sourceRefs?: Array<{ eventId?: string }> }): string {
     if (candidate.source === 'commitment') {
       const commitmentId = candidate.id.slice('surfacing:commitment:'.length);
@@ -204,10 +203,7 @@ export class ResidentTick {
     return (this.shell.machine.runtime.emergence?.consumed ?? []).includes(this.emergenceKey(candidate));
   }
 
-  /** The configured day's count; it survives a restart because it lives in the checkpoint. */
   private emergenceAllowed(at: number): boolean {
-    // #233 and #229 share one day boundary and one hard stop: when the day's tokens are gone,
-    // autonomy does not start another run, exactly as the emergence count cap does.
     if (this.shell.statusFace.dailyBudgetExceeded(at)) return false;
     const state = this.shell.machine.runtime.emergence;
     if (!state) return true;
@@ -265,7 +261,6 @@ export class ResidentTick {
     }
   }
 
-  /** The owner's next line closes F7's loop for the last thing the companion said on its own. */
   acknowledgeSurfacing(): void {
     for (const [source, prior] of [...this.shell.surfacedByType]) {
       this.writeSurfacingFeedback(prior, 'engaged');
@@ -273,12 +268,6 @@ export class ResidentTick {
     }
   }
 
-  /**
-   * The kernel's own condition (#196, F19): refresh the four checks, and once per failed Dream
-   * streak route the health notice through F18's highest tier. Delivery reuses the existing
-   * emergence speak path; when the owner is away the notice accumulates instead of talking to an
-   * empty room. The decision trace is written so the notice is auditable, not just felt.
-   */
   private reportHealth(at: number): void {
     try {
       this.shell.kernel.health.check({ now: at });
@@ -308,11 +297,6 @@ export class ResidentTick {
     }
   }
 
-  /**
-   * The process half of the health face (#226). The kernel's frozen four checks stay four; this
-   * reads the resident's own RSS against the unit ceiling and routes one notice through the same
-   * emergence path the Dream-streak notice uses. The reading itself is also on `GET /health`.
-   */
   private reportMemoryPressure(at: number): void {
     const memory = readMemoryUsage();
     const action = memoryPressureAction(memory, this.shell.memoryWarned);
@@ -334,7 +318,6 @@ export class ResidentTick {
     void this.shell.host.bus.emit('companion_emergence', { id: 'health:memory-pressure', reason: 'memory_notice', text });
   }
 
-  /** Keep the inherited stdout/stderr file bounded between restarts. */
   rotateServiceLog(): void {
     const path = join(this.shell.config.dataDir, 'service.log');
     try {
@@ -345,7 +328,6 @@ export class ResidentTick {
     }
   }
 
-  /** WAKING means the block is written into runtime state, not just into the trace. */
   injectTimeContext(reason: string, at = this.shell.now()): void {
     let kernelLine: string[] = [];
     try {
@@ -358,7 +340,6 @@ export class ResidentTick {
     this.shell.trace.append('time_context_injected', { block, reason });
   }
 
-  /** One due intent is one WAKING->IDLE pass; both the dormant and the standby path use it. */
   private async applyDueWakeIntent(at: number): Promise<void> {
     const due = this.shell.clock!.dueWakeIntent(at);
     if (!due) return;
@@ -386,23 +367,45 @@ export class ResidentTick {
     }
   }
 
-  private dreamDue(at: number): boolean {
+  private dreamDecision(at: number): DreamTriggerDecision {
     const clock = this.shell.clock!;
-    if (clock.dreamedNight(at)) return false;
+    const night = clock.dreamWindowOpen(at);
+    const backlog = this.dreamBacklog(at);
+    const lastInteractionAt = this.shell.machine.runtime.lastInteractionAt;
+    const idleMs = lastInteractionAt === undefined ? null : Math.max(0, at - lastInteractionAt);
+    const idleMinMs = night ? DREAM_NIGHT_IDLE_MS : DREAM_DAY_IDLE_MS;
+    const backlogMin = night ? DREAM_NIGHT_BACKLOG : DREAM_DAY_BACKLOG;
+    const metrics = {
+      night,
+      idleMs,
+      idleMinMs,
+      backlogMin,
+      backlogEvents: backlog.events,
+      backlogEpisodes: backlog.episodes,
+    };
+    if (clock.dreamedNight(at)) return { ...metrics, start: false, reason: 'already_dreamed' };
     const retry = this.shell.machine.runtime.dreamRetry;
-    return !retry
-      || retry.night !== clock.dreamNightDate(at)
-      || (!retry.gaveUp && retry.nextAt <= at);
+    if (retry && retry.night === clock.dreamNightDate(at) && (retry.gaveUp || retry.nextAt > at)) {
+      return { ...metrics, start: false, reason: retry.gaveUp ? 'gave_up' : 'retry_wait' };
+    }
+    if (idleMs !== null && idleMs < idleMinMs) return { ...metrics, start: false, reason: 'idle_short' };
+    if (backlog.events + backlog.episodes < backlogMin) return { ...metrics, start: false, reason: 'backlog_low' };
+    return { ...metrics, start: true, reason: 'idle_and_backlog' };
   }
 
-  private emptyCatchupTarget(at: number): string | undefined {
-    if (this.shell.clock!.dreamWindowOpen(at)) return undefined;
-    const localDate = this.shell.clock!.dreamTargetDate(at);
-    const events = this.shell.kernel.getThreadEvents(`companion-day:${localDate}`, {
-      projectId: this.shell.config.projectId,
-      limit: 1,
-    });
-    return events.length === 0 ? localDate : undefined;
+  private dreamBacklog(at: number): { events: number; episodes: number } {
+    const date = this.shell.clock!.dreamTargetDate(at);
+    const projectId = this.shell.config.projectId;
+    const covered = new Set<string>();
+    for (const product of this.shell.kernel.getThreadEvents(`companion-dream:${date}`, { projectId, limit: 50 })) {
+      const ids = (product.payload as { metadata?: { sourceEventIds?: unknown } } | undefined)?.metadata?.sourceEventIds;
+      if (Array.isArray(ids)) for (const id of ids) if (typeof id === 'string') covered.add(id);
+    }
+    const events = this.shell.kernel
+      .getThreadEvents(`companion-day:${date}`, { projectId, limit: 5_000 })
+      .filter((event) => !covered.has(event.eventId)).length;
+    const status = this.shell.kernel.getEpisodeDreamStatus(projectId);
+    return { events, episodes: status.pending + status.retryScheduled + status.failedRetryable };
   }
 
   private dreamSkippedDays(localDate: string): number {
@@ -455,8 +458,6 @@ export class ResidentTick {
         skippedDays,
       });
       void this.shell.host.bus.emit('companion_dream', { product: { localDate, eventCount: result.eventCount, summary: result.summary } });
-      // A message that arrived while the integration was awaiting wakes the shell out of DREAMING.
-      // The product is already written; the transition belongs to whoever moved the state, not to us.
       if (this.shell.machine.state !== 'DREAMING') {
         this.shell.trace.append('dream_finished_after_wake', { localDate, state: this.shell.machine.state });
         return;
