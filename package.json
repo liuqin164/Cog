@@ -61,6 +61,7 @@
     "dist/**/*.js",
     "dist/**/*.d.ts",
     "dist/observatory/web/**",
+    "dist/shell/web-channel/**",
     "install.sh",
     "README.md",
     "MEMORY_MODEL.md",

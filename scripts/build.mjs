@@ -46,6 +46,7 @@ if (shell.status !== 0) {
 // The observatory's page is not TypeScript, so tsc copies none of it. It is served from beside the
 // compiled route module, which is why it lands at the same relative path it has in src/.
 cpSync('src/observatory/web', `${staging}/observatory/web`, { recursive: true })
+cpSync('shell/web-channel', `${staging}/shell/web-channel`, { recursive: true })
 
 rmSync('dist', { recursive: true, force: true })
 renameSync(staging, 'dist')

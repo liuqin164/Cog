@@ -54,6 +54,7 @@ export interface HttpFaceOptions {
   /** The shell's trace file; the observatory reads its surfacing counts from it. */
   tracePath?: string;
   credentials?: HttpCredentialFace;
+  webChannel?: () => { handle(request: Request, remoteAddress?: string): Promise<Response | null> } | undefined;
 }
 
 export interface HttpCredentialFace {
@@ -152,6 +153,11 @@ export async function startKernelHttpFace(kernel: unknown, options: HttpFaceOpti
           memory: readMemoryUsage(),
           ...options.health?.(),
         });
+      }
+      const channel = options.webChannel?.();
+      if (channel) {
+        const response = await channel.handle(request, server.requestIP(request)?.address ?? undefined);
+        if (response) return response;
       }
       if (observatory) {
         const response = await observatory.handle(request, server.requestIP(request)?.address ?? undefined);

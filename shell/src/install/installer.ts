@@ -34,7 +34,7 @@ import {
 import { defaultFetchHealth, runDoctor, type DoctorReport, type HealthPayload } from './doctor.ts';
 import { openProbeSession, type ProbeReply, type ProbeSession } from './attach.ts';
 import { createTerminalIO, type InstallIO, type TerminalStreams } from './io.ts';
-import { pluginsConfigPath, writePluginRegistry } from '../plugins/registry.ts';
+import { OFFICIAL_PLUGIN_SPECS, pluginsConfigPath, writePluginRegistry } from '../plugins/registry.ts';
 import { ensureEmbeddingModel, type EmbeddingEnsureResult, type EmbeddingProgress } from '../embedding/ensure.ts';
 import { cliEntry, cogEntry, defaultShellHome, isSourceShell } from './layout.ts';
 import {
@@ -531,12 +531,10 @@ export class Installer {
       );
       this.io.say(`预算：紧笼 ${DEFAULT_AUTONOMOUS_BUDGET.maxTurnsPerRun} 回合 / ${DEFAULT_AUTONOMOUS_BUDGET.maxTokensPerRun} token；工作档 ${DEFAULT_WORK_BUDGET.maxTurnsPerRun} 回合 / ${DEFAULT_WORK_BUDGET.maxTokensPerRun} token；日限 ${DEFAULT_DAILY_BUDGET.maxTokensPerDay} token；夜间模型 ${DEFAULT_NIGHT_BUDGET.maxTokensPerNight} token；无进展 ${DEFAULT_MAX_IDLE_TURNS} 回合（${budgetsPath}）`);
     }
-    // The native plugin registry: empty on first install, never overwritten on a re-run. A re-run must
-    // not unregister what `/plugins add` wrote; the file is the resident's operating copy.
     const pluginsPath = pluginsConfigPath(this.choices.dataDir);
     if (!existsSync(pluginsPath)) {
-      writePluginRegistry(this.choices.dataDir, []);
-      this.io.say(`原生插件注册表：空表（${pluginsPath}，0600；之后用 /plugins add 登记）`);
+      writePluginRegistry(this.choices.dataDir, [...OFFICIAL_PLUGIN_SPECS]);
+      this.io.say(`原生插件注册表：预装 ${OFFICIAL_PLUGIN_SPECS.join(', ')}（${pluginsPath}，0600；之后用 /plugins add 登记）`);
     }
 
     // 空库初始化 through the kernel's own API — migrations and schema come from the kernel, not here.

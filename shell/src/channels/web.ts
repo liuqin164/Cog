@@ -1,0 +1,376 @@
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import type { ChannelContract, ChannelSession } from 'cogmem';
+import type { NativePlugin } from '../plugins/host.ts';
+
+const SOURCE_LAYOUT = import.meta.url.endsWith('.ts');
+const ROUTES_MODULE = SOURCE_LAYOUT ? '../../../src/observatory/routes.ts' : '../../observatory/routes.js';
+const TOKEN_MODULE = SOURCE_LAYOUT ? '../../../src/observatory/token.ts' : '../../observatory/token.js';
+
+const PREFIX = '/channel/web';
+const STATIC_FILES: Record<string, { file: string; type: string }> = {
+  [PREFIX]: { file: 'index.html', type: 'text/html; charset=utf-8' },
+  [`${PREFIX}/`]: { file: 'index.html', type: 'text/html; charset=utf-8' },
+  [`${PREFIX}/app.js`]: { file: 'app.js', type: 'text/javascript; charset=utf-8' },
+};
+
+export interface WebChannelShell {
+  submit(text: string): Promise<unknown>;
+  runCommand(name: string, args?: string): Promise<{ text: string }>;
+  confirmProposal(id: string): Promise<{ ok: boolean; reason?: string; proposal?: { resultText?: string } }>;
+  discardProposal(id: string): unknown;
+  acknowledgeSurfacing(): void;
+  snooze(minutes: number, commitmentId?: string): { text: string };
+}
+
+export interface WebChannelBackend {
+  recentRecallDecision(input: { projectId: string; agentId: string }): {
+    decision?: { timestamp: number; payload: Record<string, unknown> };
+  };
+}
+
+interface WebChannelOptions {
+  shell: WebChannelShell;
+  backend: WebChannelBackend;
+  kernel: any;
+  clock: { now(): number; localDate(at?: number): string };
+  contract: ChannelContract;
+  projectId: string;
+  agentId: string;
+  dataDir: string;
+  webRoot: string;
+  routes: {
+    isLoopbackAddress(address: string | undefined): boolean;
+    isLocalAuthority(authority: string | null | undefined): boolean;
+    jsonResponse(body: unknown, status?: number, acceptEncoding?: string | null): Response;
+    readJsonBody(request: Request): Promise<Record<string, unknown> | null>;
+    refuseWrite(request: Request, token: string | undefined, acceptEncoding?: string | null): Response | null;
+  };
+  token?: string;
+}
+
+interface Stream {
+  push(event: string, data: unknown): void;
+  close(reason: string): void;
+  signal: AbortSignal;
+}
+
+function defaultWebRoot(): string {
+  return fileURLToPath(new URL(SOURCE_LAYOUT ? '../../web-channel/' : '../web-channel/', import.meta.url));
+}
+
+export class WebChannel {
+  private readonly session: ChannelSession;
+  private readonly streams = new Set<Stream>();
+  private stopped = false;
+  private runStartedAt = 0;
+
+  constructor(private readonly options: WebChannelOptions) {
+    this.session = options.contract.register({
+      channelId: 'web',
+      occasion: 'private',
+      accounts: [{ accountId: 'web-owner', role: 'owner' }],
+      reachability: 'online',
+      interruptibility: 'normal',
+    });
+  }
+
+  handle = async (request: Request, remoteAddress?: string): Promise<Response | null> => {
+    const url = new URL(request.url);
+    if (url.pathname !== PREFIX && !url.pathname.startsWith(`${PREFIX}/`)) return null;
+    if (this.stopped) return new Response('not_found', { status: 404 });
+    if (!this.options.routes.isLoopbackAddress(remoteAddress)) {
+      return new Response('forbidden: the web channel answers on loopback only', { status: 403 });
+    }
+    if (!this.options.routes.isLocalAuthority(request.headers.get('host') ?? url.host)) {
+      return new Response('forbidden: unexpected Host (loopback only)', { status: 403 });
+    }
+
+    const staticFile = STATIC_FILES[url.pathname];
+    if (staticFile && (request.method === 'GET' || request.method === 'HEAD')) {
+      const file = Bun.file(join(this.options.webRoot, staticFile.file));
+      if (!(await file.exists())) return new Response(`missing_asset: ${staticFile.file}`, { status: 500 });
+      return new Response(request.method === 'HEAD' ? null : file, {
+        headers: { 'content-type': staticFile.type, 'cache-control': 'no-store' },
+      });
+    }
+
+    if (url.pathname === `${PREFIX}/events`) {
+      if (request.method !== 'GET') return this.methodNotAllowed('GET');
+      return this.openStream(request.signal);
+    }
+
+    if (url.pathname === `${PREFIX}/history`) {
+      if (request.method !== 'GET' && request.method !== 'HEAD') return this.methodNotAllowed('GET, HEAD');
+      return this.options.routes.jsonResponse({ messages: this.history() });
+    }
+
+    if (url.pathname === `${PREFIX}/send`) {
+      if (request.method !== 'POST') return this.methodNotAllowed('POST');
+      return this.onSend(request);
+    }
+
+    if (url.pathname === `${PREFIX}/proposal`) {
+      if (request.method !== 'POST') return this.methodNotAllowed('POST');
+      return this.onProposal(request);
+    }
+
+    if (url.pathname === `${PREFIX}/commitment`) {
+      if (request.method !== 'POST') return this.methodNotAllowed('POST');
+      return this.onCommitment(request);
+    }
+
+    return new Response('not_found', { status: 404 });
+  };
+
+  onBusEvent(name: string, payload: any): void {
+    if (name === 'message_update') {
+      if (typeof payload?.delta === 'string' && payload.delta !== '') this.broadcast('reply_delta', { delta: payload.delta });
+      return;
+    }
+    if (name === 'message_end') {
+      if (payload?.message?.role === 'assistant' && typeof payload.message.content === 'string' && payload.message.content !== '') {
+        this.broadcast('reply_end', { text: payload.message.content, provenance: this.provenance() });
+      }
+      return;
+    }
+    if (name === 'companion_command_proposal') {
+      const proposal = payload?.proposal;
+      if (proposal?.kind === 'plugin' || proposal?.kind === 'credential') this.broadcast('proposal', { proposal });
+      return;
+    }
+    if (name === 'companion_emergence') {
+      this.broadcast('emergence', { id: payload?.id, text: payload?.text, reason: payload?.reason });
+      return;
+    }
+    if (name === 'companion_transition') {
+      if (payload?.state === 'RUNNING') this.runStartedAt = this.options.clock.now();
+      this.broadcast('state', { state: payload?.state });
+    }
+  }
+
+  stop(): void {
+    if (this.stopped) return;
+    this.stopped = true;
+    for (const stream of [...this.streams]) stream.close('plugin_removed');
+    this.streams.clear();
+    try {
+      this.options.contract.presence(this.session, { reachability: 'offline', ownerActivity: 'away' });
+    } catch {}
+  }
+
+  private methodNotAllowed(allow: string): Response {
+    return new Response('method_not_allowed', { status: 405, headers: { allow } });
+  }
+
+  private async onSend(request: Request): Promise<Response> {
+    const refused = this.options.routes.refuseWrite(request, this.options.token, request.headers.get('accept-encoding'));
+    if (refused) return refused;
+    const body = await this.options.routes.readJsonBody(request);
+    if (!body) return this.options.routes.jsonResponse({ error: 'invalid_json' }, 400);
+    let text: string;
+    try {
+      text = this.options.contract.ingest(this.session, {
+        accountId: 'web-owner',
+        text: typeof body.text === 'string' ? body.text : '',
+        at: this.options.clock.now(),
+      }).text;
+    } catch (error) {
+      return this.options.routes.jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+    if (text.startsWith('/')) {
+      const [name = '', ...rest] = text.slice(1).split(/\s+/u);
+      const reply = await this.options.shell.runCommand(name, rest.join(' '));
+      this.broadcast('notice', { text: reply.text });
+      return this.options.routes.jsonResponse({ ok: true, command: name });
+    }
+    this.broadcast('user', { text, at: this.options.clock.now() });
+    void this.options.shell.submit(text).catch((error) => {
+      this.broadcast('notice', { text: `回复失败：${error instanceof Error ? error.message : String(error)}` });
+    });
+    return this.options.routes.jsonResponse({ ok: true }, 202);
+  }
+
+  private async onProposal(request: Request): Promise<Response> {
+    const refused = this.options.routes.refuseWrite(request, this.options.token, request.headers.get('accept-encoding'));
+    if (refused) return refused;
+    const body = await this.options.routes.readJsonBody(request);
+    if (!body) return this.options.routes.jsonResponse({ error: 'invalid_json' }, 400);
+    const id = typeof body.id === 'string' ? body.id : '';
+    if (body.action === 'discard') {
+      this.options.shell.discardProposal(id);
+      return this.options.routes.jsonResponse({ ok: true, text: '已作废。' });
+    }
+    if (body.action !== 'confirm') return this.options.routes.jsonResponse({ error: 'invalid_action' }, 400);
+    const result = await this.options.shell.confirmProposal(id);
+    return this.options.routes.jsonResponse({
+      ok: result.ok,
+      text: result.ok ? (result.proposal?.resultText ?? '已执行。') : (result.reason ?? '未执行。'),
+    });
+  }
+
+  private async onCommitment(request: Request): Promise<Response> {
+    const refused = this.options.routes.refuseWrite(request, this.options.token, request.headers.get('accept-encoding'));
+    if (refused) return refused;
+    const body = await this.options.routes.readJsonBody(request);
+    if (!body) return this.options.routes.jsonResponse({ error: 'invalid_json' }, 400);
+    const id = typeof body.id === 'string' ? body.id : '';
+    const commitmentId = id.startsWith('surfacing:commitment:') ? id.slice('surfacing:commitment:'.length) : undefined;
+    if (body.action === 'confirm') {
+      this.options.shell.acknowledgeSurfacing();
+      return this.options.routes.jsonResponse({ ok: true, text: '已确认。' });
+    }
+    if (body.action !== 'snooze') return this.options.routes.jsonResponse({ error: 'invalid_action' }, 400);
+    const minutes = typeof body.minutes === 'number' && Number.isFinite(body.minutes) ? Math.max(1, Math.round(body.minutes)) : 60;
+    const result = this.options.shell.snooze(minutes, commitmentId);
+    return this.options.routes.jsonResponse({ ok: true, text: result.text });
+  }
+
+  private history(): Array<{ role: string; text: string; at: number }> {
+    const threadId = `companion-day:${this.options.clock.localDate(this.options.clock.now())}`;
+    const page = this.options.kernel.eventStore.queryEvents(1, 100, {
+      projectId: [this.options.projectId],
+      threadId: [threadId],
+      eventType: ['RAW_EVENT_RECORDED'],
+      order: 'asc',
+    });
+    return page.records
+      .filter((event: any) => event.role === 'user' || event.role === 'assistant')
+      .map((event: any) => ({ role: event.role, text: String(event.payload?.text ?? ''), at: event.occurredAt }))
+      .filter((message: { text: string }) => message.text !== '');
+  }
+
+  private provenance(): Array<{ id: string; label: string }> {
+    let selected: string[] = [];
+    try {
+      const decision = this.options.backend.recentRecallDecision({ projectId: this.options.projectId, agentId: this.options.agentId }).decision;
+      if (!decision || decision.timestamp < this.runStartedAt) return [];
+      selected = Array.isArray(decision.payload.selectedIds) ? decision.payload.selectedIds.map(String) : [];
+    } catch {
+      return [];
+    }
+    const nodes: Array<{ id: string; label: string }> = [];
+    for (const id of selected) {
+      try {
+        const node = this.options.kernel.memoryAtlasService?.node(id, {
+          projectId: this.options.projectId,
+          includeEvidence: false,
+          refresh: false,
+          staleOk: true,
+        });
+        if (node) nodes.push({ id, label: String(node.label ?? node.title ?? id) });
+      } catch {}
+    }
+    return nodes;
+  }
+
+  private broadcast(event: string, data: unknown): void {
+    for (const stream of [...this.streams]) stream.push(event, data);
+  }
+
+  private openStream(signal: AbortSignal): Response {
+    const encoder = new TextEncoder();
+    const queue: Array<{ event: string; data: unknown }> = [];
+    let wake: (() => void) | null = null;
+    let finished = false;
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+
+    const stream: Stream = {
+      signal,
+      push: (event, data) => {
+        if (finished) return;
+        queue.push({ event, data });
+        wake?.();
+        wake = null;
+      },
+      close: (reason) => {
+        if (finished) return;
+        finished = true;
+        queue.push({ event: 'bye', data: { reason } });
+        if (heartbeat !== undefined) clearInterval(heartbeat);
+        wake?.();
+        wake = null;
+        this.streams.delete(stream);
+      },
+    };
+
+    const stop = (): void => stream.close('client_closed');
+    signal.addEventListener('abort', stop, { once: true });
+    if (signal.aborted) stop();
+
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(': connected\n\n'));
+        heartbeat = setInterval(() => {
+          try {
+            controller.enqueue(encoder.encode(': ping\n\n'));
+          } catch {
+            stream.close('client_closed');
+          }
+        }, 15_000);
+      },
+      async pull(controller) {
+        while (!finished && queue.length === 0) await new Promise<void>((resolve) => { wake = resolve; });
+        for (const entry of queue.splice(0)) {
+          controller.enqueue(encoder.encode(`event: ${entry.event}\ndata: ${JSON.stringify(entry.data)}\n\n`));
+        }
+        if (finished) {
+          controller.close();
+          return;
+        }
+        if (signal.aborted) {
+          stream.close('client_closed');
+          controller.close();
+        }
+      },
+      cancel() {
+        stream.close('client_closed');
+      },
+    });
+    this.streams.add(stream);
+    return new Response(body, {
+      headers: {
+        'content-type': 'text/event-stream; charset=utf-8',
+        'cache-control': 'no-store',
+        connection: 'keep-alive',
+      },
+    });
+  }
+}
+
+export interface WebChannelPluginOptions {
+  contract: ChannelContract;
+  projectId: string;
+  agentId: string;
+  dataDir: string;
+}
+
+export function webChannelPlugin(options: WebChannelPluginOptions): NativePlugin {
+  return {
+    name: 'web-channel',
+    inject: ['shell', 'memory', 'kernel', 'clock'],
+    provide: ['webChannel'],
+    async apply(ctx) {
+      const routes = await import(ROUTES_MODULE);
+      const tokenModule = await import(TOKEN_MODULE);
+      const channel = new WebChannel({
+        shell: ctx.getService<WebChannelShell>('shell'),
+        backend: ctx.getService<WebChannelBackend>('memory'),
+        kernel: ctx.getService('kernel'),
+        clock: ctx.getService<{ now(): number; localDate(at?: number): string }>('clock'),
+        contract: options.contract,
+        projectId: options.projectId,
+        agentId: options.agentId,
+        dataDir: options.dataDir,
+        webRoot: defaultWebRoot(),
+        routes,
+        token: tokenModule.readObservatoryToken(options.dataDir),
+      });
+      ctx.provide('webChannel', channel);
+      for (const name of ['message_update', 'message_end', 'companion_command_proposal', 'companion_emergence', 'companion_transition']) {
+        ctx.on(name, (payload: any) => channel.onBusEvent(name, payload));
+      }
+      ctx.dispose(() => channel.stop());
+    },
+  };
+}

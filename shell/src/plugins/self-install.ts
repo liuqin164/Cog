@@ -27,6 +27,7 @@ export const RESERVED_PLUGIN_NAMES: readonly string[] = [
   'emergence',
   'terminal-channel',
   'web',
+  'web-channel',
   'plugin-self-install',
 ];
 

@@ -38,6 +38,8 @@ import { PluginProposals, selfInstallPlugin } from './plugins/self-install.ts';
 import { dreamPlugin } from './plugins/dream.ts';
 import { emergencePlugin } from './plugins/emergence.ts';
 import { terminalPlugin, TerminalChannel, type ShellControl } from './channels/terminal.ts';
+import { webChannelPlugin } from './channels/web.ts';
+import { isOfficialPluginSpec } from './plugins/registry.ts';
 import { AgentRuntime, type ModelProvider, type RunSummary } from './state/agent-loop.ts';
 import type { ToolOutputAccount } from './state/context-budget.ts';
 import { laneAssemblyView, type ContextMetrics } from './state/session-lanes.ts';
@@ -551,6 +553,7 @@ export class CompanionShell implements ShellControl, AttachShell {
         connectedAgents: () => [this.config.agentId],
         tracePath: join(this.config.dataDir, 'shell-events.jsonl'),
         credentials: this.credentials,
+        webChannel: () => (this.host.hasService('webChannel') ? this.host.getService<{ handle(request: Request, remoteAddress?: string): Promise<Response | null> }>('webChannel') : undefined),
       });
       this.trace.append('http_face_started', { url: this.http.baseUrl, port: this.http.port });
     }
@@ -793,6 +796,18 @@ export class CompanionShell implements ShellControl, AttachShell {
       afterKernelNight: () => this.endDreamModelBudget(),
     }));
     this.host.register(emergencePlugin({ agentId: this.config.agentId, projectId: this.config.projectId }));
+    for (const spec of this.config.plugins) {
+      if (!isOfficialPluginSpec(spec)) continue;
+      if (spec === 'builtin:web-channel') {
+        this.host.register(webChannelPlugin({
+          contract: this.channelContract,
+          projectId: this.config.projectId,
+          agentId: this.config.agentId,
+          dataDir: this.config.dataDir,
+        }));
+        this.pluginResults.push({ spec, status: 'loaded', name: 'web-channel', tools: [], commands: [] });
+      }
+    }
     if (this.config.terminalEnabled) {
       this.host.register(terminalPlugin({
         shell: this,
@@ -807,7 +822,7 @@ export class CompanionShell implements ShellControl, AttachShell {
         },
       }));
     }
-    this.pluginResults.push(...(await loadNativePlugins(this.host, this.config.plugins, {
+    this.pluginResults.push(...(await loadNativePlugins(this.host, this.config.plugins.filter((spec) => !isOfficialPluginSpec(spec)), {
       cwd: this.config.workspaceRoot,
       trace: this.trace,
     })));
@@ -966,6 +981,10 @@ export class CompanionShell implements ShellControl, AttachShell {
 
   currentQueued(): string[] {
     return this.statusFace.currentQueued();
+  }
+
+  acknowledgeSurfacing(): void {
+    this.residentTick.acknowledgeSurfacing();
   }
 
   withdrawSteering(): string | undefined {

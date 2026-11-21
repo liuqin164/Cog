@@ -2052,6 +2052,15 @@ function applyLoaded() {
   if (state.view === 'credentials') void loadCredentials();
   if (state.view === 'health') void loadHealth();
   renderPanel();
+  applyHashTarget();
+}
+
+function applyHashTarget() {
+  const hash = decodeURIComponent(location.hash.replace(/^#/u, ''));
+  if (hash === 'credentials') { showView('credentials'); return; }
+  if (!hash.startsWith('node=')) return;
+  const node = state.nodeIndex.get(hash.slice('node='.length));
+  if (node) selectNode(node, { fromSnapshot: true });
 }
 
 async function reload() {
