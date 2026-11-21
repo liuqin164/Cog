@@ -1548,6 +1548,7 @@ export class AgentRecallEngine {
   }
 
   private isRawEventInRecallScope(event: MemoryEvent, query: AgentRecallQuery, effectiveIntent?: AgentRecallIntent): boolean {
+    if (event.eventType === 'SHELL_STATE_RECORDED') return false;
     if (isToolObservationEvent(event) && !isPromotedToolObservation(event)) return false;
     if (eventHoldsSecretMark(event) && !FORENSIC_SOCIAL_EXEMPT_INTENTS.has(String(effectiveIntent ?? ''))) {
       SECRET_WITHHELD_EVENT_IDS.set(this, (SECRET_WITHHELD_EVENT_IDS.get(this) ?? new Set()).add(event.eventId));
