@@ -21,10 +21,9 @@ import { existsSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createMemoryKernel, SnapshotImporter } from 'cogmem';
 
-import { launchdLabel, renderLaunchdPlist, renderSystemdUnit, serviceStatus, type Platform, type Runner } from '../install/service.ts';
-import { defaultFetchHealth, parseEnvFile } from '../install/installer.ts';
-import { DEFAULT_SOUL, readSoul } from '../install/soul.ts';
-import { runDoctor, type HealthPayload } from '../install/doctor.ts';
+import { defaultRunner, launchdLabel, renderLaunchdPlist, renderSystemdUnit, serviceStatus, type Platform, type Runner } from '../install/service.ts';
+import { parseEnvFile } from '../install/installer.ts';
+import { defaultFetchHealth, runDoctor, type HealthPayload } from '../install/doctor.ts';
 import { cliEntry } from '../install/layout.ts';
 import { TraceLog } from '../trace.ts';
 import { residentArgsFor, serviceSpecFromRequest, shellDirOfTree, supervisorEntryPath } from './paths.ts';
@@ -384,20 +383,12 @@ export function defaultUpgradeOps(options: DefaultOpsOptions): UpgradeOps {
     async health(request, pid) {
       const fetchHealth = options.fetchHealth ?? defaultFetchHealth;
       const platform = platformOf(request);
-      const expectedSoul = (() => {
-        try {
-          return readSoul(request.dbPath, request.agentId)?.content ?? DEFAULT_SOUL;
-        } catch {
-          return DEFAULT_SOUL;
-        }
-      })();
       let report: Awaited<ReturnType<typeof runDoctor>> | undefined;
       const ok = await pollUntil(async () => {
         try {
           report = await runDoctor({
             dataDir: request.dataDir,
             dbPath: request.dbPath,
-            agentId: request.agentId,
             socketPath: request.socketPath,
             healthUrl: healthUrl(request),
             fetchHealth: () => fetchHealth(healthUrl(request)),
@@ -406,7 +397,6 @@ export function defaultUpgradeOps(options: DefaultOpsOptions): UpgradeOps {
             run: options.run,
             mode: request.serviceMode ? 'service' : 'process',
             pid: pid ?? request.pid,
-            expectedSoul,
           });
         } catch (error) {
           report = undefined;
@@ -442,7 +432,7 @@ async function main(argv: string[]): Promise<number> {
   }
   const { readFileSync } = await import('node:fs');
   const request = JSON.parse(readFileSync(requestPath, 'utf8')) as UpgradeRequest;
-  const { defaultRunner } = await import(import.meta.url.endsWith('.ts') ? '../install/installer.ts' : '../install/installer.js');
+  const { defaultRunner } = await import(import.meta.url.endsWith('.ts') ? '../install/service.ts' : '../install/service.js');
   // First act: say which process owns this cycle, so the resident that comes back can tell "still
   // working" from "gone silent". Removed in the same breath as the outcome is written.
   writeFileSync(upgradeSupervisorPidPath(request.dataDir), `${process.pid}\n`, { mode: 0o600 });

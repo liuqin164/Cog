@@ -193,7 +193,7 @@ describe('doctor memory ceiling (#226)', () => {
   test('a service install whose resident reports no hard cap fails the check', async () => {
     const { dataDir, dbPath, socketPath, spec } = context();
     const report = await runDoctor({
-      dataDir, dbPath, agentId: 'agent-a', socketPath, healthUrl: 'http://127.0.0.1:7338/health',
+      dataDir, dbPath, socketPath, healthUrl: 'http://127.0.0.1:7338/health',
       fetchHealth: async () => ({
         status: 'ok', bind: '127.0.0.1', state: 'IDLE',
         kernel: { status: 'ok', package: 'cogmem', dbPath },
@@ -207,7 +207,7 @@ describe('doctor memory ceiling (#226)', () => {
   test('an uncapped no-manager process is not failed', async () => {
     const { dataDir, dbPath, socketPath, spec } = context();
     const report = await runDoctor({
-      dataDir, dbPath, agentId: 'agent-a', socketPath, healthUrl: 'http://127.0.0.1:7338/health',
+      dataDir, dbPath, socketPath, healthUrl: 'http://127.0.0.1:7338/health',
       fetchHealth: async () => ({
         status: 'ok', bind: '127.0.0.1', state: 'IDLE',
         kernel: { status: 'ok', package: 'cogmem', dbPath },
@@ -232,7 +232,7 @@ describe('doctor memory ceiling (#226)', () => {
       return { code: 0, stdout: '', stderr: '' };
     };
     const report = await runDoctor({
-      dataDir, dbPath, agentId: 'agent-a', socketPath, healthUrl: 'http://127.0.0.1:7338/health',
+      dataDir, dbPath, socketPath, healthUrl: 'http://127.0.0.1:7338/health',
       fetchHealth: async () => {
         throw new Error('resident unreachable');
       },

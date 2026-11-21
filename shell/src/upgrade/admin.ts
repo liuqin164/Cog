@@ -2,7 +2,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { CompanionShell } from '../app.ts';
 import type { CommandReply } from '../commands.ts';
-import { defaultRunner } from '../install/installer.ts';
+import { defaultRunner } from '../install/service.ts';
 import { readInstallState, readTreeVersion, serviceFileExists, treeOfThisProcess } from './paths.ts';
 import { spawnUpgradeSupervisor } from './spawn.ts';
 import { stageUpgradeTree } from './stage.ts';
