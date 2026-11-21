@@ -53,7 +53,6 @@ test('the installed layout is recognised, so the gate cannot report OK off PATH'
   expect(resolveCliBinDir('src/bin/doctor.ts', { PATH: '/usr/bin:/bin' })).toBeUndefined();
   rmSync(home, { recursive: true, force: true });
 });
-
 describe('install step shape', () => {
   test('every step names exactly one actor and only agent steps are automation-safe', () => {
     const steps: InstallStep[] = [
@@ -212,4 +211,3 @@ describe('the install gate answers four outcomes', () => {
     expect(parsed.installGate.diagnostics[0].code).toBe('invalid_model_provider');
   });
 });
-

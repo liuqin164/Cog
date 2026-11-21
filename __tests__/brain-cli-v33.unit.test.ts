@@ -43,4 +43,3 @@ test('prospective CLI creates, confirms, and lists a due candidate without execu
   expect(due.exitCode).toBe(0);
   expect(JSON.parse(due.stdout).items[0].candidateId).toBe(candidate.candidateId);
 });
-
