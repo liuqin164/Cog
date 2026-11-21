@@ -108,6 +108,18 @@ export class PluginProposals {
     return [...this.byId.values()].filter((proposal) => proposal.status === 'pending');
   }
 
+  private removeStagedSource(sourcePath: string): void {
+    const source = resolve(sourcePath);
+    const workspace = resolve(pluginWorkspaceDir(this.options.dataDir));
+    if (dirname(dirname(source)) !== workspace) return;
+    try {
+      if (readPluginRegistry(this.options.dataDir).some((spec) => spec === sourcePath || resolve(spec) === source)) return;
+    } catch {
+      return;
+    }
+    rmSync(dirname(source), { recursive: true, force: true });
+  }
+
   propose(input: ProposePluginInput): PluginProposeResult {
     const name = input.name.trim();
     const purpose = input.purpose.trim();
@@ -253,6 +265,7 @@ export class PluginProposals {
     if (!proposal || proposal.status !== 'pending') return undefined;
     proposal.status = 'discarded';
     this.options.trace.append('plugin_proposal_discarded', { id, name: proposal.name, spec: proposal.sourcePath, reason: 'owner_discarded' });
+    this.removeStagedSource(proposal.sourcePath);
     this.options.onChange?.(proposal);
     return proposal;
   }
@@ -264,6 +277,7 @@ export class PluginProposals {
     if (!ok) {
       proposal.status = 'rejected';
       proposal.rejectedReason = text;
+      this.removeStagedSource(proposal.sourcePath);
     }
     this.options.onChange?.(proposal);
     return proposal;
@@ -367,7 +381,7 @@ export function selfInstallPlugin(options: { proposals: PluginProposals; admin: 
       ctx.registerTool({
         name: 'propose_plugin',
         description:
-          'Offer the owner a native plugin to install. The source is staged in the controlled plugin workspace and recorded with its name, purpose, permission surface, and removal method; it is not loaded until the owner approves the proposal. Only source under that workspace is accepted.',
+          'Offer the owner a native plugin to install. The source is staged in the controlled plugin workspace and recorded with its name, purpose, permission surface, and removal method; it is not loaded until the owner approves the proposal. Only source under that workspace is accepted. Declare every tool with ctx.registerTool: the host adds a loaded plugin\'s registered tools to the cage whitelist automatically and removes them on uninstall, so you do not need to inject "cage" or call cage.allowTools yourself. permissions.provide registers services, permissions.inject requires existing ones, and permissions.data names the data touched.',
         replay: 'never',
         parameters: {
           type: 'object',

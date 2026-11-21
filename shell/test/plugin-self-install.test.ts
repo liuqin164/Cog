@@ -4,16 +4,17 @@ import { dirname, join } from 'node:path';
 import { AttachClient } from '../src/attach/client.ts';
 import type { AttachServerMessage, AttachSnapshot } from '../src/attach/server.ts';
 import { defaultShellConfig } from '../src/config.ts';
+import { RunCage } from '../src/plugins/cage.ts';
 import { ScriptedProvider, makeShell, makeTempDir, waitUntil } from './helpers.ts';
 
 const GREETING_SOURCE = `export default {
-  name: 'hello-plugin',
+  name: 'hello-clock',
   apply(ctx) {
     ctx.registerTool({
-      name: 'hello-plugin-tool',
-      description: 'A harmless greeting from the self-installed plugin.',
+      name: 'hello_clock',
+      description: 'Return the current greeting from the self-installed plugin.',
       parameters: { type: 'object', properties: {} },
-      execute() { return { output: 'hello from plugin' }; },
+      execute() { return { output: 'hello from clock' }; },
     });
   },
 };
@@ -48,7 +49,7 @@ describe('plugin self-install runs through the owner approval gate', () => {
     const dataDir = join(dir, 'data');
     const workspaceRoot = join(dir, 'ws');
     const firstConfig = defaultShellConfig({ dataDir, workspaceRoot });
-    const provider = proposing(pluginInput('hello-plugin', GREETING_SOURCE));
+    const provider = proposing(pluginInput('hello-clock', GREETING_SOURCE));
     const first = makeShell(dir, provider, { dataDir, plugins: firstConfig.plugins });
     await first.start();
     let sourcePath = '';
@@ -60,13 +61,13 @@ describe('plugin self-install runs through the owner approval gate', () => {
       const pending = first.pluginProposals.pending();
       expect(pending).toHaveLength(1);
       sourcePath = pending[0].sourcePath;
-      expect(sourcePath.startsWith(join(dataDir, 'plugin-workspace', 'hello-plugin') + '/')).toBe(true);
+      expect(sourcePath.startsWith(join(dataDir, 'plugin-workspace', 'hello-clock') + '/')).toBe(true);
       expect(existsSync(sourcePath)).toBe(true);
       expect(existsSync(join(dataDir, 'plugins.json'))).toBe(false);
       expect(kinds(first, 'plugin_loaded')).toHaveLength(0);
 
       const opened = await first.host.tools.invoke('plugin_proposal_status', { toolCallId: 's1', input: { id: pending[0].id } }, { runId: 'test' });
-      expect(opened.output).toContain('hello-plugin');
+      expect(opened.output).toContain('hello-clock');
       expect(opened.output).toContain('pending');
 
       const approved = await first.confirmProposal(pending[0].id);
@@ -76,7 +77,7 @@ describe('plugin self-install runs through the owner approval gate', () => {
       expect(kinds(first, 'plugin_approved')).toHaveLength(1);
       expect(kinds(first, 'plugin_install_pending_health')).toHaveLength(1);
       const pendingList = await first.host.tools.invoke('installed_plugins', { toolCallId: 's3', input: {} }, { runId: 'test' });
-      expect(pendingList.output).toContain('hello-plugin');
+      expect(pendingList.output).toContain('hello-clock');
       expect(pendingList.output).toContain('本进程未加载');
       expect(pendingList.output).toContain('测试用问候插件');
 
@@ -88,26 +89,33 @@ describe('plugin self-install runs through the owner approval gate', () => {
 
     const secondConfig = defaultShellConfig({ dataDir, workspaceRoot });
     expect(secondConfig.plugins).toEqual([sourcePath]);
-    const second = makeShell(dir, new ScriptedProvider([{ text: 'ok', toolCalls: [] }]), {
+    const secondProvider = new ScriptedProvider([
+      { text: '', toolCalls: [{ toolCallId: 'm1', toolName: 'hello_clock', input: {} }] },
+      { text: 'clock called', toolCalls: [] },
+    ]);
+    const second = makeShell(dir, secondProvider, {
       dataDir,
       plugins: secondConfig.plugins,
       http: { enabled: true, port: 0, hostname: '127.0.0.1' },
     });
     await second.start();
     try {
-      expect(second.host.tools.has('hello-plugin-tool')).toBe(true);
-      const invoked = await second.host.tools.invoke('hello-plugin-tool', { toolCallId: 'c1', input: {} }, { runId: 'test' });
-      expect(invoked.output).toBe('hello from plugin');
+      expect(second.host.tools.has('hello_clock')).toBe(true);
+      expect(second.cage?.toolAllowed('hello_clock')).toBe(true);
+      await second.submit('试一下 hello_clock');
+      const toolResult = secondProvider.calls[1]?.messages.find((entry) => entry.role === 'tool')?.content ?? '';
+      expect(toolResult).toContain('hello from clock');
+      expect(kinds(second, 'cage_violation')).toHaveLength(0);
       const health = (await (await fetch(`${second.httpUrl}/health`)).json()) as {
         plugins?: { registered: string[]; results: Array<{ spec: string; status: string; tools: string[] }> };
       };
       expect(health.plugins?.registered).toEqual([sourcePath]);
       expect(health.plugins?.results[0]?.status).toBe('loaded');
-      expect(health.plugins?.results[0]?.tools).toContain('hello-plugin-tool');
+      expect(health.plugins?.results[0]?.tools).toContain('hello_clock');
       expect(kinds(second, 'plugin_health_ok')).toHaveLength(1);
 
       const installed = await second.runCommand('plugins', '');
-      expect(installed.text).toContain('hello-plugin');
+      expect(installed.text).toContain('hello-clock');
       const list = second.host.tools.has('installed_plugins')
         ? await second.host.tools.invoke('installed_plugins', { toolCallId: 'c2', input: {} }, { runId: 'test' })
         : undefined;
@@ -118,9 +126,49 @@ describe('plugin self-install runs through the owner approval gate', () => {
       expect(removed.text).toContain('已摘除');
       expect(JSON.parse(readFileSync(join(dataDir, 'plugins.json'), 'utf8'))).toEqual([]);
       expect(existsSync(dirname(sourcePath))).toBe(false);
-      expect(second.host.tools.has('hello-plugin-tool')).toBe(false);
+      expect(second.host.tools.has('hello_clock')).toBe(false);
+      expect(second.cage?.toolAllowed('hello_clock')).toBe(false);
       expect(kinds(second, 'plugin_removed').some((record) => record.reason === 'command')).toBe(true);
     } finally {
+      await second.stop();
+    }
+  }, 45_000);
+
+  test('a plugin tool that never reaches the cage whitelist fails health and is removed', async () => {
+    const dir = makeTempDir('plugin-self-install-whitelist-');
+    const dataDir = join(dir, 'data');
+    const workspaceRoot = join(dir, 'ws');
+    const firstConfig = defaultShellConfig({ dataDir, workspaceRoot });
+    const first = makeShell(dir, new ScriptedProvider([{ text: 'ok', toolCalls: [] }]), { dataDir, plugins: firstConfig.plugins });
+    await first.start();
+    let id = '';
+    let sourcePath = '';
+    try {
+      const proposed = first.pluginProposals.propose(pluginInput('hello-clock', GREETING_SOURCE));
+      expect(proposed.accepted).toBe(true);
+      id = proposed.proposal!.id;
+      sourcePath = proposed.proposal!.sourcePath;
+      expect((await first.confirmProposal(id)).ok).toBe(true);
+    } finally {
+      await first.stop();
+    }
+
+    const allowTools = RunCage.prototype.allowTools;
+    RunCage.prototype.allowTools = () => {};
+    const secondConfig = defaultShellConfig({ dataDir, workspaceRoot });
+    const second = makeShell(dir, new ScriptedProvider([{ text: 'ok', toolCalls: [] }]), {
+      dataDir,
+      plugins: secondConfig.plugins,
+      http: { enabled: true, port: 0, hostname: '127.0.0.1' },
+    });
+    try {
+      await second.start();
+      expect(String(kinds(second, 'plugin_health_failed')[0]?.reason)).toContain('tool_not_in_whitelist: hello_clock');
+      expect(kinds(second, 'plugin_removed')).toHaveLength(1);
+      expect(JSON.parse(readFileSync(join(dataDir, 'plugins.json'), 'utf8'))).toEqual([]);
+      expect(existsSync(dirname(sourcePath))).toBe(false);
+    } finally {
+      RunCage.prototype.allowTools = allowTools;
       await second.stop();
     }
   }, 45_000);
@@ -185,7 +233,7 @@ describe('plugin self-install runs through the owner approval gate', () => {
     });
     await shell.start();
     try {
-      const first = shell.pluginProposals.propose(pluginInput('hello-plugin', GREETING_SOURCE));
+      const first = shell.pluginProposals.propose(pluginInput('hello-clock', GREETING_SOURCE));
       expect(first.accepted).toBe(true);
       const id = first.proposal!.id;
       const client = new AttachClient();
@@ -195,10 +243,10 @@ describe('plugin self-install runs through the owner approval gate', () => {
       const card = snapshot.entries.find((entry) => entry.kind === 'proposal' && entry.proposal.id === id);
       expect(card?.kind).toBe('proposal');
       if (card?.kind !== 'proposal') throw new Error('plugin proposal missing from attach snapshot');
-      expect(card.proposal.args).toBe('hello-plugin');
+      expect(card.proposal.args).toBe('hello-clock');
       expect(card.proposal.reason).toContain('测试用问候插件');
       const detail = (card.proposal.detail ?? []).join('\n');
-      expect(detail).toContain('plugin-workspace/hello-plugin/index.ts');
+      expect(detail).toContain('plugin-workspace/hello-clock/index.ts');
       expect(detail).toContain('provide=');
       expect(detail).toContain('/plugins remove');
       expect(existsSync(join(dataDir, 'plugins.json'))).toBe(false);
@@ -214,6 +262,8 @@ describe('plugin self-install runs through the owner approval gate', () => {
       client.send({ t: 'command-discard', id: second.proposal!.id });
       await waitUntil(() => kinds(shell, 'plugin_proposal_discarded').some((record) => record.id === second.proposal!.id));
       expect(JSON.parse(readFileSync(join(dataDir, 'plugins.json'), 'utf8'))).toEqual([first.proposal!.sourcePath]);
+      expect(existsSync(dirname(second.proposal!.sourcePath))).toBe(false);
+      expect(kinds(shell, 'plugin_proposal_discarded').find((record) => record.id === second.proposal!.id)?.spec).toBe(second.proposal!.sourcePath);
       client.close();
     } finally {
       await shell.stop();
