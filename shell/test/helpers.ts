@@ -171,6 +171,7 @@ export interface TestShellOptions {
   terminalOutput?: NodeJS.WritableStream;
   now?: () => number;
   tick?: boolean;
+  embeddingProvider?: CompanionShellOptions['embeddingProvider'];
   /** The upgrade handoff is a process spawn in production; tests inject the answer. */
   upgradeSpawner?: CompanionShellOptions['upgradeSpawner'];
   stageUpgrade?: CompanionShellOptions['stageUpgrade'];
@@ -203,6 +204,7 @@ export function makeShell(dir: string, provider: ModelProvider | undefined, conf
     },
     modelProvider: provider,
     tick: options.tick ?? false,
+    embeddingProvider: options.embeddingProvider,
     now: options.now,
     terminalInput: options.terminalInput,
     terminalOutput: options.terminalOutput,

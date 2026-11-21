@@ -96,6 +96,7 @@ export interface ShellConfig {
   idleWakeIntervalMs: number;
   /** Tick interval for due intents/dream/emergence. Deterministic; tests drive ticks directly. */
   tickIntervalMs: number;
+  freshness: { intervalMs: number; embeddingBatch: number; bindingBatch: number };
   /**
    * The resident's loopback HTTP face: status and the read-only observatory, and nothing else. It
    * carried an MCP endpoint until #200 R2 removed the shell's outward MCP face.
@@ -329,6 +330,7 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
     dream,
     idleWakeIntervalMs: overrides.idleWakeIntervalMs ?? 30 * 60_000,
     tickIntervalMs: overrides.tickIntervalMs ?? 30_000,
+    freshness: overrides.freshness ?? { intervalMs: 60_000, embeddingBatch: 16, bindingBatch: 50 },
     http: overrides.http ?? {
       enabled: env('COG_HTTP') !== 'off',
       port: Number(env('COG_HTTP_PORT') ?? (typeof choices.httpPort === 'number' ? choices.httpPort : undefined) ?? 7338),

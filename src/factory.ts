@@ -315,10 +315,15 @@ export class MemoryKernel extends KernelServices {
     }
   }
 
-  async backfillEventEmbeddings(options: { projectId?: string; limit?: number } = {}): Promise<{ completed: number; failed: number }> {
+  async backfillEventEmbeddingBatch(options: {
+    projectId?: string;
+    limit?: number;
+    afterRowId?: number;
+  } = {}): Promise<{ completed: number; failed: number; nextRowId: number; hasMore: boolean }> {
     const provider = this.embeddingProvider;
-    if (!provider) return { completed: 0, failed: 0 };
-    const batchSize = Math.max(1, options.limit ?? 64);
+    const afterRowId = options.afterRowId ?? 0;
+    if (!provider) return { completed: 0, failed: 0, nextRowId: afterRowId, hasMore: false };
+    const batchSize = Math.max(1, options.limit ?? 16);
     const db = this.factStore.getDatabase();
     const scoped = options.projectId !== undefined;
     const select = db.prepare(`
@@ -332,20 +337,17 @@ export class MemoryKernel extends KernelServices {
       ORDER BY e.rowid
       LIMIT ?
     `);
+    const rows = (scoped
+      ? select.all(provider.modelId, afterRowId, options.projectId ?? '', batchSize)
+      : select.all(provider.modelId, afterRowId, batchSize)) as Array<{
+        row_id: number;
+        event_id: string;
+        project_id: string | null;
+        payload_json: string;
+      }>;
     let completed = 0;
     let failed = 0;
-    let cursor = 0;
-    for (;;) {
-      const rows = (scoped
-        ? select.all(provider.modelId, cursor, options.projectId ?? '', batchSize)
-        : select.all(provider.modelId, cursor, batchSize)) as Array<{
-          row_id: number;
-          event_id: string;
-          project_id: string | null;
-          payload_json: string;
-        }>;
-      if (rows.length === 0) break;
-      cursor = rows[rows.length - 1]!.row_id;
+    if (rows.length > 0) {
       const entries = rows.map((row) => {
         let text = row.payload_json;
         try {
@@ -382,8 +384,50 @@ export class MemoryKernel extends KernelServices {
         }
       }
     }
+    return {
+      completed,
+      failed,
+      nextRowId: rows.at(-1)?.row_id ?? afterRowId,
+      hasMore: rows.length === batchSize,
+    };
+  }
+
+  async backfillEventEmbeddings(options: { projectId?: string; limit?: number } = {}): Promise<{ completed: number; failed: number }> {
+    const provider = this.embeddingProvider;
+    if (!provider) return { completed: 0, failed: 0 };
+    const batchSize = Math.max(1, options.limit ?? 64);
+    let completed = 0;
+    let failed = 0;
+    let afterRowId = 0;
+    for (;;) {
+      const batch = await this.backfillEventEmbeddingBatch({ ...options, limit: batchSize, afterRowId });
+      completed += batch.completed;
+      failed += batch.failed;
+      if (!batch.hasMore) break;
+      afterRowId = batch.nextRowId;
+    }
+    const db = this.factStore.getDatabase();
     db.prepare(`DELETE FROM memory_event_embeddings WHERE model_id<>?`).run(provider.modelId);
     return { completed, failed };
+  }
+
+  getEmbeddingBacklog(projectId?: string): { count: number; oldestAt?: number } {
+    const provider = this.embeddingProvider;
+    if (!provider) return { count: 0 };
+    const scoped = projectId !== undefined;
+    const row = this.factStore.getDatabase().prepare(`
+      SELECT COUNT(*) AS count, MIN(e.occurred_at) AS oldest_at
+      FROM memory_events e
+      LEFT JOIN memory_event_embeddings ee ON ee.event_id = e.event_id AND ee.model_id = ?
+      WHERE e.event_type = 'RAW_EVENT_RECORDED'
+        AND ee.event_id IS NULL
+        ${scoped ? `AND COALESCE(e.project_id,'') = ?` : ''}
+    `).get(...(scoped ? [provider.modelId, projectId] : [provider.modelId])) as { count?: number; oldest_at?: number | null } | null;
+    const oldest = row?.oldest_at;
+    return {
+      count: Number(row?.count ?? 0),
+      ...(oldest === null || oldest === undefined ? {} : { oldestAt: Number(oldest) }),
+    };
   }
 
   async ingest(input: IngestInput | { content: string; projectId?: string; tags?: string[] }): Promise<Neuron> {
@@ -1700,24 +1744,27 @@ export class MemoryKernel extends KernelServices {
 
   countUnboundBindableRawEvents(projectId?: string, limit: number = 1000): number {
     const max = Math.max(1, limit);
-    let afterGlobalSeq: number | undefined;
+    const scoped = projectId !== undefined;
+    const rows = this.factStore.getDatabase().prepare(`
+      SELECT e.raw_event_type AS raw_event_type, e.payload_json AS payload_json
+      FROM memory_events e
+      WHERE e.event_type = 'RAW_EVENT_RECORDED'
+        AND e.role = 'user'
+        AND (e.raw_event_type IS NULL OR e.raw_event_type = 'message')
+        AND NOT EXISTS (SELECT 1 FROM memory_bindings b WHERE b.event_id = e.event_id)
+        ${scoped ? `AND COALESCE(e.project_id,'') = ?` : ''}
+      LIMIT ?
+    `).all(...(scoped ? [projectId, max] : [max])) as Array<{ raw_event_type: string | null; payload_json: string }>;
     let count = 0;
-    while (count < max) {
-      const batchLimit = Math.min(500, max);
-      const events = this.eventStore.listRawEventsAfterGlobalSeq({
-        projectId,
-        afterGlobalSeq,
-        limit: batchLimit,
-      });
-      if (events.length === 0) break;
-      afterGlobalSeq = events.at(-1)?.globalSeq ?? afterGlobalSeq;
-      for (const event of events) {
-        if (!this.memoryBindingService.isBindableRawEvent(event)) continue;
-        if (this.memoryBindingStore.listBindings({ eventId: event.eventId, limit: 1 }).length > 0) continue;
-        count += 1;
-        if (count >= max) break;
+    for (const row of rows) {
+      let payload: unknown;
+      try {
+        payload = JSON.parse(row.payload_json);
+      } catch {
+        continue;
       }
-      if (events.length < batchLimit) break;
+      const event = { role: 'user', rawEventType: row.raw_event_type, payload } as MemoryEvent;
+      if (this.memoryBindingService.isBindableRawEvent(event)) count += 1;
     }
     return count;
   }

@@ -541,6 +541,7 @@ export class CompanionShell implements ShellControl, AttachShell {
           state: this.machine.state,
           plugins: this.pluginsAdmin.pluginHealth(),
           embedding: this.embeddingStatus(),
+          freshness: this.residentTick.freshness ?? null,
           memoryModel: this.statusFace.memoryModelHealth(),
           contextAssembly: {
             failures: this.contextAssemblyFailures,

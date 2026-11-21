@@ -28,7 +28,20 @@ interface DreamTriggerDecision {
   backlogEpisodes: number;
 }
 
+interface FreshnessReadings {
+  measuredAt: number;
+  unembeddedEvents: number;
+  oldestUnembeddedAgeMs: number;
+  unboundEvents: number;
+}
+
 export class ResidentTick {
+  freshness?: FreshnessReadings;
+  private backfillInFlight = false;
+  private lastFreshnessPassAt?: number;
+  private embeddingRowCursor = 0;
+  private bindingSeqCursor?: number;
+
   constructor(private readonly shell: CompanionShell) {}
 
   async tick(at = this.shell.now()): Promise<void> {
@@ -42,6 +55,7 @@ export class ResidentTick {
       return;
     }
     if (this.shell.machine.state === 'DREAMING') return;
+    await this.backfillFreshness(at);
     await this.applyDueWakeIntent(at);
     const quiet = this.shell.clock!.quietWindowOpen(at);
     if (!quiet && this.shell.machine.state === 'IDLE') {
@@ -166,6 +180,51 @@ export class ResidentTick {
       this.shell.compiledThroughEventId = this.latestEventId(projectId);
     } catch (error) {
       this.shell.trace.append('proactive_compile_failed', { at, message: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  private async backfillFreshness(at: number): Promise<void> {
+    if (this.backfillInFlight) return;
+    if (this.lastFreshnessPassAt !== undefined && at - this.lastFreshnessPassAt < this.shell.config.freshness.intervalMs) return;
+    this.lastFreshnessPassAt = at;
+    this.backfillInFlight = true;
+    const projectId = this.shell.config.projectId;
+    try {
+      const config = this.shell.config.freshness;
+      const embeddings = await this.shell.kernel.backfillEventEmbeddingBatch({
+        projectId,
+        limit: config.embeddingBatch,
+        afterRowId: this.embeddingRowCursor,
+      });
+      this.embeddingRowCursor = embeddings.hasMore ? embeddings.nextRowId : 0;
+      const state = this.shell.machine.state;
+      if (state === 'RUNNING' || state === 'WAKING' || state === 'SUSPENDED') return;
+      const binding = this.shell.kernel.bindRawEvents({
+        projectId,
+        sinceGlobalSeq: this.bindingSeqCursor,
+        limit: config.bindingBatch,
+      });
+      this.bindingSeqCursor = binding.hasMore ? binding.nextGlobalSeq : undefined;
+      const backlog = this.shell.kernel.getEmbeddingBacklog(projectId);
+      this.freshness = {
+        measuredAt: at,
+        unembeddedEvents: backlog.count,
+        oldestUnembeddedAgeMs: backlog.oldestAt === undefined ? 0 : Math.max(0, at - backlog.oldestAt),
+        unboundEvents: this.shell.kernel.countUnboundBindableRawEvents(projectId),
+      };
+      this.shell.trace.append('freshness_backfill', {
+        projectId,
+        at,
+        embedded: embeddings.completed,
+        embeddingFailures: embeddings.failed,
+        bound: binding.boundEvents,
+        bindable: binding.bindableEvents,
+        ...this.freshness,
+      }, at);
+    } catch (error) {
+      this.shell.trace.append('freshness_backfill_failed', { at, message: error instanceof Error ? error.message : String(error) });
+    } finally {
+      this.backfillInFlight = false;
     }
   }
 
