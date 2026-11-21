@@ -983,8 +983,10 @@ export class CompanionShell implements ShellControl, AttachShell {
     return this.statusFace.currentQueued();
   }
 
-  acknowledgeSurfacing(): void {
-    this.residentTick.acknowledgeSurfacing();
+  acknowledgeSurfacing(candidateId: string): void {
+    for (const entry of this.backend.surfacingPending({ projectId: this.config.projectId })) {
+      if (entry.candidateId === candidateId) this.residentTick.writeSurfacingFeedback(entry, 'engaged');
+    }
   }
 
   withdrawSteering(): string | undefined {

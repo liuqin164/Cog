@@ -19,7 +19,7 @@ export interface WebChannelShell {
   runCommand(name: string, args?: string): Promise<{ text: string }>;
   confirmProposal(id: string): Promise<{ ok: boolean; reason?: string; proposal?: { resultText?: string } }>;
   discardProposal(id: string): unknown;
-  acknowledgeSurfacing(): void;
+  acknowledgeSurfacing(candidateId: string): void;
   snooze(minutes: number, commitmentId?: string): { text: string };
 }
 
@@ -217,7 +217,7 @@ export class WebChannel {
     const id = typeof body.id === 'string' ? body.id : '';
     const commitmentId = id.startsWith('surfacing:commitment:') ? id.slice('surfacing:commitment:'.length) : undefined;
     if (body.action === 'confirm') {
-      this.options.shell.acknowledgeSurfacing();
+      this.options.shell.acknowledgeSurfacing(id);
       return this.options.routes.jsonResponse({ ok: true, text: '已确认。' });
     }
     if (body.action !== 'snooze') return this.options.routes.jsonResponse({ error: 'invalid_action' }, 400);

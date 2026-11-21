@@ -163,4 +163,40 @@ describe('web channel plugin (F12)', () => {
       await reinstalled.stop();
     }
   }, 60_000);
+
+  test('confirming a commitment card marks only that surfacing engaged', async () => {
+    const dir = makeTempDir('web-channel-commitment-');
+    const dataDir = join(dir, 'data');
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(join(dataDir, 'observatory-token'), `${TOKEN}\n`, { mode: 0o600 });
+    writePluginRegistry(dataDir, ['builtin:web-channel']);
+
+    const provider = new StreamingProvider();
+    const shell = makeShell(dir, provider, {
+      dataDir,
+      dbPath: join(dataDir, 'memory.sqlite'),
+      plugins: ['builtin:web-channel'],
+      dream: NO_DREAM,
+      http: { enabled: true, port: 0, hostname: '127.0.0.1' },
+    });
+    await shell.start();
+    try {
+      const base = shell.httpUrl!;
+      const projectId = shell.config.projectId;
+      shell.backend.deliverSurfacing({ projectId, candidateId: 'surfacing:commitment:web-one', content: '测试承诺一', now: Date.now() });
+      shell.backend.deliverSurfacing({ projectId, candidateId: 'surfacing:commitment:web-two', content: '测试承诺二', now: Date.now() });
+      expect(shell.backend.surfacingPending({ projectId })).toHaveLength(2);
+
+      const confirmed = await post(base, '/channel/web/commitment', { id: 'surfacing:commitment:web-one', action: 'confirm' });
+      expect(confirmed.status).toBe(200);
+      expect(await confirmed.json()).toMatchObject({ ok: true });
+      const audit = shell.kernel.surfacingFeedback.audit({ projectId });
+      expect(audit.at(-1)).toMatchObject({ candidateId: 'surfacing:commitment:web-one', outcome: 'engaged' });
+      const pending = shell.backend.surfacingPending({ projectId });
+      expect(pending).toHaveLength(1);
+      expect(pending[0]!.candidateId).toBe('surfacing:commitment:web-two');
+    } finally {
+      await shell.stop();
+    }
+  }, 60_000);
 });
