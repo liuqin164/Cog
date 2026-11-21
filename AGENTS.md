@@ -91,6 +91,7 @@ instead of a code one.
 
 One rule, cheap enough to actually hold. Everything else about size stays a judgement call.
 
+- **The freeze line (#270) is checked by `freeze-budget.json`:** per-area line caps plus tool, command, state, table and export-symbol caps; `bun scripts/budget-check.ts` (run by CI) fails over cap, and raising a cap is the same-PR edit to that file.
 - **Every minor release's notes list what was removed or merged, not only what was added.**
   Subtraction nobody writes down does not happen.
 
