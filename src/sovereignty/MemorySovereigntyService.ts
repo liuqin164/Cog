@@ -596,13 +596,10 @@ export class MemorySovereigntyService {
     `).all(scope) as Array<{ node_type: string; label: string }>;
   }
 
-  /**
-   * `secure_delete` zeroes the cells as they are deleted; VACUUM then rebuilds every page so no
-   * unreferenced copy survives. VACUUM writes through the WAL, so the checkpoint has to come after
-   * it: a checkpoint before the rebuild leaves the pre-VACUUM pages in the main database file.
-   */
   private eraseFreedPages(): void {
     const db = this.ports.db;
+    const ftsTables = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND sql LIKE '%USING fts5%'`).all() as Array<{ name: string }>;
+    for (const { name } of ftsTables) db.exec(`INSERT INTO "${name}"("${name}") VALUES('optimize')`);
     const previousTempStore = (db.prepare('PRAGMA temp_store').get() as { temp_store?: number } | undefined)?.temp_store ?? 0;
     db.exec('PRAGMA temp_store = MEMORY');
     try {
