@@ -61,6 +61,19 @@ describe('Issue #72: supersession on the recall surface', () => {
     }
   });
 
+  test('raw recall does not leak a superseded Chinese reschedule', async () => {
+    const { kernel, backend } = fixture('cogmem-supersession-cjk-');
+    try {
+      await backend.rememberTurn({ agentId: 'a', projectId: 'p', sessionId: 's', userText: '评审会定在周二下午两点。' });
+      await backend.rememberTurn({ agentId: 'a', projectId: 'p', sessionId: 's', userText: '评审会改到周三下午三点。' });
+      const result = texts(backend, 'p', '评审会定在什么时候？');
+      expect(result).toContain('三点');
+      expect(result).not.toContain('两点');
+    } finally {
+      kernel.close();
+    }
+  });
+
   test('the untagged rule_only default path still supersedes', async () => {
     const { kernel, backend } = fixture('cogmem-untagged-supersession-');
     try {
