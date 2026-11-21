@@ -122,5 +122,7 @@ describe('the six star roles', () => {
     expect(starRoleFor('entity')).toBe('ordinary');
     expect(starRoleFor('memoryKind', 'profile')).toBe('ordinary');
     expect(starRoleFor('memoryKind', 'preference')).toBe('ordinary');
+    expect(starRoleFor('belief', 'boundary')).toBe('rule');
+    expect(starRoleFor('belief', 'preference')).toBe('ordinary');
   });
 });

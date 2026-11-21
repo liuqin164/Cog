@@ -34,7 +34,7 @@ the read views, and is required for `/soul`.
 
 | Endpoint | Answer |
 |---|---|
-| `/observatory/snapshot?project=&agent=` | Nodes with coordinates, six-role class, degree, `status` and `evidenceTotal`; the frame/graph edges whose endpoints are both in view; per-type, per-relation and per-role counts; the time histogram; the agent roster; `source`, `generatedAt`, `watermark`. `topicPath` is not repeated per node: the arm is its disclosed form. In a single-agent view the type and role counts and the arms describe that view, while `nodesTotal` stays the project's own count |
+| `/observatory/snapshot?project=&agent=` | Nodes with coordinates, six-role class, degree, `status` and `evidenceTotal`; the frame/graph edges whose endpoints are both in view; per-type, per-relation and per-role counts; the time histogram; the agent roster; `source`, `generatedAt`, `watermark`. The four governed layers are read from their own stores in the same pass: `beliefs` (rule/soul), current `soul_versions` (soul), and the commitment and intention books (promise/intent). `topicPath` is not repeated per node: the arm is its disclosed form. In a single-agent view the type and role counts and the arms describe that view, while `nodesTotal` stays the project's own count |
 | `/observatory/node/:id?project=&agent=` | One node, its evidence locators (with the exact `cogmem memory show …` drilldown), and its one-hop neighbours. `404` when the node is outside the selected agent's view |
 | `/observatory/timeline?project=&agent=&from=&to=` | Events per day × event type |
 | `/observatory/recalls?project=&agent=&limit=` | Stored recall decisions, one per task. `available: false` when the database has no `trace_events` table — the honest answer, and not an error |
@@ -82,6 +82,9 @@ Three things, and nothing else:
   承诺 (`commitment`/`promise`/…), 意图 (`intention`/`plan`/`goal`/…), 经历 (episode/action/cluster/
   raw_event/…) and 普通 (everything else, including profile and procedure when they have no stronger
   class). The legend counts are the view's own.
+- **the four governed layers** — 规矩 and 灵魂 come from the belief rows plus each agent's current
+  `soul_versions` row; 承诺 and 意图 come from the commitment and intention books. They are read-only
+  joins into the same snapshot, so the atlas projection is untouched and no node is written for them.
 - **size** — incident edge count, `support` and `activation`.
 
 Edges are the `memory_edges` rows whose two endpoints are both in the snapshot, so the page draws the

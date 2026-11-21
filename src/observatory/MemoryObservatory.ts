@@ -15,7 +15,11 @@ import type Database from 'bun:sqlite';
 
 import { candidateAgentsForEvent, eventsVisibleToAgent, isAgentRawEvent, type ScopedEvent } from '../agent/AgentScopeRules.js';
 import { encodeAtlasNodeId } from '../atlas/AtlasNodeIdCodec.js';
-import type { MemoryAtlasNodeDetail } from '../atlas/MemoryAtlasTypes.js';
+import type { MemoryAtlasEdge, MemoryAtlasEvidence, MemoryAtlasNodeDetail } from '../atlas/MemoryAtlasTypes.js';
+import { atlasSourceLocator } from '../atlas/MemoryAtlasService.js';
+import type { CommitmentEntry } from '../commitment/CommitmentBook.js';
+import { eventTextForMemory } from '../episode/CogmemBlockStripper.js';
+import type { IntentionEntry } from '../intention/IntentionBook.js';
 import { readSurfacingObservability, type SurfacingObservability } from '../observability/SurfacingObservability.js';
 import { parseJsonObject } from '../utils/Values.js';
 import { armKeyFor, forceLayout, galaxyLayout } from './GalaxyLayout.js';
@@ -46,9 +50,11 @@ const EXPERIENCE_TYPES = new Set(['episode', 'action', 'raw_event', 'event', 'cl
 export function starRoleFor(nodeType: string, memoryKind?: string | null, label?: string | null): ObservatoryStarRole {
   const kind = (memoryKind || (nodeType === 'memoryKind' ? label : '') || '').trim().toLowerCase();
   if (RULE_KINDS.has(kind)) return 'rule';
-  if (nodeType === 'belief' || SOUL_KINDS.has(kind)) return 'soul';
+  if (SOUL_KINDS.has(kind)) return 'soul';
   if (PROMISE_KINDS.has(kind)) return 'promise';
   if (INTENT_KINDS.has(kind)) return 'intent';
+  if (kind) return EXPERIENCE_TYPES.has(nodeType) ? 'experience' : 'ordinary';
+  if (nodeType === 'belief') return 'soul';
   if (EXPERIENCE_TYPES.has(nodeType)) return 'experience';
   return 'ordinary';
 }
@@ -88,6 +94,41 @@ export interface ObservatoryNode {
   x: number;
   y: number;
   z: number;
+}
+
+export interface ObservatoryLayerSource {
+  id: string;
+  type: string;
+  memoryKind?: string;
+  label: string;
+  summary?: string;
+  status: string;
+  support: number;
+  occurredAt?: number;
+  evidenceEventIds: string[];
+  agentId?: string;
+  locator?: NonNullable<MemoryAtlasEvidence['sourceLocator']>;
+}
+
+export interface ObservatoryLayerDetail {
+  id: string;
+  projectId: string;
+  nodeType: string;
+  memoryKind?: string;
+  sourceId: string;
+  label: string;
+  summary?: string;
+  confidence: number;
+  supportCount: number;
+  status: string;
+  occurredAt?: number;
+  activation: number;
+  score: number;
+  evidenceCount: number;
+  evidenceTotal: number;
+  evidenceReturned: number;
+  evidence: MemoryAtlasEvidence[];
+  neighbors: MemoryAtlasEdge[];
 }
 
 export type ObservatoryStarRole = 'rule' | 'soul' | 'promise' | 'intent' | 'experience' | 'ordinary';
@@ -185,19 +226,12 @@ export interface ObservatoryView {
 }
 
 export interface MemoryObservatoryOptions {
-  /** A connection the observatory never writes through. */
   db: Database;
-  /** One-hop neighbourhood and evidence locators, borrowed from the atlas service so ids and drilldowns agree. */
   nodeDetail?: (nodeId: string, projectId: string) => MemoryAtlasNodeDetail | null;
-  /** The family roster, listed beside the identities the corpus names. */
   connectedAgents?: () => string[];
-  /** The shell's append-only `shell-events.jsonl`; absent means its surfacing counts are unreadable. */
   tracePath?: string;
-  /**
-   * The star map's node budget. Production uses {@link SNAPSHOT_NODE_LIMIT}; the seam exists so a
-   * test can reproduce "the agent's node is outside the top N" without inserting 20,001 rows.
-   */
   nodeLimit?: number;
+  books?: (projectId: string) => { commitments: CommitmentEntry[]; intentions: IntentionEntry[] };
 }
 
 interface AtlasRow {
@@ -240,8 +274,8 @@ interface ProjectAggregate {
   nodeEventIds: Map<string, string[]>;
   /** Per node, the arm it was placed on, so a scoped view can re-count the arms it actually shows. */
   armOf: Map<string, string>;
-  /** Per node, the agents the read-side predicate would admit. Computed once, inverted into the roster. */
   nodeAgents: Map<string, string[]>;
+  layerSources: Map<string, ObservatoryLayerSource>;
 }
 
 interface AgentAggregate {
@@ -310,6 +344,7 @@ export class MemoryObservatory {
   private readonly db: Database;
   private readonly nodeDetail?: MemoryObservatoryOptions['nodeDetail'];
   private readonly connectedAgents: () => string[];
+  private readonly books?: MemoryObservatoryOptions['books'];
   private readonly nodeLimit: number;
   private readonly tracePath?: string;
   private readonly cache = new Map<string, ProjectAggregate>();
@@ -320,6 +355,7 @@ export class MemoryObservatory {
     this.db = options.db;
     this.nodeDetail = options.nodeDetail;
     this.connectedAgents = options.connectedAgents ?? (() => []);
+    this.books = options.books;
     this.nodeLimit = Math.max(1, Math.floor(options.nodeLimit ?? SNAPSHOT_NODE_LIMIT));
     this.tracePath = options.tracePath;
   }
@@ -341,13 +377,16 @@ export class MemoryObservatory {
     return Array.from(merged.values()).sort((left, right) => right.events - left.events || right.nodes - left.nodes || left.projectId.localeCompare(right.projectId));
   }
 
-  /** `max(global_seq)` is the disclosed watermark; the atlas stamp catches a projection rebuilt without a new event. */
   private stamp(projectId: string): string {
     const watermark = this.watermark();
     const atlas = this.db
       .query(`SELECT COALESCE(MAX(updated_at), 0) AS stamp FROM memory_atlas_documents WHERE project_id = ?`)
       .get(projectId) as { stamp: number } | null;
-    return `${watermark}:${atlas?.stamp ?? 0}`;
+    const soul = this.db.query(`SELECT COALESCE(MAX(created_at), 0) AS stamp FROM soul_versions`).get() as { stamp: number } | null;
+    const belief = this.db
+      .query(`SELECT COALESCE(MAX(updated_at), 0) AS stamp FROM beliefs WHERE COALESCE(project_id, '') = ?`)
+      .get(projectId) as { stamp: number } | null;
+    return `${watermark}:${atlas?.stamp ?? 0}:${soul?.stamp ?? 0}:${belief?.stamp ?? 0}`;
   }
 
   private watermark(): number {
@@ -362,16 +401,31 @@ export class MemoryObservatory {
     if (cached && cached.stamp === stamp) return cached;
 
     const projects = this.projects();
+    const layerSources = this.layerSources(projectId);
+    const layerRows: AtlasRow[] = [...layerSources.values()].map((source) => ({
+      node_id: source.id,
+      node_type: source.type,
+      memory_kind: source.memoryKind ?? null,
+      label: source.label,
+      topic_path: null,
+      support_count: source.support,
+      status: source.status,
+      occurred_at: source.occurredAt ?? null,
+      activation: 0,
+      evidence_event_ids_json: JSON.stringify(source.evidenceEventIds),
+    }));
     const nodesTotalRow = this.db
       .query(`SELECT COUNT(*) AS c FROM memory_atlas_documents WHERE project_id = ? AND status NOT IN ${HIDDEN_STATUS}`)
       .get(projectId) as { c: number } | null;
-    const nodesTotal = Number(nodesTotalRow?.c ?? 0);
 
     const typeRows = this.db
       .query(`SELECT node_type AS type, COUNT(*) AS c FROM memory_atlas_documents WHERE project_id = ? AND status NOT IN ${HIDDEN_STATUS} GROUP BY node_type ORDER BY c DESC`)
       .all(projectId) as Array<{ type: string; c: number }>;
     const nodesByType: Record<string, number> = {};
     for (const row of typeRows) nodesByType[row.type] = row.c;
+    const nodesTotal = Number(nodesTotalRow?.c ?? 0) - (nodesByType.belief ?? 0) + layerRows.length;
+    delete nodesByType.belief;
+    for (const source of layerSources.values()) nodesByType[source.type] = (nodesByType[source.type] ?? 0) + 1;
 
     const relationRows = this.db
       .query(`SELECT relation_type AS relation, COUNT(*) AS c FROM memory_edges WHERE project_id = ? AND status IN ('active','weak') GROUP BY relation_type ORDER BY c DESC`)
@@ -380,23 +434,23 @@ export class MemoryObservatory {
     for (const row of relationRows) edgesByRelation[row.relation] = row.c;
     const edgesTotal = Object.values(edgesByRelation).reduce((sum, value) => sum + value, 0);
 
-    // The L0/L1 rows are never the ones cut, and within L2 the most activated go first: an order the
-    // page can explain, rather than whatever the table happened to return.
     const rows = this.db
       .query(`
         SELECT d.node_id, d.node_type, d.memory_kind, d.label, d.topic_path, d.support_count, d.status, d.occurred_at,
                d.evidence_event_ids_json, COALESCE(a.activation, 0) AS activation
         FROM memory_atlas_documents d
         LEFT JOIN memory_atlas_activation a ON a.project_id = d.project_id AND a.node_id = d.node_id
-        WHERE d.project_id = ? AND d.status NOT IN ${HIDDEN_STATUS}
+        WHERE d.project_id = ? AND d.status NOT IN ${HIDDEN_STATUS} AND d.node_type <> 'belief'
         ORDER BY CASE WHEN d.node_type IN ('project','topic','cluster') THEN 0
                       WHEN d.node_type IN ('raw_event','event') THEN 2 ELSE 1 END,
                  COALESCE(a.activation, 0) DESC, d.support_count DESC, d.occurred_at DESC, d.node_id ASC
         LIMIT ?
       `)
       .all(projectId, this.nodeLimit + 1) as AtlasRow[];
-    const overflow = rows.length > this.nodeLimit;
-    const kept = overflow ? rows.slice(0, this.nodeLimit) : rows;
+    const overflow = rows.length + layerRows.length > this.nodeLimit;
+    const kept = overflow
+      ? [...rows.slice(0, Math.max(0, this.nodeLimit - layerRows.length)), ...layerRows]
+      : [...rows, ...layerRows];
 
     const built = this.buildNodes(kept, projectId);
     const { nodes, edges, nodeEventIds, armOf, armRule } = built;
@@ -406,6 +460,7 @@ export class MemoryObservatory {
     const { events, eventIndex } = this.readEvents(projectId);
     const candidates = new Set<string>(this.connectedAgents());
     for (const event of events) for (const name of candidateAgentsForEvent(event)) candidates.add(name);
+    for (const source of layerSources.values()) if (source.agentId) candidates.add(source.agentId);
 
     const nodeAgents = new Map<string, string[]>();
     const agentNodeCounts = new Map<string, number>();
@@ -417,6 +472,12 @@ export class MemoryObservatory {
       }
     }
     for (const node of nodes) {
+      const named = layerSources.get(node.id)?.agentId;
+      if (named) {
+        nodeAgents.set(node.id, [named]);
+        agentNodeCounts.set(named, (agentNodeCounts.get(named) ?? 0) + 1);
+        continue;
+      }
       const chain = this.chainFor(node.id, nodeEventIds, eventIndex);
       const visible: string[] = [];
       for (const name of candidates) {
@@ -460,16 +521,73 @@ export class MemoryObservatory {
       nodeEventIds,
       armOf,
       nodeAgents,
+      layerSources,
     };
-    // The roster's node count is the agent's own view of the whole project, not the count that
-    // survived the project's display budget (#204). Only a truncated project needs the full read;
-    // below the limit the kept rows are the whole project and the loop above already counted them.
     if (nodesTotal > this.nodeLimit) {
       const full = this.fullVisibility(projectId, aggregate);
       aggregate.agents = aggregate.agents.map((agent) => ({ ...agent, nodes: full.counts.get(agent.id) ?? 0 }));
     }
     this.cache.set(projectId, aggregate);
     return aggregate;
+  }
+
+  private layerSources(projectId: string): Map<string, ObservatoryLayerSource> {
+    const out = new Map<string, ObservatoryLayerSource>();
+    const hidden = new Set(['rejected', 'archived', 'needs_confirmation']);
+    const souls = this.db.query(`
+      SELECT s.agent_id, s.version, s.content, s.created_at
+      FROM soul_versions s
+      WHERE s.version = (SELECT MAX(t.version) FROM soul_versions t WHERE t.agent_id = s.agent_id)
+    `).all() as Array<{ agent_id: string; version: number; content: string; created_at: number }>;
+    for (const soul of souls) {
+      const eventId = `soul:${soul.agent_id}:v${soul.version}`;
+      const command = `soul_versions agent_id=${soul.agent_id} version=${soul.version}`;
+      out.set(`soul:${soul.agent_id}`, {
+        id: `soul:${soul.agent_id}`, type: 'soul', memoryKind: 'identity', label: soul.agent_id,
+        summary: soul.content, status: 'active', support: 1, occurredAt: soul.created_at,
+        evidenceEventIds: [], agentId: soul.agent_id,
+        locator: { eventId, command, contextCommand: command },
+      });
+    }
+    const beliefs = this.db.query(`
+      SELECT b.id, b.subject, b.predicate, b.object_value, b.status, b.updated_at, b.source_event_id, b.metadata_json,
+             (SELECT group_concat(e.event_id) FROM belief_evidence e WHERE e.belief_id = b.id) AS evidence
+      FROM beliefs b WHERE COALESCE(b.project_id, '') = ?
+    `).all(projectId) as Array<{
+      id: string; subject: string; predicate: string; object_value: string; status: string;
+      updated_at: number; source_event_id: string | null; metadata_json: string | null; evidence: string | null;
+    }>;
+    for (const belief of beliefs) {
+      if (hidden.has(belief.status)) continue;
+      const metadata = parseJsonObject(belief.metadata_json);
+      const kind = String(belief.predicate || metadata.deep_write_candidate_type || metadata.beliefType || '').trim().toLowerCase();
+      const evidenceEventIds = [belief.source_event_id, ...String(belief.evidence ?? '').split(',')]
+        .filter((id): id is string => Boolean(id));
+      out.set(`belief:${belief.id}`, {
+        id: `belief:${belief.id}`, type: 'belief', memoryKind: kind || undefined,
+        label: `${belief.subject} ${belief.predicate} ${belief.object_value}`,
+        summary: `${belief.subject} ${belief.predicate} ${belief.object_value}`,
+        status: belief.status, support: 1, occurredAt: belief.updated_at, evidenceEventIds,
+      });
+    }
+    const books = this.books?.(projectId);
+    for (const commitment of books?.commitments ?? []) {
+      out.set(`commitment:${commitment.commitmentId}`, {
+        id: `commitment:${commitment.commitmentId}`, type: 'commitment', memoryKind: 'commitment',
+        label: commitment.content, summary: commitment.content, status: commitment.status,
+        support: 1, occurredAt: commitment.openedAt, agentId: commitment.agentId,
+        evidenceEventIds: commitment.sourceRefs.map((ref) => ref.eventId).filter((id): id is string => Boolean(id)),
+      });
+    }
+    for (const intention of books?.intentions ?? []) {
+      out.set(`intention:${intention.intentionId}`, {
+        id: `intention:${intention.intentionId}`, type: 'intention', memoryKind: 'intention',
+        label: intention.content, summary: intention.content, status: intention.status,
+        support: 1, occurredAt: intention.openedAt, agentId: intention.agentId,
+        evidenceEventIds: intention.sourceRefs.map((ref) => ref.eventId).filter((id): id is string => Boolean(id)),
+      });
+    }
+    return out;
   }
 
   private buildNodes(rows: AtlasRow[], projectId: string): {
@@ -547,29 +665,26 @@ export class MemoryObservatory {
     return { nodes, edges, nodeEventIds, armOf, armRule: armsFromTopic ? 'topic_path' : 'project' };
   }
 
-  /**
-   * The project's whole node set with each node's visible agents (#204).
-   *
-   * Only a project past the display budget pays for this. The predicate is not a second SQL copy:
-   * the same `chainFor` + `eventsVisibleToAgent` pair the row filter used runs over every row, and
-   * the display budget is applied to the answer afterwards. That is what keeps an agent's node from
-   * disappearing because the project's top N filled up first.
-   */
   private fullVisibility(projectId: string, aggregate: ProjectAggregate): FullVisibility {
     const cached = this.fullCache.get(projectId);
     if (cached && cached.stamp === aggregate.stamp) return cached;
-    const rows = this.db
+    const documentRows = this.db
       .query(`
         SELECT d.node_id, d.node_type, d.memory_kind, d.label, d.topic_path, d.support_count, d.status, d.occurred_at,
                d.evidence_event_ids_json, COALESCE(a.activation, 0) AS activation
         FROM memory_atlas_documents d
         LEFT JOIN memory_atlas_activation a ON a.project_id = d.project_id AND a.node_id = d.node_id
-        WHERE d.project_id = ? AND d.status NOT IN ${HIDDEN_STATUS}
+        WHERE d.project_id = ? AND d.status NOT IN ${HIDDEN_STATUS} AND d.node_type <> 'belief'
         ORDER BY CASE WHEN d.node_type IN ('project','topic','cluster') THEN 0
                       WHEN d.node_type IN ('raw_event','event') THEN 2 ELSE 1 END,
                  COALESCE(a.activation, 0) DESC, d.support_count DESC, d.occurred_at DESC, d.node_id ASC
       `)
       .all(projectId) as AtlasRow[];
+    const rows: AtlasRow[] = [...documentRows, ...[...aggregate.layerSources.values()].map((source) => ({
+      node_id: source.id, node_type: source.type, memory_kind: source.memoryKind ?? null, label: source.label,
+      topic_path: null, support_count: source.support, status: source.status, occurred_at: source.occurredAt ?? null,
+      activation: 0, evidence_event_ids_json: JSON.stringify(source.evidenceEventIds),
+    }))];
     const nodeEventIds = new Map<string, string[]>();
     for (const row of rows) nodeEventIds.set(row.node_id, parseJsonArray(row.evidence_event_ids_json));
     const candidates = aggregate.agents.map((agent) => agent.id);
@@ -577,6 +692,12 @@ export class MemoryObservatory {
     const counts = new Map<string, number>();
     for (const name of candidates) counts.set(name, 0);
     for (const row of rows) {
+      const named = aggregate.layerSources.get(row.node_id)?.agentId;
+      if (named) {
+        agentsByNode.set(row.node_id, [named]);
+        counts.set(named, (counts.get(named) ?? 0) + 1);
+        continue;
+      }
       const chain = this.chainFor(row.node_id, nodeEventIds, aggregate.eventIndex);
       const visible: string[] = [];
       for (const name of candidates) {
@@ -839,21 +960,58 @@ export class MemoryObservatory {
     };
   }
 
-  /**
-   * One node's detail: the atlas's own answer, so evidence locators and the drilldown command are the
-   * ones every other surface prints. Refused when the node is not in the selected agent's view, which
-   * is the same predicate the star map filtered on rather than a second opinion.
-   */
-  node(nodeId: string, view: ObservatoryView = {}): (MemoryAtlasNodeDetail & { visibleToAgent: boolean }) | null {
+  node(nodeId: string, view: ObservatoryView = {}): (MemoryAtlasNodeDetail | ObservatoryLayerDetail) & { visibleToAgent: boolean } | null {
     const projectId = this.resolveProject(view.projectId);
     if (!projectId) return null;
     const aggregate = this.aggregate(projectId);
     const agent = view.agent?.trim() || null;
     const visibleToAgent = agent === null || this.nodeVisibleToAgent(projectId, nodeId, agent, aggregate);
     if (!visibleToAgent) return null;
-    const detailed = this.nodeDetail?.(nodeId, projectId) ?? null;
+    const detailed = this.nodeDetail?.(nodeId, projectId) ?? this.layerDetail(nodeId, projectId, aggregate);
     if (!detailed) return null;
     return { ...detailed, visibleToAgent };
+  }
+
+  private layerDetail(nodeId: string, projectId: string, aggregate: ProjectAggregate): ObservatoryLayerDetail | null {
+    const source = aggregate.layerSources.get(nodeId);
+    if (!source) return null;
+    const evidence = source.evidenceEventIds.slice(0, 8)
+      .map((eventId) => this.eventEvidence(eventId, projectId))
+      .filter((item): item is MemoryAtlasEvidence => Boolean(item));
+    if (!evidence.length && source.locator) {
+      evidence.push({
+        eventId: source.locator.eventId, projectId, drilldown: source.locator.command,
+        sourceLocator: source.locator, excerpt: source.summary?.slice(0, 500),
+      });
+    }
+    return {
+      id: source.id, projectId, nodeType: source.type, memoryKind: source.memoryKind,
+      sourceId: source.id, label: source.label, summary: source.summary, confidence: 1,
+      supportCount: source.support, status: source.status, occurredAt: source.occurredAt,
+      activation: 0, score: 0, evidenceCount: evidence.length, evidenceTotal: evidence.length,
+      evidenceReturned: evidence.length, evidence, neighbors: [],
+    };
+  }
+
+  private eventEvidence(eventId: string, projectId: string): MemoryAtlasEvidence | null {
+    const row = this.db.query(`
+      SELECT event_id, global_seq, thread_id, session_id, local_date, payload_json
+      FROM memory_events WHERE event_id = ? AND project_id = ?
+    `).get(eventId, projectId) as {
+      event_id: string; global_seq: number | null; thread_id: string | null;
+      session_id: string | null; local_date: string | null; payload_json: string;
+    } | null;
+    if (!row) return null;
+    const sourceLocator = atlasSourceLocator({
+      eventId: row.event_id, globalSeq: row.global_seq ?? undefined, projectId,
+      threadId: row.thread_id ?? undefined, sessionId: row.session_id ?? undefined,
+      localDate: row.local_date ?? undefined,
+    }, projectId);
+    return {
+      eventId: row.event_id, globalSeq: row.global_seq ?? undefined, projectId,
+      drilldown: sourceLocator.command, sourceLocator,
+      excerpt: eventTextForMemory({ payload: parseJsonObject(row.payload_json) }).slice(0, 500),
+    };
   }
 
   /**
