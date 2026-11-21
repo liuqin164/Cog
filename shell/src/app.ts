@@ -667,20 +667,20 @@ export class CompanionShell implements ShellControl, AttachShell {
         dimensions: status.dimensions,
         loadMs: status.loadMs ?? null,
       });
-      const backfill = await this.kernel.backfillEventEmbeddings({ projectId: this.config.projectId });
+      const backfill = await this.kernel.backfillEventEmbeddings({
+        projectId: this.config.projectId,
+        limit: this.config.embedding.provider === 'local' ? 4 : undefined,
+        yieldMs: 25,
+      });
       if (backfill.completed > 0 || backfill.failed > 0) {
         this.trace.append('embedding_backfill', { projectId: this.config.projectId, ...backfill });
       }
     } catch (error) {
-      // A missing model, a failed download or a broken ONNX file all land here. The companion keeps
-      // answering with lexical recall; health and this trace record why.
       const message = error instanceof Error ? error.message : String(error);
       this.trace.append('embedding_unavailable', {
         modelId: this.config.embedding.model,
         message,
       });
-      // The service log is inherited stdout/stderr; the trace is the durable record. Say it on both
-      // faces so a worker that never starts is not only a `/health` line nobody reads (#280).
       console.error(`[companion-shell] embedding degraded: ${message}`);
     }
   }

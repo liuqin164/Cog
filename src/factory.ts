@@ -345,8 +345,7 @@ export class MemoryKernel extends KernelServices {
         project_id: string | null;
         payload_json: string;
       }>;
-    let completed = 0;
-    let failed = 0;
+    let completed = 0, failed = 0;
     if (rows.length > 0) {
       const entries = rows.map((row) => {
         let text = row.payload_json;
@@ -392,7 +391,7 @@ export class MemoryKernel extends KernelServices {
     };
   }
 
-  async backfillEventEmbeddings(options: { projectId?: string; limit?: number } = {}): Promise<{ completed: number; failed: number }> {
+  async backfillEventEmbeddings(options: { projectId?: string; limit?: number; yieldMs?: number } = {}): Promise<{ completed: number; failed: number }> {
     const provider = this.embeddingProvider;
     if (!provider) return { completed: 0, failed: 0 };
     const batchSize = Math.max(1, options.limit ?? 64);
@@ -405,6 +404,7 @@ export class MemoryKernel extends KernelServices {
       failed += batch.failed;
       if (!batch.hasMore) break;
       afterRowId = batch.nextRowId;
+      if (options.yieldMs !== undefined) await new Promise((resolve) => setTimeout(resolve, options.yieldMs));
     }
     const db = this.factStore.getDatabase();
     db.prepare(`DELETE FROM memory_event_embeddings WHERE model_id<>?`).run(provider.modelId);

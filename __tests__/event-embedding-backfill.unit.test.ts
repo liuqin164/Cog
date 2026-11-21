@@ -74,3 +74,30 @@ test('a failed backfill is non-fatal and recorded', async () => {
     kernel.close();
   }
 });
+
+test('a bounded backfill keeps its batches small', async () => {
+  const dir = makeTempDir('cogmem-embedding-backfill-yield-');
+  const sizes: number[] = [];
+  const kernel = createMemoryKernel({
+    dbPath: join(dir, 'brain.db'),
+    embeddingProvider: {
+      dimensions: 2,
+      modelId: 'embedding/yield',
+      embedBatch: async (texts: string[]) => {
+        sizes.push(texts.length);
+        return texts.map(() => new Float32Array([1, 0]));
+      },
+      embed: async () => new Float32Array([1, 0]),
+    } as EmbeddingProvider,
+  });
+  try {
+    for (let index = 0; index < 5; index += 1) {
+      kernel.recordRawEvent({ projectId: 'p', threadId: 't', role: 'user', content: `event ${index}` });
+    }
+
+    expect(await kernel.backfillEventEmbeddings({ projectId: 'p', limit: 2, yieldMs: 1 })).toEqual({ completed: 5, failed: 0 });
+    expect(sizes).toEqual([2, 2, 1]);
+  } finally {
+    kernel.close();
+  }
+});
