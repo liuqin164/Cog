@@ -74,7 +74,7 @@ async function seedCompletedCommitment(shell: ReturnType<typeof makeShell>, titl
 
 describe('attach over the socket (spec §0, §6)', () => {
   test('the first attach gets a snapshot; a re-attach gets "你不在时" that matches the ledger', async () => {
-    const base = Date.now();
+    const base = Date.UTC(2020, 0, 1, 12, 0, 0);
     const dir = makeTempDir();
     const provider = new ScriptedProvider([{ text: '在。', toolCalls: [] }]);
     const shell = attachShell(dir, provider, () => base);
@@ -95,7 +95,7 @@ describe('attach over the socket (spec §0, §6)', () => {
       await waitFor(() => shell.attachedClients === 0);
 
       // While nobody was attached: a night integration, a fulfilled commitment, an accumulated emergence.
-      shell.trace.append('dream_complete', { localDate: '2026-11-10', eventCount: 7 });
+      shell.trace.append('dream_complete', { localDate: '2026-11-10', eventCount: 7 }, base);
       await shell.backend.ingestTaskEvent({
         agentId: shell.config.agentId,
         projectId: shell.config.projectId,
