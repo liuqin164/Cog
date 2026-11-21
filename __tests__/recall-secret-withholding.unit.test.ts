@@ -82,3 +82,55 @@ test('recall never hands back the marked turn in its answer or trace', () => {
     }
   });
 });
+
+test('a withheld top-three hit does not cost a slot when a clean fourth candidate exists', () => {
+  const dir = makeTempDir('cogmem-withhold-backfill-');
+  const dbPath = join(dir, 'brain.db');
+  const kernel = createMemoryKernel({ dbPath, vectorBackend: 'sqlite-vec' });
+  const store = new EventStore(dbPath);
+  let ordinal = 0;
+  const append = (text: string, metadata?: Record<string, unknown>): string => {
+    ordinal += 1;
+    return store.append({
+      streamType: 'thread', streamId: 't', eventType: 'RAW_EVENT_RECORDED', projectId: 'p', threadId: 't',
+      sessionId: 's', threadSeq: ordinal, eventOrdinal: ordinal, role: 'user', sourceId: 'a',
+      occurredAt: 1_700_000_000_000 + ordinal, payload: { text, ...(metadata ? { metadata } : {}) },
+    }).eventId;
+  };
+  const first = append('penguin migration step one');
+  const second = append('penguin migration step two');
+  const secretAnchor = append('lunch note');
+  const cleanAnchor = append('monthly report');
+  const secretEvidence = append('vault item zephyr', { secretFindings: { total: 1, byKind: { github_token: 1 } } });
+  kernel.memoryAtlasStore.upsertDocument({
+    id: 'event:penguin-key', projectId: 'p', nodeType: 'event', sourceId: 'penguin-key',
+    label: 'penguin migration key rotation', summary: 'penguin migration credential turnover',
+    confidence: 0.9, supportCount: 9, status: 'active', evidenceEventIds: [secretAnchor, secretEvidence],
+  });
+  kernel.memoryAtlasStore.upsertDocument({
+    id: 'event:penguin-rollback', projectId: 'p', nodeType: 'event', sourceId: 'penguin-rollback',
+    label: 'penguin migration rollback', summary: 'penguin migration rollback plan',
+    confidence: 0.9, supportCount: 1, status: 'active', evidenceEventIds: [cleanAnchor],
+  });
+  kernel.memoryAtlasStore.markProjectionClean('p');
+  const memory = new KernelAgentMemoryBackend(kernel, {
+    binding: kernel.occasionScope.register({ channelId: 'withhold-backfill', occasion: 'private' }),
+  });
+  try {
+    const result = memory.recall({ query: 'penguin migration', projectId: 'p', agentId: 'a', limit: 3 });
+    expect(result.items.map((item) => item.id)).toEqual([
+      expect.stringContaining(first),
+      expect.stringContaining(second),
+      'atlas-node:event:penguin-rollback',
+    ]);
+    expect(result.items).toHaveLength(3);
+    expect(JSON.stringify(result)).not.toContain('vault item zephyr');
+    expect(result.decisionTrace?.selectedCount).toBe(3);
+    expect(result.decisionTrace?.suppressed).toContainEqual({ reason: 'secret_bearing_withheld', count: 2 });
+    const trace = memory.recentRecallDecision({ projectId: 'p', agentId: 'a' });
+    expect(trace.state).toBe('found');
+    expect((trace.decision?.payload as { selectedIds: string[] }).selectedIds).toEqual(result.items.map((item) => item.id));
+  } finally {
+    kernel.close();
+  }
+});

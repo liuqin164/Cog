@@ -79,6 +79,7 @@ import {
  * two of them must not answer the second with the first one's counts.
  */
 const RAW_TERM_DF_CACHE = new WeakMap<object, Map<string, number>>();
+const PRIVATE_CHECKED_ITEMS = new WeakMap<object, WeakSet<AgentRecallItem>>();
 const FREQUENT_TERM_MIN = 3;
 const DISCRIMINATIVE_TERM_BUDGET = 8;
 
@@ -360,6 +361,22 @@ export class AgentRecallEngine {
     return this.itemChainEvents(item).some((event) => eventHoldsLifeSensitivityMark(event));
   }
 
+  private withholdPrivateItem(item: AgentRecallItem): boolean {
+    if (this.itemHoldsSecretMark(item)) {
+      const ids = SECRET_WITHHELD_EVENT_IDS.get(this) ?? new Set<string>();
+      ids.add(item.id);
+      SECRET_WITHHELD_EVENT_IDS.set(this, ids);
+      return true;
+    }
+    if (this.itemHoldsLifeSensitivityMark(item)) {
+      const ids = LIFE_SENSITIVITY_WITHHELD_EVENT_IDS.get(this) ?? new Set<string>();
+      ids.add(item.id);
+      LIFE_SENSITIVITY_WITHHELD_EVENT_IDS.set(this, ids);
+      return true;
+    }
+    return false;
+  }
+
   private itemChainEvents(item: AgentRecallItem): MemoryEvent[] {
     const chain = new Map<string, MemoryEvent>();
     const anchor = (item.sourceAnchor as { eventId?: string } | undefined)?.eventId;
@@ -410,11 +427,9 @@ export class AgentRecallEngine {
   private recallPrivate(query: AgentRecallQuery): { result: AgentRecallResult; suppressedIds: RecallTraceSuppression[] } {
     SECRET_WITHHELD_EVENT_IDS.set(this, new Set());
     LIFE_SENSITIVITY_WITHHELD_EVENT_IDS.set(this, new Set());
+    PRIVATE_CHECKED_ITEMS.set(this, new WeakSet());
     const queryText = String(query.query ?? '');
     const forensic = FORENSIC_SOCIAL_EXEMPT_INTENTS.has(String(query.intent ?? ''));
-    // Defence 1, at the one place every caller routes through: a social turn asks nothing, so no
-    // lane runs. Later in this file the same judgement removes social *entries* from the lanes a
-    // real query does run (defence 2).
     if (!forensic && classifySocialTurn(queryText) === 'social') {
       const empty = this.emptyRecallResult(query, 'social_query_residue_empty');
       const trace: AgentRecallDecisionTrace = {
@@ -424,34 +439,15 @@ export class AgentRecallEngine {
       return { result: { ...empty, decisionTrace: trace, semanticIndex: this.kernel.semanticIndexEnabled() }, suppressedIds: [] };
     }
     const result = this.withProfileItems(query, this.withoutSupersededByProfile(query, this.recallCore(query)));
-    // The compiler can infer a quote request from the question's words (「原话」) even when the caller
-    // did not set `intent`. The gates already honour that intent in the raw lane; the general floor must
-    // honour it too, or it discards the exact source row the quote request exists to find (#321).
     const quoteIntent = forensic || FORENSIC_SOCIAL_EXEMPT_INTENTS.has(String(result.queryPlan?.intent ?? ''));
     const gated = this.gateSocialEntries(result.items ?? [], query, quoteIntent);
-    // The secret mark is enforced here, and not only in the raw lane's scope test (#142). Measured while fixing
-    // this: with the event withheld from the raw lane, the same turn still came back as an item from another
-    // lane — text and `sourceContext.event.text` both — so a caller received the key with
-    // `suppressed: secret_bearing_withheld` beside it. Every lane returns through here, which is the same reason
-    // the social gate sits here; the forensic and exact-quote intents never reach this method.
-    // One pass, not two: the withheld entries are what the trace has to name by id (#187), and
-    // `itemHoldsSecretMark` walks the ledger, so asking it twice per item would be the only cost this
-    // change adds to the hot path.
-    const secretWithheldItems = forensic ? [] : gated.items.filter((item) => this.itemHoldsSecretMark(item));
+    const checked = PRIVATE_CHECKED_ITEMS.get(this);
+    const secretWithheldItems = forensic ? [] : gated.items.filter((item) => !checked?.has(item) && this.itemHoldsSecretMark(item));
     const withheld = new Set(secretWithheldItems);
     const secretKept = forensic ? gated.items : gated.items.filter((item) => !withheld.has(item));
-    // Life information is a second, separate withhold: a turn can mention a diagnosis without holding a
-    // credential. The forensic intent opens both lanes, which is the historical behaviour.
-    const lifeWithheldItems = forensic ? [] : secretKept.filter((item) => this.itemHoldsLifeSensitivityMark(item));
+    const lifeWithheldItems = forensic ? [] : secretKept.filter((item) => !checked?.has(item) && this.itemHoldsLifeSensitivityMark(item));
     const lifeWithheld = new Set(lifeWithheldItems);
     const lifeKept = forensic ? secretKept : secretKept.filter((item) => !lifeWithheld.has(item));
-    // The raw lane records the events it dropped while it ran (#142); this second half covers items no
-    // raw window owned. Both are merged here, before the trace is built: the item-level count used to be
-    // written to the map after the merge, so a recall that withheld only a compiled item reported no
-    // reason at all (found while deleting the read-time text rescan, #169).
-    // The raw ids matter to the trace even more than to the count: an event dropped before it could
-    // become an item exists nowhere else, so without them a decision that withheld a secret could not
-    // name what it withheld (#187).
     const rawWithheldIds = [...(SECRET_WITHHELD_EVENT_IDS.get(this) ?? [])];
     const secretWithheld = rawWithheldIds.length + secretWithheldItems.length;
     const secretIds = [...rawWithheldIds, ...secretWithheldItems.map((item) => item.id)];
@@ -475,18 +471,10 @@ export class AgentRecallEngine {
         { reason: 'life_sensitivity_withheld', count: lifeWithheldCount },
       ]);
     }
-    // The agent scope of compiled material (#143), in the same place and off the same chain as the secret mark.
-    // The raw lane has always scoped its own events, but a compiled product — a neuron or an Atlas card — is not an
-    // event, so it was readable by every agent in the project. The shared lane is skipped: it is the one
-    // deliberate cross-agent channel, and its items say so.
-    // Dropping an item for scope is not the same fact as withholding it for a secret, so it is not counted as one:
-    // the trace's `secret_bearing_withheld` has to keep meaning what it says.
     const agentKept = query.agentId
       ? lifeKept.filter((item) => Boolean((item as { shared?: unknown }).shared)
         || this.itemVisibleToAgent(item, String(query.agentId)))
       : lifeKept;
-    // Phase projection (#130): the third admission, next to the social and secret ones and in the same place,
-    // so it cannot apply to some lanes and not others. Off by default; with it off this is the identity.
     const phased = this.projectPhases(agentKept, query);
     const zeroExplanation = phased.items.length === 0 ? this.explainZeroResult(query) : undefined;
     const ordered = [...phased.items].sort((left, right) => (
@@ -503,12 +491,11 @@ export class AgentRecallEngine {
         decisionTrace: result.decisionTrace
           ? {
             ...result.decisionTrace,
+            selectedCount: ordered.length,
             ...(suppressions ? { suppressed: suppressions } : {}),
             ...(zeroExplanation ? { zeroExplanation } : {}),
           }
           : result.decisionTrace,
-        // One place, because every lane returns through here. A caller that needs to know
-        // whether an answer came from a semantic index should not have to read the config.
         semanticIndex: this.kernel.semanticIndexEnabled(),
       },
       suppressedIds,
@@ -760,6 +747,7 @@ export class AgentRecallEngine {
       taxonomy: this.kernel.taxonomy,
     });
     const limit = query.limit ?? 5;
+    const forensic = FORENSIC_SOCIAL_EXEMPT_INTENTS.has(String(query.intent ?? ''));
     const allowsGraph = laneAllowed(query.retrievalPolicy, 'graph');
     const allowsRawSource = laneAllowed(query.retrievalPolicy, 'raw_source');
     // Only the three intents below merge atlas items into their result. The
@@ -768,7 +756,7 @@ export class AgentRecallEngine {
     const withEarlyAtlasItems = (result: RecallCoreResult): RecallCoreResult =>
       query.projectId === undefined || !allowsGraph
         ? result
-        : this.withAtlasItems(result, this.atlasItemsForAgentQuery(queryPlan.primarySearchText, query, allowsRawSource), limit);
+        : this.withAtlasItems(result, this.atlasItemsForAgentQuery(queryPlan.primarySearchText, query, allowsRawSource), limit, forensic);
     if (queryPlan.intent === 'previous_session_summary') {
       return withEarlyAtlasItems(this.recallPreviousSession(query, queryPlan));
     }
@@ -781,7 +769,7 @@ export class AgentRecallEngine {
     const atlasItems = allowsGraph ? this.atlasItemsForAgentQuery(queryPlan.primarySearchText, query, allowsRawSource) : [];
     const graphItems = allowsGraph ? this.memoryBindingGraphItemsForQuery(query, queryPlan, limit) : [];
     const rawFallbackItems = allowsRawSource ? this.rawLedgerFallbackItemsForQuery(queryPlan, query, limit) : [];
-    const items = this.mergeRecallItems(graphItems, this.mergeRecallItems(rawFallbackItems, atlasItems, limit), limit);
+    const items = this.mergeRecallItems(graphItems, this.mergeRecallItems(rawFallbackItems, atlasItems, limit, forensic), limit, forensic);
     return {
       recallMode: 'raw_ledger_fallback',
       items,
@@ -1351,7 +1339,7 @@ export class AgentRecallEngine {
     ].join('\n');
   }
 
-  private mergeRecallItems(primary: AgentRecallItem[], secondary: AgentRecallItem[], limit: number): AgentRecallItem[] {
+  private mergeRecallItems(primary: AgentRecallItem[], secondary: AgentRecallItem[], limit: number, forensic = false): AgentRecallItem[] {
     const semanticAtlas = secondary.find((item) => item.source === 'memory_atlas' && (item.tags.includes('atlas_node') || item.tags.includes('facet_graph') || item.tags.includes('atlas_path')));
     const hasSemanticAtlas = primary.some((item) => item.source === 'memory_atlas' && (item.tags.includes('atlas_node') || item.tags.includes('facet_graph') || item.tags.includes('atlas_path')));
     const hasScopedPrimary = primary.some((item) => item.tags.some((tag) => tag.startsWith('agent:')));
@@ -1383,18 +1371,26 @@ export class AgentRecallEngine {
       }
       merged.push(item);
     }
-    return filterSuperseded(merged, (item) => ({
+    const superseded = filterSuperseded(merged, (item) => ({
       id: item.id,
       content: item.text,
       createdAt: item.sourceAnchor?.turnSeq ?? item.sourceAnchor?.eventOrdinal ?? 0,
       tags: item.tags,
       projectId: item.projectId,
-    })).slice(0, limit);
+    }));
+    const checked = PRIVATE_CHECKED_ITEMS.get(this);
+    const kept = forensic ? superseded : superseded.filter((item) => {
+      if (checked?.has(item)) return true;
+      if (this.withholdPrivateItem(item)) return false;
+      checked?.add(item);
+      return true;
+    });
+    return kept.slice(0, limit);
   }
 
-  private withAtlasItems(result: RecallCoreResult, atlasItems: AgentRecallItem[], limit: number): RecallCoreResult {
+  private withAtlasItems(result: RecallCoreResult, atlasItems: AgentRecallItem[], limit: number, forensic = false): RecallCoreResult {
     if (!atlasItems.length) return result;
-    return { ...result, items: this.mergeRecallItems(result.items, atlasItems, limit) };
+    return { ...result, items: this.mergeRecallItems(result.items, atlasItems, limit, forensic) };
   }
 
   private atlasItemsForAgentQuery(searchText: string, query: AgentRecallQuery, allowsRawSource: boolean): AgentRecallItem[] {
