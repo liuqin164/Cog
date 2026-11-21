@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import type { TraceLog, TraceRecord } from '../trace.ts';
 import type { PluginsAdmin } from '../plugins-admin.ts';
@@ -159,13 +159,24 @@ export class PluginProposals {
         return reject(`path_outside_plugin_workspace: ${input.sourcePath}`);
       }
       if (!existsSync(requested)) return reject(`plugin_not_found: ${requested}`);
+      let real: string;
+      let realWorkspace: string;
+      try {
+        real = realpathSync(requested);
+        realWorkspace = realpathSync(workspace);
+      } catch {
+        return reject(`plugin_not_found: ${requested}`);
+      }
+      if (real !== realWorkspace && !real.startsWith(realWorkspace + sep)) {
+        return reject(`path_outside_plugin_workspace: ${input.sourcePath}`);
+      }
       let source: string;
       try {
-        source = readFileSync(requested, 'utf8');
+        source = readFileSync(real, 'utf8');
       } catch (error) {
         return reject(`plugin_unreadable: ${error instanceof Error ? error.message : String(error)}`);
       }
-      return this.record(id, at, name, purpose, requested, source, { provide, inject, data }, reject);
+      return this.record(id, at, name, purpose, real, source, { provide, inject, data }, reject);
     }
     const source = textOf(input.source);
     if (source.trim() === '') return reject('plugin_source_required');

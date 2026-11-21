@@ -187,8 +187,10 @@ export class PluginsAdmin {
       if (!result) failure = 'plugin_not_loaded_in_this_process';
       else if (result.status !== 'loaded') failure = result.reason ?? 'plugin_load_failed';
       else if (result.name !== name) failure = `plugin_name_mismatch: 期望 ${name}，实际 ${result.name ?? 'unknown'}`;
-      else if (this.shell.host.plugins.get(name)?.status !== 'started') failure = 'plugin_not_started';
-      else {
+      else if (this.shell.host.plugins.get(name)?.status !== 'started') {
+        const error = this.shell.host.plugins.get(name)?.error;
+        failure = error ? `plugin_not_started: ${error}` : 'plugin_not_started';
+      } else {
         for (const service of Array.isArray(record.provided) ? record.provided as string[] : []) {
           if (!this.shell.host.hasService(service)) {
             failure = `plugin_service_missing: ${service}`;
