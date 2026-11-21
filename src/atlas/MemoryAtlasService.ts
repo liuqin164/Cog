@@ -468,7 +468,7 @@ function replaceFacet(plan: FacetQueryPlan, from: FacetQueryPlan['facets'][numbe
     facets: plan.facets.map((facet) => facet === from ? to : facet),
   };
 }
-function atlasSourceLocator(event: { eventId: string; globalSeq?: number; projectId?: string; threadId?: string; sessionId?: string; localDate?: string }, projectId: string): NonNullable<MemoryAtlasEvidence['sourceLocator']> {
+export function atlasSourceLocator(event: { eventId: string; globalSeq?: number; projectId?: string; threadId?: string; sessionId?: string; localDate?: string }, projectId: string): NonNullable<MemoryAtlasEvidence['sourceLocator']> {
   const project = projectId || event.projectId;
   const projectArg = project ? ` --project ${cliArg(project)}` : '';
   const base = `cogmem memory show --event ${cliArg(event.eventId)}${projectArg}`;

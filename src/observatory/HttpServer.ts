@@ -70,6 +70,10 @@ export async function startObservatoryServer(options: ObservatoryServerOptions):
     nodeDetail: (nodeId, projectId) => kernel.memoryAtlasService.node(nodeId, {
       projectId, includeEvidence: true, evidenceLimit: 8, refresh: false, staleOk: true,
     }),
+    books: (projectId) => ({
+      commitments: kernel.commitments.list({ projectId, limit: 100 }),
+      intentions: kernel.intentions.list({ projectId, limit: 100 }),
+    }),
     connectedAgents: options.connectedAgents ?? (() => []),
     tracePath: options.tracePath ?? (kernel.databasePath && kernel.databasePath !== ':memory:' && !kernel.databasePath.startsWith('file:')
       ? join(dirname(kernel.databasePath), 'shell-events.jsonl')

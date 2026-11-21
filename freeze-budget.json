@@ -57,7 +57,7 @@
     "src/migrations": 2901,
     "src/models": 431,
     "src/observability": 621,
-    "src/observatory": 4484,
+    "src/observatory": 4648,
     "src/occasion": 179,
     "src/ontology": 10,
     "src/person": 721,
@@ -88,5 +88,5 @@
   "commands": 23,
   "states": 6,
   "tables": 105,
-  "exportSymbols": 770
+  "exportSymbols": 771
 }
