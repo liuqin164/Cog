@@ -79,6 +79,49 @@ describe('/forget covers the shell checkpoint and trace', () => {
     }
   }, 30_000);
 
+  test('a pending binding reference leaves the database bytes after confirm', async () => {
+    const dir = makeTempDir('forget-shell-pending-');
+    const data = join(dir, 'data');
+    const marker = 'zz-pending-373-9a4c';
+    const first = makeShell(dir, new ScriptedProvider([{ text: '记下了。', toolCalls: [] }]));
+    await first.start();
+    try {
+      await first.submit(`${marker} 你把它放在哪里了?`);
+    } finally {
+      await first.stop();
+    }
+    const dbPath = join(data, 'memory.sqlite');
+    const seeded = createMemoryKernel({ dbPath, projectTimeZone: 'UTC' });
+    try {
+      const db = seeded.factStore.getDatabase();
+      const event = db.prepare(`SELECT event_id FROM memory_events WHERE role='user' ORDER BY occurred_at DESC LIMIT 1`).get() as { event_id: string };
+      db.prepare(`INSERT INTO interaction_units (unit_id, type, message_neuron_ids_json, semantic_text, status, created_at, updated_at)
+        VALUES ('unit-probe', 'question', ?, ?, 'pending', ?, ?)`)
+        .run(JSON.stringify([event.event_id]), `${marker} question`, Date.now(), Date.now());
+      db.prepare(`INSERT INTO pending_bindings (pending_id, binding_type, unit_id, reference_text, status, created_at, updated_at)
+        VALUES ('pending-probe', 'question', 'unit-probe', ?, 'pending', ?, ?)`)
+        .run(`${marker} 你把它放在哪里了?`, Date.now(), Date.now());
+    } finally {
+      seeded.close();
+    }
+    expect(scan(dbPath, marker)).toBe(true);
+
+    const second = makeShell(dir, new ScriptedProvider([{ text: '好。', toolCalls: [] }]));
+    await second.start();
+    try {
+      const now = Date.now();
+      const preview = await second.runCommand('forget', `${new Date(now - DAY).toISOString()} ${new Date(now + DAY).toISOString()}`);
+      expect(preview.text).toContain('pending_bindings 待绑定引用 1 条');
+      const receipt = await second.runCommand('forget', 'confirm');
+      expect(receipt.text).toContain('pendingBindings 1');
+      for (const file of ['memory.sqlite', 'memory.sqlite-wal', 'memory.sqlite-shm']) {
+        expect(scan(join(data, file), marker), file).toBe(false);
+      }
+    } finally {
+      await second.stop();
+    }
+  }, 30_000);
+
   test('a snapshot into a new directory restores the open assignment and away queue', async () => {
     const dir = makeTempDir('forget-shell-export-');
     const shell = makeShell(dir, new ScriptedProvider([{ text: '好。', toolCalls: [] }]));

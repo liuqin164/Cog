@@ -32,10 +32,11 @@ export class SovereigntyCommands {
     const projectId = this.shell.config.projectId;
     // The same half-open occurredAt filter deleteRange applies; this is a read, not a second rule.
     const count = this.shell.backend.countEventsBetween({ projectId, startTime: start, endTime: end });
+    const pending = this.shell.backend.countPendingBindingsBetween({ projectId, startTime: start, endTime: end });
     this.pendingForget = { start, end };
     return {
       text: [
-        `将删除 ${new Date(start).toISOString()} 至 ${new Date(end).toISOString()}（含起不含止）的 ${count} 条账本记录。`,
+        `将删除 ${new Date(start).toISOString()} 至 ${new Date(end).toISOString()}（含起不含止）的 ${count} 条账本记录，以及 pending_bindings 待绑定引用 ${pending} 条。`,
         '引用这些记录的画像、程序、承诺、情节与图谱条目会随证据一并删除，然后重建。',
         '数据库页会被重写；本机数据目录内的夜间快照、周归档与导出副本也会一并删除。',
         '数据目录之外的导出文件与已复制到其他机器的备份不在覆盖范围内。',
