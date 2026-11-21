@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, delimiter, dirname, join, resolve } from 'node:path';
 
@@ -69,18 +69,13 @@ export function buildGate(
 }
 
 /**
- * The two Install paths, as the steps that follow a finished install.
- * The installer prints these and stops; it never runs them.
- */
-/**
  * The step that runs the Install gate.
  *
  * Defined once because it appears in more than one list, and the two copies had
  * already drifted apart in the one field that legitimately differs — when it is
- * run — while the rest must never diverge. `init` reports it as the step to take
- * now; the install-path list reports it as the step after setup.
+ * run — while the rest must never diverge.
  */
-export function installGateStep(bin: string, when = 'after either setup step'): InstallStep {
+export function installGateStep(bin: string, when = 'after the install'): InstallStep {
   return {
     id: 'install_gate',
     actor: 'agent',
@@ -94,20 +89,12 @@ export function installGateStep(bin: string, when = 'after either setup step'): 
 export function installPathSteps(bin: string): InstallStep[] {
   return [
     {
-      id: 'operator_init',
+      id: 'companion_install',
       actor: 'operator',
       safeForAutomation: false,
-      command: `${bin} init`,
+      command: `${bin} install`,
       when: 'with a terminal available',
-      purpose: 'interactive first-time config; asks for provider, key and passphrase',
-    },
-    {
-      id: 'agent_init',
-      actor: 'agent',
-      safeForAutomation: true,
-      command: `${bin} init --yes --json`,
-      when: 'with no human present',
-      purpose: 'non-interactive config; Human-required settings fall back to conservative defaults',
+      purpose: 'the companion installer: preflight, place, model, rhythm, resident, awake',
     },
     installGateStep(bin),
   ];
@@ -205,137 +192,17 @@ export function hasCogmemLauncher(env: Record<string, string | undefined> = proc
 
 /** The recorded installation, when it still exists and can be executed. */
 export function readCogmemLauncherTarget(env: Record<string, string | undefined> = process.env): string | undefined {
-  const recorded = readCogmemLauncherRecord(env)[0];
+  const recorded = readCogmemLauncherRecord(env);
   if (!recorded || recorded === cogmemLauncherPath(env)) return undefined;
   return isExecutableFile(recorded) ? recorded : undefined;
 }
 
-/**
- * The runtime directory recorded beside the installation.
- *
- * An installed `cogmem` is a launcher for a runtime — npm writes a shim that runs
- * `bun` — so the installation is not runnable on its own. A process launching it
- * from an environment whose PATH does not contain that runtime needs this (#94).
- * The launcher owns the runtime instead, and the configuration written from here
- * stops needing it.
- */
-export function readCogmemLauncherRuntime(env: Record<string, string | undefined> = process.env): string | undefined {
-  const recorded = readCogmemLauncherRecord(env)[1];
-  return recorded && isDirectory(recorded) ? recorded : undefined;
-}
-
-function readCogmemLauncherRecord(env: Record<string, string | undefined>): [string | undefined, string | undefined] {
-  let lines: string[];
+function readCogmemLauncherRecord(env: Record<string, string | undefined>): string | undefined {
   try {
-    lines = readFileSync(cogmemLauncherRecordPath(env), 'utf8').split('\n');
+    return readFileSync(cogmemLauncherRecordPath(env), 'utf8').split('\n')[0]?.trim() || undefined;
   } catch {
-    return [undefined, undefined];
+    return undefined;
   }
-  const target = lines[0]?.trim() || undefined;
-  const runtime = lines[1]?.trim() || undefined;
-  return [target, runtime];
-}
-
-function isDirectory(path: string): boolean {
-  try {
-    return statSync(path).isDirectory();
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Point the managed launcher at an installation, creating it if needed.
- *
- * Returns undefined when there is nothing to point at — a source checkout run
- * through `src/bin/*.ts` has no installed launcher of its own — in which case no
- * launcher is written and the caller keeps the invocation it already had.
- */
-export function writeCogmemLauncher(options: {
-  env?: Record<string, string | undefined>;
-  target: string | undefined;
-  runtimeDir?: string;
-}): { launcher: string; target: string; runtimeDir?: string } | undefined {
-  const env = options.env ?? process.env;
-  const target = options.target;
-  if (!target || target === 'cogmem' || !isExecutableFile(target)) return undefined;
-  const launcher = cogmemLauncherPath(env);
-  if (resolve(target) === resolve(launcher)) return undefined;
-  const runtimeDir = options.runtimeDir && isDirectory(options.runtimeDir) ? options.runtimeDir : undefined;
-  mkdirSync(cogmemLauncherDir(env), { recursive: true });
-  writeFileSync(cogmemLauncherRecordPath(env), `${target}\n${runtimeDir ?? ''}\n`);
-  writeFileSync(launcher, renderCogmemLauncher());
-  chmodSync(launcher, 0o755);
-  return { launcher, target, runtimeDir };
-}
-
-/**
- * The launcher's source. POSIX `sh`, no bashisms: it is run with whatever a
- * caller has, and one of them runs it with an empty PATH.
- */
-export function renderCogmemLauncher(): string {
-  return `#!/bin/sh
-# Cog launcher, written by \`cogmem init\`. Do not edit.
-#
-# Configurations written from here point at this file rather than at an
-# installation, because this path does not move when the installation does.
-# Everything an installation needs is resolved here, when this runs:
-#   1. the runtime directory recorded beside this file, so a caller whose PATH has
-#      no runtime on it can still run an installed CLI that is a launcher for one;
-#   2. $COGMEM_BIN, when an operator has set one;
-#   3. the installation recorded beside this file (cogmem.target, its first line);
-#   4. the first \`cogmem\` on PATH that is not this file.
-# Finding none is reported and exits 127; it never runs something else.
-#
-# Only shell builtins are used to find this file and read its record: the launcher
-# can be run with a PATH that has nothing on it, which is the situation #94 was
-# about, and \`dirname\` or \`cat\` missing there would break the launcher rather than
-# the installation.
-set -u
-self=$0
-case "$self" in
-  */*) launcher_dir=\${self%/*} ;;
-  *) launcher_dir=. ;;
-esac
-launcher_dir=$(cd "$launcher_dir" && pwd) || launcher_dir=\${self%/*}
-self="$launcher_dir/cogmem"
-
-recorded=""
-runtime=""
-if [ -r "$launcher_dir/cogmem.target" ]; then
-  { IFS= read -r recorded; IFS= read -r runtime; } < "$launcher_dir/cogmem.target" || true
-fi
-
-if [ -n "$runtime" ] && [ -d "$runtime" ]; then PATH="$runtime:$PATH"; export PATH; fi
-
-if [ -n "\${COGMEM_BIN:-}" ] && [ -x "\${COGMEM_BIN}" ]; then exec "\${COGMEM_BIN}" "$@"; fi
-
-target=""
-case "$recorded" in
-  ""|"$self") ;;
-  *) if [ -x "$recorded" ]; then target="$recorded"; fi ;;
-esac
-
-if [ -z "$target" ]; then
-  IFS=:
-  set -f
-  for dir in $PATH; do
-    if [ -n "$dir" ] && [ "$dir" != "$launcher_dir" ] && [ -x "$dir/cogmem" ]; then
-      target="$dir/cogmem"
-      break
-    fi
-  done
-  unset IFS
-  set +f
-fi
-
-if [ -z "$target" ]; then
-  echo "cogmem: this launcher found no installation to run." >&2
-  echo "cogmem: re-run \`cogmem init\`, or set COGMEM_BIN, then try again." >&2
-  exit 127
-fi
-exec "$target" "$@"
-`;
 }
 
 function isExecutableFile(path: string): boolean {
@@ -360,8 +227,8 @@ function isExecutableFile(path: string): boolean {
  * One function because four commands had four answers: `doctor` printed an
  * absolute path unconditionally, one printed a literal project-local
  * `.bin/cogmem` path that exists only in a JS project with a local dependency,
- * `init --json` printed the bin *directory*, and an integration wrote a bare
- * `cogmem` into a config on machines where it was not on `PATH`.
+ * one printed the bin *directory*, and an integration wrote a bare `cogmem`
+ * into a config on machines where it was not on `PATH`.
  */
 export function resolveCogmemInvocation(
   env: Record<string, string | undefined> = process.env,
@@ -395,20 +262,6 @@ export function resolveCogmemInstallation(
   const binDir = resolveCliBinDir(argv1, env);
   if (!hasInstalledLauncher(binDir)) return undefined;
   return join(binDir, 'cogmem');
-}
-
-/** Point the managed launcher at this installation, if it is one. */
-export function ensureCogmemLauncher(
-  env: Record<string, string | undefined> = process.env,
-  argv1: string | undefined = process.argv[1],
-): { launcher: string; target: string; runtimeDir?: string } | undefined {
-  // The runtime this process is running under is the runtime the installation needs,
-  // recorded once here instead of in every host configuration (#114).
-  return writeCogmemLauncher({
-    env,
-    target: resolveCogmemInstallation(env, argv1),
-    runtimeDir: dirname(process.execPath),
-  });
 }
 
 /**

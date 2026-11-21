@@ -26,8 +26,8 @@ export const REFUSAL_NEXT_STEPS: Record<RefusalReason, RefusalNextStep[]> = {
     {
       id: 'use_new_database',
       action: 'point cogmem at a new database path and set it up there, leaving this file untouched',
-      command: 'cogmem init --config <new-config.toml> --yes',
-      safeForAutomation: true,
+      command: 'cogmem install --data <new-data-dir>',
+      safeForAutomation: false,
     },
     {
       id: 'verify_database_path',
@@ -46,8 +46,8 @@ export const REFUSAL_NEXT_STEPS: Record<RefusalReason, RefusalNextStep[]> = {
     {
       id: 'use_new_database',
       action: 'point cogmem at a new database path and import history exported from the old install',
-      command: 'cogmem init --config <new-config.toml> --yes',
-      safeForAutomation: true,
+      command: 'cogmem install --data <new-data-dir>',
+      safeForAutomation: false,
     },
   ],
 };

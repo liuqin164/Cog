@@ -390,7 +390,7 @@ const storage = hasFlag('--storage');
 const json = hasFlag('--json');
 
 if (envPath) {
-  fail('--env-path is no longer supported. Use cogmem init to create .cogmem/config.toml, then run cogmem doctor --config <config.toml>.');
+  fail('--env-path is no longer supported. Use cogmem install to create the companion config, then run cogmem doctor --config <config.toml>.');
 } else {
   const resolution = resolveCogmemConfigPath({ configPath });
   // The PATH question is asked before the branch, not inside it: a fresh
@@ -458,12 +458,12 @@ if (envPath) {
   const launcherFinding = hasCogmemLauncher() && !readCogmemLauncherTarget()
     ? {
       code: 'launcher_target_missing',
-      message: `The managed launcher ${cogmemLauncherPath()} has no installation to run. Run ${launcherInvocation} cleanup to remove it (the state an uninstall leaves), or ${launcherInvocation} init --yes in ${workspaceRoot} to point it at this installation.`,
+      message: `The managed launcher ${cogmemLauncherPath()} has no installation to run. Delete it; this release does not write one.`,
     }
     : !hasCogmemLauncher() && resolveCogmemInstallation(process.env)
       ? {
         code: 'launcher_missing',
-        message: `No managed launcher at ${cogmemLauncherPath()}: a configuration written from here names this installation's own path, and stops working when that path changes. Run ${launcherInvocation} init --yes in ${workspaceRoot} to create one.`,
+        message: `No managed launcher at ${cogmemLauncherPath()}: this release does not write one. Run ${launcherInvocation} install to register the companion.`,
       }
       : undefined;
   if (launcherFinding) {

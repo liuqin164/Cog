@@ -568,7 +568,7 @@ function openKernel(args: ParsedArgs, workspaceRoot: string): { kernel: MemoryKe
     const error = loaded.diagnostics.find((item) => item.severity === 'error');
     if (error) throw new Error(`${error.code}: ${error.message}`);
     if (!loaded.options.dbPath) {
-      throw new Error(`Missing core.db_path in ${configResolution.path}. Run cogmem init again or pass --db <memory.db>.`);
+      throw new Error(`Missing core.db_path in ${configResolution.path}. Run cogmem install or pass --db <memory.db>.`);
     }
     return {
       kernel: createMemoryKernelFromConfig({ configPath: configResolution.path, cwd: workspaceRoot }),
@@ -577,7 +577,7 @@ function openKernel(args: ParsedArgs, workspaceRoot: string): { kernel: MemoryKe
     };
   }
 
-  throw new Error(`Missing cogmem config at ${configResolution.path}. Run cogmem init first or pass --db <memory.db> / --config <config.toml>.`);
+  throw new Error(`Missing cogmem config at ${configResolution.path}. Run cogmem install or pass --db <memory.db> / --config <config.toml>.`);
 }
 
 function buildWindow(args: ParsedArgs): AgentImportResult['window'] {

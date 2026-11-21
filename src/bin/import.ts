@@ -14,7 +14,7 @@ const USAGE = [
   'openclaw reads that workspace\'s memory files; hermes reads its profile, sessions, and state',
   'database. --skill imports a named SKILL.md guide as an imported, low-weight procedure entry;',
   'there is no skills directory to scan. Missing --project is derived from the workspace. The full',
-  'flag set is the shared import surface; `cogmem init` prints the path it wrote.',
+  'flag set is the shared import surface.',
 ].join('\n');
 
 const HOSTS = { openclaw: runOpenClawImport, hermes: runHermesImport } as const;

@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # The Cog installer.
 #
-# It installs the package, links the CLI and stops. It never runs the setup
-# wizard and never writes config: setup is `cogmem init`, verification is
-# `cogmem doctor`. Both are named at the end, one per Install path, so a person
-# and an agent each get the command they should run next. See ADR-0003.
+# It installs the package, links the CLI and stops. It never runs setup and never
+# writes config: installation is `cogmem install`, verification is `cogmem doctor`.
+# See ADR-0003.
 set -euo pipefail
 
 INSTALL_HOME="${COGMEM_INSTALL_HOME:-$HOME/.cogmem/pkg}"

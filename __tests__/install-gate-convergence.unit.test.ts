@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -9,8 +9,7 @@ import { makeTempDir } from './helpers/tmp.js';
  * #114: the managed launcher is the one entry that survives an installation move.
  *
  * A launcher that points at nothing is the state a moved installation leaves, and
- * the gate has to name a command that puts it back. The launcher's absence is not a
- * failure — `init` writes it — and this pins that both output paths do.
+ * the gate has to name the command that replaces it.
  */
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const doctorBin = join(coreRoot, 'src/bin/doctor.ts');
@@ -59,38 +58,11 @@ describe('the gate reports the managed launcher (#114)', () => {
     const finding = parsed.installGate.diagnostics.find((diagnostic) => diagnostic.code === 'launcher_target_missing');
     expect(finding).toBeDefined();
     expect(finding!.message).toContain(join(shimDir, 'cogmem'));
-    expect(finding!.message).toContain('init --yes');
+    expect(finding!.message).toContain('Delete it');
 
     // A launcher that is fine says nothing: a warning here would be noise on every run.
     writeFileSync(join(shimDir, 'cogmem.target'), process.execPath + '\n');
     const clean = await doctor(dir, configPath) as unknown as { installGate: { diagnostics: Array<{ code: string }> } };
     expect(clean.installGate.diagnostics.some((diagnostic) => diagnostic.code.startsWith('shim_'))).toBe(false);
   });
-});
-
-// #114 follow-up. The managed launcher was created inside the `--json` output path, so an
-// interactive `cogmem init` left no launcher and every host configuration written after it
-// named the installation directly — the prefix-change failure #114 exists to prevent. The
-// output format must not decide what lands on disk.
-test('init writes the managed launcher on both output paths', async () => {
-  const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
-  const bin = join(coreRoot, 'src', 'bin', 'init.ts');
-  for (const json of [false, true]) {
-    const home = makeTempDir(`cogmem-init-launcher-${json ? 'json' : 'human'}-`);
-    const workspace = join(home, 'ws');
-    const install = join(home, 'install');
-    mkdirSync(workspace, { recursive: true });
-    mkdirSync(join(install, 'dist', 'bin'), { recursive: true });
-    writeFileSync(join(install, 'cogmem'), '#!/bin/sh\n');
-    chmodSync(join(install, 'cogmem'), 0o755);
-    writeFileSync(join(install, 'dist', 'bin', 'cogmem.js'), '');
-
-    const proc = Bun.spawn([process.execPath, bin, '--yes', '--no-probe', ...(json ? ['--json'] : [])], {
-      cwd: workspace, stdout: 'pipe', stderr: 'pipe',
-      env: { ...process.env, HOME: home, COGMEM_BIN_DIR: install, PATH: '/usr/bin:/bin' },
-    });
-    const code = await proc.exited;
-    expect(code).toBe(0);
-    expect({ json, launcher: existsSync(join(home, '.cogmem', 'bin', 'cogmem')) }).toEqual({ json, launcher: true });
-  }
 });

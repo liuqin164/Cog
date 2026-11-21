@@ -8,7 +8,6 @@ import { checkForUpdate, maybeStartVersionCheck, renderUpdateNotice } from '../i
 import { assertCliArgs } from './CliArgs.js';
 
 const COMMANDS: Record<string, string> = {
-  init: 'init',
   doctor: 'doctor',
   update: 'update',
   memory: 'memory',
@@ -33,7 +32,6 @@ function usage(): string {
     'Usage: cogmem <command> [args]',
     '',
     'Commands:',
-    '  init                 interactive setup',
     '  doctor               validate config, kernel, storage and the install gate',
     '  update               show or run package update command',
     '  memory               audit/search/show raw and compiled memory; run dream/candidates queue',

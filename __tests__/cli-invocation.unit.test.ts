@@ -5,7 +5,6 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
-  cogmemLauncherPath,
   resolveCliBinDir,
   resolveCogmemInvocation,
   type InstallStep,
@@ -17,7 +16,7 @@ import { makeTempDir } from './helpers/tmp.js';
  * One resolver decides how Cogmem is invoked (#78).
  *
  * Commands used to answer "how do I invoke `cogmem`" different ways: `doctor`
- * printed an absolute path unconditionally, `init --json` printed the bin
+ * printed an absolute path unconditionally, one command printed the bin
  * **directory** (`/path/to/bin doctor --json`, exit 126), and an integration
  * wrote a bare `cogmem` into a config on machines where it does not resolve.
  * All of them are printed steps whose whole promise is that they run when
@@ -25,7 +24,6 @@ import { makeTempDir } from './helpers/tmp.js';
  */
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const doctorBin = join(coreRoot, 'src/bin/doctor.ts');
-const initBin = join(coreRoot, 'src/bin/init.ts');
 const BUN_DIR = dirname(process.execPath);
 
 function run(cmd: string[], options: { cwd?: string; env?: Record<string, string> } = {}) {
@@ -235,37 +233,6 @@ describe('printed steps run as printed', () => {
     expect(parsed.nextSteps.find((step) => step.id === 'install_gate')!.command).toBe(`${launcher} doctor --json`);
   });
 
-  test('init --json emits a command, not the bin directory', async () => {
-    const dir = makeTempDir('cogmem-invocation-init-');
-    const binDir = installedLauncher(dir);
-    const workspace = join(dir, 'ws');
-    mkdirSync(workspace, { recursive: true });
-
-    const { stdout, exitCode } = await run(
-      ['bun', initBin, '--yes', '--json', '--no-probe', '--dry-run'],
-      { cwd: workspace, env: { COGMEM_BIN_DIR: binDir, PATH: '/usr/bin:/bin', HOME: dir } },
-    );
-    expect(exitCode).toBe(0);
-    const parsed = JSON.parse(stdout) as { nextSteps: InstallStep[] };
-    // `/path/to/bin doctor --json` is exit 126 — the step an agent follows has to
-    // be the command, not the directory it lives in. It names the managed launcher
-    // rather than this installation, so the step a reader copies keeps working after
-    // the prefix or the checkout moves (#114).
-    expect(parsed.nextSteps[0]!.command).toBe(`${cogmemLauncherPath({ HOME: dir })} doctor --json`);
-    expect(parsed.nextSteps[0]!.command).not.toContain(binDir);
-    // A dry run writes nothing, so the launcher it names does not exist yet — that is the
-    // point of the flag. The step is runnable once the real run has happened, which is the
-    // claim worth checking, so make that run and check it then.
-    const real = await run(
-      ['bun', initBin, '--yes', '--json', '--no-probe'],
-      { cwd: workspace, env: { COGMEM_BIN_DIR: binDir, PATH: '/usr/bin:/bin', HOME: dir } },
-    );
-    expect(real.exitCode).toBe(0);
-    const afterReal = JSON.parse(real.stdout) as { nextSteps: InstallStep[] };
-    expect(afterReal.nextSteps[0]!.command).toBe(`${cogmemLauncherPath({ HOME: dir })} doctor --json`);
-    expectRunnableCommand(afterReal.nextSteps[0]!.command);
-  });
-
   test('a global npm install is found through its own shim directory', () => {
     // npm's posix global layout: the shim is `<prefix>/bin/cogmem`, and the script
     // Bun actually reports as argv[1] is
@@ -381,7 +348,6 @@ test('the JSON command field names the command the way every other one does', ()
     ['cleanup.ts', ['--dry-run']],
     ['doctor.ts', ['--config', config]],
     ['repair.ts', ['project-scope', '--from', 'a', '--to', 'b', '--dry-run', '--config', config]],
-    ['init.ts', ['--yes', '--no-probe']],
   ];
   for (const [file, args] of runs) {
     const proc = Bun.spawnSync({ cmd: ['bun', join(coreRoot, 'src', 'bin', file), ...args, '--json'], cwd: dir, stdout: 'pipe', stderr: 'pipe' });

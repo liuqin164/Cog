@@ -236,7 +236,7 @@ WantedBy=default.target
 ```
 
 ```bash
-cogmem init                 # writes ~/.cogmem/config.toml; --db would create the dir on its own
+cogmem install              # creates the companion data directory and database
 systemctl --user daemon-reload
 systemctl --user enable --now cogmem-observatory
 ```
