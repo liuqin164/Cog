@@ -132,7 +132,7 @@ describe('tools load full set, independent of message content (#333)', () => {
       const ctx = (await shell.runCommand('context')).text;
       const toolsLine = ctx.match(/已装载工具：(.+)/);
       expect(toolsLine).not.toBeNull();
-    expect(toolsLine![1].split('、')).toHaveLength(13);
+      expect(toolsLine![1].split('、')).toHaveLength(13);
     } finally {
       await shell.stop();
     }
