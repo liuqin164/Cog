@@ -18,11 +18,12 @@ import { encodeAtlasNodeId } from '../atlas/AtlasNodeIdCodec.js';
 import type { MemoryAtlasNodeDetail } from '../atlas/MemoryAtlasTypes.js';
 import { readSurfacingObservability, type SurfacingObservability } from '../observability/SurfacingObservability.js';
 import { parseJsonObject } from '../utils/Values.js';
-import { armKeyFor, galaxyLayout } from './GalaxyLayout.js';
+import { armKeyFor, forceLayout, galaxyLayout } from './GalaxyLayout.js';
 import { readRecall, readRecalls, type ObservatoryRecallDetail, type ObservatoryRecalls } from './RecallTraces.js';
 
 /** Nodes above this many are cut, most activate first — the ~20k point budget the star map is built for. */
 const SNAPSHOT_NODE_LIMIT = 20_000;
+const FORCE_NODE_LIMIT = 2_500;
 
 const HIDDEN_STATUS = `('rejected','archived','needs_confirmation')`;
 const L0_TYPES = new Set(['project', 'topic', 'cluster']);
@@ -34,6 +35,22 @@ function lodFor(nodeType: string): ObservatoryLod {
   if (L0_TYPES.has(nodeType)) return 0;
   if (L2_TYPES.has(nodeType)) return 2;
   return 1;
+}
+
+const RULE_KINDS = new Set(['rule', 'constraint', 'prohibition', 'policy', 'boundary', 'workflow_rule']);
+const SOUL_KINDS = new Set(['identity', 'persona', 'belief']);
+const PROMISE_KINDS = new Set(['commitment', 'promise', 'commitments', 'promises']);
+const INTENT_KINDS = new Set(['intention', 'intent', 'plan', 'planning', 'goal', 'goals', 'task']);
+const EXPERIENCE_TYPES = new Set(['episode', 'action', 'raw_event', 'event', 'cluster', 'correction']);
+
+export function starRoleFor(nodeType: string, memoryKind?: string | null, label?: string | null): ObservatoryStarRole {
+  const kind = (memoryKind || (nodeType === 'memoryKind' ? label : '') || '').trim().toLowerCase();
+  if (RULE_KINDS.has(kind)) return 'rule';
+  if (nodeType === 'belief' || SOUL_KINDS.has(kind)) return 'soul';
+  if (PROMISE_KINDS.has(kind)) return 'promise';
+  if (INTENT_KINDS.has(kind)) return 'intent';
+  if (EXPERIENCE_TYPES.has(nodeType)) return 'experience';
+  return 'ordinary';
 }
 
 export interface ObservatoryEvent extends ScopedEvent {
@@ -59,15 +76,27 @@ export interface ObservatoryNode {
   id: string;
   type: string;
   lod: ObservatoryLod;
+  role: ObservatoryStarRole;
   label: string;
   status: string;
+  memoryKind?: string;
   support: number;
   activation: number;
+  degree: number;
   evidenceTotal: number;
   occurredAt?: number;
   x: number;
   y: number;
   z: number;
+}
+
+export type ObservatoryStarRole = 'rule' | 'soul' | 'promise' | 'intent' | 'experience' | 'ordinary';
+
+export interface ObservatoryEdge {
+  source: string;
+  target: string;
+  relation: string;
+  confidence: number;
 }
 
 export interface ObservatoryTruncation {
@@ -97,11 +126,13 @@ export interface ObservatorySnapshot {
     edgesTotal: number;
     nodesByType: Record<string, number>;
     edgesByRelation: Record<string, number>;
+    nodesByRole: Record<ObservatoryStarRole, number>;
   };
   layout: { armRule: 'topic_path' | 'project'; arms: Array<{ id: string; nodes: number }> };
   truncation: ObservatoryTruncation | null;
   histogram: ObservatoryHistogram;
   nodes: ObservatoryNode[];
+  edges: ObservatoryEdge[];
 }
 
 export interface ObservatoryTimeline {
@@ -172,6 +203,7 @@ export interface MemoryObservatoryOptions {
 interface AtlasRow {
   node_id: string;
   node_type: string;
+  memory_kind: string | null;
   label: string;
   topic_path: string | null;
   support_count: number;
@@ -196,6 +228,7 @@ interface ProjectAggregate {
   projectId: string;
   projects: ObservatoryProject[];
   nodes: ObservatoryNode[];
+  edges: ObservatoryEdge[];
   nodesTotal: number;
   truncated: ObservatoryTruncation | null;
   counts: ObservatorySnapshot['counts'];
@@ -214,8 +247,10 @@ interface ProjectAggregate {
 interface AgentAggregate {
   stamp: string;
   nodes: ObservatoryNode[];
+  edges: ObservatoryEdge[];
   truncated: ObservatoryTruncation | null;
   nodesByType: Record<string, number>;
+  nodesByRole: Record<ObservatoryStarRole, number>;
   layout: ObservatorySnapshot['layout'];
 }
 
@@ -238,6 +273,12 @@ function countBy<T>(items: T[], key: (item: T) => string): Record<string, number
 function countByTypeRows(rows: AtlasRow[]): Record<string, number> {
   const counts: Record<string, number> = {};
   for (const row of rows) counts[row.node_type] = (counts[row.node_type] ?? 0) + 1;
+  return counts;
+}
+
+function countRoles(nodes: ObservatoryNode[]): Record<ObservatoryStarRole, number> {
+  const counts: Record<ObservatoryStarRole, number> = { rule: 0, soul: 0, promise: 0, intent: 0, experience: 0, ordinary: 0 };
+  for (const node of nodes) counts[node.role] += 1;
   return counts;
 }
 
@@ -343,7 +384,7 @@ export class MemoryObservatory {
     // page can explain, rather than whatever the table happened to return.
     const rows = this.db
       .query(`
-        SELECT d.node_id, d.node_type, d.label, d.topic_path, d.support_count, d.status, d.occurred_at,
+        SELECT d.node_id, d.node_type, d.memory_kind, d.label, d.topic_path, d.support_count, d.status, d.occurred_at,
                d.evidence_event_ids_json, COALESCE(a.activation, 0) AS activation
         FROM memory_atlas_documents d
         LEFT JOIN memory_atlas_activation a ON a.project_id = d.project_id AND a.node_id = d.node_id
@@ -358,7 +399,7 @@ export class MemoryObservatory {
     const kept = overflow ? rows.slice(0, this.nodeLimit) : rows;
 
     const built = this.buildNodes(kept, projectId);
-    const { nodes, nodeEventIds, armOf, armRule } = built;
+    const { nodes, edges, nodeEventIds, armOf, armRule } = built;
 
     const truncated = overflow ? this.truncation(nodesTotal, kept, nodesByType) : null;
 
@@ -404,12 +445,11 @@ export class MemoryObservatory {
       projectId,
       projects,
       nodes,
+      edges,
       nodesTotal,
       truncated,
-      counts: { nodesTotal, edgesTotal, nodesByType, edgesByRelation },
+      counts: { nodesTotal, edgesTotal, nodesByType, edgesByRelation, nodesByRole: countRoles(nodes) },
       layout: {
-        // Which rule actually produced the arms, not which one was available: a corpus can carry
-        // topic paths on its records without ever projecting a topic node.
         armRule,
         arms: armCounts(nodes, armOf),
       },
@@ -432,9 +472,9 @@ export class MemoryObservatory {
     return aggregate;
   }
 
-  /** The rows the page will draw, in the order the SQL selected them. */
   private buildNodes(rows: AtlasRow[], projectId: string): {
     nodes: ObservatoryNode[];
+    edges: ObservatoryEdge[];
     nodeEventIds: Map<string, string[]>;
     armOf: Map<string, string>;
     armRule: 'topic_path' | 'project';
@@ -452,17 +492,51 @@ export class MemoryObservatory {
       layoutInput.push({ id: row.node_id, arm });
       nodeEventIds.set(row.node_id, parseJsonArray(row.evidence_event_ids_json));
     }
-    const positions = galaxyLayout(layoutInput);
+    const ids = new Set(rows.map((row) => row.node_id));
+    const edgeRows = this.db
+      .query(`
+        SELECT source_type, source_id, target_type, target_id, relation_type, confidence
+        FROM memory_edges
+        WHERE project_id = ? AND status IN ('active','weak')
+        ORDER BY relation_type, source_type, source_id, target_type, target_id
+        LIMIT 60000
+      `)
+      .all(projectId) as Array<{
+        source_type: string;
+        source_id: string;
+        target_type: string;
+        target_id: string;
+        relation_type: string;
+        confidence: number;
+      }>;
+    const edges: ObservatoryEdge[] = [];
+    const degree = new Map<string, number>();
+    for (const row of edgeRows) {
+      const source = encodeAtlasNodeId(row.source_type, row.source_id, projectId);
+      const target = encodeAtlasNodeId(row.target_type, row.target_id, projectId);
+      if (!ids.has(source) || !ids.has(target) || source === target) continue;
+      edges.push({ source, target, relation: row.relation_type, confidence: Number(row.confidence ?? 1) });
+      degree.set(source, (degree.get(source) ?? 0) + 1);
+      degree.set(target, (degree.get(target) ?? 0) + 1);
+    }
+    const base = galaxyLayout(layoutInput);
+    const forced = layoutInput.slice(0, FORCE_NODE_LIMIT);
+    const forcedIds = new Set(forced.map((node) => node.id));
+    const forcedEdges = edges.filter((edge) => forcedIds.has(edge.source) && forcedIds.has(edge.target));
+    const positions = new Map([...base, ...forceLayout(forced, forcedEdges, base)]);
     const nodes: ObservatoryNode[] = rows.map((row) => {
       const point = positions.get(row.node_id) ?? { x: 0, y: 0, z: 0 };
       return {
         id: row.node_id,
         type: row.node_type,
         lod: lodFor(row.node_type),
+        role: starRoleFor(row.node_type, row.memory_kind, row.label),
         label: row.label,
         status: row.status,
+        memoryKind: row.memory_kind ?? undefined,
         support: Number(row.support_count ?? 0),
         activation: Number(row.activation ?? 0),
+        degree: degree.get(row.node_id) ?? 0,
         evidenceTotal: (nodeEventIds.get(row.node_id) ?? []).length,
         occurredAt: row.occurred_at ?? undefined,
         x: point.x,
@@ -470,7 +544,7 @@ export class MemoryObservatory {
         z: point.z,
       };
     });
-    return { nodes, nodeEventIds, armOf, armRule: armsFromTopic ? 'topic_path' : 'project' };
+    return { nodes, edges, nodeEventIds, armOf, armRule: armsFromTopic ? 'topic_path' : 'project' };
   }
 
   /**
@@ -486,7 +560,7 @@ export class MemoryObservatory {
     if (cached && cached.stamp === aggregate.stamp) return cached;
     const rows = this.db
       .query(`
-        SELECT d.node_id, d.node_type, d.label, d.topic_path, d.support_count, d.status, d.occurred_at,
+        SELECT d.node_id, d.node_type, d.memory_kind, d.label, d.topic_path, d.support_count, d.status, d.occurred_at,
                d.evidence_event_ids_json, COALESCE(a.activation, 0) AS activation
         FROM memory_atlas_documents d
         LEFT JOIN memory_atlas_activation a ON a.project_id = d.project_id AND a.node_id = d.node_id
@@ -527,11 +601,14 @@ export class MemoryObservatory {
     let view: AgentAggregate;
     if (aggregate.nodesTotal <= this.nodeLimit) {
       const nodes = aggregate.nodes.filter((node) => (aggregate.nodeAgents.get(node.id) ?? []).includes(agent));
+      const visible = new Set(nodes.map((node) => node.id));
       view = {
         stamp: aggregate.stamp,
         nodes,
+        edges: aggregate.edges.filter((edge) => visible.has(edge.source) && visible.has(edge.target)),
         truncated: aggregate.truncated,
         nodesByType: countBy(nodes, (node) => node.type),
+        nodesByRole: countRoles(nodes),
         layout: { armRule: aggregate.layout.armRule, arms: armCounts(nodes, aggregate.armOf) },
       };
     } else {
@@ -542,12 +619,12 @@ export class MemoryObservatory {
       view = {
         stamp: aggregate.stamp,
         nodes: built.nodes,
-        // The truncation is this view's own: how many of *this agent's* nodes were cut, never the
-        // project's count borrowed as if it described the view (#204).
+        edges: built.edges,
         truncated: visibleRows.length > this.nodeLimit
           ? this.truncation(visibleRows.length, kept, countByTypeRows(visibleRows))
           : null,
         nodesByType: countBy(built.nodes, (node) => node.type),
+        nodesByRole: countRoles(built.nodes),
         layout: { armRule: built.armRule, arms: armCounts(built.nodes, built.armOf) },
       };
     }
@@ -690,11 +767,18 @@ export class MemoryObservatory {
         agent,
         projects: [],
         agents: [],
-        counts: { nodesTotal: 0, edgesTotal: 0, nodesByType: {}, edgesByRelation: {} },
+        counts: {
+          nodesTotal: 0,
+          edgesTotal: 0,
+          nodesByType: {},
+          edgesByRelation: {},
+          nodesByRole: { rule: 0, soul: 0, promise: 0, intent: 0, experience: 0, ordinary: 0 },
+        },
         layout: { armRule: 'project', arms: [] },
         truncation: null,
         histogram: { days: [], series: [], totals: {} },
         nodes: [],
+        edges: [],
       };
     }
     const aggregate = this.aggregate(projectId);
@@ -706,8 +790,8 @@ export class MemoryObservatory {
     // everything that describes the map (the type counts and the arms) follows the view, so a single
     // agent's legend is not a report on the neighbours' corpus.
     const scoped = scopedView === null
-      ? { nodesByType: aggregate.counts.nodesByType, layout: aggregate.layout }
-      : { nodesByType: scopedView.nodesByType, layout: scopedView.layout };
+      ? { nodesByType: aggregate.counts.nodesByType, nodesByRole: aggregate.counts.nodesByRole, layout: aggregate.layout }
+      : { nodesByType: scopedView.nodesByType, nodesByRole: scopedView.nodesByRole, layout: scopedView.layout };
     return {
       source: 'live',
       generatedAt: aggregate.generatedAt,
@@ -717,11 +801,12 @@ export class MemoryObservatory {
       agent,
       projects: aggregate.projects,
       agents: aggregate.agents,
-      counts: { ...aggregate.counts, nodesByType: scoped.nodesByType },
+      counts: { ...aggregate.counts, nodesByType: scoped.nodesByType, nodesByRole: scoped.nodesByRole },
       layout: scoped.layout,
       truncation: scopedView ? scopedView.truncated : aggregate.truncated,
       histogram: agent === null ? aggregate.histogram : this.histogramFor(aggregate.events, agent),
       nodes,
+      edges: scopedView ? scopedView.edges : aggregate.edges,
     };
   }
 

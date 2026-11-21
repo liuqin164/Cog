@@ -1,53 +1,39 @@
-/**
- * The memory observatory's page.
- *
- * Three views over one snapshot, one scope (project + agent) and one watermark, so a reader always
- * knows which moment of which corpus they are looking at: a 3D star map of the Memory Atlas, the
- * ledger's shape over time, and the recall decisions that were actually stored. A fourth view is
- * the governance write exceptions: the owner edits an agent's soul (#194) and enters credential
- * requests (#383) in the trusted page.
- *
- * The star map encodes three things and no more — the arm is a node's top-level grouping, the colour
- * is its node type, the size is support and activation. Radius is a hash scatter: a second meaning
- * on the radius would be a reading the data does not support (`docs/observatory.md`).
- */
-
 import * as THREE from './three.bundle.js';
 
-const NODE_COLORS = {
-  project: '#f2c14e',
-  topic: '#5fd0b4',
-  cluster: '#3fb4a0',
-  issue: '#e88f6a',
-  entity: '#78c8ff',
-  session: '#9b8cf0',
-  thread: '#8a7ae6',
-  memoryKind: '#d7a05a',
-  actionKind: '#e0b25e',
-  episode: '#6ea8fe',
-  raw_event: '#aebbd0',
-  event: '#c3cfe2',
-  belief: '#7fd6a8',
-  action: '#f0a3c8',
-  time: '#5d6f8f',
-  decision: '#8fd0a0',
-  correction: '#e5857e',
-  actor: '#c9a7f0',
-  task: '#93b8d8',
-  object: '#b8c9a0',
-  location: '#7fc7cf',
-  state: '#c0a37a',
-};
-const FALLBACK_COLOR = '#9aa8bd';
-/** Event series are ordered by volume, so the busiest one is always the same colour on every run. */
+const STAR_ROLES = [
+  { id: 'rule', label: '规矩', color: '#e0b25e' },
+  { id: 'soul', label: '灵魂', color: '#c9a7f0' },
+  { id: 'promise', label: '承诺', color: '#e5857e' },
+  { id: 'intent', label: '意图', color: '#7fd6a8' },
+  { id: 'experience', label: '经历', color: '#6ea8fe' },
+  { id: 'ordinary', label: '普通', color: '#9aa8bd' },
+];
+const ROLE_COLOR = Object.fromEntries(STAR_ROLES.map((role) => [role.id, role.color]));
+const ROLE_LABEL = Object.fromEntries(STAR_ROLES.map((role) => [role.id, role.label]));
+const RULE_KINDS = new Set(['rule', 'constraint', 'prohibition', 'policy', 'boundary', 'workflow_rule']);
+const SOUL_KINDS = new Set(['identity', 'persona', 'belief']);
+const PROMISE_KINDS = new Set(['commitment', 'promise', 'commitments', 'promises']);
+const INTENT_KINDS = new Set(['intention', 'intent', 'plan', 'planning', 'goal', 'goals', 'task']);
+const EXPERIENCE_TYPES = new Set(['episode', 'action', 'raw_event', 'event', 'cluster', 'correction']);
+
+function roleOf(node) {
+  if (node.role && ROLE_COLOR[node.role]) return node.role;
+  const kind = String(node.memoryKind || (node.type === 'memoryKind' ? node.label : '') || '').trim().toLowerCase();
+  if (RULE_KINDS.has(kind)) return 'rule';
+  if (node.type === 'belief' || SOUL_KINDS.has(kind)) return 'soul';
+  if (PROMISE_KINDS.has(kind)) return 'promise';
+  if (INTENT_KINDS.has(kind)) return 'intent';
+  if (EXPERIENCE_TYPES.has(node.type)) return 'experience';
+  return 'ordinary';
+}
+
+const colorFor = (node) => ROLE_COLOR[roleOf(node)];
 const SERIES_COLORS = ['#6ea8fe', '#5fd0b4', '#e0b25e', '#e5857e', '#9b8cf0', '#7fc7cf', '#b8c9a0', '#f0a3c8'];
 const DEMO_SOURCE = 'demo';
-/** How much of L1 a phone-sized viewport keeps, most activated first. */
 const MOBILE_L1_LIMIT = 3000;
 
 const state = {
   demo: false,
-  /** id → node, rebuilt with each snapshot: a selection resolves its neighbours per click. */
   nodeIndex: new Map(),
   view: 'starmap',
   projectId: null,
@@ -65,9 +51,10 @@ const state = {
   healthLoading: false,
   healthError: null,
   selectedNode: null,
+  selectedNeighbors: new Set(),
+  hiddenRoles: new Set(),
   selectedDay: null,
   range: null,
-  /** The highest layer the reader will allow; zoom decides how much of it is actually drawn. */
   lodCap: 2,
   mobile: matchMedia('(max-width: 900px)').matches,
   reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
@@ -86,13 +73,11 @@ const el = (tag, props = {}, children = []) => {
   return node;
 };
 const num = (value) => Number(value ?? 0).toLocaleString('zh-CN');
-/** The same estimate the server uses: one CJK character, four Latin characters per token. */
 function soulTokens(text) {
   let units = 0;
   for (const char of String(text ?? '')) units += /[\u2e80-\u9fff\uac00-\ud7af\uf900-\ufaff]/u.test(char) ? 1 : 0.25;
   return Math.ceil(units);
 }
-const colorFor = (type) => NODE_COLORS[type] || FALLBACK_COLOR;
 const stamp = (ms) => (ms ? new Date(ms).toLocaleString('zh-CN', { hour12: false }) : '—');
 
 function api(path, params = {}) {
@@ -132,14 +117,26 @@ async function postJson(path, body) {
   return data;
 }
 
-/* ---------------------------------------------------------------- star map */
-
 const map = {
   ready: false,
   needsFrame: true,
+  fallback: false,
   layers: {},
   groups: { 0: [], 1: [], 2: [] },
+  adjacency: new Map(),
+  edgeList: [],
+  focus: null,
+  interacting: false,
 };
+
+function webglAvailable() {
+  try {
+    const canvas = document.createElement('canvas');
+    return Boolean(canvas.getContext('webgl2') || canvas.getContext('webgl'));
+  } catch {
+    return false;
+  }
+}
 
 function spriteTexture(inner, outer) {
   const size = 64;
@@ -175,29 +172,28 @@ const POINT_VERTEX = `
   attribute float weight;
   varying vec3 vColor;
   varying float vWeight;
+  varying float vDepth;
   void main() {
     vColor = color;
     vWeight = weight;
     vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    vDepth = -mv.z;
     gl_PointSize = clamp(size * (480.0 / -mv.z), 1.0, 48.0);
     gl_Position = projectionMatrix * mv;
   }`;
 const POINT_FRAGMENT = `
   uniform sampler2D uSprite;
   uniform float uFade;
+  uniform float uFogDensity;
   varying vec3 vColor;
   varying float vWeight;
+  varying float vDepth;
   void main() {
     float alpha = texture2D(uSprite, gl_PointCoord).a;
-    gl_FragColor = vec4(vColor * vWeight * uFade, alpha * vWeight * uFade);
+    float fog = exp(-uFogDensity * uFogDensity * vDepth * vDepth);
+    gl_FragColor = vec4(vColor, alpha * vWeight * uFade * fog);
   }`;
 
-/**
- * The camera distance at which each layer fades in, [starts, fully on]. Zoom is what decides how deep
- * the map is drawn — the note's ladder is a reading device, not a settings panel — and the buttons
- * above it set a ceiling. Mobile drops L2 by default and halves the sprite size, which is the
- * degradation table the note fixed.
- */
 function lodBands() {
   return state.mobile
     ? { 1: [430, 250], 2: [0, -1] }
@@ -206,8 +202,6 @@ function lodBands() {
 
 function lodFade(lod, distance) {
   if (lod > state.lodCap) return 0;
-  // The skeleton is never faded: with one project node in a corpus it is the single point at the
-  // centre, and a band for it would be a threshold nobody could see the effect of.
   if (lod === 0) return 1;
   const [starts, full] = lodBands()[lod];
   if (distance <= full) return 1;
@@ -219,9 +213,21 @@ function lodFade(lod, distance) {
 function initMap() {
   if (map.ready) return;
   const canvas = $('map');
-  map.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: 'high-performance' });
+  if (!webglAvailable()) {
+    initMap2d(canvas);
+    return;
+  }
+  try {
+    map.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: 'high-performance' });
+  } catch {
+    const replacement = canvas.cloneNode(false);
+    canvas.replaceWith(replacement);
+    initMap2d(replacement);
+    return;
+  }
   map.renderer.setClearAlpha(0);
   map.scene = new THREE.Scene();
+  map.scene.fog = new THREE.FogExp2(0x05070d, 0.0016);
   map.camera = new THREE.PerspectiveCamera(55, 1, 1, 4000);
   map.camera.position.set(0, 132, 138);
   map.sprite = spriteTexture(0.9, 0);
@@ -235,10 +241,13 @@ function initMap() {
   map.controls.autoRotate = !state.reducedMotion && !state.mobile;
   map.controls.autoRotateSpeed = 0.28;
   map.controls.addEventListener('change', () => { map.needsFrame = true; });
-  map.controls.addEventListener('start', () => { map.controls.autoRotate = false; });
+  map.controls.addEventListener('start', () => { map.controls.autoRotate = false; map.interacting = true; });
+  map.controls.addEventListener('end', () => { map.interacting = false; });
 
   map.dust = dustPoints();
   map.scene.add(map.dust);
+  map.nebula = nebulaClouds();
+  map.scene.add(map.nebula);
   map.marker = new THREE.Sprite(new THREE.SpriteMaterial({
     map: ringTexture(), depthTest: false, transparent: true, opacity: 0.95,
   }));
@@ -246,25 +255,53 @@ function initMap() {
   map.scene.add(map.marker);
   map.edges = new THREE.LineSegments(
     new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3)),
-    new THREE.LineBasicMaterial({ color: 0xf2c14e, transparent: true, opacity: 0.5, depthWrite: false }),
+    new THREE.LineBasicMaterial({ color: 0x607a9b, transparent: true, opacity: 0.16, depthWrite: false }),
   );
   map.edges.frustumCulled = false;
   map.scene.add(map.edges);
+  map.edgeHighlight = new THREE.LineSegments(
+    new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3)),
+    new THREE.LineBasicMaterial({ color: 0xf2c14e, transparent: true, opacity: 0.95, depthWrite: false }),
+  );
+  map.edgeHighlight.frustumCulled = false;
+  map.scene.add(map.edgeHighlight);
 
-  new ResizeObserver(() => { resizeMap(); applyRangeWeights(); }).observe(canvas.parentElement);
-  canvas.addEventListener('pointermove', onPointerMove);
-  canvas.addEventListener('pointerleave', () => { $('hovercard').classList.remove('on'); });
-  canvas.addEventListener('click', onCanvasClick);
-  canvas.addEventListener('keydown', onKeyDown);
+  new ResizeObserver(() => { resizeMap(); applyWeights(); }).observe(canvas.parentElement);
+  bindMapEvents(canvas);
   map.ready = true;
-  // Reachable so a probe can read the frame's draw calls and timing off the live page; nothing in the
-  // page itself reads it.
   window.__cogmemObservatory = map;
   resizeMap();
   requestAnimationFrame(frame);
 }
 
-/** Decoration, not data: it carries no meaning, so a fixed seed keeps screenshots stable. */
+function bindMapEvents(canvas) {
+  canvas.addEventListener('pointermove', onPointerMove);
+  canvas.addEventListener('pointerleave', () => { $('hovercard').classList.remove('on'); });
+  canvas.addEventListener('click', onCanvasClick);
+  canvas.addEventListener('keydown', onKeyDown);
+}
+
+function nebulaClouds() {
+  const group = new THREE.Group();
+  const colors = [0x315c8a, 0x5b3f8a, 0x1f6f78];
+  for (let index = 0; index < colors.length; index += 1) {
+    const material = new THREE.SpriteMaterial({
+      map: spriteTexture(0.12, 0),
+      color: colors[index],
+      transparent: true,
+      opacity: 0.16,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const cloud = new THREE.Sprite(material);
+    const angle = (index / colors.length) * Math.PI * 2;
+    cloud.position.set(Math.cos(angle) * 58, (index - 1) * 11, Math.sin(angle) * 58);
+    cloud.scale.setScalar(160 + index * 36);
+    group.add(cloud);
+  }
+  return group;
+}
+
 function dustPoints() {
   const count = state.mobile || state.reducedMotion ? 0 : 2600;
   const positions = new Float32Array(Math.max(count, 1) * 3);
@@ -286,27 +323,271 @@ function dustPoints() {
   }));
 }
 
+function initMap2d(canvas) {
+  map.fallback = true;
+  const ctx = canvas.getContext('2d');
+  const stars = [];
+  let seed = 0x2f6e2b1;
+  const rand = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+  const count = state.mobile || state.reducedMotion ? 90 : 220;
+  for (let index = 0; index < count; index += 1) {
+    stars.push({ x: rand(), y: rand(), size: 0.4 + rand() * 1.4, alpha: 0.15 + rand() * 0.5 });
+  }
+  map.map2d = {
+    ctx,
+    width: 1,
+    height: 1,
+    scale: 2.6,
+    minScale: 0.6,
+    maxScale: 24,
+    centerX: 0,
+    centerZ: 0,
+    rotation: 0,
+    stars,
+    pointers: new Map(),
+    panning: null,
+    pinch: null,
+    dragged: false,
+  };
+  canvas.addEventListener('pointerdown', (event) => {
+    canvas.setPointerCapture(event.pointerId);
+    map.map2d.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (map.map2d.pointers.size === 2) {
+      const [left, right] = [...map.map2d.pointers.values()];
+      map.map2d.pinch = { distance: Math.hypot(left.x - right.x, left.y - right.y), scale: map.map2d.scale };
+    } else {
+      map.map2d.panning = { x: event.clientX, y: event.clientY };
+      map.map2d.dragged = false;
+    }
+  });
+  canvas.addEventListener('pointermove', (event) => {
+    if (map.map2d.pointers.has(event.pointerId)) map.map2d.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (map.map2d.pinch && map.map2d.pointers.size === 2) {
+      const [left, right] = [...map.map2d.pointers.values()];
+      const distance = Math.hypot(left.x - right.x, left.y - right.y);
+      if (distance > 0) map.map2d.scale = Math.max(map.map2d.minScale, Math.min(map.map2d.maxScale, map.map2d.pinch.scale * distance / map.map2d.pinch.distance));
+      map.needsFrame = true;
+      return;
+    }
+    if (!map.map2d.panning) return;
+    const dx = event.clientX - map.map2d.panning.x;
+    const dy = event.clientY - map.map2d.panning.y;
+    if (Math.abs(dx) + Math.abs(dy) > 3) map.map2d.dragged = true;
+    map.map2d.centerX -= dx / map.map2d.scale;
+    map.map2d.centerZ -= dy / map.map2d.scale;
+    map.map2d.panning = { x: event.clientX, y: event.clientY };
+    map.needsFrame = true;
+  });
+  const release = (event) => {
+    map.map2d.pointers.delete(event.pointerId);
+    if (map.map2d.pointers.size < 2) map.map2d.pinch = null;
+    map.map2d.panning = null;
+  };
+  canvas.addEventListener('pointerup', release);
+  canvas.addEventListener('pointercancel', release);
+  canvas.addEventListener('wheel', (event) => {
+    event.preventDefault();
+    map.map2d.scale = Math.max(map.map2d.minScale, Math.min(map.map2d.maxScale, map.map2d.scale * Math.exp(-event.deltaY * 0.0012)));
+    map.needsFrame = true;
+  }, { passive: false });
+  map.ready = true;
+  bindMapEvents(canvas);
+  new ResizeObserver(() => resizeMap()).observe(canvas.parentElement);
+  window.__cogmemObservatory = map;
+  resizeMap();
+  requestAnimationFrame(frame);
+}
+
+function resizeMap2d(width, height) {
+  const canvas = $('map');
+  const devicePixelRatio = Math.min(window.devicePixelRatio || 1, state.mobile ? 1.5 : 2);
+  canvas.width = Math.max(1, Math.round(width * devicePixelRatio));
+  canvas.height = Math.max(1, Math.round(height * devicePixelRatio));
+  map.map2d.ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+  map.map2d.width = width;
+  map.map2d.height = height;
+  map.map2d.minScale = Math.min(width, height) / 260;
+  map.map2d.scale = Math.max(map.map2d.scale, map.map2d.minScale);
+  map.needsFrame = true;
+}
+
+function frame2d() {
+  if (!map.ready) return;
+  const idle = state.mobile || state.reducedMotion || state.selectedNode;
+  if (!idle || map.needsFrame) draw2d();
+  if (!idle && !state.reducedMotion) {
+    map.map2d.rotation += 0.0009;
+    map.needsFrame = true;
+  }
+}
+
+function project2d(x, y, z) {
+  const view = map.map2d;
+  const cosine = Math.cos(view.rotation);
+  const sine = Math.sin(view.rotation);
+  const dx = x - view.centerX;
+  const dz = z - view.centerZ;
+  return {
+    x: view.width / 2 + (dx * cosine - dz * sine) * view.scale,
+    y: view.height / 2 + (dx * sine + dz * cosine) * view.scale,
+    depth: y,
+  };
+}
+
+function nearestNode2d(clientX, clientY, limit = 14) {
+  const rect = $('map').getBoundingClientRect();
+  const x = clientX - rect.left;
+  const y = clientY - rect.top;
+  let best = null;
+  let bestDistance = limit * limit * 4;
+  for (const lod of visibleGroups()) {
+    for (const node of map.groups[lod]) {
+      const screen = project2d(node.x, node.y, node.z);
+      const dx = screen.x - x;
+      const dy = screen.y - y;
+      const distance = dx * dx + dy * dy;
+      if (distance < bestDistance) { bestDistance = distance; best = node; }
+    }
+  }
+  return best;
+}
+
+function weightFor(node) {
+  let weight = 1;
+  if (state.hiddenRoles.has(roleOf(node))) weight *= 0.06;
+  if (state.range && node.occurredAt) {
+    const day = new Date(node.occurredAt).toISOString().slice(0, 10);
+    if (day < state.range[0] || day > state.range[1]) weight *= 0.12;
+  }
+  if (state.selectedNode) {
+    if (node.id === state.selectedNode.id) weight *= 1;
+    else if (state.selectedNeighbors.has(node.id)) weight *= 0.85;
+    else weight *= 0.05;
+  }
+  return weight;
+}
+
+function draw2d() {
+  const view = map.map2d;
+  const ctx = view.ctx;
+  ctx.clearRect(0, 0, view.width, view.height);
+  const glow = ctx.createRadialGradient(view.width * 0.55, view.height * 0.45, 10, view.width * 0.55, view.height * 0.45, Math.max(view.width, view.height) * 0.8);
+  glow.addColorStop(0, 'rgba(37,58,92,0.28)');
+  glow.addColorStop(0.45, 'rgba(28,34,66,0.16)');
+  glow.addColorStop(1, 'rgba(5,7,13,0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, view.width, view.height);
+  for (const star of view.stars) {
+    ctx.globalAlpha = star.alpha;
+    ctx.fillStyle = '#8fa6c8';
+    ctx.fillRect(star.x * view.width, star.y * view.height, star.size, star.size);
+  }
+  ctx.globalAlpha = 1;
+
+  ctx.beginPath();
+  for (const edge of map.edgeList) {
+    const source = project2d(edge.sourceNode.x, edge.sourceNode.y, edge.sourceNode.z);
+    const target = project2d(edge.targetNode.x, edge.targetNode.y, edge.targetNode.z);
+    ctx.moveTo(source.x, source.y);
+    ctx.lineTo(target.x, target.y);
+  }
+  ctx.strokeStyle = state.selectedNode ? 'rgba(96,122,155,0.05)' : 'rgba(96,122,155,0.18)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  if (state.selectedNode) {
+    ctx.beginPath();
+    for (const edge of map.edgeList) {
+      if (edge.source !== state.selectedNode.id && edge.target !== state.selectedNode.id) continue;
+      const source = project2d(edge.sourceNode.x, edge.sourceNode.y, edge.sourceNode.z);
+      const target = project2d(edge.targetNode.x, edge.targetNode.y, edge.targetNode.z);
+      ctx.moveTo(source.x, source.y);
+      ctx.lineTo(target.x, target.y);
+    }
+    ctx.strokeStyle = 'rgba(242,193,78,0.8)';
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+  }
+
+  const ordered = [];
+  for (const lod of visibleGroups()) for (const node of map.groups[lod]) ordered.push(node);
+  ordered.sort((left, right) => right.z - left.z);
+  for (const node of ordered) {
+    const weight = weightFor(node);
+    if (weight < 0.02) continue;
+    const screen = project2d(node.x, node.y, node.z);
+    const radius = Math.max(1.2, Math.sqrt(pointSizeFor(node)) * (state.mobile ? 0.55 : 0.75));
+    ctx.globalAlpha = Math.min(1, weight * 0.9);
+    ctx.fillStyle = colorFor(node);
+    ctx.beginPath();
+    ctx.arc(screen.x, screen.y, radius, 0, Math.PI * 2);
+    ctx.fill();
+    if (state.selectedNode?.id === node.id) {
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = '#f2c14e';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y, radius + 5, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (state.selectedNeighbors.has(node.id)) {
+      ctx.globalAlpha = 0.8;
+      ctx.strokeStyle = 'rgba(242,193,78,0.55)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y, radius + 2.5, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+  ctx.globalAlpha = 1;
+  map.needsFrame = false;
+}
+
 function pointSizeFor(node) {
   const support = Math.log10(1 + Math.max(0, node.support)) * 2.1;
+  const degree = Math.log10(1 + Math.max(0, node.degree ?? 0)) * 2.4;
   const activation = Math.min(Math.max(node.activation ?? 0, 0), 1) * 2.4;
   const base = node.lod === 2 ? 1.5 : 3.2;
-  const size = Math.min(Math.max(base + support + activation, 1.5), 13);
+  const size = Math.min(Math.max(base + support + degree + activation, 1.5), 14);
   return state.mobile ? size * 0.5 : size;
 }
 
 function buildMap(snapshot) {
   initMap();
-  for (const lod of [0, 1, 2]) {
-    if (map.layers[lod]) { map.scene.remove(map.layers[lod]); map.layers[lod].geometry.dispose(); }
-  }
   map.groups = { 0: [], 1: [], 2: [] };
   for (const node of snapshot.nodes) map.groups[node.lod].push(node);
-  // Mobile keeps the most activated slice of L1 rather than every aggregate; the legend says how much
-  // was left out, because a silent cap is the thing the note forbids.
   state.mobileDropped = 0;
   if (state.mobile && map.groups[1].length > MOBILE_L1_LIMIT) {
     state.mobileDropped = map.groups[1].length - MOBILE_L1_LIMIT;
     map.groups[1] = map.groups[1].slice(0, MOBILE_L1_LIMIT);
+  }
+  const nodeIndex = new Map(snapshot.nodes.map((node) => [node.id, node]));
+  const visible = new Set([...map.groups[0], ...map.groups[1], ...map.groups[2]].map((node) => node.id));
+  map.adjacency = new Map();
+  map.edgeList = [];
+  for (const edge of snapshot.edges ?? []) {
+    if (!visible.has(edge.source) || !visible.has(edge.target)) continue;
+    const source = nodeIndex.get(edge.source);
+    const target = nodeIndex.get(edge.target);
+    if (!source || !target) continue;
+    map.edgeList.push({ ...edge, sourceNode: source, targetNode: target });
+    const left = map.adjacency.get(edge.source) ?? new Set();
+    left.add(edge.target);
+    map.adjacency.set(edge.source, left);
+    const right = map.adjacency.get(edge.target) ?? new Set();
+    right.add(edge.source);
+    map.adjacency.set(edge.target, right);
+  }
+
+  if (map.fallback) {
+    map.map2d.snapshot = snapshot;
+    map.map2d.nodes = snapshot.nodes.filter((node) => visible.has(node.id));
+    map.needsFrame = true;
+    updateMapStats();
+    return;
+  }
+
+  for (const lod of [0, 1, 2]) {
+    if (map.layers[lod]) { map.scene.remove(map.layers[lod]); map.layers[lod].geometry.dispose(); }
   }
 
   for (const lod of [0, 1, 2]) {
@@ -321,7 +602,7 @@ function buildMap(snapshot) {
       positions[index * 3] = node.x;
       positions[index * 3 + 1] = node.y;
       positions[index * 3 + 2] = node.z;
-      tint.set(colorFor(node.type));
+      tint.set(colorFor(node));
       colors[index * 3] = tint.r;
       colors[index * 3 + 1] = tint.g;
       colors[index * 3 + 2] = tint.b;
@@ -334,7 +615,7 @@ function buildMap(snapshot) {
     geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
     geometry.setAttribute('weight', new THREE.BufferAttribute(weights, 1));
     const material = new THREE.ShaderMaterial({
-      uniforms: { uSprite: { value: map.sprite }, uFade: { value: 1 } },
+      uniforms: { uSprite: { value: map.sprite }, uFade: { value: 1 }, uFogDensity: { value: 0.0032 } },
       vertexShader: POINT_VERTEX,
       fragmentShader: POINT_FRAGMENT,
       transparent: true,
@@ -348,7 +629,13 @@ function buildMap(snapshot) {
     map.scene.add(points);
     map.layers[lod] = points;
   }
-  applyRangeWeights();
+  const allEdges = new Float32Array(map.edgeList.length * 6);
+  map.edgeList.forEach((edge, index) => {
+    allEdges.set([edge.sourceNode.x, edge.sourceNode.y, edge.sourceNode.z, edge.targetNode.x, edge.targetNode.y, edge.targetNode.z], index * 6);
+  });
+  map.edges.geometry.setAttribute('position', new THREE.BufferAttribute(allEdges, 3));
+  map.edges.geometry.computeBoundingSphere();
+  applyWeights();
   map.needsFrame = true;
   updateMapStats();
 }
@@ -358,6 +645,7 @@ function resizeMap() {
   const width = canvas.clientWidth || canvas.parentElement.clientWidth;
   const height = canvas.clientHeight || canvas.parentElement.clientHeight;
   if (!width || !height) return;
+  if (map.fallback) { resizeMap2d(width, height); return; }
   map.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, state.mobile ? 1.5 : 2));
   map.renderer.setSize(width, height, false);
   map.camera.aspect = width / height;
@@ -366,20 +654,31 @@ function resizeMap() {
   map.needsFrame = true;
 }
 
-/** The one authored motion: the galaxy turns while nobody is touching it, and stops when they are. */
 function frame() {
   requestAnimationFrame(frame);
   if (!map.ready) return;
+  if (map.fallback) { frame2d(); return; }
   if (map.onDemandIdle === undefined) map.onDemandIdle = state.mobile || state.reducedMotion;
+  const focusing = updateFocus();
   const damping = map.controls.update();
-  if (map.onDemandIdle && !map.needsFrame && !damping) return;
+  if (map.onDemandIdle && !map.needsFrame && !damping && !focusing) return;
   applyLodBands();
   updateProjection();
   map.renderer.render(map.scene, map.camera);
   map.needsFrame = false;
 }
 
-/** Reused by hover picking: one world→screen matrix, recomputed once per rendered frame. */
+function updateFocus() {
+  if (!map.focus) return false;
+  const progress = Math.min(1, (performance.now() - map.focus.started) / map.focus.duration);
+  const ease = progress * progress * (3 - 2 * progress);
+  map.controls.target.lerpVectors(map.focus.fromTarget, map.focus.toTarget, ease);
+  map.camera.position.lerpVectors(map.focus.fromPosition, map.focus.toPosition, ease);
+  map.needsFrame = true;
+  if (progress >= 1) map.focus = null;
+  return true;
+}
+
 function updateProjection() {
   map.camera.updateMatrixWorld();
   map.camera.matrixWorldInverse.copy(map.camera.matrixWorld).invert();
@@ -388,7 +687,6 @@ function updateProjection() {
     .elements;
 }
 
-/** Zoom, not a checkbox, is what brings a layer in — and the legend is re-labelled when it changes. */
 function applyLodBands() {
   const distance = map.camera.position.distanceTo(map.controls.target);
   let changed = false;
@@ -409,44 +707,43 @@ function applyLodBands() {
   if (changed) updateMapStats();
 }
 
-function applyRangeWeights() {
-  const range = state.range;
+function applyWeights() {
   for (const lod of [0, 1, 2]) {
     const layer = map.layers[lod];
     if (!layer) continue;
     const weights = layer.geometry.attributes.weight;
     map.groups[lod].forEach((node, index) => {
-      let weight = 1;
-      if (range && node.occurredAt) {
-        const day = new Date(node.occurredAt).toISOString().slice(0, 10);
-        const inside = day >= range[0] && day <= range[1];
-        if (!inside) weight *= 0.12;
-      }
-      weights.array[index] = weight;
+      weights.array[index] = weightFor(node);
     });
     weights.needsUpdate = true;
   }
+  if (map.edges) map.edges.material.opacity = state.selectedNode ? 0.04 : 0.16;
   map.needsFrame = true;
 }
 
 function visibleGroups() {
+  if (map.fallback) {
+    return [0, 1, 2].filter((lod) => map.groups[lod].length > 0 && lod <= state.lodCap && !(state.mobile && lod === 2));
+  }
   const distance = map.camera.position.distanceTo(map.controls.target);
   return [0, 1, 2].filter((lod) => map.groups[lod].length > 0 && lodFade(lod, distance) > 0.02);
 }
 
 function projectToScreen(x, y, z) {
+  if (map.fallback) return project2d(x, y, z);
   const matrix = map.projection;
   const w = matrix[3] * x + matrix[7] * y + matrix[11] * z + matrix[15];
   if (w <= 0) return null;
   const ndcX = (matrix[0] * x + matrix[4] * y + matrix[8] * z + matrix[12]) / w;
   const ndcY = (matrix[1] * x + matrix[5] * y + matrix[9] * z + matrix[13]) / w;
-  const canvas = map.renderer.domElement;
+  const canvas = $('map');
   return { x: (ndcX * 0.5 + 0.5) * canvas.clientWidth, y: (-ndcY * 0.5 + 0.5) * canvas.clientHeight };
 }
 
 function nearestNode(clientX, clientY, limit = 14) {
+  if (map.fallback) return nearestNode2d(clientX, clientY, limit);
   if (!map.projection) return null;
-  const rect = map.renderer.domElement.getBoundingClientRect();
+  const rect = $('map').getBoundingClientRect();
   const x = clientX - rect.left;
   const y = clientY - rect.top;
   let best = null;
@@ -474,12 +771,12 @@ function onPointerMove(event) {
     const node = nearestNode(event.clientX, event.clientY);
     const card = $('hovercard');
     if (!node) { card.classList.remove('on'); return; }
-    const rect = map.renderer.domElement.getBoundingClientRect();
+    const rect = $('map').getBoundingClientRect();
     card.innerHTML = '';
     card.append(el('span', { class: 't', text: node.label || node.id }));
     card.append(el('span', {
       class: 's',
-      text: `${node.type}${node.status && node.status !== 'active' ? ` · ${node.status}` : ''} · support ${num(node.support)} · 证据 ${num(node.evidenceTotal)}`,
+      text: `${ROLE_LABEL[roleOf(node)]} · ${node.type}${node.status && node.status !== 'active' ? ` · ${node.status}` : ''} · ${num(node.degree ?? 0)} 条连边 · 证据 ${num(node.evidenceTotal)}`,
     }));
     card.classList.add('on');
     card.style.left = `${Math.min(event.clientX - rect.left + 14, rect.width - 240)}px`;
@@ -489,14 +786,21 @@ function onPointerMove(event) {
 
 function selectNode(node, options = {}) {
   state.selectedNode = node;
-  map.marker.visible = Boolean(node);
-  if (node) map.marker.position.set(node.x, node.y, node.z);
-  else map.edges.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3));
+  state.selectedNeighbors = new Set(node ? [node.id, ...(map.adjacency.get(node.id) ?? [])] : []);
+  if (map.marker) {
+    map.marker.visible = Boolean(node);
+    if (node) map.marker.position.set(node.x, node.y, node.z);
+  }
+  if (!node) clearHighlight();
+  else {
+    drawHighlight(node, state.selectedNeighbors);
+    focusNode(node);
+  }
+  applyWeights();
   map.needsFrame = true;
   if (!node) { renderPanel(); return; }
   if (options.fromSnapshot && state.demo) {
     const detail = demoDetail(node);
-    drawEdges(node, detail.neighbors);
     renderPanel({ node, detail });
     return;
   }
@@ -505,17 +809,20 @@ function selectNode(node, options = {}) {
     api(`node/${encodeURIComponent(node.id)}`, { project: state.projectId, agent: state.agent })
       .then((detail) => {
         if (state.selectedNode !== node) return;
-        drawEdges(node, detail.neighbors || []);
+        const neighborIds = new Set(state.selectedNeighbors);
+        for (const edge of detail.neighbors || []) {
+          const other = edge.source === node.id ? edge.target : edge.source;
+          if (state.nodeIndex.has(other)) neighborIds.add(other);
+        }
+        state.selectedNeighbors = neighborIds;
+        drawHighlight(node, neighborIds);
+        applyWeights();
         renderPanel({ node, detail });
       })
       .catch((error) => renderPanel({ node, error: error.message }));
   }
 }
 
-/**
- * The demo entry has no database behind it, so the detail panel is assembled from the same fictional
- * snapshot and says so. Nothing here is ever mixed with a live corpus: demo mode never calls the API.
- */
 function demoDetail(node) {
   const neighbours = (state.snapshot.nodes ?? [])
     .filter((item) => item.id !== node.id && item.topicPath && item.topicPath === node.topicPath)
@@ -534,23 +841,53 @@ function demoDetail(node) {
   };
 }
 
-function drawEdges(node, neighbors) {
-  const visible = new Set(state.snapshot.nodes.map((item) => item.id));
-  const points = [];
-  for (const edge of neighbors) {
-    const otherId = edge.source === node.id ? edge.target : edge.source;
-    if (!visible.has(otherId)) continue;
-    const other = state.nodeIndex.get(otherId);
-    if (!other) continue;
-    points.push(node.x, node.y, node.z, other.x, other.y, other.z);
+function focusNode(node) {
+  if (map.fallback) {
+    const target = map.map2d;
+    target.centerX = node.x;
+    target.centerZ = node.z;
+    target.scale = Math.max(target.scale, target.minScale * 2.2);
+    map.needsFrame = true;
+    return;
   }
-  const geometry = map.edges.geometry;
+  map.controls.autoRotate = false;
+  const toTarget = new THREE.Vector3(node.x, node.y, node.z);
+  const offset = map.camera.position.clone().sub(map.controls.target);
+  offset.setLength(Math.max(30, Math.min(offset.length(), 72)));
+  map.focus = {
+    fromTarget: map.controls.target.clone(),
+    toTarget,
+    fromPosition: map.camera.position.clone(),
+    toPosition: toTarget.clone().add(offset),
+    started: performance.now(),
+    duration: 420,
+  };
+}
+
+function drawHighlight(node, neighbors) {
+  state.selectedNeighbors = new Set(neighbors);
+  if (map.fallback) { map.needsFrame = true; return; }
+  const points = [];
+  for (const edge of map.edgeList) {
+    if (edge.source !== node.id && edge.target !== node.id) continue;
+    points.push(edge.sourceNode.x, edge.sourceNode.y, edge.sourceNode.z, edge.targetNode.x, edge.targetNode.y, edge.targetNode.z);
+  }
+  const geometry = map.edgeHighlight.geometry;
   geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(points), 3));
   geometry.computeBoundingSphere();
   map.needsFrame = true;
 }
 
+function clearHighlight() {
+  state.selectedNeighbors = new Set();
+  if (map.edgeHighlight) {
+    map.edgeHighlight.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3));
+  }
+  map.needsFrame = true;
+}
+
 function onCanvasClick(event) {
+  if (map.fallback && map.map2d.dragged) { map.map2d.dragged = false; return; }
   const node = nearestNode(event.clientX, event.clientY);
   if (!node) { selectNode(null); return; }
   selectNode(node, { fromSnapshot: true });
@@ -558,6 +895,26 @@ function onCanvasClick(event) {
 
 function onKeyDown(event) {
   const canvas = $('map');
+  if (map.fallback) {
+    const pan = (dx, dy) => {
+      map.map2d.centerX -= dx / map.map2d.scale;
+      map.map2d.centerZ -= dy / map.map2d.scale;
+      map.needsFrame = true;
+    };
+    if (event.key === 'ArrowLeft') { pan(24, 0); event.preventDefault(); }
+    else if (event.key === 'ArrowRight') { pan(-24, 0); event.preventDefault(); }
+    else if (event.key === 'ArrowUp') { pan(0, 24); event.preventDefault(); }
+    else if (event.key === 'ArrowDown') { pan(0, -24); event.preventDefault(); }
+    else if (event.key === '+' || event.key === '=') { map.map2d.scale *= 1.15; map.needsFrame = true; event.preventDefault(); }
+    else if (event.key === '-' || event.key === '_') { map.map2d.scale /= 1.15; map.needsFrame = true; event.preventDefault(); }
+    else if (event.key === 'Enter') {
+      const rect = canvas.getBoundingClientRect();
+      const node = nearestNode(rect.left + rect.width / 2, rect.top + rect.height / 2, 60);
+      if (node) selectNode(node, { fromSnapshot: true });
+      event.preventDefault();
+    } else if (event.key === 'Escape') selectNode(null);
+    return;
+  }
   const rotate = (dx, dy) => {
     map.controls.autoRotate = false;
     const offset = map.camera.position.clone();
@@ -585,13 +942,13 @@ function onKeyDown(event) {
 function updateMapStats() {
   const snapshot = state.snapshot;
   if (!snapshot) return;
-  const distance = map.camera.position.distanceTo(map.controls.target);
-  const bands = [0, 1, 2].filter((lod) => map.groups[lod].length > 0 && lodFade(lod, distance) > 0.02);
+  const bands = visibleGroups();
   const shown = bands.reduce((sum, lod) => sum + map.groups[lod].length, 0);
   const caps = [];
   if (state.mobileDropped) caps.push(`移动端 L1 只画最活跃的 ${num(MOBILE_L1_LIMIT)} 个（省略 ${num(state.mobileDropped)}）`);
   if (snapshot.truncation) caps.push(`快照上限 ${num(snapshot.truncation.limit)}`);
-  $('map-stats').textContent = `显示 ${num(shown)} / ${num(snapshot.nodes.length)} 个节点 · LOD 当前 ${bands.map((lod) => `L${lod}`).join('+') || '无'}`
+  const mode = map.fallback ? '2D 降级' : '3D';
+  $('map-stats').textContent = `${mode} · ${num(shown)} / ${num(snapshot.nodes.length)} 节点 · ${num(map.edgeList.length)} / ${num(snapshot.counts.edgesTotal)} 边 · LOD ${bands.map((lod) => `L${lod}`).join('+') || '无'}`
     + (caps.length ? ` · ${caps.join(' · ')}` : '');
 }
 
@@ -726,7 +1083,7 @@ function renderTimeline() {
       state.range = [days[low], days[high]];
       state.selectedDay = null;
     }
-    applyRangeWeights();
+    applyWeights();
     renderDayPanel(dayPanel);
     renderPanel();
   });
@@ -740,7 +1097,7 @@ function renderDayPanel(host) {
     host.append(el('div', {}, [
       el('h3', { text: `范围 ${state.range[0]} → ${state.range[1]}` }),
       el('p', { class: 'dim', text: '星图里落在范围外的节点已变暗。' }),
-      el('button', { class: 'chip', type: 'button', text: '清除范围', onclick: () => { state.range = null; applyRangeWeights(); renderDayPanel(host); renderPanel(); } }),
+      el('button', { class: 'chip', type: 'button', text: '清除范围', onclick: () => { state.range = null; applyWeights(); renderDayPanel(host); renderPanel(); } }),
     ]));
     return;
   }
@@ -1428,7 +1785,7 @@ function renderOverviewPanel(panel) {
   const typeSection = el('div', { class: 'section' });
   typeSection.append(el('h2', { class: 'head', text: state.agent ? '按类型（本视图）' : '按类型' }));
   typeSection.append(el('ul', { class: 'plain' }, types.map(([type, count]) => el('li', {}, [
-    el('span', {}, [el('span', { class: 'swatch', style: `color:${colorFor(type)};margin-right:0.375rem` }), type]),
+    el('span', {}, [el('span', { class: 'swatch', style: `color:${colorFor({ type })};margin-right:0.375rem` }), type]),
     el('span', { class: 'num', text: num(count) }),
   ]))));
   panel.append(typeSection);
@@ -1438,8 +1795,8 @@ function renderOverviewPanel(panel) {
   layout.append(el('p', {
     class: 'dim prose',
     text: snapshot.layout.armRule === 'topic_path'
-      ? `旋臂 = 顶层主题（${num(snapshot.layout.arms.length)} 条臂）。颜色 = 节点类型，点大小 = support 与 activation。半径不承载语义。`
-      : `这个项目没有主题节点，所以整片星云落在一条臂上（${snapshot.projectId}）。颜色 = 节点类型，点大小 = support 与 activation。半径不承载语义。`,
+      ? `力导向团簇 = 帧/图谱关系，颜色 = 六类角色（${num(snapshot.layout.arms.length)} 个顶层分组）。点大小 = 连边数、support 与 activation。`
+      : `这个项目没有主题节点，所以力导向从项目（${snapshot.projectId}）起算。颜色 = 六类角色，点大小 = 连边数、support 与 activation。`,
   }));
   layout.append(el('ul', { class: 'plain' }, snapshot.layout.arms.slice(0, 12).map((arm) =>
     el('li', {}, [el('span', { text: arm.id }), el('span', { class: 'num', text: num(arm.nodes) })]))));
@@ -1448,8 +1805,8 @@ function renderOverviewPanel(panel) {
   const edges = Object.entries(snapshot.counts.edgesByRelation).sort((left, right) => right[1] - left[1]);
   if (edges.length) {
     const edgeSection = el('div', { class: 'section' });
-    edgeSection.append(el('h2', { class: 'head', text: '关系（不在快照里）' }));
-    edgeSection.append(el('p', { class: 'dim', text: '边不随快照下发，选中节点时按需取一跳邻域。' }));
+    edgeSection.append(el('h2', { class: 'head', text: '关系' }));
+    edgeSection.append(el('p', { class: 'dim', text: `本视图画 ${num(snapshot.edges?.length ?? 0)} 条边，账本共 ${num(snapshot.counts.edgesTotal)} 条。` }));
     edgeSection.append(el('ul', { class: 'plain' }, edges.slice(0, 12).map(([relation, count]) =>
       el('li', {}, [el('span', { text: relation }), el('span', { class: 'num', text: num(count) })]))));
     panel.append(edgeSection);
@@ -1469,7 +1826,7 @@ function renderOverviewPanel(panel) {
 
 function renderNodePanel(panel, options) {
   const node = options.node ?? state.selectedNode;
-  panel.append(panelHeader(node.label || node.id, `${node.type} · LOD ${node.lod}`));
+  panel.append(panelHeader(node.label || node.id, `${ROLE_LABEL[roleOf(node)]} · ${node.type} · LOD ${node.lod}`));
   if (options.error) {
     panel.append(el('div', { class: 'section' }, [el('p', { class: 'dim', text: `详情读取失败：${options.error}` })]));
     return;
@@ -1478,6 +1835,8 @@ function renderNodePanel(panel, options) {
   const detail = options.detail;
   const facts = el('div', { class: 'section' });
   facts.append(el('dl', { class: 'kv' }, [
+    el('dt', { text: '角色' }), el('dd', { text: ROLE_LABEL[roleOf(node)] }),
+    el('dt', { text: '连边' }), el('dd', { text: num(node.degree ?? 0) }),
     el('dt', { text: 'support' }), el('dd', { text: num(node.support) }),
     el('dt', { text: 'activation' }), el('dd', { text: (node.activation ?? 0).toFixed(3) }),
     el('dt', { text: '状态' }), el('dd', { text: detail?.status ?? '—' }),
@@ -1486,7 +1845,10 @@ function renderNodePanel(panel, options) {
   ]));
   panel.append(facts);
   if (detail?.summary) {
-    panel.append(el('div', { class: 'section' }, [el('p', { class: 'prose', text: detail.summary })]));
+    const summary = el('div', { class: 'section' });
+    summary.append(el('h2', { class: 'head', text: '原文' }));
+    summary.append(el('p', { class: 'prose', text: detail.summary }));
+    panel.append(summary);
   }
   const evidence = detail?.evidence ?? [];
   const evidenceSection = el('div', { class: 'section' });
@@ -1499,6 +1861,7 @@ function renderNodePanel(panel, options) {
         class: 'dim',
         text: locator?.localDate ? `${locator.localDate} · ${item.eventId.slice(0, 18)}…` : item.eventId,
       }),
+      item.excerpt ? el('p', { class: 'prose excerpt', text: item.excerpt }) : null,
       el('div', { class: 'cmd' }, [
         el('span', { text: locator?.command || item.drilldown }),
         el('button', { type: 'button', text: '复制', onclick: (event) => copyCommand(event, locator?.command || item.drilldown) }),
@@ -1601,12 +1964,31 @@ function renderScope() {
 
 function renderLegend() {
   const snapshot = state.snapshot;
-  const types = Object.entries(snapshot?.counts.nodesByType ?? {}).sort((left, right) => right[1] - left[1]);
+  const counts = snapshot?.counts.nodesByRole ?? STAR_ROLES.reduce((result, role) => {
+    result[role.id] = (snapshot?.nodes ?? []).filter((node) => roleOf(node) === role.id).length;
+    return result;
+  }, {});
   $('legend-items').innerHTML = '';
-  for (const [type, count] of types) {
-    $('legend-items').append(el('li', {}, [
-      el('span', { class: 'swatch', style: `color:${colorFor(type)}` }), `${type} ${num(count)}`,
-    ]));
+  for (const role of STAR_ROLES) {
+    const hidden = state.hiddenRoles.has(role.id);
+    const button = el('button', {
+      class: 'legend-role',
+      type: 'button',
+      'aria-pressed': String(!hidden),
+      title: hidden ? `显示${role.label}` : `只暗下${role.label}`,
+      onclick: () => {
+        if (hidden) state.hiddenRoles.delete(role.id);
+        else state.hiddenRoles.add(role.id);
+        applyWeights();
+        renderLegend();
+        map.needsFrame = true;
+      },
+    }, [
+      el('span', { class: 'swatch', style: `color:${role.color}` }),
+      role.label,
+      el('span', { class: 'count', text: num(counts?.[role.id] ?? 0) }),
+    ]);
+    $('legend-items').append(el('li', {}, [button]));
   }
   const truncation = snapshot?.truncation;
   const notice = $('truncation-notice');
@@ -1647,10 +2029,11 @@ async function loadDemo() {
 
 function applyLoaded() {
   state.selectedNode = null;
+  state.selectedNeighbors = new Set();
   state.selectedDay = null;
   state.range = null;
   map.marker && (map.marker.visible = false);
-  map.edges?.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3));
+  if (map.edgeHighlight) map.edgeHighlight.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3));
   $('project-select').innerHTML = '';
   for (const project of state.snapshot.projects ?? []) {
     $('project-select').append(el('option', { value: project.projectId, selected: project.projectId === state.projectId, text: `${project.projectId} · ${num(project.nodes)} 节点 / ${num(project.events)} 事件` }));

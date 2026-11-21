@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
-import { armKeyFor, galaxyLayout } from '../src/observatory/GalaxyLayout.js';
+import { armKeyFor, forceLayout, galaxyLayout } from '../src/observatory/GalaxyLayout.js';
+import { starRoleFor } from '../src/observatory/MemoryObservatory.js';
 
 /**
  * #136 §c: the same corpus has to open onto the same galaxy. A layout that drifted between two
@@ -73,5 +74,53 @@ describe('which arm a node belongs to', () => {
     expect(armKeyFor({ projectId: 'p' })).toBe('p');
     // The 20,343-event corpus has a null topic_path on every row: one arm, and the page says so.
     expect(armKeyFor({ topicPath: undefined, projectId: 'p' })).toBe('p');
+  });
+});
+
+describe('the force layout follows the edges', () => {
+  const nodes = [
+    { id: 'episode:a', arm: 'atlas' },
+    { id: 'episode:b', arm: 'atlas' },
+    { id: 'episode:c', arm: 'recall' },
+    { id: 'episode:d', arm: 'recall' },
+  ];
+  const edges = [{ source: 'episode:a', target: 'episode:b', confidence: 1 }];
+  const seeds = galaxyLayout(nodes);
+
+  test('the same input yields the same coordinates, whatever order it arrives in', () => {
+    const first = forceLayout(nodes, edges, seeds, { iterations: 12 });
+    const second = forceLayout([...nodes].reverse(), edges, seeds, { iterations: 12 });
+    for (const node of nodes) expect(second.get(node.id)).toEqual(first.get(node.id));
+  });
+
+  test('a connected pair is closer than an unconnected one', () => {
+    const points = forceLayout(nodes, edges, seeds, { iterations: 24 });
+    const distance = (left: string, right: string) => {
+      const a = points.get(left)!;
+      const b = points.get(right)!;
+      return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+    };
+    expect(distance('episode:a', 'episode:b')).toBeLessThan(distance('episode:a', 'episode:c'));
+  });
+
+  test('every point stays finite', () => {
+    for (const point of forceLayout(nodes, edges, seeds, { iterations: 12 }).values()) {
+      expect(Number.isFinite(point.x)).toBe(true);
+      expect(Number.isFinite(point.y)).toBe(true);
+      expect(Number.isFinite(point.z)).toBe(true);
+    }
+  });
+});
+
+describe('the six star roles', () => {
+  test('rules, soul, promises, intents, experiences and the rest are separated', () => {
+    expect(starRoleFor('memoryKind', null, 'policy')).toBe('rule');
+    expect(starRoleFor('belief')).toBe('soul');
+    expect(starRoleFor('memoryKind', 'commitment')).toBe('promise');
+    expect(starRoleFor('episode', 'planning')).toBe('intent');
+    expect(starRoleFor('episode', 'discussion')).toBe('experience');
+    expect(starRoleFor('entity')).toBe('ordinary');
+    expect(starRoleFor('memoryKind', 'profile')).toBe('ordinary');
+    expect(starRoleFor('memoryKind', 'preference')).toBe('ordinary');
   });
 });

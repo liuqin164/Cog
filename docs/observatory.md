@@ -34,7 +34,7 @@ the read views, and is required for `/soul`.
 
 | Endpoint | Answer |
 |---|---|
-| `/observatory/snapshot?project=&agent=` | Nodes with coordinates plus `status` and `evidenceTotal`, per-type and per-relation counts, the arm legend, the time histogram, the agent roster, `source`, `generatedAt`, `watermark`. `topicPath` is not repeated per node: the arm is its disclosed form. In a single-agent view the per-type counts and the arms describe that view, while `nodesTotal` stays the project's own count |
+| `/observatory/snapshot?project=&agent=` | Nodes with coordinates, six-role class, degree, `status` and `evidenceTotal`; the frame/graph edges whose endpoints are both in view; per-type, per-relation and per-role counts; the time histogram; the agent roster; `source`, `generatedAt`, `watermark`. `topicPath` is not repeated per node: the arm is its disclosed form. In a single-agent view the type and role counts and the arms describe that view, while `nodesTotal` stays the project's own count |
 | `/observatory/node/:id?project=&agent=` | One node, its evidence locators (with the exact `cogmem memory show …` drilldown), and its one-hop neighbours. `404` when the node is outside the selected agent's view |
 | `/observatory/timeline?project=&agent=&from=&to=` | Events per day × event type |
 | `/observatory/recalls?project=&agent=&limit=` | Stored recall decisions, one per task. `available: false` when the database has no `trace_events` table — the honest answer, and not an error |
@@ -73,22 +73,35 @@ JSON, 826,039 gzipped, 504 ms cold and 83 ms from cache.
 
 Three things, and nothing else:
 
-- **arm** — the node's top-level grouping: the first segment of its `topic_path`, else a one-hop topic
-  node, else its project. The page states which rule produced the arms. The 20,343-event corpus has a
-  null `topic_path` on every row and no topic nodes, so it is one arm, and the panel says so.
-- **colour** — the node type.
-- **size** — `support` and `activation`.
+- **cluster** — a fixed-iteration force layout seeded by a hash scatter
+  (`src/observatory/GalaxyLayout.ts`): the arm still gives each node a deterministic starting region,
+  then `PART_OF_PROJECT`, `ABOUT_TOPIC`, `HAS_EVIDENCE`, `OCCURRED_*` and the other frame/graph edges
+  pull related memories together. The same database opens onto the same galaxy, and the force pass is
+  capped at 2,500 nodes so a large corpus keeps the arm seed rather than a multi-second layout.
+- **colour** — six roles: 规矩 (`policy`/`constraint`/`prohibition`/…), 灵魂 (`belief`/`identity`/`persona`/…),
+  承诺 (`commitment`/`promise`/…), 意图 (`intention`/`plan`/`goal`/…), 经历 (episode/action/cluster/
+  raw_event/…) and 普通 (everything else, including profile and procedure when they have no stronger
+  class). The legend counts are the view's own.
+- **size** — incident edge count, `support` and `activation`.
 
-Radius is a hash scatter with a fixed falloff: it carries no meaning. A radius that also encoded time
-or support would be a reading the data does not support.
+Edges are the `memory_edges` rows whose two endpoints are both in the snapshot, so the page draws the
+same relations the Atlas reads; `counts.edgesTotal` remains the ledger's own count so the difference
+is visible when a node is outside the view. The detail panel shows the node summary and each evidence
+row's original excerpt with its `cogmem memory show …` locator.
 
-The layout is deterministic — a pure function of node ids and arms (`src/observatory/GalaxyLayout.ts`),
-never a force simulation — so the same database opens onto the same galaxy.
+Interaction is read-only: drag rotates, wheel/pinch zooms, and panning walks the map. Hovering names
+a node; selecting one moves the camera to it, lights only that node, its neighbours and their edges,
+and dims the rest; the six legend buttons dim a role without hiding it. The idle rotation stops on
+the first drag and while a node is selected.
+
+If WebGL cannot be created, the same snapshot is drawn by a Canvas 2D renderer: the force positions
+are flattened to `x/z`, drag pans, wheel/pinch zooms, hover and selection keep the same panel. It is
+a real renderer, not a blank-state message.
 
 **LOD.** `L0` is `project`/`topic`/`cluster`, `L1` everything aggregated, `L2` `raw_event`/`event`.
-Each layer is one `Points` object with its own fade uniform, which is 3 draw calls for the map plus one
-for decorative star dust, one for the selection ring, and one for the selected node's edges. Rendering
-is built for ~20,000 points.
+Each layer is one `Points` object with its own fade uniform, which is 3 draw calls for the map plus the
+edge mesh, the selected-node edge mesh, the selection ring, the dust and the three nebula sprites.
+Rendering is built for ~20,000 points.
 
 Zoom brings the layers in, not a checkbox: `L1` fades in as the camera closes to 520 units and is fully
 on by 330, `L2` between 300 and 150. The three buttons set a ceiling on top of that, and the legend
@@ -111,7 +124,9 @@ Two numbers differ from the research note, on purpose, because the measurement m
 
 **Mobile.** `prefers-reduced-motion` or a viewport at or under 900 px turns off the background dust and
 the idle rotation, halves the device pixel ratio ceiling and the sprite size, drops `L2`, caps `L1` at
-3,000 nodes, and renders on demand instead of every frame.
+3,000 nodes, and renders on demand instead of every frame. The 2D fallback follows the same caps and
+adds pointer-drag panning plus two-finger pinch zoom; the legend shrinks so it does not cover the
+cloud.
 
 ## Agent scope
 
