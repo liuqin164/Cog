@@ -86,10 +86,10 @@ function textOf(value: unknown): string {
 
 function reservedNameInSource(source: string): string | undefined {
   for (const name of RESERVED_BUILTIN_TOOLS) {
-    if (new RegExp(`registerTool\\s*\\(\\s*\\{[\\s\\S]{0,300}?\\bname\\s*:\\s*['"]${name}['"]`, 'u').test(source)) return name;
+    if (new RegExp(`registerTool\\s*\\(\\s*\\{[\\s\\S]*?\\bname\\s*:\\s*['"]${name}['"]`, 'u').test(source)) return name;
   }
   for (const name of RESERVED_CORE_COMMANDS) {
-    if (new RegExp(`registerCommand\\s*\\(\\s*\\{[\\s\\S]{0,300}?\\bname\\s*:\\s*['"]${name}['"]`, 'u').test(source)) return `/${name}`;
+    if (new RegExp(`registerCommand\\s*\\(\\s*\\{[\\s\\S]*?\\bname\\s*:\\s*['"]${name}['"]`, 'u').test(source)) return `/${name}`;
   }
   return undefined;
 }
