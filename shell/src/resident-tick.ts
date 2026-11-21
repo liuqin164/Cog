@@ -355,7 +355,6 @@ export class ResidentTick {
       this.shell.trace.append('temporal_context_failed', { message: error instanceof Error ? error.message : String(error) });
     }
     const block = this.shell.clock!.timeContextBlock(at, kernelLine);
-    this.shell.machine.updateRuntime({ lastTimeContext: block });
     this.shell.trace.append('time_context_injected', { block, reason });
   }
 

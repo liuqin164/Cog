@@ -16,6 +16,13 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
+      # A doc may say something has not landed only when it names the issue that tracks it.
+      - name: Docs "not landed" claims name an issue
+        run: |
+          if grep -rnE "not landed|has not landed|尚未落地" README.md shell/README.md docs/*.md | grep -vE '#[0-9]+'; then
+            echo "::error::a doc claims something has not landed without an issue reference"
+            exit 1
+          fi
       - uses: actions/setup-node@v5
         with:
           node-version: 24.12.0

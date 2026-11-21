@@ -21,7 +21,7 @@ describe('Pi-aligned loop', () => {
   test('event order is verbatim and a tool call adds a second turn', async () => {
     const bus = new EventBus();
     const seen = recordEvents(bus, [
-      'before_agent_start', 'agent_start', 'turn_start', 'message_start', 'message_update', 'message_end',
+      'agent_start', 'turn_start', 'message_start', 'message_update', 'message_end',
       'tool_execution_start', 'tool_execution_end', 'turn_end', 'agent_end', 'agent_settled',
     ]);
     const provider = new ScriptedProvider([
@@ -30,14 +30,14 @@ describe('Pi-aligned loop', () => {
     ]);
     const summary = await runtime(bus, provider).run({ runId: 'r1', sessionId: 's1', userText: 'hi' });
     expect(seen.map((event) => event.name)).toEqual([
-      'before_agent_start', 'agent_start',
+      'agent_start',
       'message_start', 'message_end',
       'turn_start', 'message_start', 'message_update', 'message_end', 'tool_execution_start', 'tool_execution_end', 'turn_end',
       'turn_start', 'message_start', 'message_update', 'message_end', 'turn_end',
       'agent_end', 'agent_settled',
     ]);
-    // The two leading message events are the user message entering the loop (Pi's tree: message_start/end).
-    expect(seen[2].payload.message.role).toBe('user');
+    // The message events after agent_start are the user message entering the loop.
+    expect(seen[1].payload.message.role).toBe('user');
     expect(summary.stopReason).toBe('run_complete');
     expect(summary.assistantText).toContain('all done');
     expect(summary.toolResults[0].output).toBe('echo:{"value":1}');

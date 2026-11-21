@@ -93,8 +93,6 @@ export interface ShellRuntimeState {
   dreamRetry?: { night: string; attempts: number; nextAt: number; gaveUp?: boolean };
   lastSnapshotAt?: number;
   lastInteractionAt?: number;
-  /** The block injected when the shell last woke; the system prompt reuses it until the next wake. */
-  lastTimeContext?: string;
   /**
    * The tool loadout the transcript declared (Pi's `declareToolChanges`). Recovery compares it with
    * the executable set: a loadout the checkpoint promised but the process can no longer run is a
@@ -283,7 +281,6 @@ const RUNTIME_KEYS: Record<keyof ShellRuntimeState, true> = {
   dreamRetry: true,
   lastSnapshotAt: true,
   lastInteractionAt: true,
-  lastTimeContext: true,
   declaredTools: true,
   inFlightToolCalls: true,
   pendingSteering: true,

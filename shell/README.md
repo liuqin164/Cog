@@ -197,7 +197,7 @@ choice for a machine that runs that local gateway; it is not the fallback.
    baseUrl, key, model) in `<dataDir>/routes.json` (`0600`) and becomes the active one; mg remains the
    one explicit choice and is not rewritten.
 3. **节律** — time zone, dream window, do-not-disturb window. TZ and the dream window go to the
-   resident's env file; the quiet window is recorded (the shell has no silence gate yet — that is F16).
+   resident's env file; the quiet window is recorded and gates proactive speech (#328).
 4. **常驻** — register a **user-level** service (`systemd --user` on Linux, launchd agent on macOS; no
    sudo), start it, run the shell-side doctor, and print the star-sea and health addresses.
 5. **自检式首醒** — write a probe memory through the resident's own control socket (its in-process
@@ -210,10 +210,10 @@ choice for a machine that runs that local gateway; it is not the fallback.
 Each step is idempotent and its completion is written to `<dataDir>/install.json` only after it fully
 succeeded, so a re-run resumes at the first unfinished step.
 
-**Soul.** F17's versioned kernel table and star-sea editor have not landed, and this round may not
-touch the kernel, so the installer writes the v0 row into a shell-owned `companion_soul` table in the
-same database file (`v0`, `supersedes` NULL). `ponytail:` interim — F17 moves it into the kernel. The
-default text is `DEFAULT_SOUL` in `src/install/soul.ts`, verbatim; `/soul` in the TUI now reads it back.
+**Soul.** F17 (#194) stores the soul in the kernel's `soul_versions` table, per agent and versioned;
+the installer writes the default text as `v0` (`supersedes` NULL). The default text is `DEFAULT_SOUL`
+in `src/install/soul.ts`, verbatim; the observatory's star-sea editor saves and rolls back versions,
+and `/soul` in the TUI reads the current one back.
 
 **Security posture, printed at install time:** every service face is loopback only; the data and
 snapshot directories are `0700`; the model key is taken through masked input and lives only in the
