@@ -15,6 +15,7 @@ import { KeyDecoder, type Key } from './keys.ts';
 import { inputCursorPosition, renderTui, TranscriptCache, type TuiSize } from './layout.ts';
 import { dispatchTuiCommand, filterCommands, paletteCommands } from './commands.ts';
 import { TuiView, type ShellEvent } from './view.ts';
+import type { CommandProposal, CredentialField } from '../proposals.ts';
 
 export interface TuiAppOptions {
   socketPath: string;
@@ -41,6 +42,17 @@ export class TuiApp {
   private escapeTimer?: ReturnType<typeof setTimeout>;
   private stopped = false;
   private cursorWritten = false;
+  private credential?: {
+    id: string;
+    service: string;
+    purpose: string;
+    fields: CredentialField[];
+    index: number;
+    values: Record<string, string>;
+    value: string;
+    error?: string;
+  };
+  private credentialDraft?: string;
 
   constructor(private readonly options: TuiAppOptions) {}
 
@@ -57,6 +69,7 @@ export class TuiApp {
       : await connectDefault(this.options.socketPath);
     this.client = client;
     this.view.load(snapshot);
+    this.startPendingCredential();
     client.onEvent = (message) => this.onServerMessage(message);
     client.onClose = (reason) => this.stop(`attach_lost:${reason}`);
 
@@ -72,6 +85,7 @@ export class TuiApp {
   private onServerMessage(message: AttachServerMessage): void {
     if (message.t === 'event') {
       this.view.applyEvent({ name: message.name, payload: message.payload, ctx: message.ctx } as ShellEvent);
+      this.applyCredentialEvent(message.name, message.payload);
       this.scheduleRender();
       return;
     }
@@ -107,6 +121,11 @@ export class TuiApp {
       return;
     }
     this.detachArmed = false;
+
+    if (this.credential) {
+      this.handleCredentialKey(key);
+      return;
+    }
 
     // The sleep screen promises any key wakes it. `wake` is a submit with no text, so the resident
     // takes the existing DREAMING -> WAKING edge; the key itself is swallowed, not typed.
@@ -190,6 +209,115 @@ export class TuiApp {
 
   private followIfAtBottom(): void {
     if (this.view.scrollTop <= 0) this.view.followTail();
+  }
+
+  private startPendingCredential(): void {
+    const pending = this.view.pendingProposal();
+    if (pending?.proposal.kind === 'credential') this.beginCredential(pending.proposal);
+  }
+
+  private applyCredentialEvent(name: string, payload: any): void {
+    if (name !== 'companion_command_proposal') return;
+    const proposal = payload?.proposal as CommandProposal | undefined;
+    if (!proposal || proposal.kind !== 'credential') return;
+    if (!this.credential) {
+      this.startPendingCredential();
+      return;
+    }
+    if (this.credential.id === proposal.id && proposal.status !== 'pending') {
+      this.clearCredential();
+      this.startPendingCredential();
+    }
+  }
+
+  private beginCredential(proposal: CommandProposal): void {
+    const spec = proposal.credential;
+    if (!spec || spec.fields.length === 0) return;
+    this.credential = {
+      id: proposal.id,
+      service: spec.service,
+      purpose: spec.purpose,
+      fields: spec.fields,
+      index: 0,
+      values: {},
+      value: '',
+    };
+    this.credentialDraft = this.editor.text;
+    this.editor.setText('');
+    this.view.overlay = undefined;
+    this.refreshCredential();
+  }
+
+  private refreshCredential(): void {
+    const credential = this.credential;
+    if (!credential) return;
+    const field = credential.fields[credential.index];
+    if (!field) return;
+    this.view.credential = {
+      id: credential.id,
+      service: credential.service,
+      purpose: credential.purpose,
+      prompt: `请输入${field.label ?? field.name}`,
+      index: credential.index,
+      total: credential.fields.length,
+      value: credential.value,
+      secret: field.secret === true,
+      ...(credential.error ? { error: credential.error } : {}),
+    };
+  }
+
+  private clearCredential(): void {
+    this.credential = undefined;
+    this.view.credential = undefined;
+    if (this.credentialDraft !== undefined) {
+      this.editor.setText(this.credentialDraft);
+      this.credentialDraft = undefined;
+    }
+  }
+
+  private handleCredentialKey(key: Key): void {
+    const credential = this.credential;
+    if (!credential) return;
+    if (key.name === 'esc') {
+      this.client.send({ t: 'credential-cancel', id: credential.id });
+      this.clearCredential();
+      this.scheduleRender();
+      return;
+    }
+    if (key.name === 'backspace') {
+      credential.value = Array.from(credential.value).slice(0, -1).join('');
+      credential.error = undefined;
+      this.refreshCredential();
+      this.scheduleRender();
+      return;
+    }
+    if (key.name === 'char' && !key.ctrl && !key.alt && key.text) {
+      credential.value += key.text;
+      credential.error = undefined;
+      this.refreshCredential();
+      this.scheduleRender();
+      return;
+    }
+    if (key.name !== 'enter') return;
+    if (credential.value === '') {
+      credential.error = '这一项不能为空。';
+      this.refreshCredential();
+      this.scheduleRender();
+      return;
+    }
+    const field = credential.fields[credential.index]!;
+    credential.values[field.name] = credential.value;
+    credential.index += 1;
+    credential.value = '';
+    credential.error = undefined;
+    if (credential.index < credential.fields.length) {
+      this.refreshCredential();
+      this.scheduleRender();
+      return;
+    }
+    this.client.send({ t: 'credential-submit', id: credential.id, values: credential.values });
+    this.clearCredential();
+    this.scheduleRender();
   }
 
   private paletteOpen(): boolean {

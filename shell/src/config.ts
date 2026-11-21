@@ -314,13 +314,10 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
       model: env('MG_MODEL') ?? 'auto/deepseek-v4.1-flash',
       timeoutMs: 120_000,
     },
-    // `propose_command`, `propose_soul_edit` and the plugin proposal/audit tools are on the default
-    // whitelist because they are how the agent offers or reads back an installation; leaving them
-    // off would make every call a cage violation.
     budgets: overrides.budgets ?? {
       ...autonomous,
       // The web plugin is opt-in; it adds its three names when its spec is registered (#338).
-      toolWhitelist: ['read', 'write', 'edit', 'bash', 'propose_command', 'propose_soul_edit', 'propose_plugin', 'plugin_proposal_status', 'installed_plugins', 'ask_user', 'declare_task', 'memory'],
+      toolWhitelist: ['read', 'write', 'edit', 'bash', 'propose_command', 'request_credential', 'propose_soul_edit', 'propose_plugin', 'plugin_proposal_status', 'installed_plugins', 'ask_user', 'declare_task', 'memory'],
     },
     workBudget: overrides.workBudget ?? work,
     dailyBudget: overrides.dailyBudget ?? daily,

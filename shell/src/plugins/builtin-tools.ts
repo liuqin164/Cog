@@ -36,6 +36,7 @@ export interface BuiltinToolsConfig {
   kernel?: MemoryKernel;
   /** One successful `mem:` read; the shell counts it for the context trace's drill metric (#268). */
   onMemoryRead?: (eventId: string) => void;
+  credentials?: { use(ref: string, caller: string): Record<string, string> };
 }
 
 /**
@@ -244,6 +245,18 @@ function resolveBashTimeoutMs(args: unknown): number {
   return timeoutMs;
 }
 
+function credentialRef(args: unknown): string | undefined {
+  const raw = (args as Record<string, unknown> | undefined)?.['credential'];
+  if (raw === undefined) return undefined;
+  if (typeof raw !== 'string' || raw.trim() === '') throw new Error('invalid_arguments: "credential" must be a non-empty string');
+  return raw.trim();
+}
+
+function credentialEnvName(ref: string, field: string): string {
+  const part = (value: string): string => value.toUpperCase().replace(/[^A-Z0-9]+/gu, '_').replace(/^_+|_+$/gu, '');
+  return `COGMEM_CRED_${part(ref)}_${part(field)}`;
+}
+
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes}B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
@@ -340,6 +353,7 @@ function definitions(
   sandboxed: boolean,
   ledger: { kernel?: MemoryKernel; trace?: TraceLog; onMemoryRead?: (eventId: string) => void },
   cliConfigPath?: string,
+  credentials?: { use(ref: string, caller: string): Record<string, string> },
 ): ToolDefinition[] {
   const sandbox = sandboxed && dataDir !== undefined ? { dataDir, trace: ledger.trace } : undefined;
   // The shell always has a data dir, so a bare test host without one is not a degradation to
@@ -408,12 +422,26 @@ function definitions(
     {
       name: 'bash',
       replay: 'never',
-      description: 'Run a bash command in the workspace, 30s timeout by default. It runs with no network access and sees only system directories and the workspace: the shell data directory and the operator home are not mounted, and only a small variable allowlist reaches the child. stdout/stderr are combined; the last 2000 lines or 50 KiB (whichever is hit first) are returned, and the full text is written under .cogmem-shell/bash-output/ and named in the result. A non-zero exit is an error. The optional `timeout` is in seconds.',
-      parameters: { type: 'object', properties: { command: { type: 'string' }, timeout: { type: 'number' } }, required: ['command'] },
+      description: 'Run a bash command in the workspace, 30s timeout by default. It runs with no network access and sees only system directories and the workspace: the shell data directory and the operator home are not mounted, and only a small variable allowlist reaches the child. stdout/stderr are combined; the last 2000 lines or 50 KiB (whichever is hit first) are returned, and the full text is written under .cogmem-shell/bash-output/ and named in the result. A non-zero exit is an error. The optional `timeout` is in seconds. Set `credential` to a reference from request_credential to have the host inject its fields as COGMEM_CRED_<REF>_<FIELD> environment variables; do not print them.',
+      parameters: {
+        type: 'object',
+        properties: {
+          command: { type: 'string' },
+          timeout: { type: 'number' },
+          credential: { type: 'string' },
+        },
+        required: ['command'],
+      },
       execute({ args, signal }) {
         const command = asString(args, 'command');
         const timeoutMs = resolveBashTimeoutMs(args);
         const env = bashEnv(sandbox !== undefined, cliConfigPath);
+        const credential = credentialRef(args);
+        if (credential !== undefined) {
+          if (!credentials) throw new Error('credential_unavailable: this shell has no credential service');
+          const values = credentials.use(credential, 'bash');
+          for (const [field, value] of Object.entries(values)) env[credentialEnvName(credential, field)] = value;
+        }
         return new Promise<ToolOutcome>((resolvePromise, rejectPromise) => {
           const child = sandbox
             ? spawn('bwrap', sandboxArgs(workspaceRoot, sandbox.dataDir, command), { cwd: workspaceRoot, signal, stdio: ['ignore', 'pipe', 'pipe'], env })
@@ -488,11 +516,11 @@ export function builtinToolsPlugin(): NativePlugin {
     name: 'builtin-tools',
     provide: ['builtinTools'],
     apply(ctx, config) {
-      const { workspaceRoot, dataDir, cliConfigPath, trace, kernel, onMemoryRead } = config as BuiltinToolsConfig;
+      const { workspaceRoot, dataDir, cliConfigPath, trace, kernel, onMemoryRead, credentials } = config as BuiltinToolsConfig;
       const sandboxed = dataDir !== undefined && bwrapUsable();
       if (dataDir !== undefined && !sandboxed) trace?.append('bash_sandbox_unavailable', { dataDir, reason: 'bwrap_not_usable' });
       if (sandboxed) trace?.append('bash_sandbox_network', { network: 'unshared' });
-      for (const definition of definitions(workspaceRoot, dataDir, sandboxed, { kernel, trace, onMemoryRead }, cliConfigPath)) {
+      for (const definition of definitions(workspaceRoot, dataDir, sandboxed, { kernel, trace, onMemoryRead }, cliConfigPath, credentials)) {
         ctx.registerTool(definition, { builtin: true });
       }
       ctx.provide('builtinTools', { names: ['read', 'write', 'edit', 'bash'] });

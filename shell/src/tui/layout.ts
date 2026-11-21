@@ -187,7 +187,7 @@ export function renderTui(view: TuiView, editor: LineEditor, size: TuiSize, env:
 
   const inputRows = editor.displayRows(Math.max(1, width - 4));
   const contentLines = Math.max(1, Math.min(MAX_INPUT_LINES, inputRows.length));
-  const inputHeight = contentLines + 2;
+  const inputHeight = view.credential ? 3 : contentLines + 2;
   const queueRows = view.queued.length > 0 ? 1 : 0;
   const workRows = view.work.active ? 1 : 0;
   const transcriptHeight = Math.max(1, height - 2 - queueRows - inputHeight);
@@ -197,7 +197,10 @@ export function renderTui(view: TuiView, editor: LineEditor, size: TuiSize, env:
   rows.push(statusRow(view, width, env));
 
   const paletteQuery = paletteQueryOf(editor);
-  if (paletteQuery !== undefined) {
+  if (view.credential) {
+    const credential = credentialScreen(view, width, transcriptHeight, env);
+    for (let index = 0; index < transcriptHeight; index += 1) rows.push(credential[index] ?? []);
+  } else if (paletteQuery !== undefined) {
     const palette = paletteRows(view, paletteQuery, Math.max(1, width - 2), env, view.paletteIndex);
     for (let index = 0; index < transcriptHeight; index += 1) rows.push(palette[index] ?? []);
   } else if (view.overlay) {
@@ -218,9 +221,41 @@ export function renderTui(view: TuiView, editor: LineEditor, size: TuiSize, env:
   }
 
   if (queueRows > 0) rows.push(queueRow(view, width));
-  rows.push(...inputBox(editor, width, contentLines, inputRows, env));
+  rows.push(...(view.credential ? credentialBox(view.credential, width, env) : inputBox(editor, width, contentLines, inputRows, env)));
   rows.push(footerRow(view, width, env));
   return makeFrame(width, height, rows);
+}
+
+function credentialScreen(view: TuiView, width: number, height: number, env: RenderEnv): Row[] {
+  const credential = view.credential!;
+  const lines = [
+    `保密输入 · ${credential.service}`,
+    '接下来的输入不会进入对话与账本，模型看不到。',
+    credential.purpose,
+    '',
+    `[${credential.index + 1}/${credential.total}] ${credential.prompt}`,
+    ...(credential.error ? [credential.error] : []),
+    '',
+    'Enter 确认 · Esc 取消（任一步取消都不保存）',
+  ];
+  const rows: Row[] = [];
+  for (let index = 0; index < Math.min(height, lines.length); index += 1) {
+    rows.push([seg(truncate(lines[index], Math.max(1, width - 2)), index === 0 ? 'accent' : index === 1 ? 'warn' : 'dim')]);
+  }
+  return rows;
+}
+
+function credentialBox(credential: NonNullable<TuiView['credential']>, width: number, env: RenderEnv): Row[] {
+  const g = boxGlyphs(env);
+  const inner = Math.max(1, width - 2);
+  const shown = credential.secret ? '' : credential.value;
+  const body = padTo(`${credential.prompt} ${shown}`, inner);
+  const v = g.v;
+  return [
+    [seg(`${g.tl}${g.h.repeat(inner)}${g.tr}`, 'border')],
+    [seg(v, 'border'), seg(body, 'plain'), seg(v, 'border')],
+    [seg(`${g.bl}${g.h.repeat(inner)}${g.br}`, 'border')],
+  ];
 }
 
 function renderSmall(view: TuiView, editor: LineEditor, size: TuiSize, env: RenderEnv): Frame {
@@ -373,6 +408,13 @@ export function sleepScreen(view: TuiView, width: number, height: number, env: R
 export function inputCursorPosition(view: TuiView, editor: LineEditor, size: TuiSize): { row: number; column: number } | undefined {
   const { width, height } = size;
   if (width < MIN_WIDTH || height < MIN_HEIGHT) return undefined;
+  if (view.credential) {
+    const queueRows = view.queued.length > 0 ? 1 : 0;
+    const transcriptHeight = Math.max(1, height - 2 - queueRows - 3);
+    const boxTop = 1 + transcriptHeight + queueRows;
+    const shown = view.credential.secret ? '' : view.credential.value;
+    return { row: boxTop + 2, column: 2 + cellWidth(view.credential.prompt) + 1 + cellWidth(shown) };
+  }
   const inputRows = editor.displayRows(Math.max(1, width - 4));
   const contentLines = Math.max(1, Math.min(MAX_INPUT_LINES, inputRows.length));
   const queueRows = view.queued.length > 0 ? 1 : 0;

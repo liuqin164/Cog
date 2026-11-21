@@ -1,8 +1,9 @@
 /**
  * The observatory's HTTP surface, served by the loopback process in `HttpServer.ts`.
  *
- * The read path is still zero-write, with the soul editor as the one named exception (#194):
- *  - every route answers GET/HEAD and writes nothing, except `POST /soul` and `POST /soul/rollback`;
+ * The read path is still zero-write, with the soul editor (#194) and the credential form (#383) as
+ * the named exceptions:
+ *  - every route answers GET/HEAD and writes nothing, except the soul and credential POSTs;
  *  - the socket address is checked against loopback on every request, so a process bound to a LAN
  *    address does not expose the corpus by merely existing;
  *  - every read goes through `MemoryObservatory`, which holds a read-only connection; the two soul
@@ -40,6 +41,21 @@ export interface ObservatoryRouteOptions {
    * refused with `observatory_write_token_unavailable` rather than silently allowed.
    */
   token?: string;
+  credentials?: ObservatoryCredentialFace;
+}
+
+export interface ObservatoryCredentialField {
+  name: string;
+  label?: string;
+  secret?: boolean;
+}
+
+export interface ObservatoryCredentialFace {
+  pending(): Array<{ id: string; service: string; purpose: string; fields: ObservatoryCredentialField[]; requestedBy: string; createdAt: number }>;
+  refs(): Array<{ ref: string; service: string; createdAt: number }>;
+  submit(id: string, values: Record<string, string>, surface: string): { ok: true; ref: string } | { ok: false; reason: string };
+  cancel(id: string, surface: string): boolean;
+  revoke(ref: string): boolean;
 }
 
 /** Everything the page loads, by exact path: no directory walk, so no traversal to defend against. */
@@ -132,7 +148,7 @@ async function readJsonBody(request: Request): Promise<Record<string, unknown> |
  * cannot be forged by another site, and the token is the credential a hostile page cannot read.
  * Returns the refusal, or null when the write may proceed.
  */
-function refuseSoulWrite(request: Request, token: string | undefined, acceptEncoding?: string | null): Response | null {
+function refuseWrite(request: Request, token: string | undefined, acceptEncoding?: string | null): Response | null {
   const contentType = (request.headers.get('content-type') ?? '').split(';')[0]!.trim().toLowerCase();
   if (contentType !== 'application/json') {
     return jsonResponse({ error: 'unsupported_media_type', message: 'content-type must be application/json' }, 415, acceptEncoding);
@@ -277,7 +293,7 @@ export function createObservatoryRoutes(
     if (soulRead || soulRollback) {
       if (!soul) return jsonResponse({ error: 'soul_editor_unavailable' }, 404, acceptEncoding);
       if (request.method === 'POST') {
-        const refused = refuseSoulWrite(request, options.token, acceptEncoding);
+        const refused = refuseWrite(request, options.token, acceptEncoding);
         if (refused) return refused;
       }
       try {
@@ -308,6 +324,47 @@ export function createObservatoryRoutes(
         if (error instanceof SoulError) {
           return jsonResponse({ error: error.code, message: error.message }, 400, acceptEncoding);
         }
+        return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 500, acceptEncoding);
+      }
+    }
+
+    const credentialRead = url.pathname === '/observatory/credentials';
+    const credentialSubmit = url.pathname === '/observatory/credentials/submit';
+    const credentialCancel = url.pathname === '/observatory/credentials/cancel';
+    const credentialRevoke = url.pathname === '/observatory/credentials/revoke';
+    if (credentialRead || credentialSubmit || credentialCancel || credentialRevoke) {
+      if (credentialRead && request.method !== 'GET' && request.method !== 'HEAD') {
+        return new Response('method_not_allowed', { status: 405, headers: { allow: 'GET, HEAD' } });
+      }
+      if (!credentialRead && request.method !== 'POST') {
+        return new Response('method_not_allowed', { status: 405, headers: { allow: 'POST' } });
+      }
+      if (!options.credentials) return jsonResponse({ error: 'credentials_unavailable' }, 404, acceptEncoding);
+      if (credentialRead) {
+        return jsonResponse({ pending: options.credentials.pending(), refs: options.credentials.refs() }, 200, acceptEncoding);
+      }
+      const refused = refuseWrite(request, options.token, acceptEncoding);
+      if (refused) return refused;
+      const body = await readJsonBody(request);
+      if (!body) return jsonResponse({ error: 'invalid_json' }, 400, acceptEncoding);
+      try {
+        if (credentialSubmit) {
+          const values: Record<string, string> = {};
+          if (body.values !== null && typeof body.values === 'object' && !Array.isArray(body.values)) {
+            for (const [key, value] of Object.entries(body.values as Record<string, unknown>)) {
+              if (typeof value === 'string') values[key] = value;
+            }
+          }
+          const result = options.credentials.submit(typeof body.id === 'string' ? body.id : '', values, 'web');
+          return result.ok
+            ? jsonResponse(result, 200, acceptEncoding)
+            : jsonResponse({ ok: false, error: result.reason }, 400, acceptEncoding);
+        }
+        if (credentialCancel) {
+          return jsonResponse({ ok: options.credentials.cancel(typeof body.id === 'string' ? body.id : '', 'web') }, 200, acceptEncoding);
+        }
+        return jsonResponse({ ok: options.credentials.revoke(typeof body.ref === 'string' ? body.ref : '') }, 200, acceptEncoding);
+      } catch (error) {
         return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 500, acceptEncoding);
       }
     }
@@ -368,7 +425,7 @@ export function createObservatoryRoutes(
 
     return jsonResponse({
       error: 'not_found',
-      endpoints: ['/snapshot', '/node/:id', '/timeline', '/recalls', '/recalls/:recallId', '/health', '/events', '/soul', '/soul/rollback'],
+      endpoints: ['/snapshot', '/node/:id', '/timeline', '/recalls', '/recalls/:recallId', '/health', '/events', '/soul', '/soul/rollback', '/credentials'],
     }, 404, acceptEncoding);
   };
 }
