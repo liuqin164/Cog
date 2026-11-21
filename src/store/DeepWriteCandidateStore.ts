@@ -556,6 +556,33 @@ export class DeepWriteCandidateStore {
     };
   }
 
+  countNeedsConfirmationAging(input: {
+    projectId?: string;
+    expiredBefore: number;
+    warningBefore: number;
+    candidateTypes?: string[];
+  }): { expiringSoon: number; overdue: number } {
+    const params: Array<string | number> = [input.warningBefore, input.expiredBefore, input.expiredBefore];
+    let sql = `
+      SELECT
+        SUM(CASE WHEN COALESCE(c.updated_at, c.created_at) < ? AND COALESCE(c.updated_at, c.created_at) >= ? THEN 1 ELSE 0 END) AS expiring_soon,
+        SUM(CASE WHEN COALESCE(c.updated_at, c.created_at) < ? THEN 1 ELSE 0 END) AS overdue
+      FROM deep_write_candidates c
+      JOIN deep_write_runs r ON r.run_id = c.run_id
+      WHERE c.status = 'needs_confirmation'
+    `;
+    if (input.candidateTypes?.length) {
+      sql += ` AND c.candidate_type IN (${input.candidateTypes.map(() => '?').join(', ')})`;
+      params.push(...input.candidateTypes);
+    }
+    if (input.projectId !== undefined) {
+      sql += " AND COALESCE(r.project_id, '') = ?";
+      params.push(projectScope(input.projectId));
+    }
+    const row = this.db.prepare(sql).get(...params) as { expiring_soon: number | null; overdue: number | null } | null;
+    return { expiringSoon: Number(row?.expiring_soon ?? 0), overdue: Number(row?.overdue ?? 0) };
+  }
+
   private mapRun(row: RunRow): DeepWriteRunRecord {
     return {
       runId: row.run_id,

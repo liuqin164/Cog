@@ -207,6 +207,9 @@ export type { DreamTickOptions, DreamTickResult } from './dream/index.js';
 export type { EpisodeClosureReceipt, EpisodeDreamStatus, EpisodeListOptions, MemoryEpisode } from './episode/index.js';
 
 const ATLAS_RECALL_REFRESH_MS = 24 * 60 * 60 * 1000;
+const CONFIRMATION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const CONFIRMATION_WARNING_MS = 7 * 24 * 60 * 60 * 1000;
+const HIGH_PRIVILEGE_CANDIDATE_TYPES = ['preferences', 'user_preference', 'long_term_goal', 'boundary', 'failure_lesson'];
 export type * from './factory/KernelOptions.js';
 
 export class MemoryKernel extends KernelServices {
@@ -1798,6 +1801,42 @@ export class MemoryKernel extends KernelServices {
     };
   }
 
+  getBacklogReadings(projectId?: string, now = Date.now(), confirmationTtlMs = CONFIRMATION_TTL_MS) {
+    const expiredBefore = now - confirmationTtlMs;
+    const warningBefore = expiredBefore + CONFIRMATION_WARNING_MS;
+    const aging = this.deepWriteCandidateStore.countNeedsConfirmationAging({ projectId, expiredBefore, warningBefore });
+    const highPrivilegeAging = this.deepWriteCandidateStore.countNeedsConfirmationAging({
+      projectId, expiredBefore, warningBefore, candidateTypes: HIGH_PRIVILEGE_CANDIDATE_TYPES,
+    });
+    return {
+      measuredAt: now,
+      unboundEvents: this.countUnboundBindableRawEvents(projectId),
+      dreamBacklog: this.getDreamBacklogStatus(projectId).undreamedRawCount,
+      aliasConflicts: this.countEntityAliasConflicts(projectId),
+      candidateQueue: {
+        ...this.getDreamCandidateQueue(projectId),
+        needsConfirmationExpiringSoon: aging.expiringSoon,
+        needsConfirmationOverdue: aging.overdue,
+        highPrivilege: {
+          needsConfirmation: this.countDreamCandidates({ projectId, statuses: ['needs_confirmation'], candidateTypes: HIGH_PRIVILEGE_CANDIDATE_TYPES }),
+          needsConfirmationExpiringSoon: highPrivilegeAging.expiringSoon,
+          needsConfirmationOverdue: highPrivilegeAging.overdue,
+        },
+      },
+    };
+  }
+
+  countEntityAliasConflicts(projectId?: string): number {
+    return this.entityStore.listAliasConflicts().filter((conflict) => {
+      if (projectId === undefined) return true;
+      return conflict.entityIds.some((entityId) => {
+        const entity = this.entityStore.getByEntityId(entityId);
+        return entity?.metadata?.projectId === projectId
+          || this.entityStore.listTimeline({ entityId, projectId, limit: 1 }).length > 0;
+      });
+    }).length;
+  }
+
   buildMemoryMap(options: MemoryMapOptions = {}): MemorySelfMap {
     const projectId = options.projectId;
     const rawPage = this.eventStore.queryEvents(1, 1, {
@@ -1951,9 +1990,6 @@ export class MemoryKernel extends KernelServices {
   runMaintenanceTick(options: MaintenanceTickOptions = {}): MaintenanceTickResult {
     const projectId = options.projectId;
     const ranAt = options.now ?? Date.now();
-    // `refreshed: false` means "the projection was already current". A pass that did not
-    // run and a pass that failed are two further states, and both say which they are:
-    // reporting either as "current" is how a missing pass reads as a working one.
     const passDidNotProduce = (state: { skipped?: true; errors?: Array<{ projectId: string; error: string }> }) => ({
       documents: this.memoryAtlasStore.countDocuments(projectId),
       actions: 0,
@@ -1975,12 +2011,6 @@ export class MemoryKernel extends KernelServices {
     const memoryAtlasAccessPruned = this.memoryAtlasStore.cleanupAccess({
       projectId, before: ranAt - (options.atlasAccessRetentionMs ?? 90 * 24 * 60 * 60 * 1000),
     });
-    // A conversation that has gone quiet has ended, and that is what makes its episode
-    // something Dream can compile: Dream processes sealed episodes only, and until
-    // this ran nothing sealed a host's idle ones — a turn written over MCP was stored,
-    // searchable, and unreachable by recall (#87, ADR-0011). The window is the boundary
-    // policy's own idle gap, the same one the assembler audits boundaries against, not
-    // a second constant. A turn is never sealed on its own: this seals conversations.
     const episodeIdleGapMs = this.episodeBoundaryPolicy.config.maxIdleGapMs;
     const episodeIdleBefore = ranAt - episodeIdleGapMs;
     const episodeSealing = {
@@ -1988,26 +2018,16 @@ export class MemoryKernel extends KernelServices {
       idleBefore: episodeIdleBefore,
       sealedEpisodes: this.episodeStore.sealIdleEpisodes({ projectId, idleBefore: episodeIdleBefore, now: ranAt }).length,
     };
-    const confirmationTtlMs = options.confirmationTtlMs ?? 30 * 24 * 60 * 60 * 1000;
+    const confirmationTtlMs = options.confirmationTtlMs ?? CONFIRMATION_TTL_MS;
     const reviewQueueAging = this.deepWriteCandidateStore.expireNeedsConfirmation({
       projectId,
       before: ranAt - confirmationTtlMs,
       now: ranAt,
     });
-    const dreamBacklog = this.getDreamBacklogStatus(projectId);
+    const backlog = this.getBacklogReadings(projectId, ranAt, confirmationTtlMs);
     const episodeDream = this.getEpisodeDreamStatus(projectId);
     const unassignedEpisodeRawEvents = this.episodeStore.countUnassignedRawEvents(projectId);
-    const queue = this.getDreamCandidateQueue(projectId);
-    const entityConflicts = this.entityStore.listAliasConflicts().filter((conflict) => {
-      if (projectId === undefined) return true;
-      return conflict.entityIds.some((entityId) => {
-        const entity = this.entityStore.getByEntityId(entityId);
-        return entity?.metadata?.projectId === projectId
-          || this.entityStore.listTimeline({ entityId, projectId, limit: 1 }).length > 0;
-      });
-    }).length;
-    const candidateQueue = queue.candidate + queue.needsConfirmation + queue.shadow;
-    const unboundRawEvents = this.countUnboundBindableRawEvents(projectId);
+    const candidateQueue = backlog.candidateQueue.candidate + backlog.candidateQueue.needsConfirmation + backlog.candidateQueue.shadow;
     const bindingFailures = this.pipelineMetrics.getNonFatalCount('memory_binding_failed', { projectId });
     const suggestedActions: MaintenanceSuggestedAction[] = [];
     const suggestedAction = (
@@ -2038,13 +2058,13 @@ export class MemoryKernel extends KernelServices {
         'memory', 'govern', ...(projectId !== undefined ? ['--project', projectId] : [])
       ], `${candidateQueue} dream/deep-write candidates need CPU governance.`));
     }
-    if (entityConflicts > 0) {
-      suggestedActions.push(suggestedAction('resolve_entities', 'cogmem', ['memory', 'map', '--json'], `${entityConflicts} active entity alias conflicts need host or agent review.`));
+    if (backlog.aliasConflicts > 0) {
+      suggestedActions.push(suggestedAction('resolve_entities', 'cogmem', ['memory', 'map', '--json'], `${backlog.aliasConflicts} active entity alias conflicts need host or agent review.`));
     }
-    if (unboundRawEvents > 0) {
+    if (backlog.unboundEvents > 0) {
       suggestedActions.push(suggestedAction('bind_raw_events', 'cogmem', [
         'memory', 'bind', ...(projectId !== undefined ? ['--project', projectId] : []), '--json'
-      ], `${unboundRawEvents} high-value raw user events are not attached to memory binding clusters yet.`));
+      ], `${backlog.unboundEvents} high-value raw user events are not attached to memory binding clusters yet.`));
     }
     if (bindingFailures > 0) {
       suggestedActions.push(suggestedAction('inspect_binding_failures', 'cogmem', [
@@ -2057,10 +2077,10 @@ export class MemoryKernel extends KernelServices {
       ranAt,
       hostOwned: true,
       chargeVector: {
-        dreamBacklog: dreamBacklog.undreamedRawCount,
+        dreamBacklog: backlog.dreamBacklog,
         candidateQueue,
-        entityConflicts,
-        unboundRawEvents,
+        entityConflicts: backlog.aliasConflicts,
+        unboundRawEvents: backlog.unboundEvents,
         bindingFailures,
         expiredConfirmationCandidates: reviewQueueAging.expired,
         episodeDreamBacklog: episodeDream.pending + episodeDream.failed,
@@ -2123,6 +2143,7 @@ export class MemoryKernel extends KernelServices {
         embeddings: this.eventEmbeddingStore.getProgress(),
         recallDecisions,
       },
+      backlog: this.getBacklogReadings(),
       vectorRecall: this.semanticIndexEnabled() ? 'active' : 'disabled',
       embeddingModelId: this.embeddingProvider?.modelId,
       hasStaleVectors: this.embeddingProvider

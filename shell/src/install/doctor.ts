@@ -28,12 +28,35 @@ export interface HealthPayload {
   };
   memoryModel?: { state?: string; line?: string };
   storage?: StorageProgress;
+  backlog?: BacklogReading;
 }
 
 export interface StorageProgress {
   rawEvents?: number;
   embeddings?: { completed: number; total: number; failed: number };
   recallDecisions?: { rows: number; maxRows: number };
+}
+
+export interface BacklogReading {
+  measuredAt: number;
+  unboundEvents: number;
+  dreamBacklog: number;
+  aliasConflicts: number;
+  candidateQueue: {
+    candidate: number;
+    needsConfirmation: number;
+    promoted: number;
+    rejected: number;
+    superseded: number;
+    shadow: number;
+    needsConfirmationExpiringSoon: number;
+    needsConfirmationOverdue: number;
+    highPrivilege: {
+      needsConfirmation: number;
+      needsConfirmationExpiringSoon: number;
+      needsConfirmationOverdue: number;
+    };
+  };
 }
 
 export interface DoctorContext {
@@ -65,6 +88,7 @@ export interface DoctorReport {
   ok: boolean;
   checks: DoctorCheck[];
   storage?: StorageProgress;
+  backlog?: BacklogReading;
 }
 
 function mode(path: string): number {
@@ -76,6 +100,7 @@ const LOOPBACK = new Set(['127.0.0.1', '::1', 'localhost']);
 export async function runDoctor(ctx: DoctorContext): Promise<DoctorReport> {
   const checks: DoctorCheck[] = [];
   let storage: StorageProgress | undefined;
+  let backlog: BacklogReading | undefined;
 
   // 1. The data directory is the private one the installer made.
   try {
@@ -131,6 +156,16 @@ export async function runDoctor(ctx: DoctorContext): Promise<DoctorReport> {
         ].join(' ')
         : 'resident reports no storage reading (older build?)',
     });
+    backlog = health.backlog;
+    if (backlog) {
+      const queue = backlog.candidateQueue;
+      checks.push({
+        id: 'backlog',
+        ok: true,
+        warn: queue.needsConfirmationExpiringSoon > 0 || queue.needsConfirmationOverdue > 0,
+        detail: `backlog unbound=${backlog.unboundEvents} dream=${backlog.dreamBacklog} candidates=${queue.candidate}/${queue.needsConfirmation}/${queue.promoted}/${queue.rejected}/${queue.superseded}/${queue.shadow} needs_confirmation_expiring_soon=${queue.needsConfirmationExpiringSoon} needs_confirmation_overdue=${queue.needsConfirmationOverdue} high_privilege_needs_confirmation=${queue.highPrivilege.needsConfirmation} high_privilege_expiring_soon=${queue.highPrivilege.needsConfirmationExpiringSoon} high_privilege_overdue=${queue.highPrivilege.needsConfirmationOverdue} alias_conflicts=${backlog.aliasConflicts}`,
+      });
+    }
     if (health.memoryModel !== undefined) {
       const state = health.memoryModel.state ?? 'unknown';
       checks.push({
@@ -214,7 +249,12 @@ export async function runDoctor(ctx: DoctorContext): Promise<DoctorReport> {
       : 'bubblewrap unavailable: bash runs unsandboxed and says so; install bubblewrap on Linux to restore isolation',
   });
 
-  return { ok: checks.every((check) => check.ok || check.warn === true), checks, ...(storage ? { storage } : {}) };
+  return {
+    ok: checks.every((check) => check.ok || check.warn === true),
+    checks,
+    ...(storage ? { storage } : {}),
+    ...(backlog ? { backlog } : {}),
+  };
 }
 
 export async function defaultFetchHealth(url: string): Promise<HealthPayload> {

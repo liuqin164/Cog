@@ -3,7 +3,9 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
 import { dirname, join } from 'node:path';
 import { createMemoryKernel } from 'cogmem';
-import { RECALL_TRACE_MAX_ROWS } from 'cogmem/internal';
+import { DeepWriteCandidateStore, RECALL_TRACE_MAX_ROWS } from 'cogmem/internal';
+import { defaultFetchHealth, runDoctor, type BacklogReading } from '../src/install/doctor.ts';
+import type { ServiceSpec } from '../src/install/service.ts';
 import { startKernelHttpFace } from '../src/kernel-host.ts';
 import { makeTempDir } from './helpers.ts';
 
@@ -63,6 +65,142 @@ describe('in-process kernel host and its loopback HTTP face', () => {
         recallDecisions: { rows: 0, maxRows: RECALL_TRACE_MAX_ROWS },
       });
       expect(health.storage).toMatchObject({ embeddings: { completed: 1, total: 2, failed: 0 } });
+    } finally {
+      face.stop();
+      kernel.close();
+    }
+  });
+
+  test('health and doctor publish the same backlog readings as direct SQL (#390)', async () => {
+    const dir = makeTempDir();
+    const dbPath = join(dir, 'memory.sqlite');
+    const kernel = createMemoryKernel({ dbPath, projectTimeZone: 'UTC' });
+    const projectId = 'companion';
+    const now = Date.now();
+    const DAY = 24 * 60 * 60 * 1000;
+    for (const content of [
+      'MoneyPrinterTurbo 项目的部署策略需要离线优先，并且按照发布事件做时间线分类。',
+      'Cogmem memory write pipeline 需要写入时回看旧记忆，并绑定到同一个分类路径。',
+    ]) kernel.recordRawEvent({ projectId, threadId: 'backlog', role: 'user', content });
+    const store = new DeepWriteCandidateStore(kernel.factStore.getDatabase());
+    const run = store.insertRun({
+      projectId, sourceNeuronIds: [], mode: 'episode', promptHash: 'p', outputHash: 'o', status: 'succeeded',
+    });
+    const candidate = (candidateType: string, status: string, createdAt?: number) => ({
+      runId: run.runId, candidateType, status: status as never, confidence: 0.8, content: {}, evidence: [],
+      ...(createdAt === undefined ? {} : { createdAt }),
+    });
+    store.insertCandidates([
+      candidate('semantic_tags', 'candidate'),
+      candidate('semantic_tags', 'needs_confirmation', now - 29 * DAY),
+      candidate('preferences', 'needs_confirmation', now - 24 * DAY),
+      candidate('semantic_tags', 'needs_confirmation', now - 31 * DAY),
+      candidate('user_preference', 'needs_confirmation', now - 29 * DAY),
+      candidate('long_term_goal', 'needs_confirmation', now - 10 * DAY),
+      candidate('boundary', 'needs_confirmation', now - 31 * DAY),
+      candidate('failure_lesson', 'needs_confirmation', now - 5 * DAY),
+      candidate('correction', 'needs_confirmation', now - 26 * DAY),
+      candidate('semantic_tags', 'shadow'),
+    ]);
+    const db = kernel.factStore.getDatabase();
+    db.prepare(`
+      INSERT INTO entity_alias_conflicts
+        (conflict_id, project_id, normalized_alias, entity_type, entity_ids_json, policy, status, created_at, updated_at)
+      VALUES ('conflict-1', ?, 'cog', 'project', '["e1","e2"]', 'review', 'active', ?, ?)
+    `).run(projectId, now, now);
+    const face = await startKernelHttpFace(kernel, { port: 0, hostname: '127.0.0.1' });
+    try {
+      const health = await (await fetch(face.healthUrl)).json() as { backlog: BacklogReading };
+      const count = (sql: string, ...params: Array<string | number>): number =>
+        Number((db.prepare(sql).get(...params) as { count: number }).count);
+      expect(health.backlog).toMatchObject({
+        unboundEvents: 2,
+        dreamBacklog: 2,
+        aliasConflicts: 1,
+        candidateQueue: {
+          candidate: 1,
+          needsConfirmation: 8,
+          promoted: 0,
+          rejected: 0,
+          superseded: 0,
+          shadow: 1,
+          needsConfirmationExpiringSoon: 4,
+          needsConfirmationOverdue: 2,
+          highPrivilege: {
+            needsConfirmation: 5,
+            needsConfirmationExpiringSoon: 2,
+            needsConfirmationOverdue: 1,
+          },
+        },
+      });
+      expect(health.backlog.unboundEvents).toBe(count(`
+        SELECT COUNT(*) AS count FROM memory_events e
+        WHERE e.event_type = 'RAW_EVENT_RECORDED' AND e.role = 'user'
+          AND (e.raw_event_type IS NULL OR e.raw_event_type = 'message')
+          AND NOT EXISTS (SELECT 1 FROM memory_bindings b WHERE b.event_id = e.event_id)
+      `));
+      expect(health.backlog.dreamBacklog).toBe(count(
+        `SELECT COUNT(*) AS count FROM memory_events WHERE event_type = 'RAW_EVENT_RECORDED'`,
+      ));
+      expect(health.backlog.aliasConflicts).toBe(count(
+        `SELECT COUNT(*) AS count FROM entity_alias_conflicts WHERE status = 'active'`,
+      ));
+      const statusCount = (status: string): number => count(`
+        SELECT COUNT(*) AS count FROM deep_write_candidates c
+        JOIN deep_write_runs r ON r.run_id = c.run_id
+        WHERE c.status = ? AND COALESCE(r.project_id, '') = ?
+      `, status, projectId);
+      for (const status of ['candidate', 'needsConfirmation', 'promoted', 'rejected', 'superseded', 'shadow'] as const) {
+        expect(health.backlog.candidateQueue[status]).toBe(statusCount(status === 'needsConfirmation' ? 'needs_confirmation' : status));
+      }
+      expect(health.backlog.candidateQueue.needsConfirmationExpiringSoon).toBe(count(`
+        SELECT COUNT(*) AS count FROM deep_write_candidates c
+        JOIN deep_write_runs r ON r.run_id = c.run_id
+        WHERE c.status = 'needs_confirmation'
+          AND COALESCE(c.updated_at, c.created_at) < ? AND COALESCE(c.updated_at, c.created_at) >= ?
+      `, now - 23 * DAY, now - 30 * DAY));
+      expect(health.backlog.candidateQueue.needsConfirmationOverdue).toBe(count(`
+        SELECT COUNT(*) AS count FROM deep_write_candidates
+        WHERE status = 'needs_confirmation' AND COALESCE(updated_at, created_at) < ?
+      `, now - 30 * DAY));
+      expect(health.backlog.candidateQueue.highPrivilege.needsConfirmation).toBe(count(`
+        SELECT COUNT(*) AS count FROM deep_write_candidates
+        WHERE status = 'needs_confirmation'
+          AND candidate_type IN ('preferences', 'user_preference', 'long_term_goal', 'boundary', 'failure_lesson')
+      `));
+
+      const spec: ServiceSpec = {
+        serviceName: 'cogmem-companion',
+        bunPath: process.execPath,
+        shellDir: dir,
+        dataDir: dir,
+        workspaceRoot: dir,
+        projectId,
+        agentId: 'agent-a',
+        httpPort: 7338,
+        envFile: join(dir, 'env'),
+        logFile: join(dir, 'service.log'),
+        homeDir: dir,
+        env: {},
+      };
+      const report = await runDoctor({
+        dataDir: dir,
+        dbPath,
+        socketPath: join(dir, 'attach.sock'),
+        healthUrl: face.healthUrl,
+        fetchHealth: () => defaultFetchHealth(face.healthUrl),
+        spec,
+        platform: 'linux',
+        run: async () => ({ code: 0, stdout: '', stderr: '' }),
+        mode: 'process',
+        pid: process.pid,
+      });
+      const { measuredAt: _measuredAt, ...readings } = health.backlog;
+      expect(report.backlog).toMatchObject(readings);
+      const check = report.checks.find((entry) => entry.id === 'backlog');
+      expect(check?.warn).toBe(true);
+      expect(check?.detail).toContain('needs_confirmation_expiring_soon=4');
+      expect(check?.detail).toContain('high_privilege_expiring_soon=2');
     } finally {
       face.stop();
       kernel.close();

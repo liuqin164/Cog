@@ -239,6 +239,7 @@ async function main(): Promise<void> {
     installState: statePath,
     checks: report.checks,
     ...(report.storage ? { storage: report.storage } : {}),
+    ...(report.backlog ? { backlog: report.backlog } : {}),
   }, gate, text, options.json);
 }
 
