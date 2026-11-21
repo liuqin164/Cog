@@ -27,6 +27,14 @@ import type {
   SessionRecallInput,
   SessionRecallPage,
 } from '../session/index.js';
+import {
+  readSessionToolCalls,
+  readSessionTurns,
+  type SessionToolCall,
+  type SessionToolCallReadInput,
+  type SessionTurnRead,
+  type SessionTurnReadInput,
+} from '../session/index.js';
 import type { KernelEvent, KernelEventFilter, KernelEventSubscription } from '../events/index.js';
 import type { ProfileRecallEntry } from '../profile/index.js';
 import type {
@@ -496,6 +504,17 @@ export interface KernelAgentMemoryBackendOptions {
   agentId?: string;
 }
 
+export interface RecallDecisionTraceRead {
+  state: 'untraced' | 'empty' | 'found';
+  decision?: {
+    id: string;
+    timestamp: number;
+    payload: Record<string, unknown>;
+    parentEventId?: string;
+  };
+  chain: string[];
+}
+
 export class KernelAgentMemoryBackend {
   private readonly binding?: ChannelBinding;
   private readonly agentId?: string;
@@ -518,6 +537,76 @@ export class KernelAgentMemoryBackend {
     options: { since?: number } = {},
   ): KernelEventSubscription {
     return this.kernel.events.subscribe(filter, onEvent, options);
+  }
+
+  recentRecallDecision(input: { projectId: string; agentId: string }): RecallDecisionTraceRead {
+    const db = this.kernel.factStore.getDatabase();
+    const hasTraceTable = (db.query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'trace_events'`).all() as unknown[]).length > 0;
+    if (!hasTraceTable) return { state: 'untraced', chain: [] };
+    const store = new TraceStore(db);
+    const rows = store.queryByEventType('recall.result').filter((event) => {
+      if (event.projectId !== undefined && event.projectId !== input.projectId) return false;
+      const payload = event.payload as Record<string, unknown>;
+      const named = [payload.agentId, payload.agent, payload.sourceAgent].filter((value): value is string => typeof value === 'string');
+      return named.length === 0 || named.includes(input.agentId);
+    });
+    const last = rows[rows.length - 1];
+    if (!last) return { state: 'empty', chain: [] };
+    return {
+      state: 'found',
+      decision: {
+        id: last.id,
+        timestamp: last.timestamp,
+        payload: last.payload,
+        ...(last.parentEventId ? { parentEventId: last.parentEventId } : {}),
+      },
+      chain: store.getDecisionChain(last.id).map((event) => event.eventType),
+    };
+  }
+
+  recordRuntimeText(input: { projectId: string; kind: string; text: string }): string {
+    return this.kernel.eventStore.append({
+      streamId: `shell-state:${input.projectId}:${input.kind}`,
+      streamType: 'system',
+      eventType: 'SHELL_STATE_RECORDED',
+      projectId: input.projectId,
+      payload: { kind: input.kind, text: input.text },
+    }).eventId;
+  }
+
+  readRuntimeText(eventId: string): { kind: string; text: string } | undefined {
+    const payload = (this.kernel.eventStore.getEvent(eventId)?.payload ?? {}) as { kind?: unknown; text?: unknown };
+    return typeof payload.kind === 'string' && typeof payload.text === 'string'
+      ? { kind: payload.kind, text: payload.text }
+      : undefined;
+  }
+
+  latestEventSeq(): number {
+    return this.kernel.eventStore.getLatestGlobalSeq();
+  }
+
+  latestEventId(projectId: string): string {
+    return this.kernel.eventStore.queryEvents(1, 1, { projectId: [projectId], order: 'desc' }).records[0]?.eventId ?? '';
+  }
+
+  countEventsBetween(input: { projectId: string; startTime: number; endTime: number }): number {
+    return this.kernel.eventStore.queryEvents(1, 1, {
+      projectId: [input.projectId],
+      startTime: input.startTime,
+      endTime: input.endTime,
+    }).total;
+  }
+
+  nextTurnSeq(threadId: string, projectId: string): number {
+    return this.kernel.eventStore.getNextTurnSeq(threadId, projectId);
+  }
+
+  markToolObservationPromoted(eventId: string): boolean {
+    return this.kernel.eventStore.markToolObservationPromoted(eventId);
+  }
+
+  setWalAutoCheckpoint(pages: number): void {
+    this.kernel.factStore.getDatabase().exec(`PRAGMA wal_autocheckpoint=${Math.max(0, Math.trunc(pages))}`);
   }
 
   /**
@@ -1003,6 +1092,28 @@ export class KernelAgentMemoryBackend {
 
   assembleSessionContext(input: AssembleSessionContextInput): SessionContextAssembly {
     return this.kernel.sessionContext.assemble(input);
+  }
+
+  sessionTurns(input: SessionTurnReadInput): SessionTurnRead {
+    return readSessionTurns(this.kernel.factStore.getDatabase(), input);
+  }
+
+  sessionToolCalls(input: SessionToolCallReadInput): SessionToolCall[] {
+    return readSessionToolCalls(this.kernel.factStore.getDatabase(), input);
+  }
+
+  taskProcedureRecorded(input: { projectId: string; declarationEventId: string }): boolean {
+    const row = this.kernel.factStore.getDatabase().query(`
+      SELECT 1
+      FROM memory_events
+      WHERE event_type = 'RAW_EVENT_RECORDED'
+        AND raw_event_type = 'task_event'
+        AND COALESCE(project_id, '') = ?
+        AND json_valid(payload_json)
+        AND json_extract(payload_json, '$.metadata.procedure.declarationEventId') = ?
+      LIMIT 1
+    `).get(input.projectId, input.declarationEventId);
+    return row !== null && row !== undefined;
   }
 
   /**

@@ -166,7 +166,7 @@ export class ResidentTick {
   }
 
   private latestEventId(projectId: string): string {
-    return this.shell.kernel.eventStore.queryEvents(1, 1, { projectId: [projectId], order: 'desc' }).records[0]?.eventId ?? '';
+    return this.shell.backend.latestEventId(projectId);
   }
 
   /** F2's clock: fire due intentions and announce due prospective memories. It never speaks. */

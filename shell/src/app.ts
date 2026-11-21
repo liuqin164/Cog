@@ -8,8 +8,7 @@
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { ChannelContract, createMemoryKernel, KernelAgentMemoryBackend, type ChannelSession, type EmbeddingProvider, type MemoryKernel, type SessionContextAssembly, type SurfacingSource } from 'cogmem';
-import { ModelRegistry, type ModelRoleConfig, type ModelRoleName, type ModelTextUsage } from 'cogmem/internal';
+import { ChannelContract, createMemoryKernel, KernelAgentMemoryBackend, ModelRegistry, type ChannelSession, type EmbeddingProvider, type MemoryKernel, type ModelRoleConfig, type ModelRoleName, type ModelTextUsage, type SessionContextAssembly, type SurfacingSource } from 'cogmem';
 import { defaultShellConfig, type ShellConfig } from './config.ts';
 import { StateMachine } from './state/machine.ts';
 import { CheckpointStore, type InFlightToolCall } from './state/checkpoint.ts';
@@ -262,22 +261,6 @@ export class CompanionShell implements ShellControl, AttachShell {
       modelRegistry: registry,
       ...(embeddingProvider ? { embeddingProvider } : {}),
     });
-    this.stateLedger = new ShellStateLedger(this.kernel.eventStore, this.config.projectId);
-    this.machine = new StateMachine({
-      checkpoint: new CheckpointStore(this.config.dataDir, this.stateLedger),
-      trace: this.trace,
-      clock: this.now,
-      onAlarm: (error) => {
-        console.error(`[companion-shell] ALARM: ${error.message}; halting`);
-        this.options.onAlarm?.(error);
-      },
-    });
-    // A host-supplied provider is ready by definition; the local one flips this when it loads. The
-    // flip comes after the kernel is built so its write-path embedder stays deterministic.
-    if (options.embeddingProvider && this.shellRegistry) this.shellRegistry.embeddingReady = true;
-    // The WAL is mmap'd and counts against RSS. The 4 MB default lets it grow to the threshold on a
-    // busy turn stream; 256 pages (~1 MB) keeps the native footprint bounded without a shell timer.
-    this.kernel.factStore.getDatabase().exec('PRAGMA wal_autocheckpoint=256');
     // The resident's own terminal is a private conversation (#162), registered through F12's
     // contract (#166). A future channel registers its own session here; a connection that never
     // registers answers as `public`.
@@ -295,6 +278,22 @@ export class CompanionShell implements ShellControl, AttachShell {
       binding: this.terminalSession.binding,
       agentId: this.config.agentId,
     });
+    this.stateLedger = new ShellStateLedger(this.backend, this.config.projectId);
+    this.machine = new StateMachine({
+      checkpoint: new CheckpointStore(this.config.dataDir, this.stateLedger),
+      trace: this.trace,
+      clock: this.now,
+      onAlarm: (error) => {
+        console.error(`[companion-shell] ALARM: ${error.message}; halting`);
+        this.options.onAlarm?.(error);
+      },
+    });
+    // A host-supplied provider is ready by definition; the local one flips this when it loads. The
+    // flip comes after the kernel is built so its write-path embedder stays deterministic.
+    if (options.embeddingProvider && this.shellRegistry) this.shellRegistry.embeddingReady = true;
+    // The WAL is mmap'd and counts against RSS. The 4 MB default lets it grow to the threshold on a
+    // busy turn stream; 256 pages (~1 MB) keeps the native footprint bounded without a shell timer.
+    this.backend.setWalAutoCheckpoint(256);
     this.host = new PluginHost({ trace: this.trace });
     this.host.seedService('stateMachine', this.machine);
     this.host.seedService('eventBus', this.host.bus);
@@ -731,7 +730,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       profile: () => this.contextLanes.laneProfile(),
       openLoops: () => this.contextLanes.laneOpenLoops(),
       digestStubs: () => this.contextLanes.laneDigestStubs(),
-      ledgerSeq: () => this.kernel.eventStore.getLatestGlobalSeq(),
+      ledgerSeq: () => this.backend.latestEventSeq(),
       variablePrompt: () => this.systemPromptSections().tail,
       onAssembly: (assembly) => {
         this.lastLaneAssembly = assembly;

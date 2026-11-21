@@ -1,4 +1,4 @@
-import { digestAnchors, readSessionToolCalls, readSessionTurns, type SessionContextItem, type SessionDigestEntry, type SessionToolCall, type SessionTurn } from 'cogmem';
+import { digestAnchors, type SessionContextItem, type SessionDigestEntry, type SessionToolCall, type SessionTurn } from 'cogmem';
 import type { CompanionShell } from './app.ts';
 import { SecretRedactor } from './kernel-host.ts';
 
@@ -192,7 +192,7 @@ export class ContextLanes {
     if (!pending || !declaration) return;
     let calls: SessionToolCall[];
     try {
-      calls = readSessionToolCalls(this.shell.kernel.factStore.getDatabase(), {
+      calls = this.shell.backend.sessionToolCalls({
         projectId: this.shell.config.projectId,
         agentId: this.shell.config.agentId,
         sessionId: this.shell.config.sessionId,
@@ -282,17 +282,10 @@ export class ContextLanes {
   /** Whether the same end declaration already produced its task_event (#279). */
   private taskProcedureWritten(declarationEventId: string): boolean {
     try {
-      const row = this.shell.kernel.factStore.getDatabase().query(`
-        SELECT 1
-        FROM memory_events
-        WHERE event_type = 'RAW_EVENT_RECORDED'
-          AND raw_event_type = 'task_event'
-          AND COALESCE(project_id, '') = ?
-          AND json_valid(payload_json)
-          AND json_extract(payload_json, '$.metadata.procedure.declarationEventId') = ?
-        LIMIT 1
-      `).get(this.shell.config.projectId, declarationEventId);
-      return row !== null && row !== undefined;
+      return this.shell.backend.taskProcedureRecorded({
+        projectId: this.shell.config.projectId,
+        declarationEventId,
+      });
     } catch (error) {
       this.shell.trace.append('task_procedure_lookup_failed', {
         declarationEventId,
@@ -317,7 +310,7 @@ export class ContextLanes {
     }
     let turns: SessionTurn[];
     try {
-      turns = readSessionTurns(this.shell.kernel.factStore.getDatabase(), {
+      turns = this.shell.backend.sessionTurns({
         projectId: this.shell.config.projectId,
         agentId: this.shell.config.agentId,
         sessionId: this.shell.config.sessionId,

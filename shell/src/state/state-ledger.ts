@@ -1,4 +1,4 @@
-import { redactSecretText, type MemoryKernel } from 'cogmem';
+import { redactSecretText, type KernelAgentMemoryBackend } from 'cogmem';
 
 import type { RuntimeTextLedger } from './checkpoint.ts';
 
@@ -7,7 +7,7 @@ export class ShellStateLedger implements RuntimeTextLedger {
   private readonly byId = new Map<string, string>();
 
   constructor(
-    private readonly store: MemoryKernel['eventStore'],
+    private readonly backend: KernelAgentMemoryBackend,
     private readonly projectId: string,
   ) {}
 
@@ -16,24 +16,18 @@ export class ShellStateLedger implements RuntimeTextLedger {
     const existing = this.byText.get(key);
     if (existing !== undefined) return existing;
     const stored = redactSecretText(text).text;
-    const event = this.store.append({
-      streamId: `shell-state:${this.projectId}:${kind}`,
-      streamType: 'system',
-      eventType: 'SHELL_STATE_RECORDED',
-      projectId: this.projectId,
-      payload: { kind, text: stored },
-    });
-    this.remember(event.eventId, key, stored);
-    return event.eventId;
+    const eventId = this.backend.recordRuntimeText({ projectId: this.projectId, kind, text: stored });
+    this.remember(eventId, key, stored);
+    return eventId;
   }
 
   read(eventId: string): string | undefined {
     const cached = this.byId.get(eventId);
     if (cached !== undefined) return cached;
-    const payload = (this.store.getEvent(eventId)?.payload ?? {}) as { kind?: unknown; text?: unknown };
-    if (typeof payload.kind !== 'string' || typeof payload.text !== 'string') return undefined;
-    this.remember(eventId, `${payload.kind}\0${payload.text}`, payload.text);
-    return payload.text;
+    const stored = this.backend.readRuntimeText(eventId);
+    if (stored === undefined) return undefined;
+    this.remember(eventId, `${stored.kind}\0${stored.text}`, stored.text);
+    return stored.text;
   }
 
   has(eventId: string, text: string): boolean {

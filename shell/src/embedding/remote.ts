@@ -12,8 +12,7 @@
  */
 import { Worker } from 'node:worker_threads';
 import { fileURLToPath } from 'node:url';
-import type { EmbeddingProvider } from 'cogmem';
-import { OllamaEmbeddingProvider, QwenAPIEmbeddingProvider } from 'cogmem/internal';
+import { OllamaEmbeddingProvider, QwenAPIEmbeddingProvider, type EmbeddingProvider } from 'cogmem';
 import type { EmbeddingConfig, EmbeddingState, EmbeddingStatus } from './model.ts';
 
 type RemoteKind = Exclude<EmbeddingConfig['provider'], 'local'>;
