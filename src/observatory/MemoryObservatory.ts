@@ -38,7 +38,7 @@ function lodFor(nodeType: string): ObservatoryLod {
 }
 
 const RULE_KINDS = new Set(['rule', 'constraint', 'prohibition', 'policy', 'boundary', 'workflow_rule']);
-const SOUL_KINDS = new Set(['profile', 'identity', 'persona', 'preference', 'belief']);
+const SOUL_KINDS = new Set(['identity', 'persona', 'belief']);
 const PROMISE_KINDS = new Set(['commitment', 'promise', 'commitments', 'promises']);
 const INTENT_KINDS = new Set(['intention', 'intent', 'plan', 'planning', 'goal', 'goals', 'task']);
 const EXPERIENCE_TYPES = new Set(['episode', 'action', 'raw_event', 'event', 'cluster', 'correction']);

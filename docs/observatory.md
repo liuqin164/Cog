@@ -78,7 +78,7 @@ Three things, and nothing else:
   then `PART_OF_PROJECT`, `ABOUT_TOPIC`, `HAS_EVIDENCE`, `OCCURRED_*` and the other frame/graph edges
   pull related memories together. The same database opens onto the same galaxy, and the force pass is
   capped at 2,500 nodes so a large corpus keeps the arm seed rather than a multi-second layout.
-- **colour** — six roles: 规矩 (`policy`/`constraint`/`prohibition`/…), 灵魂 (`belief`/`profile`/…),
+- **colour** — six roles: 规矩 (`policy`/`constraint`/`prohibition`/…), 灵魂 (`belief`/`identity`/`persona`/…),
   承诺 (`commitment`/`promise`/…), 意图 (`intention`/`plan`/`goal`/…), 经历 (episode/action/cluster/
   raw_event/…) and 普通 (everything else, including profile and procedure when they have no stronger
   class). The legend counts are the view's own.
