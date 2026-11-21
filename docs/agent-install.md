@@ -52,9 +52,8 @@ curl -fsSL https://raw.githubusercontent.com/liuqin164/Cog/main/install.sh | bas
 ```
 
 The installer only installs the package and links both declared bins, `cog`
-and `cogmem`. It never runs the setup wizard and never writes config —
-`COGMEM_SKIP_INIT` exists and is ignored, because setup has been a separate
-step since 3.x. If it prints a next step, follow it; do not add your own.
+and `cogmem`. It never runs setup and never writes config. If it prints a next
+step, follow it; do not add your own.
 
 ## 3. Run the companion installer
 

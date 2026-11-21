@@ -167,12 +167,6 @@ print_next_steps() {
 }
 
 main() {
-  # Accepted and ignored, so existing scripts that set it keep running. The
-  # installer no longer runs the wizard, so there is nothing left to skip.
-  if [ "${COGMEM_SKIP_INIT:-}" != "" ]; then
-    log "COGMEM_SKIP_INIT is set and ignored: setup is always a separate step now."
-  fi
-
   ensure_bun
   ensure_install_home
 

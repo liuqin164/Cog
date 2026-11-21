@@ -144,7 +144,6 @@ another.
 
 | Variable | What it does |
 | --- | --- |
-| `COGMEM_SKIP_INIT` | Still accepted, and now does nothing. |
 | `COGMEM_PACKAGE_SPEC` | Selects what is installed: a version, a range, a tarball, a path, or a URL or `npm:`/`github:` location. |
 | `COGMEM_NPM_SPEC`, `COGMEM_RELEASE_TARBALL` | Older names for the same setting, in that order of precedence. |
 | `COGMEM_INSTALL_HOME`, `COGMEM_BIN_DIR` | Move the package home and the linked CLI, so the same script installs a locally packed build without the package itself coming from the registry — its dependencies still resolve from the registry unless they are already cached. |
