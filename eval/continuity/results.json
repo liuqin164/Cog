@@ -1,6 +1,6 @@
 {
-  "head": "3d6e5a08",
-  "runAt": "2026-11-20T05:15:17.405Z",
+  "head": "97aaf662",
+  "runAt": "2026-11-20T23:54:50.792Z",
   "bun": "1.3.14",
   "platform": "linux",
   "arch": "arm64",
@@ -29,7 +29,7 @@
         }
       ],
       "pass": true,
-      "durationMs": 175581.51547399999
+      "durationMs": 236585.57077700002
     },
     {
       "name": "forget (#332/#331)",
@@ -55,15 +55,15 @@
         }
       ],
       "pass": true,
-      "durationMs": 356.5389209999994
+      "durationMs": 664.6543280000042
     },
     {
       "name": "night catch-up (#327)",
       "metrics": [
         {
           "key": "dream_complete_after_missed_window",
-          "value": "0",
-          "pass": false,
+          "value": "1",
+          "pass": true,
           "threshold": "1"
         },
         {
@@ -79,8 +79,8 @@
           "threshold": ">= 1"
         }
       ],
-      "pass": false,
-      "durationMs": 406.63796000002185
+      "pass": true,
+      "durationMs": 1009.0069999999832
     },
     {
       "name": "emergence feedback (#330)",
@@ -94,13 +94,25 @@
         {
           "key": "surfacings_after_three_ignored",
           "value": "4",
-          "pass": false,
-          "threshold": "<= 3 (the fourth waits or is suppressed)",
-          "detail": "per tick: 1, 1, 1, 1"
+          "pass": true,
+          "threshold": "4 (the fourth is where the third ignore is learned)",
+          "detail": "per tick: 1, 1, 1, 1, 0"
+        },
+        {
+          "key": "fifth_surfacing_withheld",
+          "value": "0",
+          "pass": true,
+          "threshold": "0 (F7 cooldown holds the fifth)"
+        },
+        {
+          "key": "emergence_cooldown_active",
+          "value": "L1 until 2026-11-16T09:09:01.000Z",
+          "pass": true,
+          "threshold": "level >= 1 with a cooldown still running"
         }
       ],
-      "pass": false,
-      "durationMs": 525.8096409999998
+      "pass": true,
+      "durationMs": 1675.486372000014
     },
     {
       "name": "budget pause and resume (#228)",
@@ -113,8 +125,8 @@
         },
         {
           "key": "resume_keeps_the_assignment",
-          "value": "(none)",
-          "pass": false,
+          "value": "read {\"path\":\"missing.txt\"}",
+          "pass": true,
           "threshold": "the second request carries the stop"
         },
         {
@@ -124,8 +136,8 @@
           "threshold": "IDLE and the assignment closed"
         }
       ],
-      "pass": false,
-      "durationMs": 273.9129660000035
+      "pass": true,
+      "durationMs": 940.5686819999828
     },
     {
       "name": "SIGKILL recovery (#331)",
@@ -138,8 +150,8 @@
         },
         {
           "key": "assignment_survives_sigkill",
-          "value": "(missing)",
-          "pass": false,
+          "value": "把这份报告整理完，然后等我确认",
+          "pass": true,
           "threshold": "the open assignment text is back"
         },
         {
@@ -150,8 +162,8 @@
           "detail": "fixture saw away=1"
         }
       ],
-      "pass": false,
-      "durationMs": 590.8658339999965
+      "pass": true,
+      "durationMs": 2594.272843999992
     }
   ]
 }

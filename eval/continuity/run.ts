@@ -237,7 +237,7 @@ async function forget(): Promise<Metric[]> {
 /** 3. Night: sleep across the window, then catch the Dream up once and snapshot (#327). */
 async function night(): Promise<Metric[]> {
   const dir = makeTempDir('continuity-night-');
-  const clock = { now: T0 + HOUR };
+  const clock = { now: T0 - HOUR };
   const config = { dream: DREAM_2_TO_5, idleWakeIntervalMs: DAY };
   const first = makeShell(dir, new ScriptedProvider([{ text: '好的。', toolCalls: [] }]), config, { now: () => clock.now });
   await first.start();
@@ -280,6 +280,7 @@ async function emergence(): Promise<Metric[]> {
       '我 3 小时后把蓝色笔记本带给你',
       '我 3 小时后把绿色杯子送到你桌上',
       '我 3 小时后把黄色钥匙交给你',
+      '我 3 小时后把紫色围巾放到门口',
     ];
     const runsByTick: number[] = [];
     for (const [index, text] of texts.entries()) {
@@ -301,14 +302,29 @@ async function emergence(): Promise<Metric[]> {
       runsByTick.push(after - before);
     }
     const total = runsByTick.reduce((sum, count) => sum + count, 0);
+    const feedback = shell.backend
+      .surfacingFeedbackState({ projectId: shell.config.projectId, now: clock.now })
+      .types.find((entry) => entry.type === 'commitment');
     return [
       metric('first_due_surfacing', String(runsByTick[0] ?? 0), runsByTick[0] === 1, 'exactly 1'),
       metric(
         'surfacings_after_three_ignored',
         String(total),
-        total <= 3,
-        '<= 3 (the fourth waits or is suppressed)',
+        total === 4,
+        '4 (the fourth is where the third ignore is learned)',
         `per tick: ${runsByTick.join(', ')}`,
+      ),
+      metric(
+        'fifth_surfacing_withheld',
+        String(runsByTick[4] ?? 0),
+        runsByTick[4] === 0,
+        '0 (F7 cooldown holds the fifth)',
+      ),
+      metric(
+        'emergence_cooldown_active',
+        feedback?.cooldownUntil == null ? '(none)' : `L${feedback.level} until ${new Date(feedback.cooldownUntil).toISOString()}`,
+        (feedback?.level ?? 0) > 0 && feedback?.cooldownUntil !== null && feedback!.cooldownUntil > clock.now,
+        'level >= 1 with a cooldown still running',
       ),
     ];
   } finally {
@@ -324,7 +340,10 @@ async function budgetPause(): Promise<Metric[]> {
   const provider = new ScriptedProvider([
     {
       text: 'working',
-      toolCalls: [{ toolCallId: 'c1', toolName: 'read', input: { path: 'missing.txt' } }],
+      toolCalls: [
+        { toolCallId: 'c0', toolName: 'declare_task', input: { action: 'start' } },
+        { toolCallId: 'c1', toolName: 'read', input: { path: 'missing.txt' } },
+      ],
       usage: { input: 1_500, output: 1 },
     },
     { text: 'finished', toolCalls: [] },
@@ -337,9 +356,10 @@ async function budgetPause(): Promise<Metric[]> {
     const stoppedStep = shell.machine.runtime.openAssignment?.stoppedStep ?? '';
     const reply = await shell.runCommand('continue');
     await waitUntil(() => shell.state === 'IDLE', 10_000);
+    const resumedPrompt = (provider.calls.at(-1)?.messages ?? []).map((message) => message.content).join('\n');
     const resumed = provider.calls.length >= 2
-      && (provider.calls[1]!.systemPrompt ?? '').includes('<open-assignment>')
-      && (provider.calls[1]!.systemPrompt ?? '').includes('stopped at:');
+      && resumedPrompt.includes('<open-assignment>')
+      && resumedPrompt.includes('stopped at:');
     const closed = shell.machine.runtime.openAssignment === undefined;
     return [
       metric('budget_stop_is_a_pause', first?.stopReason ?? 'none', paused, 'SUSPENDED / budget'),
@@ -458,8 +478,8 @@ function renderMarkdown(results: ScenarioResult[]): string {
     '',
     '- Scenario 1 is the #316 cliff probe: 600 turns, 6,000-token target, default 8-turn tail.',
     '- Scenario 2 scans every file under the data directory, including SQLite, WAL, checkpoint, trace and snapshots.',
-    '- Scenario 3 starts the process at 01:00, stops it, restarts at 06:00, then ticks once.',
-    '- Scenario 4 seeds one due commitment before each tick; the ticks are 3 minutes apart, so the fixed 2-minute cooldown allows a fourth surfacing today.',
+    '- Scenario 3 starts the process at 23:00, so its turn belongs to the day the 02:00 window folds; it stops before the window, restarts at 06:00, then ticks once.',
+    '- Scenario 4 seeds one due commitment before each tick, five ticks three minutes apart: the fourth surfacing is where the third ignore is learned, and the fifth must wait for F7\'s six-hour cooldown.',
     '- Scenario 6 crosses a real SIGKILL; the fixture opens the assignment and the away queue through the shell\'s own paths.',
     '',
   );
