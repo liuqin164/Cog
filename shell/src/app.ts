@@ -6,15 +6,13 @@
  * shell, a due intent re-injects the clock, the cage's overrun leaves RUNNING. Plugins decide
  * behaviour; the app decides which transition that behaviour is.
  */
-import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { isAbsolute, join, relative, resolve } from 'node:path';
-import { ChannelContract, createMemoryKernel, digestAnchors, KernelAgentMemoryBackend, readSessionToolCalls, readSessionTurns, type ChannelSession, type DeliveryCandidateInput, type EmbeddingProvider, type MemoryKernel, type SessionContextAssembly, type SessionContextItem, type SessionDigestEntry, type SessionToolCall, type SessionTurn, type SurfacingSource } from 'cogmem';
-import { ModelRegistry, TraceStore, type ModelRoleConfig, type ModelRoleName, type ModelTextUsage } from 'cogmem/internal';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { ChannelContract, createMemoryKernel, KernelAgentMemoryBackend, type ChannelSession, type EmbeddingProvider, type MemoryKernel, type SessionContextAssembly, type SurfacingSource } from 'cogmem';
+import { ModelRegistry, type ModelRoleConfig, type ModelRoleName, type ModelTextUsage } from 'cogmem/internal';
 import { defaultShellConfig, type ShellConfig } from './config.ts';
 import { StateMachine } from './state/machine.ts';
-import { CheckpointStore, forgetRuntimeText, type InFlightToolCall, type Suspension } from './state/checkpoint.ts';
+import { CheckpointStore, type InFlightToolCall } from './state/checkpoint.ts';
 import { ShellStateLedger } from './state/state-ledger.ts';
 import type { Trigger } from './state/table.ts';
 import { ProcessLock } from './process-lock.ts';
@@ -24,12 +22,12 @@ import { clockPlugin, ClockService } from './plugins/clock.ts';
 import { providedModelPlugin } from './plugins/mg-provider.ts';
 import { ModelRouter, modelRouterPlugin, routeLine } from './model/router.ts';
 import { BUILTIN_ROUTE_NAME, RouteStore, redactUrl, type ModelRoute } from './model/routes.ts';
-import { cagePlugin, estimateBudgetGrant, RunCage, type CageTier } from './plugins/cage.ts';
-import { bwrapUsable, builtinToolsPlugin } from './plugins/builtin-tools.ts';
+import { cagePlugin, RunCage, type CageTier } from './plugins/cage.ts';
+import { builtinToolsPlugin } from './plugins/builtin-tools.ts';
 import { coreCommandFor, availableCoreCommand, unknownCommandReply, type CommandHost, type CommandReply } from './commands.ts';
 import { proposalPlugin } from './plugins/proposal.ts';
 import { askPlugin } from './plugins/ask.ts';
-import { CommandProposals, executeProposal, isProposableCommand, type CommandProposal, type ProposalConfirmation } from './proposals.ts';
+import { CommandProposals, isProposableCommand, type CommandProposal } from './proposals.ts';
 import { capturePlugin } from './plugins/capture.ts';
 import { sessionContextPlugin } from './plugins/session-context.ts';
 import { assignmentPlugin } from './plugins/assignment.ts';
@@ -38,93 +36,27 @@ import { soulEditPlugin } from './plugins/soul-edit.ts';
 import { dreamPlugin } from './plugins/dream.ts';
 import { emergencePlugin } from './plugins/emergence.ts';
 import { terminalPlugin, TerminalChannel, type ShellControl } from './channels/terminal.ts';
-import { AgentRuntime, type AgentMessage, type ModelProvider, type RunSummary, type TurnUsage } from './state/agent-loop.ts';
+import { AgentRuntime, type ModelProvider, type RunSummary } from './state/agent-loop.ts';
 import type { ToolOutputAccount } from './state/context-budget.ts';
-import { classifyEndpointFailure } from './state/retry.ts';
 import { laneAssemblyView, type ContextMetrics } from './state/session-lanes.ts';
-import { SecretRedactor, startKernelHttpFace, type HttpFaceHandle } from './kernel-host.ts';
-import { formatBytes, memoryPressureAction, readMemoryUsage } from './memory.ts';
-import { rotateLogFile, SERVICE_LOG_MAX_BYTES } from './log-rotation.ts';
-import { defaultRunner } from './install/installer.ts';
+import { startKernelHttpFace, type HttpFaceHandle } from './kernel-host.ts';
 import { AttachServer, defaultSocketPath, type AttachShell } from './attach/server.ts';
-import { buildAwayReport, enqueueAway } from './presence.ts';
-import { readInstallState, readTreeVersion, serviceFileExists, shellDirOfTree, treeOfThisProcess } from './upgrade/paths.ts';
-import { restartService, servicePath, type Platform, type ServiceSpec } from './install/service.ts';
-import { pluginsConfigPath, readPluginRegistry, writePluginRegistry } from './plugins/registry.ts';
-import { checkPluginSpec, loadNativePlugins, type PluginLoadResult } from './plugins/load.ts';
-import { stageUpgradeTree, type StageUpgradeInput, type StagedTree } from './upgrade/stage.ts';
-import { spawnUpgradeSupervisor, type SpawnSupervisorResult } from './upgrade/spawn.ts';
-import {
-  clearUpgradeRequest,
-  describeUpgradeOutcome,
-  isUpgradePromise,
-  newUpgradeId,
-  readUpgradeOutcome,
-  readUpgradeRequest,
-  upgradeOutcomePath,
-  supervisorIsAlive,
-  upgradePromiseReason,
-  upgradeRequestPath,
-  writeUpgradeJson,
-  type UpgradeOutcome,
-  type UpgradeRequest,
-} from './upgrade/records.ts';
+import { loadNativePlugins, type PluginLoadResult } from './plugins/load.ts';
+import { UpgradeAdmin } from './upgrade/admin.ts';
+import type { StageUpgradeInput, StagedTree } from './upgrade/stage.ts';
+import type { SpawnSupervisorResult } from './upgrade/spawn.ts';
+import type { UpgradeOutcome, UpgradeRequest } from './upgrade/records.ts';
 import type { PresenceReport, StatusState, WorkState } from './tui/view.ts';
 import type { EmbeddingStatus } from './embedding/model.ts';
 import { createEmbeddingProvider, resolveEmbeddingDimensions, type ShellEmbeddingProvider } from './embedding/provider.ts';
+import { ContextLanes } from './context-lanes.ts';
+import { PluginsAdmin } from './plugins-admin.ts';
+import { RunLoop } from './run-loop.ts';
+import { ProposalsHandlers } from './proposals-handlers.ts';
+import { SovereigntyCommands } from './sovereignty.ts';
+import { StatusFace } from './status-face.ts';
+import { ResidentTick } from './resident-tick.ts';
 
-/**
- * How long the resident gives the supervisor before the promise's due instant arrives. The report is
- * what the promise is for; this is the "how long is still working" half of it. The supervisor's own
- * pid decides the rest (see `settleUpgradeReport`).
- */
-const UPGRADE_REPORT_GRACE_MS = 60_000;
-
-/**
- * The plugin restart's grace. The reply to `/plugins add` (and its trace) must reach the attach
- * socket and the log before systemd's SIGTERM takes the process down, or the user sees a command
- * that neither answered nor left a record. Same spirit as the upgrade's handoff grace, sized for one
- * socket write rather than a whole announcement.
- */
-const PLUGIN_RESTART_GRACE_MS = 300;
-
-/** The findings handoff is a prompt line, not a transcript: one bounded paragraph. */
-const MAX_ASSIGNMENT_FINDINGS = 600;
-
-/**
- * A task-exit stub (#263) quotes each source ledger row as an exact prefix; the full row stays one
- * `read mem:<eventId>` away. The list is bounded because a resident may finish tasks forever.
- */
-const MAX_TASK_STUB_QUOTE_CHARS = 240;
-const MAX_TASK_STUBS = 20;
-const MAX_RETAINED_CONSTRAINTS = 8;
-/** If the run's ledger row never arrives (capture paused), stop retrying the stub after an hour. */
-const TASK_STUB_RETRY_MS = 60 * 60_000;
-const DREAM_RETRY_BASE_MS = 5 * 60_000;
-const DREAM_RETRY_CAP_MS = 30 * 60_000;
-const DREAM_MAX_ATTEMPTS_PER_NIGHT = 5;
-const SNAPSHOT_INTERVAL_MS = 24 * 60 * 60_000;
-
-/**
- * Autonomous continuation backoff (#228): 5 min × 2^n, capped at 6 h. The base is the shortest wait
- * that still lets a transient provider failure clear; the cap is what a stuck task costs at most —
- * after the ladder saturates, an unattended assignment is retried about four times a day instead of
- * every wake, which is the repeated-recon burn the ticket names. A user line, an approved budget, or
- * a successful tool result resets the count, so the cap never applies to work that is moving.
- */
-const RESUME_BACKOFF_BASE_MS = 5 * 60_000;
-const RESUME_BACKOFF_CAP_MS = 6 * 60 * 60_000;
-
-/**
- * Emergence's stop-bleed (#229): a candidate is spoken or queued at most once, and at most eight
- * times in a configured-zone day (#285). The count is checkpointed, so a restart cannot reset
- * today's silence. Per-source frequency is F7's job.
- *
- * shortcut: the consumed-key list keeps the newest 500; an event older than that may surface once
- * more. Raise the cap if a resident ever accumulates candidates faster than 500 per lifetime.
- */
-const EMERGENCE_DAILY_LIMIT = 8;
-const MAX_EMERGENCE_CONSUMED = 500;
 
 export interface CompanionShellOptions {
   config?: Partial<ShellConfig>;
@@ -184,11 +116,19 @@ export class CompanionShell implements ShellControl, AttachShell {
   readonly lock: ProcessLock;
   /** The agent's command offers and the user's answers; the transcript element's source of truth. */
   readonly proposals: CommandProposals;
-  private runtime?: AgentRuntime;
-  private cage?: RunCage;
-  private clock?: ClockService;
-  private dream?: { integrate(...args: [string, string, number?]): Promise<{ localDate: string; eventCount: number; sourceRefs: unknown[]; summary: string; memoryModelUsed?: boolean; memoryModelDegraded?: string; kernelNightRan?: boolean }> };
-  private emergence?: {
+  readonly sovereignty: SovereigntyCommands;
+  readonly proposalsHandlers: ProposalsHandlers;
+  readonly pluginsAdmin: PluginsAdmin;
+  readonly upgradeAdmin: UpgradeAdmin;
+  readonly statusFace: StatusFace;
+  readonly contextLanes: ContextLanes;
+  readonly runLoop: RunLoop;
+  readonly residentTick: ResidentTick;
+  runtime?: AgentRuntime;
+  cage?: RunCage;
+  clock?: ClockService;
+  dream?: { integrate(...args: [string, string, number?]): Promise<{ localDate: string; eventCount: number; sourceRefs: unknown[]; summary: string; memoryModelUsed?: boolean; memoryModelDegraded?: string; kernelNightRan?: boolean }> };
+  emergence?: {
     hasDue?(now?: number): boolean;
     decide(now?: number): {
       candidates: Array<{
@@ -206,7 +146,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     };
   };
   /** The last candidate spoken per F6 source, so the owner's next line can close F7's loop. */
-  private readonly surfacedByType = new Map<SurfacingSource, {
+  readonly surfacedByType = new Map<SurfacingSource, {
     candidateId: string;
     sourceRefs: Array<{ eventId?: string; sourceId?: string; contentHash?: string }>;
   }>();
@@ -214,33 +154,31 @@ export class CompanionShell implements ShellControl, AttachShell {
   private terminal?: TerminalChannel;
   private readonly channelContract: ChannelContract;
   private readonly terminalSession: ChannelSession;
-  private attach?: AttachServer;
-  private modelLabel = 'unknown';
+  attach?: AttachServer;
+  modelLabel = 'unknown';
   /** Present only when this process built its own provider; an injected test provider has no routes. */
-  private modelRouter?: ModelRouter;
+  modelRouter?: ModelRouter;
   /** The request-side estimate, calibrated by the provider's reported prompt count. */
-  private contextTokenEstimate = 0;
+  contextTokenEstimate = 0;
   /** The newest request's tool-output account (#319), shown beside the lane budget. */
   private lastToolOutput?: ToolOutputAccount;
   /** The newest six-lane assembly; `/context` and the TUI read this, not a second accounting. */
-  private lastLaneAssembly?: SessionContextAssembly;
+  lastLaneAssembly?: SessionContextAssembly;
   private contextAssemblyFailures = 0;
   private contextAssemblyConsecutive = 0;
   private contextAssemblyLastFailure?: { at: number; message: string };
   /** The projection actions that produced it (#268); reset when the next assembly is recorded. */
-  private lastContextMetrics?: ContextMetrics;
+  lastContextMetrics?: ContextMetrics;
   /** `mem:` reads since the previous assembly; the next trace reports and clears it. */
   private drillsSinceAssembly = 0;
   /** The latest project event the compiled books were last brought up to. */
-  private compiledThroughEventId?: string;
-  /** Whether a soul-read failure has been traced; the read itself is retried on the next turn. */
-  private soulFailureTraced = false;
-  private workLabel = '';
-  private runTurns = 0;
-  private runTokens = 0;
+  compiledThroughEventId?: string;
+  workLabel = '';
+  runTurns = 0;
+  runTokens = 0;
   /** The tier this process last started a run with; the work bar shows that tier's limits. */
-  private runTier: CageTier = 'autonomous';
-  private currentRunUserText = '';
+  runTier: CageTier = 'autonomous';
+  currentRunUserText = '';
   /**
    * The provider's own prompt-cache account for the run in flight (#165 round 21): `hit` is what the
    * endpoint reported served from cache, `miss` the remainder of the prompt, `percent` their ratio.
@@ -248,19 +186,19 @@ export class CompanionShell implements ShellControl, AttachShell {
    * provider that never reports caching cannot look like a provider that always misses. Round 17's
    * estimate is not this number and never fills it.
    */
-  private promptCache?: { hit: number; miss: number; percent: number };
-  private runStartedAt?: number;
+  promptCache?: { hit: number; miss: number; percent: number };
+  runStartedAt?: number;
   /**
    * The killed run's prompt, rebuilt from the session log at recovery (#210). Delivery is a product
    * decision the shell does not make; holding it means the interrupted turn is reconstructable.
    */
-  private interrupted?: { runId: string; text: string; chars: number };
+  interrupted?: { runId: string; text: string; chars: number };
   /** An upgrade outcome already spoken by this process; attaches read it once, then it is gone. */
-  private lastUpgrade?: UpgradeOutcome;
+  lastUpgrade?: UpgradeOutcome;
   /** One memory notice per crossing, reset after we drop below 90% of the ceiling. */
-  private memoryWarned = false;
+  memoryWarned = false;
   /** The day whose daily-budget stop was already spoken to the user (#233). */
-  private dailyNotifiedDay?: string;
+  dailyNotifiedDay?: string;
   /** The Dream model's spend for the current night, charged to the same day counter (#231). */
   private nightSpent = 0;
   private nightCap = 0;
@@ -268,33 +206,15 @@ export class CompanionShell implements ShellControl, AttachShell {
   private nightStartTokens = 0;
   private dreamModelActive = false;
   /**
-   * The window `/forget` previewed and `/forget confirm` may execute. Process-local: a restart
-   * asks for a fresh preview rather than resuming a confirmation the owner can no longer see.
-   */
-  private pendingForget?: { start: number; end: number };
-  /**
-   * The export path `/export` asked the owner to confirm (#290). Process-local: unlike the data-dir
-   * path, writing outside the data dir must belong to a confirmation the owner just saw.
-   */
-  private pendingExport?: { path: string };
-  /**
-   * The practice `/correct` proposed and `/correct confirm` may write (#264). Process-local for the
-   * same reason as the forget window: a confirmation must belong to a proposal the owner just saw.
-   */
-  private pendingProcedureCorrection?: { domain: string; key: string; value: string; title: string; steps: string[] };
-  /**
    * A question the run registered through `ask_user` (#228). It is process-local because the run is
    * still in this process; `settleAssignment` turns it into the checkpointed suspension.
    */
-  private pendingQuestion?: { text: string; contextRef?: string };
-  /** The proposal that offers `/continue` for the current pause; Esc on it is the owner's refusal. */
-  private suspensionProposalId?: string;
+  pendingQuestion?: { text: string; contextRef?: string };
   /**
    * An autonomous wake that is backed off must not continue the open assignment, so its prompt must
    * not carry the assignment block either — otherwise the model would try anyway.
    */
-  private hideAssignmentContext = false;
-  private readonly redactor = new SecretRedactor();
+  hideAssignmentContext = false;
   /**
    * The CLI config this process writes for its own bash children. `COGMEM_CONFIG` points at it, so a
    * `cogmem` invocation inside the companion resolves `<dataDir>/memory.sqlite` rather than the
@@ -303,20 +223,20 @@ export class CompanionShell implements ShellControl, AttachShell {
   private readonly cliConfigPath: string;
   private tickTimer?: ReturnType<typeof setInterval>;
   private started = false;
-  private readonly now: () => number;
+  readonly now: () => number;
   /** This process's native plugin load outcomes; `/plugins` and `/health` read it. */
   readonly pluginResults: PluginLoadResult[] = [];
   private readonly embedding?: ShellEmbeddingProvider;
   /** Any host-supplied embedder, so the install's semantic probe is not limited to the local one. */
   private readonly embeddingProvider?: EmbeddingProvider;
   private readonly shellRegistry?: ShellModelRegistry;
-  private readonly modelRegistry: ModelRegistry;
-  private readonly stateLedger: ShellStateLedger;
-  private memoryModelFailed = false;
+  readonly modelRegistry: ModelRegistry;
+  readonly stateLedger: ShellStateLedger;
+  memoryModelFailed = false;
   /** A degraded provider must not claim the index; only a warm provider over a current index may. */
   private embeddingReadyAllowed = false;
 
-  constructor(private readonly options: CompanionShellOptions = {}) {
+  constructor(readonly options: CompanionShellOptions = {}) {
     this.config = defaultShellConfig(options.config);
     this.now = options.now ?? Date.now;
     this.trace = new TraceLog(this.config.dataDir);
@@ -383,6 +303,14 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.host.seedService('shell', this);
     this.host.seedService('commands', this.host.commands);
     this.host.seedService('trace', this.trace);
+    this.sovereignty = new SovereigntyCommands(this);
+    this.proposalsHandlers = new ProposalsHandlers(this);
+    this.pluginsAdmin = new PluginsAdmin(this);
+    this.upgradeAdmin = new UpgradeAdmin(this);
+    this.statusFace = new StatusFace(this);
+    this.contextLanes = new ContextLanes(this);
+    this.runLoop = new RunLoop(this);
+    this.residentTick = new ResidentTick(this);
     this.proposals = new CommandProposals(
       (command) =>
         isProposableCommand(command) &&
@@ -405,8 +333,8 @@ export class CompanionShell implements ShellControl, AttachShell {
         this.workLabel = '思考中';
       }
       void this.host.bus.emit('companion_transition', { ...record, state: record.to });
-      this.emitWork();
-      this.emitStatus();
+      this.statusFace.emitWork();
+      this.statusFace.emitStatus();
     });
   }
 
@@ -472,8 +400,8 @@ export class CompanionShell implements ShellControl, AttachShell {
   }
 
   private beginDreamModelBudget(at: number): void {
-    const day = this.localDay(at);
-    const spent = this.dailySpent(at);
+    const day = this.statusFace.localDay(at);
+    const spent = this.statusFace.dailySpent(at);
     const persisted = this.machine.runtime.dreamNightDate === day
       ? this.machine.runtime.dreamNightStartTokens
       : undefined;
@@ -502,7 +430,7 @@ export class CompanionShell implements ShellControl, AttachShell {
 
   private beforeDreamModelCall(): void {
     if (!this.dreamModelActive) return;
-    if (this.dailyBudgetExceeded()) {
+    if (this.statusFace.dailyBudgetExceeded()) {
       this.trace.append('dream_model_budget_exceeded', {
         day: this.nightDay, spent: this.nightSpent, cap: this.nightCap, reason: 'daily_token_budget',
       });
@@ -521,8 +449,8 @@ export class CompanionShell implements ShellControl, AttachShell {
     const tokens = (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0);
     if (tokens <= 0) return;
     // One counter for the day (#233). The night cap limits this run; it is not a second ledger.
-    this.chargeCost(tokens);
-    this.nightSpent = Math.max(0, this.dailySpent() - this.nightStartTokens);
+    this.statusFace.chargeCost(tokens);
+    this.nightSpent = Math.max(0, this.statusFace.dailySpent() - this.nightStartTokens);
     this.trace.append('dream_model_usage', {
       day: this.nightDay,
       inputTokens: usage.inputTokens,
@@ -590,16 +518,16 @@ export class CompanionShell implements ShellControl, AttachShell {
         // below; the closure reads it lazily.
         health: () => ({
           state: this.machine.state,
-          plugins: this.pluginHealth(),
+          plugins: this.pluginsAdmin.pluginHealth(),
           embedding: this.embeddingStatus(),
-          memoryModel: this.memoryModelHealth(),
+          memoryModel: this.statusFace.memoryModelHealth(),
           contextAssembly: {
             failures: this.contextAssemblyFailures,
             consecutive: this.contextAssemblyConsecutive,
             lastFailure: this.contextAssemblyLastFailure ?? null,
           },
           suspension: this.machine.runtime.suspension
-            ? { ...this.suspendedLine(this.machine.runtime.suspension), id: this.machine.runtime.suspension.id, createdAt: this.machine.runtime.suspension.createdAt }
+            ? { ...this.statusFace.suspendedLine(this.machine.runtime.suspension), id: this.machine.runtime.suspension.id, createdAt: this.machine.runtime.suspension.createdAt }
             : null,
         }),
         healthStatus: () => (this.contextAssemblyConsecutive >= 3 ? 'degraded' : 'ok'),
@@ -624,13 +552,13 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.machine.updateRuntime({ declaredTools: this.executableToolNames() });
     if (this.machine.state === 'DORMANT') {
       await this.machine.dispatch('boot', { reason: 'process_start' });
-      this.injectTimeContext('process_start');
+      this.residentTick.injectTimeContext('process_start');
       await this.machine.dispatch('context_injected', { reason: 'waking_complete' });
     }
     // The upgrade's report is owed to the user, not to the next command: it is settled here and on
     // every tick until it lands. It runs *after* the plugins because the report is spoken through the
     // line channel's `terminal_print` subscription, which `startPlugins` is what installs.
-    this.settleUpgradeReport(this.now());
+    this.upgradeAdmin.settleUpgradeReport(this.now());
     this.clock!.scheduleIdleWake();
     this.terminal?.start();
     if (this.config.attach.enabled) {
@@ -664,7 +592,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       });
     }
     this.started = true;
-    this.rotateServiceLog();
+    this.residentTick.rotateServiceLog();
     this.trace.append('shell_started', { state: this.machine.state, mi: this.machine.wakeIntents.length });
     // Loading the model (and the one-time download on an upgrade) is deliberately not awaited: the
     // health face and the first turns must be ready before the 99 MiB arrives. Until it does, recall
@@ -672,12 +600,12 @@ export class CompanionShell implements ShellControl, AttachShell {
     void this.warmEmbedding();
     // The offer is in-memory, the pause is not: a restart re-offers the approval for a budget pause.
     if (this.machine.state === 'SUSPENDED' && this.machine.runtime.suspension?.kind === 'budget') {
-      this.offerResume(this.machine.runtime.suspension.id);
+      this.proposalsHandlers.offerResume(this.machine.runtime.suspension.id);
     }
     // A restart the plugin surface asked for is the one restart that continues the open assignment
     // on its own. Deferred so the HTTP/attach faces are serving before the run begins; a kill (no
     // request) never sets the flag, so recovery still lands in IDLE and waits.
-    this.resumeAfterRequestedRestart();
+    this.pluginsAdmin.resumeAfterRequestedRestart();
   }
 
   /** The embedder's state for `/health`; a missing embedder says so rather than looking active. */
@@ -799,10 +727,10 @@ export class CompanionShell implements ShellControl, AttachShell {
       sessionId: this.config.sessionId,
       targetTokens: () => this.targetTokens(),
       tailTurns: this.config.tailTurns,
-      pinned: () => this.lanePinned(),
-      profile: () => this.laneProfile(),
-      openLoops: () => this.laneOpenLoops(),
-      digestStubs: () => this.laneDigestStubs(),
+      pinned: () => this.contextLanes.lanePinned(),
+      profile: () => this.contextLanes.laneProfile(),
+      openLoops: () => this.contextLanes.laneOpenLoops(),
+      digestStubs: () => this.contextLanes.laneDigestStubs(),
       ledgerSeq: () => this.kernel.eventStore.getLatestGlobalSeq(),
       variablePrompt: () => this.systemPromptSections().tail,
       onAssembly: (assembly) => {
@@ -813,7 +741,7 @@ export class CompanionShell implements ShellControl, AttachShell {
           autoExpands: assembly.autoExpanded.length,
         };
         this.drillsSinceAssembly = 0;
-        this.emitStatus();
+        this.statusFace.emitStatus();
       },
       onAssemblyFailure: (message) => {
         this.contextAssemblyFailures += 1;
@@ -880,7 +808,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.runtime = new AgentRuntime({
       bus: this.host.bus,
       // Pi #10000: the whole prompt is durable before the model call, redacted before it reaches the trace.
-      onPrompt: (input) => this.recordPrompt(input),
+      onPrompt: (input) => this.contextLanes.recordPrompt(input),
       tools: this.host.tools,
       provider: model,
       budget: this.cage,
@@ -904,7 +832,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       onContextAssembled: (account, toolOutput) => {
         this.contextTokenEstimate = account.totalTokens;
         this.lastToolOutput = toolOutput;
-        this.emitStatus();
+        this.statusFace.emitStatus();
       },
       // One stated whole-request ceiling, the same number the lanes are fitted to. The tool cap
       // is a ceiling inside it, not an extra allowance on top of it (#319, #318's unit).
@@ -913,7 +841,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       contextMetrics: () => this.lastContextMetrics,
     });
     this.modelLabel = `${this.host.getService<ModelProvider>('model').name}/${model.model}`;
-    this.attachWorkListeners();
+    this.statusFace.attachWorkListeners();
     this.dream = this.host.getService('dream');
     this.emergence = this.host.getService('emergence');
     // Crash recovery needs to know what was running. The checkpoint records the calls that started and
@@ -983,1417 +911,60 @@ export class CompanionShell implements ShellControl, AttachShell {
     return { declared: [...restored].sort(), executable };
   }
 
-  /**
-   * The system prompt is assembled from two sections, and the split is a contract, not a layout
-   * choice. The **pinned zone** is the soul (verbatim, at its head), the identity and the rules: its
-   * bytes must be identical from one request to the next, which is what F14's lane order starts with
-   * (#191) and the half of it a provider-side prompt cache can hit. The **variable tail** is the only
-   * place per-turn content may live; today that is the time context, which is why it is rebuilt from
-   * the live clock on every call instead of reusing the block written at the last wake — a prompt
-   * that froze "now" at boot kept telling the model it was still morning three hours later.
-   *
-   * Pi holds the same property structurally: named sections rendered in a fixed order, diffed so a
-   * changed section travels as an update instead of the prompt being re-sent (`core/system-prompt.js`
-   * `buildSystemPromptSections` / `diffSystemPromptSections`), and a tool list frozen so "the cached
-   * prefix survives every tool change" (`pi-ai/dist/api/anthropic-messages.js:947-951`). The shell has
-   * one seam and no mid-run prompt mutation, so the pinned zone is what plays that part.
-   */
   systemPromptSections(): { pinned: string; tail: string } {
-    const pinned = [
-      this.soulText(),
-      'You are a resident companion agent whose memory is Cogmem. The recall lane in this request is already assembled for the turn; look there first.',
-      'Conversation capture is automatic: every user turn and every reply is already written to your memory. The cogmem CLI belongs to the operator, not to you. For one exact ledger row, use the `read` tool with `mem:<eventId>`, or the `memory` tool with action `read`; that is the in-process memory read.',
-      'Your memory is one ledger with several lanes. The recall, digest, working-set and conversation lanes are all views of it: a fact from the conversation is a fact from your memory, not a missing or unsaved one.',
-      'When you name a source, name the lane ("from our conversation earlier"). Never call a conversation-lane fact "not from long-term memory", and never offer to save what capture has already written. If no lane carries the answer, call `memory` with action `search`; action `recent` reads this session, and `read` opens a `mem:<eventId>` key. Say whether the search found the memory or not; never present a guess as a memory.',
-      'You are present at all hours; when nothing needs you, you are quiet rather than chatty.',
-      'You have four basic tools (read, write, edit, bash), plus `memory` for on-demand recall. Use them when the moment needs real work; otherwise just talk.',
-      'To hand the user a shell command, call `propose_command` with the command and a one-line reason. It is only an offer: the command runs when the user confirms it, never before, so never say it already ran.',
-      'A new user line continues the open task by default. Call `declare_task` with action "start" only when the newest line begins a different task, and with "end" when the open task is finished. Judge by meaning, never by a word.',
-      'Never invent a memory. If no lane carries a fact, say so plainly and ask; never claim it was not stored.',
-    ].filter(Boolean);
-    const tail = [this.clock ? this.clock.timeContextBlock(this.now()) : '', this.suspensionBlock()].filter(Boolean);
-    return { pinned: pinned.join('\n\n'), tail: tail.join('\n\n') };
-  }
-
-  /**
-   * The open assignment as the `working_set` lane's first open loop. A budget stop writes where it
-   * stopped and what is next; the next run (user or autonomous wake) reads it verbatim, so the work
-   * does not restart from the same file read.
-   */
-  private openAssignmentBlock(): string {
-    const assignment = this.machine.runtime.openAssignment;
-    if (!assignment || this.hideAssignmentContext) return '';
-    return [
-      '<open-assignment>',
-      `user-assigned task: ${assignment.text}`,
-      assignment.stoppedStep ? `stopped at: ${assignment.stoppedStep}` : '',
-      assignment.nextStep ? `next: ${assignment.nextStep}` : '',
-      assignment.findings ? `confirmed findings: ${assignment.findings}` : '',
-      '</open-assignment>',
-    ].filter(Boolean).join('\n');
-  }
-
-  /**
-   * The resumed run's half of a question pause (#228): the answer is the run's user text, and this
-   * block is what makes that answer answerable. It is rendered only while the object exists, which
-   * is until the resumed run settles — the question object is gone from an idle shell.
-   */
-  private suspensionBlock(): string {
-    const suspension = this.machine.runtime.suspension;
-    if (!suspension || suspension.kind !== 'question' || suspension.question === undefined) return '';
-    return [
-      '<pending-question>',
-      `you asked: ${suspension.question.text}`,
-      suspension.question.contextRef ? `about: ${suspension.question.contextRef}` : '',
-      "the user's next line is the answer; continue the open task from it.",
-      '</pending-question>',
-    ].filter(Boolean).join('\n');
+    return this.contextLanes.systemPromptSections();
   }
 
   systemPrompt(): string {
-    const { pinned, tail } = this.systemPromptSections();
-    return [pinned, tail].filter(Boolean).join('\n\n');
+    return this.contextLanes.systemPrompt();
   }
 
-  /** The active model route's sweet spot, with the shell config as the built-in route's value. */
-  private targetTokens(): number {
-    return this.modelRouter?.targetTokens ?? this.config.contextSweetSpot;
-  }
-
-  /** The stable pinned lane: the soul and the shell's rules, split into renderable paragraphs. */
-  private lanePinned(): string[] {
-    return this.systemPromptSections().pinned.split('\n\n').filter(Boolean);
-  }
-
-  /** The compiled profile's current entries, one renderable line per entry. */
-  private laneProfile(): string[] {
-    try {
-      return this.kernel.profile
-        .entries({ projectId: this.config.projectId })
-        .map((entry) => `${entry.ledger}/${entry.key}: ${entry.value}`);
-    } catch (error) {
-      this.trace.append('profile_lane_failed', { message: error instanceof Error ? error.message : String(error) });
-      return [];
-    }
-  }
-
-  /** The open loops that must survive a restart: the open assignment and unconsumed wake intents. */
-  private laneOpenLoops(): SessionContextItem[] {
-    const items: SessionContextItem[] = [];
-    const assignment = this.machine.runtime.openAssignment;
-    const assignmentText = this.openAssignmentBlock();
-    if (assignment && assignmentText) {
-      items.push({ id: `assignment:${assignment.id}`, text: assignmentText });
-    }
-    items.push(...this.laneProcedures());
-    // A constraint the task-end exit retained is not task material (#255, #263). It was already
-    // classified by the kernel's own markers during the last assembly; the shell only keeps the
-    // text and re-marks it, so the next assembly's protection rule is unchanged.
-    for (const constraint of this.machine.runtime.retainedConstraints ?? []) {
-      items.push({ id: constraint.id, text: constraint.text, protected: true });
-    }
-    for (const intent of this.machine.wakeIntents) {
-      if (intent.consumedAt) continue;
-      items.push({
-        id: `wake:${intent.id}`,
-        text: `wake intent: ${intent.reason} (scheduled ${new Date(intent.at).toISOString()})`,
-        protected: true,
-      });
-    }
-    return items;
-  }
-
-  /**
-   * The practice lane at the start of work (#261): the task's own description is what recalls a
-   * practice, never a skill name. A `checklist` entry is carried whole and marked protected so the
-   * lane's budget rule cannot fold it into a pointer; a `recall` entry is an ordinary working-set
-   * item and may be downgraded. The book exits with the assignment at task end (#263).
-   */
-  private laneProcedures(): SessionContextItem[] {
-    const assignment = this.machine.runtime.openAssignment;
-    if (!assignment || this.hideAssignmentContext) return [];
-    try {
-      const assembly = this.backend.assembleTaskProcedures({
-        projectId: this.config.projectId,
-        task: assignment.text,
-      });
-      return assembly.items
-        .filter((item) => item.kind === 'procedure')
-        .map((item) => {
-          const anchor = item.sourceRefs[0]?.eventId;
-          return {
-            id: `procedure:${item.entryId}`,
-            text: item.text,
-            ...(item.mandatory ? { protected: true } : {}),
-            ...(anchor === undefined ? {} : {
-              sourceRefs: item.sourceRefs
-                .map((ref) => ref.eventId)
-                .filter((id): id is string => typeof id === 'string' && id !== ''),
-              anchorEvent: anchor,
-              sourceLocator: `read mem:${anchor}`,
-            }),
-          };
-        });
-    } catch (error) {
-      this.trace.append('procedure_lane_failed', {
-        message: error instanceof Error ? error.message : String(error),
-      });
-      return [];
-    }
-  }
-
-  private laneDigestStubs(): SessionDigestEntry[] {
-    this.materializeTaskProcedure(false);
-    this.materializeTaskEndStub(undefined, undefined, this.machine.activeRunId);
-    return [...(this.machine.runtime.taskStubs ?? [])];
-  }
-
-  /**
-   * The procedure book's producer (#262): a declared task end leaves one `task_event` whose
-   * `metadata.procedure` the compiler reads. `domain` and `key` are the model's own end-time fill;
-   * `steps` and `tools` are built only from the task's captured `tool_call` rows, in capture order.
-   * A task that made no tool calls leaves no entry — an empty book beats a fabricated one.
-   *
-   * Called after capture has written the end run's rows (settle, or the next assembly after a
-   * restart); the declaration is cleared once the row exists so a retry cannot write it twice.
-   */
-  private materializeTaskProcedure(final: boolean): void {
-    const pending = this.machine.runtime.lastEndedTask;
-    const declaration = pending?.procedure;
-    if (!pending || !declaration) return;
-    let calls: SessionToolCall[];
-    try {
-      calls = readSessionToolCalls(this.kernel.factStore.getDatabase(), {
-        projectId: this.config.projectId,
-        agentId: this.config.agentId,
-        sessionId: this.config.sessionId,
-        since: pending.startedAt,
-      });
-    } catch (error) {
-      this.trace.append('task_procedure_failed', {
-        assignmentId: pending.assignmentId,
-        message: error instanceof Error ? error.message : String(error),
-      });
-      return;
-    }
-    const evidence = procedureEvidenceOf(calls);
-    if (!evidence) {
-      // Before the run settles, capture has not written this run's tool rows yet: an empty read
-      // here is "not yet", not "no calls". Only the settle pass may conclude there was no evidence.
-      if (final) {
-        this.machine.updateRuntime({ lastEndedTask: { ...pending, procedure: undefined } });
-        this.trace.append('task_procedure_skipped', { assignmentId: pending.assignmentId, reason: 'no_trace_evidence' });
-      }
-      return;
-    }
-    // #279: the end declaration's own ledger row is the idempotency key. A kill between the
-    // append below and the checkpoint clear leaves that row in the ledger, so a replay finds it
-    // and writes nothing; compile still runs in case the kill landed before the compile.
-    if (this.taskProcedureWritten(evidence.declarationEventId)) {
-      try {
-        this.kernel.procedures.compile({ projectId: this.config.projectId, now: this.now() });
-      } catch (error) {
-        this.trace.append('task_procedure_failed', {
-          assignmentId: pending.assignmentId,
-          message: error instanceof Error ? error.message : String(error),
-        });
-        return;
-      }
-      this.machine.updateRuntime({ lastEndedTask: { ...pending, procedure: undefined } });
-      this.trace.append('task_procedure_duplicate_skipped', {
-        assignmentId: pending.assignmentId,
-        declarationEventId: evidence.declarationEventId,
-      });
-      return;
-    }
-    try {
-      this.kernel.recordTaskEvent({
-        projectId: this.config.projectId,
-        workspaceId: this.config.projectId,
-        threadId: this.config.sessionId,
-        sessionId: this.config.sessionId,
-        ...(pending.turnId ? { turnId: pending.turnId } : {}),
-        title: `${declaration.domain}/${declaration.key}`,
-        content: `task completed: ${declaration.domain}/${declaration.key} (${evidence.steps.length} tool calls)`,
-        occurredAt: this.now(),
-        sourceId: `${this.config.agentId}:${this.config.sessionId}`,
-        metadata: {
-          sourceAgent: this.config.agentId,
-          source: 'companion-shell',
-          kind: 'task-procedure',
-          procedure: {
-            domain: declaration.domain,
-            key: declaration.key,
-            checklist: declaration.checklist,
-            outcome: 'succeeded',
-            steps: evidence.steps,
-            tools: evidence.tools,
-            declarationEventId: evidence.declarationEventId,
-          },
-        },
-      });
-      this.kernel.procedures.compile({ projectId: this.config.projectId, now: this.now() });
-    } catch (error) {
-      this.trace.append('task_procedure_failed', {
-        assignmentId: pending.assignmentId,
-        message: error instanceof Error ? error.message : String(error),
-      });
-      return;
-    }
-    this.machine.updateRuntime({ lastEndedTask: { ...pending, procedure: undefined } });
-    this.trace.append('task_procedure_written', {
-      assignmentId: pending.assignmentId,
-      domain: declaration.domain,
-      key: declaration.key,
-      steps: evidence.steps.length,
-      tools: evidence.tools,
-    });
-  }
-
-  /** Whether the same end declaration already produced its task_event (#279). */
-  private taskProcedureWritten(declarationEventId: string): boolean {
-    try {
-      const row = this.kernel.factStore.getDatabase().query(`
-        SELECT 1
-        FROM memory_events
-        WHERE event_type = 'RAW_EVENT_RECORDED'
-          AND raw_event_type = 'task_event'
-          AND COALESCE(project_id, '') = ?
-          AND json_valid(payload_json)
-          AND json_extract(payload_json, '$.metadata.procedure.declarationEventId') = ?
-        LIMIT 1
-      `).get(this.config.projectId, declarationEventId);
-      return row !== null && row !== undefined;
-    } catch (error) {
-      this.trace.append('task_procedure_lookup_failed', {
-        declarationEventId,
-        message: error instanceof Error ? error.message : String(error),
-      });
-      return false;
-    }
-  }
-
-  private materializeTaskEndStub(turnId?: string, runId?: string, deferRunId?: string): void {
-    const pending = this.machine.runtime.lastEndedTask;
-    if (!pending) return;
-    if (deferRunId !== undefined && pending.runId === deferRunId) return;
-    const resolvedTurnId = pending.turnId
-      ?? (pending.runId !== undefined && pending.runId === runId ? turnId : undefined);
-    if (!resolvedTurnId) {
-      if (this.now() - pending.endedAt > TASK_STUB_RETRY_MS) {
-        this.machine.updateRuntime({ lastEndedTask: undefined });
-        this.trace.append('task_stub_skipped', { assignmentId: pending.assignmentId, reason: 'no_turn_id' });
-      }
-      return;
-    }
-    let turns: SessionTurn[];
-    try {
-      turns = readSessionTurns(this.kernel.factStore.getDatabase(), {
-        projectId: this.config.projectId,
-        agentId: this.config.agentId,
-        sessionId: this.config.sessionId,
-      }).turns;
-    } catch (error) {
-      this.trace.append('task_stub_failed', {
-        assignmentId: pending.assignmentId,
-        message: error instanceof Error ? error.message : String(error),
-      });
-      return;
-    }
-    const stub = buildTaskStub(turns, {
-      startedAt: pending.startedAt,
-      turnId: resolvedTurnId,
-    });
-    if (!stub) {
-      if (this.now() - pending.endedAt > TASK_STUB_RETRY_MS) {
-        this.machine.updateRuntime({ lastEndedTask: undefined });
-        this.trace.append('task_stub_skipped', { assignmentId: pending.assignmentId, reason: 'no_ledger_turn' });
-      }
-      return;
-    }
-    const byId = new Map<string, SessionDigestEntry>();
-    for (const entry of [...(this.machine.runtime.taskStubs ?? []), stub]) byId.set(entry.entryId, entry);
-    const taskStubs = [...byId.values()].slice(-MAX_TASK_STUBS);
-    this.machine.updateRuntime({ taskStubs, lastEndedTask: undefined });
-    this.trace.append('task_stub_written', {
-      assignmentId: pending.assignmentId,
-      entryId: stub.entryId,
-      sourceRefs: stub.sourceRefs,
-      chars: stub.text.length,
-    });
-  }
-
-  /**
-   * The newest soul row, read where it is: it is the pinned zone's head, so it is injected verbatim,
-   * and F17's editor has to reach the next request without a restart. A database with no row is not
-   * a turn failure — the pinned zone is simply shorter. A real read failure is recorded once, so an
-   * absent soul and a soul that failed to load stay distinguishable.
-   */
-  private soulText(): string {
-    try {
-      return this.kernel.soul.read(this.config.agentId)?.content ?? '';
-    } catch (error) {
-      // The read is retried every turn — a lock held for a moment must not cost the soul for the rest
-      // of the process's life — but the trace entry is one-shot, or a database the installer never
-      // wrote would file the same record on every turn forever.
-      if (!this.soulFailureTraced) {
-        this.soulFailureTraced = true;
-        this.trace.append('soul_read_failed', { message: error instanceof Error ? error.message : String(error) });
-      }
-      return '';
-    }
-  }
-
-  /**
-   * The durable prompt log. A restart has to be able to reconstruct the run.
-   */
-  private recordPrompt(input: { runId: string; sessionId: string; text: string }): void {
-    const marked = this.redactor.mark(input.text);
-    this.trace.append('run_prompt', {
-      runId: input.runId,
-      sessionId: input.sessionId,
-      chars: input.text.length,
-      text: marked.value,
-      ...marked.metadata,
-    });
+  targetTokens(): number {
+    return this.contextLanes.targetTokens();
   }
 
   async submit(text: string): Promise<RunSummary | undefined> {
-    if (this.machine.state === 'RUNNING') {
-      this.runtime!.steer(text);
-      this.emitSteering();
-      return undefined;
-    }
-    this.acknowledgeSurfacing();
-    if (this.dailyBudgetExceeded()) this.announceDailyBudget('user_message');
-    if (this.machine.state === 'SUSPENDED') return this.submitWhileSuspended(text);
-    this.beginUserAssignment(text);
-    this.clock!.markInteraction(this.now());
-    await this.wakeIfNeeded('message_received');
-    if (this.machine.state !== 'IDLE') throw new Error(`submit_requires_idle: state is ${this.machine.state}`);
-    return this.executeRun(text, 'message_received', 'user_message');
+    return this.runLoop.submit(text);
   }
 
-  /**
-   * A line typed while paused (#228). For a question the line is the answer: the same assignment
-   * continues, no new assignment record is written, and the object is marked answered so the
-   * resumed prompt can still name the question. For a budget request a typed line is a new
-   * instruction: the paused task closes as budget_exceeded (traced) and the line starts fresh work.
-   * There is no timeout for either kind — see `Suspension`'s comment.
-   */
-  private async submitWhileSuspended(text: string): Promise<RunSummary | undefined> {
-    this.acknowledgeSurfacing();
-    const suspension = this.machine.runtime.suspension;
-    this.clock!.markInteraction(this.now());
-    if (suspension?.kind === 'question') {
-      this.machine.updateRuntime({ suspension: { ...suspension, answeredAt: this.now() } });
-      this.trace.append('suspension_answered', { id: suspension.id, assignmentId: suspension.assignmentId, chars: text.trim().length });
-      return this.executeRun(text, 'message_received', 'question_answered', 'answer_received');
-    }
-    if (suspension) this.supersedeSuspension('new_input');
-    this.beginUserAssignment(text);
-    return this.executeRun(text, 'message_received', 'user_message');
-  }
-
-  private async wakeIfNeeded(trigger: 'message_received' | 'wake_intent_due' | 'emergence_due'): Promise<void> {
-    if (this.machine.state === 'DORMANT') await this.machine.dispatch('message_received', { reason: 'message_while_dormant' });
-    if (this.machine.state === 'DREAMING') await this.machine.dispatch('message_received', { reason: 'message_while_dreaming' });
-    if (this.machine.state === 'WAKING') {
-      this.injectTimeContext(trigger);
-      await this.machine.dispatch('context_injected', { reason: `${trigger}_time_context` });
-    }
-  }
-
-  private async executeRun(
-    text: string,
-    trigger: 'message_received' | 'emergence_due',
-    reason: string,
-    dispatchTrigger: Trigger = trigger,
-    grant?: { tokens: number; turns: number },
-  ): Promise<RunSummary> {
-    const runId = `run-${this.now().toString(36)}-${randomUUID().slice(0, 8)}`;
-    const origin = trigger === 'emergence_due' ? 'emergence' : 'user';
-    const tier = this.budgetTier(trigger);
-    this.runTier = tier;
-    this.currentRunUserText = text;
-    // The owner's grant widens this one run's cage and is spent when it settles (#228).
-    this.cage!.beginRun(runId, tier, tier === 'work' ? (grant ?? this.machine.runtime.openAssignment?.grant) : undefined);
-    // A backed-off autonomous wake still runs (F7's surfacing decision is untouched) but it does not
-    // inherit the work tier or the assignment, so it cannot keep retrying the same continuation.
-    this.hideAssignmentContext = trigger === 'emergence_due' && tier === 'autonomous' && this.machine.runtime.openAssignment !== undefined;
-    if (this.hideAssignmentContext) {
-      const assignment = this.machine.runtime.openAssignment!;
-      this.trace.append('assignment_resume_deferred', {
-        assignmentId: assignment.id,
-        attempts: assignment.attempts ?? 0,
-        nextResumeAt: assignment.nextResumeAt ?? null,
-        now: this.now(),
-      });
-    }
-    await this.machine.dispatch(dispatchTrigger, { runId, reason });
-
-    let summary: RunSummary;
-    try {
-      summary = await this.runtime!.run({
-        runId,
-        sessionId: this.config.sessionId,
-        userText: text,
-        origin,
-      });
-    } finally {
-      this.hideAssignmentContext = false;
-    }
-    const outcome = this.settleAssignment(summary, tier, trigger);
-    // `agent_end` capture has written this run's rows by the time `run()` returns, so the declared
-    // task end's procedure (#262) and stub (#263) can read them here instead of waiting for the
-    // next request.
-    this.materializeTaskProcedure(true);
-    this.materializeTaskEndStub(summary.turnId, summary.runId);
-    if (summary.stopReason === 'run_error' && summary.error?.startsWith('model_timeout:')) this.announceModelTimeout(summary);
-    if (summary.stopReason === 'run_error' && summary.error?.startsWith('no_progress:')) this.announceNoProgress(summary);
-    if (summary.stopReason === 'run_error' && summary.error?.startsWith('mg_gateway_error:')) this.announceProviderFailure(summary);
-    await this.machine.dispatch(outcome, { reason: summary.error ?? reason, runId });
-    if (this.machine.state === 'SUSPENDED' && this.machine.runtime.suspension?.kind === 'budget') {
-      this.offerResume(this.machine.runtime.suspension.id);
-    }
-    if (!this.clock!.nextPendingIntent()) this.clock!.scheduleIdleWake();
-    return summary;
-  }
-
-  /**
-   * Which cage this run gets. An autonomous wake inherits the work tier only when the ledger still
-   * holds an unfinished user-assigned task; the check reads that task's `origin`, never the wake's
-   * words.
-   */
-  private budgetTier(trigger: 'message_received' | 'emergence_due'): CageTier {
-    if (trigger === 'message_received') return 'work';
-    const assignment = this.machine.runtime.openAssignment;
-    if (assignment?.origin !== 'user_message') return 'autonomous';
-    // A continuation that keeps failing waits longer (#228); while it waits, an autonomous wake is a
-    // plain surfacing run, not a retry of the assignment.
-    if (assignment.nextResumeAt !== undefined && assignment.nextResumeAt > this.now()) return 'autonomous';
-    return 'work';
-  }
-
-  private beginUserAssignment(text: string): void {
-    const trimmed = text.trim();
-    if (!trimmed) return;
-    const open = this.machine.runtime.openAssignment;
-    if (open) {
-      this.machine.updateRuntime({ openAssignment: { ...open, latestUserText: trimmed.slice(0, 500) } });
-      this.trace.append('assignment_attached', { assignmentId: open.id, chars: trimmed.length });
-    }
-  }
-
-  /**
-   * A whole-turn timeout stops the run instead of retrying (#240), so the transcript says why and
-   * with which cap; otherwise a stopped turn leaves only the idle status behind.
-   */
-  private announceModelTimeout(summary: RunSummary): void {
-    const seconds = Math.round(this.config.model.timeoutMs / 1_000);
-    const reason = (summary.error ?? '').replace(/^model_timeout:\s*/u, '');
-    const text = `模型超时（整轮上限 ${seconds} 秒），已停止本轮、不再重试${reason ? `：${reason}` : ''}`;
-    void this.host.bus.emit('terminal_print', { text: `${text}\n` });
-    void this.host.bus.emit('companion_notice', { text, tone: 'warn' });
-  }
-
-  /**
-   * The no-progress stop (#241): name the turn it stopped on and the tool call it was repeating, so
-   * the stop is not mistaken for the cage's budget or a provider failure.
-   */
-  private announceNoProgress(summary: RunSummary): void {
-    const lastCall = summary.toolCalls.at(-1);
-    const where = lastCall
-      ? `${lastCall.toolName} ${truncate(JSON.stringify(lastCall.input ?? {}), 120)}`
-      : `turn ${summary.turns}`;
-    const text = `连续 ${this.config.maxIdleTurns} 回合无用户可见产出，已停止本轮（无进展判据 maxIdleTurns=${this.config.maxIdleTurns}）；停在 ${where}`;
-    void this.host.bus.emit('terminal_print', { text: `${text}\n` });
-    void this.host.bus.emit('companion_notice', { text, tone: 'warn' });
-  }
-
-  /**
-   * A run the provider ended (#282): the provider retried 429/5xx within its budget and still failed,
-   * so the user gets a line instead of a silently missing answer. The reason is truncated; the trace
-   * keeps the same account.
-   */
-  private announceProviderFailure(summary: RunSummary): void {
-    const reason = summary.error ?? 'provider_error';
-    const kind = classifyEndpointFailure(reason);
-    const retryable = kind === 'rate_limit' || /mg_gateway_error:\s*5\d\d/u.test(reason);
-    const head = kind === 'rate_limit'
-      ? '模型网关限流（429），壳已按预算重试仍未恢复'
-      : retryable
-        ? '模型网关临时失败（5xx），壳已按预算重试仍未恢复'
-        : `模型调用失败（${kind}）`;
-    const tail = retryable
-      ? '；这句话可以稍后重发，记忆和已完成的工具结果都还在。'
-      : '；这不是可重试的网络抖动，先看原因再发。';
-    const text = `${head}${tail} 原因：${truncate(reason, 300)}`;
-    void this.host.bus.emit('terminal_print', { text: `${text}\n` });
-    void this.host.bus.emit('companion_notice', { text, tone: 'warn' });
-    this.trace.append('run_failure_announced', { runId: summary.runId, kind, retryable, reason: truncate(reason, 300) });
-  }
-
-  /**
-   * A completed run closes the assignment; a budget stop keeps it open and writes the place and the
-   * next move. A run without an assignment pauses without one. A run error or abort keeps the
-   * assignment open too: the work is unfinished, and the next wake must not mistake it for a fresh
-   * autonomous idea.
-   */
-  private settleAssignment(summary: RunSummary, tier: CageTier, trigger: 'message_received' | 'emergence_due'): Trigger {
-    const question = this.pendingQuestion;
-    this.pendingQuestion = undefined;
-    const assignment = this.machine.runtime.openAssignment;
-    // A question can only be waited on by a work run; the tool refuses the autonomous tier, and this
-    // is the second half of that guard rather than a second policy.
-    if (tier !== 'work') return summary.stopReason;
-    if (summary.stopReason === 'run_complete' && question) {
-      const suspension: Suspension = {
-        id: `suspension-${this.now().toString(36)}-${randomUUID().slice(0, 8)}`,
-        kind: 'question',
-        assignmentId: assignment?.id ?? '',
-        createdAt: this.now(),
-        runId: summary.runId,
-        question,
-      };
-      this.machine.updateRuntime({
-        suspension,
-        ...(assignment ? { openAssignment: { ...assignment, lastRunId: summary.runId, stoppedAt: this.now(), nextStep: 'continue the open task with the answer' } } : {}),
-      });
-      this.trace.append('assignment_paused', {
-        runId: summary.runId,
-        assignmentId: assignment?.id ?? '',
-        suspensionId: suspension.id,
-        kind: 'question',
-        questionChars: question.text.length,
-      });
-      return 'question_paused';
-    }
-    if (summary.stopReason === 'run_complete') {
-      this.machine.updateRuntime({ openAssignment: undefined, suspension: undefined });
-      return 'run_complete';
-    }
-    // The run's own closing words are the handoff: bounded, collapsed to one line, and carried into
-    // the next run's prompt so a continuation does not re-read the same sources. A run that ends
-    // without text (an abort mid-tool) keeps the earlier findings rather than erasing them.
-    const findings = assignment ? this.captureFindings(summary, assignment) : undefined;
-    // Only an autonomous continuation counts an attempt, and a successful tool result is the
-    // progress that resets it (#228). A user-driven run resets the count: the owner is present.
-    const progressed = summary.toolResults.some((result) => !result.isError);
-    const attempts = trigger === 'emergence_due' && assignment && !progressed ? (assignment.attempts ?? 0) + 1 : 0;
-    const nextResumeAt = attempts > 0 ? this.now() + Math.min(RESUME_BACKOFF_BASE_MS * 2 ** (attempts - 1), RESUME_BACKOFF_CAP_MS) : undefined;
-    if (summary.stopReason !== 'budget_exceeded') {
-      // A no-progress stop is unfinished work like a budget stop, but it ends through the existing
-      // run_error edge. It writes the same handoff fields so the next run knows where it stalled.
-      const noProgress = summary.error?.startsWith('no_progress:') === true;
-      const lastCall = summary.toolCalls.at(-1);
-      const stoppedStep = noProgress
-        ? lastCall
-          ? `${lastCall.toolName} ${truncate(JSON.stringify(lastCall.input ?? {}), 240)}`
-          : `after turn ${summary.turns}`
-        : undefined;
-      const nextStep = noProgress
-        ? `continue the open task, but report user-visible progress before repeating the same tool call (the previous run stopped after ${summary.turns} turns with no output)`
-        : undefined;
-      this.machine.updateRuntime({
-        suspension: undefined,
-        ...(assignment ? {
-          openAssignment: {
-            ...assignment,
-            lastRunId: summary.runId,
-            grant: undefined,
-            attempts,
-            nextResumeAt,
-            ...(findings ? { findings } : {}),
-            ...(stoppedStep ? { stoppedStep, nextStep } : {}),
-          },
-        } : {}),
-      });
-      if (noProgress && assignment) this.trace.append('assignment_stopped', { runId: summary.runId, assignmentId: assignment.id, stoppedStep, nextStep, findingsChars: findings?.length ?? 0 });
-      if (attempts > 0 && assignment) this.trace.append('assignment_backoff', { assignmentId: assignment.id, attempts, nextResumeAt });
-      return summary.stopReason;
-    }
-    const lastCall = summary.toolCalls.at(-1);
-    const stoppedStep = lastCall
-      ? `${lastCall.toolName} ${truncate(JSON.stringify(lastCall.input ?? {}), 240)}`
-      : `after turn ${summary.turns}`;
-    const nextStep = lastCall
-      ? `resume from ${lastCall.toolName}: check its last result, then continue the user-assigned task`
-      : 'continue the user-assigned task from its next step; the budget stopped this run before it finished';
-    const estimate = estimateBudgetGrant({ tokens: summary.tokens, turns: summary.turns, limits: this.config.workBudget });
-    const violation = this.cage!.violation;
-    const suspension: Suspension = {
-      id: `suspension-${this.now().toString(36)}-${randomUUID().slice(0, 8)}`,
-      kind: 'budget',
-      assignmentId: assignment?.id ?? '',
-      userText: assignment?.text ?? this.currentRunUserText,
-      createdAt: this.now(),
-      runId: summary.runId,
-      budget: {
-        ...(violation?.violation === 'turn_budget' || violation?.violation === 'token_budget' ? { violation: violation.violation } : {}),
-        tokens: summary.tokens,
-        turns: summary.turns,
-        tokensPerTurn: estimate.tokensPerTurn,
-        additionalTokens: estimate.tokens,
-        additionalTurns: estimate.turns,
-        basis: estimate.basis,
-      },
-    };
-    this.machine.updateRuntime({
-      suspension,
-      ...(assignment ? {
-        openAssignment: {
-          ...assignment,
-          lastRunId: summary.runId,
-          stoppedAt: this.now(),
-          stoppedStep,
-          nextStep,
-          grant: undefined,
-          attempts,
-          nextResumeAt,
-          ...(findings ? { findings } : {}),
-        },
-      } : {}),
-    });
-    if (assignment) this.trace.append('assignment_stopped', { runId: summary.runId, assignmentId: assignment.id, stoppedStep, nextStep, findingsChars: findings?.length ?? 0 });
-    this.trace.append(assignment ? 'assignment_paused' : 'run_paused', {
-      runId: summary.runId,
-      assignmentId: assignment?.id ?? null,
-      suspensionId: suspension.id,
-      kind: 'budget',
-      additionalTokens: estimate.tokens,
-      additionalTurns: estimate.turns,
-      tokensPerTurn: Math.round(estimate.tokensPerTurn),
-      basis: estimate.basis,
-    });
-    return 'budget_paused';
-  }
-
-  private captureFindings(summary: RunSummary, assignment: { id: string }): string | undefined {
-    // The closing message, not the whole run: the handoff is what the run concluded, and the earlier
-    // turns are already in the transcript it can recall.
-    const text = (summary.lastAssistantText ?? summary.assistantText).replace(/\s+/gu, ' ').trim();
-    if (text === '') return undefined;
-    if (text.length <= MAX_ASSIGNMENT_FINDINGS) return text;
-    this.trace.append('assignment_findings_truncated', {
-      assignmentId: assignment.id,
-      runId: summary.runId,
-      chars: text.length,
-      kept: MAX_ASSIGNMENT_FINDINGS,
-    });
-    return `${text.slice(0, MAX_ASSIGNMENT_FINDINGS - 1)}…`;
-  }
-
-  /** One deterministic tick: due intent, then dream window, then the emergence decision point. */
   async tick(at = this.now()): Promise<void> {
-    this.rotateServiceLog();
-    // An owed upgrade report is not gated on the lifecycle: a promise that came due has to be
-    // honoured whatever else is happening.
-    this.settleUpgradeReport(at);
-    // A paused shell is waiting for its owner, not for the clock: no wake intent, dream window or
-    // emergence decision may fire out of SUSPENDED (#228).
-    if (this.machine.state === 'RUNNING' || this.machine.state === 'WAKING' || this.machine.state === 'SUSPENDED') return;
-    this.reportHealth(at);
-    if (this.machine.state === 'DORMANT') {
-      await this.maybeSnapshot(at);
-      await this.applyDueWakeIntent(at);
-      return;
-    }
-    if (this.machine.state === 'DREAMING') return;
-    await this.applyDueWakeIntent(at);
-    const quiet = this.clock!.quietWindowOpen(at);
-    if (!quiet && this.machine.state === 'IDLE') {
-      const queue = [...(this.machine.runtime.awayQueue ?? [])];
-      const deferred = queue.findIndex((entry) => entry.deferred === 'quiet');
-      if (deferred >= 0) {
-        const [entry] = queue.splice(deferred, 1);
-        this.machine.updateRuntime({ awayQueue: queue });
-        this.consumeEmergence({ id: entry!.id, source: entry!.source, observedAt: entry!.observedAt, sourceRefs: entry!.sourceRefs }, at);
-        await this.speakEmergence({
-          id: entry!.id,
-          text: entry!.text,
-          reason: entry!.reason,
-          ...(entry!.source === undefined ? {} : { source: entry!.source as SurfacingSource }),
-          ...(entry!.sourceRefs === undefined ? {} : { sourceRefs: entry!.sourceRefs }),
-        }, at);
-        this.trace.append('emergence_quiet_delivered', { projectId: this.config.projectId, id: entry!.id, at });
-        return;
-      }
-    }
-    if (this.dreamDue(at)) {
-      const empty = this.emptyCatchupTarget(at);
-      if (empty) {
-        this.trace.append('dream_catchup', { dream_catchup: true, localDate: empty, skippedDays: this.dreamSkippedDays(empty), empty: true });
-        this.clock!.markDreamed(at);
-      } else {
-        await this.runDream(at);
-        await this.maybeSnapshot(at);
-        return;
-      }
-    }
-    await this.maybeSnapshot(at);
-    if (this.machine.state === 'IDLE') {
-      this.compileProactiveBooks(at);
-      // The candidate query must run before F2's tick: a due wake intention is still pending at
-      // the query, while the tick that follows marks it fired. A prospective memory stays listed
-      // after its notification, so both first-class lanes are seen once.
-      // A test double without `hasDue` is asked every tick, which is the old injected behaviour.
-      const due = this.emergence!.hasDue?.(at) ?? true;
-      const allowed = due && this.emergenceAllowed(at);
-      const decision = allowed ? this.emergence!.decide(at) : undefined;
-      if (due) this.runKernelWakeTick(at);
-      if (decision) {
-        const absent = this.shouldHoldForAbsence();
-        const userState = quiet ? 'night-dnd' : absent ? 'idle' : 'in-conversation';
-        const channel = { reachability: 'online' as const, interruptibility: quiet || absent ? 'low' as const : 'high' as const };
-        const routed = new Map<string, ReturnType<KernelAgentMemoryBackend['deliveryRoute']>>();
-        if (decision.candidates.length === 1) {
-          const only = decision.candidates[0]!;
-          routed.set(only.id, this.backend.deliveryRoute({ projectId: this.config.projectId, candidate: this.deliveryInput(only, at), userState, channel, now: at }));
-        } else {
-          const batch = this.backend.deliveryRouteBatch({
-            projectId: this.config.projectId,
-            candidates: decision.candidates.map((item) => this.deliveryInput(item, at)),
-            userState,
-            channel,
-            now: at,
-          });
-          for (const entry of batch.decisions) routed.set(entry.candidateId, entry);
-        }
-        for (const item of decision.candidates) {
-          if (this.emergenceConsumed(item)) continue;
-          const delivery = routed.get(item.id);
-          if (delivery?.decision === 'deliver') {
-            // Consume before acting: a crash during the run must not free the same candidate to run again.
-            this.consumeEmergence(item, at);
-            await this.speakEmergence(item, at);
-            break;
-          }
-          if (delivery?.decision === 'accumulate') {
-            if (!quiet) this.consumeEmergence(item, at);
-            if (!(this.machine.runtime.awayQueue ?? []).some((entry) => entry.id === item.id)) {
-              this.machine.updateRuntime({
-                awayQueue: enqueueAway(this.machine.runtime, {
-                  id: item.id,
-                  text: item.text,
-                  reason: item.reason,
-                  at,
-                  ...(item.source ? { source: item.source } : {}),
-                  ...(item.observedAt === undefined ? {} : { observedAt: item.observedAt }),
-                  ...(item.sourceRefs ? { sourceRefs: item.sourceRefs } : {}),
-                  deferred: quiet ? 'quiet' : 'absence',
-                }),
-              });
-            }
-            this.trace.append('emergence_accumulated', {
-              projectId: this.config.projectId,
-              id: item.id,
-              reason: item.reason,
-              at,
-              destination: delivery.destination,
-              ...(quiet ? { reason: 'quiet_window' } : {}),
-            });
-            break;
-          }
-        }
-      } else if (due && !allowed) {
-        this.trace.append('emergence_skipped', {
-          projectId: this.config.projectId,
-          at,
-          reason: this.dailyBudgetExceeded(at) ? 'daily_token_budget' : 'cooldown_or_daily_cap',
-        });
-      }
-    }
-  }
-
-  private compileProactiveBooks(at: number): void {
-    const projectId = this.config.projectId;
-    try {
-      const latest = this.latestEventId(projectId);
-      if (latest === (this.compiledThroughEventId ?? '')) return;
-      this.kernel.commitments.compile({ projectId, now: at });
-      this.kernel.intentions.compile({ projectId, now: at });
-      for (const intention of this.kernel.intentions.list({ projectId, statuses: ['active'], now: at })) {
-        if (intention.dueAt === undefined || intention.wakeIntentionId !== undefined) continue;
-        this.kernel.intentions.schedule({ projectId, intentionId: intention.intentionId, now: at });
-        this.trace.append('intention_scheduled_for_wake', { intentionId: intention.intentionId, dueAt: intention.dueAt, at });
-      }
-      const profile = this.kernel.profile.compile({ projectId, now: at });
-      this.trace.append('profile_compiled', { projectId, at, written: profile.written, entries: profile.entries });
-      this.compiledThroughEventId = this.latestEventId(projectId);
-    } catch (error) {
-      this.trace.append('proactive_compile_failed', { at, message: error instanceof Error ? error.message : String(error) });
-    }
-  }
-
-  private latestEventId(projectId: string): string {
-    return this.kernel.eventStore.queryEvents(1, 1, { projectId: [projectId], order: 'desc' }).records[0]?.eventId ?? '';
-  }
-
-  /** F2's clock: fire due intentions and announce due prospective memories. It never speaks. */
-  private runKernelWakeTick(at: number): void {
-    try {
-      const result = this.backend.runWakeTick({ projectId: this.config.projectId, agentId: this.config.agentId, now: at });
-      if (result.emitted > 0) {
-        this.trace.append('wake_tick', {
-          at,
-          firedWakeIntentions: result.firedWakeIntentions.map((intention) => intention.intentionId),
-          prospectiveDue: result.prospectiveDue.map((entry) => entry.candidateId),
-        });
-      }
-    } catch (error) {
-      this.trace.append('wake_tick_failed', { at, message: error instanceof Error ? error.message : String(error) });
-    }
-  }
-
-  /**
-   * The event, when the candidate names one, is a stabler key than a lane's own id. The observed
-   * instant rides along because a snoozed commitment resumes as the same id at a new occurrence.
-   */
-  private emergenceKey(candidate: { id: string; source?: string; observedAt?: number; sourceRefs?: Array<{ eventId?: string }> }): string {
-    if (candidate.source === 'commitment') {
-      const commitmentId = candidate.id.slice('surfacing:commitment:'.length);
-      const entry = this.kernel.commitments
-        .list({ projectId: this.config.projectId, now: this.now() })
-        .find((item) => item.commitmentId === commitmentId);
-      if (entry) return `${candidate.id}@${entry.resumeAt ?? entry.dueAt ?? ''}`;
-    }
-    return `${candidate.sourceRefs?.[0]?.eventId ?? candidate.id}@${candidate.observedAt ?? ''}`;
-  }
-
-  private emergenceConsumed(candidate: { id: string; source?: string; observedAt?: number; sourceRefs?: Array<{ eventId?: string }> }): boolean {
-    return (this.machine.runtime.emergence?.consumed ?? []).includes(this.emergenceKey(candidate));
-  }
-
-  /** The configured day's count; it survives a restart because it lives in the checkpoint. */
-  private emergenceAllowed(at: number): boolean {
-    // #233 and #229 share one day boundary and one hard stop: when the day's tokens are gone,
-    // autonomy does not start another run, exactly as the emergence count cap does.
-    if (this.dailyBudgetExceeded(at)) return false;
-    const state = this.machine.runtime.emergence;
-    if (!state) return true;
-    return state.day !== this.localDay(at) || state.count < EMERGENCE_DAILY_LIMIT;
-  }
-
-  private consumeEmergence(candidate: { id: string; source?: string; observedAt?: number; sourceRefs?: Array<{ eventId?: string }> }, at: number): void {
-    const key = this.emergenceKey(candidate);
-    const day = this.localDay(at);
-    const prior = this.machine.runtime.emergence;
-    const count = prior?.day === day ? prior.count + 1 : 1;
-    const consumed = [...(prior?.consumed ?? []).filter((entry) => entry !== key), key].slice(-MAX_EMERGENCE_CONSUMED);
-    this.machine.updateRuntime({ emergence: { day, count, consumed } });
-    this.trace.append('emergence_consumed', { projectId: this.config.projectId, id: candidate.id, key, day, count });
-  }
-
-  private deliveryInput(candidate: { id: string; source?: SurfacingSource; sensitivity?: 'daily' | 'private' | 'high'; confidence?: number; freshness?: { observedAt: number; ageMs: number; expiresAt: number | null; expired: boolean }; observedAt?: number }, at: number): DeliveryCandidateInput {
-    return {
-      candidateId: candidate.id,
-      source: candidate.source ?? 'commitment',
-      sensitivity: candidate.sensitivity ?? 'daily',
-      confidence: candidate.confidence ?? 0.9,
-      freshness: candidate.freshness ?? { observedAt: candidate.observedAt ?? at, ageMs: 0, expiresAt: null, expired: false },
-    };
-  }
-
-  private async speakEmergence(candidate: { id: string; text: string; reason: string; source?: SurfacingSource; sourceRefs?: Array<{ eventId?: string; sourceId?: string; contentHash?: string }> }, at: number): Promise<void> {
-    if (candidate.source !== undefined && candidate.sourceRefs !== undefined) {
-      const prior = this.surfacedByType.get(candidate.source);
-      if (prior && prior.candidateId !== candidate.id) this.writeSurfacingFeedback(prior, 'ignored');
-      this.surfacedByType.set(candidate.source, { candidateId: candidate.id, sourceRefs: candidate.sourceRefs });
-    }
-    void this.host.bus.emit('companion_emergence', { id: candidate.id, reason: candidate.reason, text: candidate.text });
-    let ok = false;
-    try {
-      const summary = await this.executeRun(candidate.text, 'emergence_due', `emergence:${candidate.id}`);
-      ok = summary.stopReason === 'run_complete';
-    } finally {
-      this.trace.append('emergence_run', { projectId: this.config.projectId, id: candidate.id, ok });
-    }
-  }
-
-  private writeSurfacingFeedback(prior: { candidateId: string; sourceRefs: Array<{ eventId?: string; sourceId?: string; contentHash?: string }> }, outcome: 'engaged' | 'ignored' | 'stopped'): void {
-    try {
-      this.backend.recordSurfacingFeedback({
-        projectId: this.config.projectId,
-        candidateId: prior.candidateId,
-        outcome,
-        sourceRefs: prior.sourceRefs,
-        now: this.now(),
-      });
-      this.trace.append('surfacing_feedback', { projectId: this.config.projectId, candidateId: prior.candidateId, outcome });
-    } catch (error) {
-      this.trace.append('surfacing_feedback_failed', { candidateId: prior.candidateId, outcome, message: error instanceof Error ? error.message : String(error) });
-    }
-  }
-
-  /** The owner's next line closes F7's loop for the last thing the companion said on its own. */
-  private acknowledgeSurfacing(): void {
-    for (const [source, prior] of [...this.surfacedByType]) {
-      this.writeSurfacingFeedback(prior, 'engaged');
-      this.surfacedByType.delete(source);
-    }
-  }
-
-  /**
-   * The kernel's own condition (#196, F19): refresh the four checks, and once per failed Dream
-   * streak route the health notice through F18's highest tier. Delivery reuses the existing
-   * emergence speak path; when the owner is away the notice accumulates instead of talking to an
-   * empty room. The decision trace is written so the notice is auditable, not just felt.
-   */
-  private reportHealth(at: number): void {
-    try {
-      this.kernel.health.check({ now: at });
-      if (this.clock!.quietWindowOpen(at)) return;
-      this.reportMemoryPressure(at);
-      const away = this.shouldHoldForAbsence();
-      const notice = this.backend.healthNotice({
-        projectId: this.config.projectId,
-        userState: away ? 'idle' : 'in-conversation',
-        channel: { reachability: 'online', interruptibility: away ? 'low' : 'high' },
-        now: at,
-      });
-      if (!notice.due || !notice.decision) return;
-      this.trace.append('health_notice', {
-        streak: notice.streak,
-        decision: notice.decision.decision,
-        destination: notice.decision.destination,
-        urgency: notice.decision.urgency,
-        reasonCode: notice.decision.reasonCode,
-        trace: notice.decision.decisionTrace,
-      });
-      if (notice.decision.decision !== 'deliver') return;
-      const text = `我最近 ${notice.streak} 晚的夜间整合都失败了，记忆可能不完整。我不会假装正常——你回来时我们先补这一块。`;
-      void this.host.bus.emit('companion_emergence', { id: 'health:dream-streak', reason: 'health_notice', text });
-    } catch (error) {
-      this.trace.append('health_check_failed', { message: error instanceof Error ? error.message : String(error) });
-    }
-  }
-
-  /**
-   * The process half of the health face (#226). The kernel's frozen four checks stay four; this
-   * reads the resident's own RSS against the unit ceiling and routes one notice through the same
-   * emergence path the Dream-streak notice uses. The reading itself is also on `GET /health`.
-   */
-  private reportMemoryPressure(at: number): void {
-    const memory = readMemoryUsage();
-    const action = memoryPressureAction(memory, this.memoryWarned);
-    if (action === 'reset') {
-      this.memoryWarned = false;
-      return;
-    }
-    if (action === 'hold') return;
-    const ceiling = (memory.highBytes ?? memory.limitBytes)!;
-    this.memoryWarned = true;
-    const kind = memory.highBytes === undefined ? '硬顶' : '高水位';
-    const text = `常驻进程占用 ${formatBytes(memory.rssBytes)}，已到安装时设的 ${formatBytes(ceiling)} ${kind}；再涨会被限流或重启。我先说一声。`;
-    this.trace.append('memory_pressure', {
-      rssBytes: memory.rssBytes,
-      limitBytes: memory.limitBytes,
-      highBytes: memory.highBytes,
-      source: memory.source,
-    }, at);
-    void this.host.bus.emit('companion_emergence', { id: 'health:memory-pressure', reason: 'memory_notice', text });
-  }
-
-  /** Keep the inherited stdout/stderr file bounded between restarts. */
-  private rotateServiceLog(): void {
-    const path = join(this.config.dataDir, 'service.log');
-    try {
-      if (!rotateLogFile(path, SERVICE_LOG_MAX_BYTES)) return;
-      this.trace.append('service_log_rotated', { path, maxBytes: SERVICE_LOG_MAX_BYTES, rotated: `${path}.1` });
-    } catch (error) {
-      this.trace.append('service_log_rotate_failed', { path, message: error instanceof Error ? error.message : String(error) });
-    }
-  }
-
-  /** WAKING means the block is written into runtime state, not just into the trace. */
-  private injectTimeContext(reason: string, at = this.now()): void {
-    let kernelLine: string[] = [];
-    try {
-      const context = this.backend.temporalContext({ projectId: this.config.projectId, now: at });
-      kernelLine = [`activity: ${context.rhythm.phase}; density: ${context.density.label}`];
-    } catch (error) {
-      this.trace.append('temporal_context_failed', { message: error instanceof Error ? error.message : String(error) });
-    }
-    const block = this.clock!.timeContextBlock(at, kernelLine);
-    this.machine.updateRuntime({ lastTimeContext: block });
-    this.trace.append('time_context_injected', { block, reason });
-  }
-
-  /** One due intent is one WAKING->IDLE pass; both the dormant and the standby path use it. */
-  private async applyDueWakeIntent(at: number): Promise<void> {
-    const due = this.clock!.dueWakeIntent(at);
-    if (!due) return;
-    this.clock!.consumeWakeIntent(due.id);
-    await this.machine.dispatch('wake_intent_due', { reason: due.reason });
-    this.injectTimeContext(`wake_intent:${due.id}`, at);
-    await this.machine.dispatch('context_injected', { reason: 'wake_intent' });
-  }
-
-  private async maybeSnapshot(at: number): Promise<void> {
-    const last = this.machine.runtime.lastSnapshotAt;
-    if (last !== undefined && at - last < SNAPSHOT_INTERVAL_MS) return;
-    this.machine.updateRuntime({ lastSnapshotAt: at });
-    try {
-      const manifest = await this.kernel.backup.snapshot();
-      if (manifest) {
-        this.trace.append('snapshot_taken', {
-          file: manifest.snapshot.file,
-          createdAt: manifest.createdAt,
-          verification: manifest.verification.ok,
-        });
-      }
-    } catch (error) {
-      this.trace.append('snapshot_failed', { message: error instanceof Error ? error.message : String(error) });
-    }
-  }
-
-  private dreamDue(at: number): boolean {
-    const clock = this.clock!;
-    if (clock.dreamedNight(at)) return false;
-    const retry = this.machine.runtime.dreamRetry;
-    return !retry
-      || retry.night !== clock.dreamNightDate(at)
-      || (!retry.gaveUp && retry.nextAt <= at);
-  }
-
-  private emptyCatchupTarget(at: number): string | undefined {
-    if (this.clock!.dreamWindowOpen(at)) return undefined;
-    const localDate = this.clock!.dreamTargetDate(at);
-    const events = this.kernel.getThreadEvents(`companion-day:${localDate}`, {
-      projectId: this.config.projectId,
-      limit: 1,
-    });
-    return events.length === 0 ? localDate : undefined;
-  }
-
-  private dreamSkippedDays(localDate: string): number {
-    const last = this.machine.runtime.lastDreamDate;
-    return last ? Math.max(0, this.clock!.daysBetween(last, localDate) - 1) : 0;
-  }
-
-  private scheduleDreamRetry(night: string, at: number): { attempts: number; nextAt?: number; gaveUp: boolean } {
-    const prior = this.machine.runtime.dreamRetry;
-    const attempts = prior?.night === night ? prior.attempts + 1 : 1;
-    if (attempts >= DREAM_MAX_ATTEMPTS_PER_NIGHT) {
-      this.machine.updateRuntime({ dreamRetry: { night, attempts, nextAt: at, gaveUp: true } });
-      this.trace.append('dream_retry_scheduled', { night, attempts, gaveUp: true, clockAt: at });
-      return { attempts, gaveUp: true };
-    }
-    const nextAt = at + Math.min(DREAM_RETRY_BASE_MS * 2 ** (attempts - 1), DREAM_RETRY_CAP_MS);
-    this.machine.updateRuntime({ dreamRetry: { night, attempts, nextAt } });
-    this.trace.append('dream_retry_scheduled', { night, attempts, nextAt, delayMs: nextAt - at, gaveUp: false, clockAt: at });
-    return { attempts, nextAt, gaveUp: false };
+    return this.residentTick.tick(at);
   }
 
   async runDream(at = this.now()): Promise<void> {
-    const localDate = this.clock!.dreamTargetDate(at);
-    const night = this.clock!.dreamNightDate(at);
-    const catchup = !this.clock!.dreamWindowOpen(at);
-    const skippedDays = this.dreamSkippedDays(localDate);
-    if (catchup) this.trace.append('dream_catchup', { dream_catchup: true, localDate, skippedDays });
-    await this.machine.dispatch('dream_window_open', { reason: 'dream_window' });
-    try {
-      const result = await this.dream!.integrate(localDate, `companion-day:${localDate}`, at);
-      if (result.memoryModelDegraded === 'semantic_processor_failed') this.memoryModelFailed = true;
-      else if (result.memoryModelUsed) this.memoryModelFailed = false;
-      this.clock!.markDreamed(at);
-      try {
-        const promotion = this.kernel.promoteDreamCandidates({ projectId: this.config.projectId, limit: 100 });
-        this.trace.append('dream_promotion', { promoted: promotion.promotedCandidates, decisions: promotion.decisions.length });
-      } catch (error) {
-        this.trace.append('dream_promotion_failed', { message: error instanceof Error ? error.message : String(error) });
-      }
-      this.machine.updateRuntime({
-        dreamRetry: undefined,
-        ...(result.kernelNightRan ? { lastSnapshotAt: at } : {}),
-      });
-      this.clock!.setWakeIntent(at + 8 * 60 * 60_000, 'morning_after_dream');
-      this.trace.append('dream_complete', {
-        localDate,
-        eventCount: result.eventCount,
-        sourceRefs: result.sourceRefs.length,
-        dream_catchup: catchup,
-        skippedDays,
-      });
-      void this.host.bus.emit('companion_dream', { product: { localDate, eventCount: result.eventCount, summary: result.summary } });
-      // A message that arrived while the integration was awaiting wakes the shell out of DREAMING.
-      // The product is already written; the transition belongs to whoever moved the state, not to us.
-      if (this.machine.state !== 'DREAMING') {
-        this.trace.append('dream_finished_after_wake', { localDate, state: this.machine.state });
-        return;
-      }
-      await this.machine.dispatch('dream_complete', { reason: `dream:${localDate}` });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const retry = this.scheduleDreamRetry(night, at);
-      this.trace.append('dream_failed', {
-        localDate,
-        message,
-        clockAt: at,
-        attempt: retry.attempts,
-        nextAt: retry.nextAt ?? null,
-        gaveUp: retry.gaveUp,
-      });
-      await this.machine.dispatch('run_error', { reason: `dream_failed:${message}` });
-    }
-  }
-
-  // ---- The attach surface (`AttachShell`): everything the TUI process is allowed to ask for. ----
-
-  /**
-   * The work indicator and the context gauge are fed from the same events the transcript is, so the
-   * TUI never has to poll state: a turn starts, a tool starts, tokens are charged, a run settles.
-   */
-  private attachWorkListeners(): void {
-    this.host.bus.on('agent_start', () => {
-      this.emitStatus();
-    });
-    this.host.bus.on('turn_start', (event: { turnIndex?: number }) => {
-      this.runTurns = event.turnIndex ?? this.runTurns;
-      this.workLabel = '思考中';
-      this.emitWork();
-    });
-    this.host.bus.on('turn_usage', (event: { tokens?: number; totalTokens?: number; usage?: TurnUsage }) => {
-      this.runTokens = event.totalTokens ?? this.runTokens;
-      // Charged per turn, not at `agent_end`: a kill mid-run must not refund the day's spend, and the
-      // checkpoint is what the next process reads (#233).
-      this.chargeCost(event.tokens ?? 0);
-      const cache = promptCacheAccount(event.usage);
-      if (cache) {
-        this.promptCache = cache;
-        this.emitStatus();
-      }
-      this.emitWork();
-    });
-    this.host.bus.on('tool_execution_start', (event: { toolName?: string }) => {
-      this.workLabel = event.toolName ?? '工具';
-      this.emitWork();
-    });
-    this.host.bus.on('tool_execution_end', () => {
-      this.workLabel = '思考中';
-      this.emitWork();
-    });
-    this.host.bus.on('turn_end', () => this.emitSteering());
-    this.host.bus.on('agent_settled', () => {
-      this.workLabel = '思考中';
-      this.emitWork();
-      this.emitSteering();
-      this.emitStatus();
-      this.flushDailyBudgetNotice();
-    });
-  }
-
-  private chargeCost(tokens: number): void {
-    if (tokens <= 0) return;
-    try {
-      const today = this.localDay(this.now());
-      const previous = this.machine.runtime.costDayDate === today ? this.machine.runtime.costDayTokens ?? 0 : 0;
-      const spent = previous + tokens;
-      this.machine.updateRuntime({ costDayDate: today, costDayTokens: spent });
-      if (previous < this.config.dailyBudget.maxTokensPerDay && spent >= this.config.dailyBudget.maxTokensPerDay) {
-        this.trace.append('daily_budget_crossed', { day: today, spent, limit: this.config.dailyBudget.maxTokensPerDay, tokens });
-      }
-    } catch (error) {
-      this.trace.append('cost_charge_failed', { tokens, message: error instanceof Error ? error.message : String(error) });
-    }
-  }
-
-  /** The day's spend under the same configured boundary #229's emergence count uses. */
-  private dailySpent(at = this.now()): number {
-    return this.machine.runtime.costDayDate === this.localDay(at) ? this.machine.runtime.costDayTokens ?? 0 : 0;
-  }
-
-  private dailyBudgetExceeded(at = this.now()): boolean {
-    return this.dailySpent(at) >= this.config.dailyBudget.maxTokensPerDay;
-  }
-
-  private dailyBudgetLine(at = this.now()): string {
-    return `已到今日预算上限（${this.dailySpent(at)} / ${this.config.dailyBudget.maxTokensPerDay} token，本日 ${this.localDay(at)}（${this.config.timeZone}））：自主运行今天不再开始；你的指令照常执行，单次运行仍受笼子上限约束。`;
-  }
-
-  /**
-   * A user line is presence: the daily stop is stated once per day rather than left to the status
-   * bar. The line still runs — the ticket stops autonomy, not the owner.
-   */
-  private announceDailyBudget(trigger: string): void {
-    const day = this.localDay(this.now());
-    if (this.dailyNotifiedDay === day) return;
-    this.dailyNotifiedDay = day;
-    this.trace.append('daily_budget_exceeded', {
-      trigger,
-      day,
-      spent: this.dailySpent(),
-      limit: this.config.dailyBudget.maxTokensPerDay,
-    });
-    void this.host.bus.emit('terminal_print', { text: `${this.dailyBudgetLine()}\n` });
-  }
-
-  private flushDailyBudgetNotice(): void {
-    if (!this.dailyBudgetExceeded()) return;
-    this.announceDailyBudget('run_settled');
-  }
-
-  private emitWork(): void {
-    void this.host.bus.emit('companion_work', this.currentWork());
-  }
-
-  private emitStatus(): void {
-    void this.host.bus.emit('companion_status', { status: this.currentStatus() });
-  }
-
-  private emitSteering(): void {
-    void this.host.bus.emit('companion_steering', { queued: this.currentQueued() });
-  }
-
-  private shouldHoldForAbsence(): boolean {
-    return this.config.attach.enabled && (this.attach?.clientCount ?? 0) === 0;
+    return this.residentTick.runDream(at);
   }
 
   currentStatus(): StatusState {
-    const next = this.clock?.nextPendingIntent();
-    const today = this.localDay(this.now());
-    return {
-      name: this.config.agentId,
-      lifecycle: this.machine.state,
-      kernelConnected: !this.machine.isHalted,
-      nextWakeAt: next?.at,
-      nextWakeReason: next?.reason,
-      model: this.modelLabel,
-      memoryModel: this.memoryModelHealth(),
-      workspace: this.config.workspaceRoot,
-      showWorkspace: true,
-      contextTokens: this.contextTokenEstimate,
-      contextSweetSpot: this.targetTokens(),
-      contextLanes: this.lastLaneAssembly ? laneAssemblyView(this.lastLaneAssembly) : null,
-      contextMetrics: this.lastContextMetrics ?? null,
-      promptCache: this.promptCache ?? null,
-      costTokens: this.machine.runtime.costDayDate === today ? this.machine.runtime.costDayTokens ?? 0 : 0,
-      timeZone: this.config.timeZone,
-      quietWindow: this.config.quiet ? { ...this.config.quiet, active: this.clock?.quietWindowOpen() ?? false } : undefined,
-      sandbox: this.sandboxState(),
-      capturePaused: this.capturePaused,
-      ...(this.machine.state === 'SUSPENDED' && this.machine.runtime.suspension ? { suspended: this.suspendedLine(this.machine.runtime.suspension) } : {}),
-    };
-  }
-
-  private memoryModelHealth(): { route: string; model: string; baseUrl: string; state: 'reachable' | 'unreachable' | 'rule_only'; line: string } {
-    const role = this.modelRegistry.getRoleConfig('memory');
-    const route = this.modelRouter?.active ?? 'default';
-    const ruleOnly = role.provider !== 'openai_compatible';
-    const state = ruleOnly ? 'rule_only' : this.memoryModelFailed ? 'unreachable' : 'reachable';
-    const stateText = state === 'rule_only'
-      ? '降级为规则；夜间整合不会用模型'
-      : state === 'unreachable' ? '不可达，降级为规则；夜间整合不会用模型' : '可达';
-    return {
-      route,
-      model: role.modelName,
-      baseUrl: redactUrl(role.baseUrl, [role.apiKey]),
-      state,
-      line: `记忆模型：${route}/${role.modelName}（${stateText}）`,
-    };
-  }
-
-  /** `/status` and the status bar say whether bash is isolated; a silent degradation is the bug (#284). */
-  private sandboxState(): 'on' | 'off' {
-    return bwrapUsable() ? 'on' : 'off';
-  }
-
-  /**
-   * The token budget and the emergence count share this day boundary: the configured project time
-   * zone (#285), which is the installer's `COGMEM_SHELL_TZ`, not a hard-coded Asia/Tokyo.
-   */
-  private localDay(at: number): string {
-    return new Intl.DateTimeFormat('en-CA', { timeZone: this.config.timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(at));
-  }
-
-  /** The one human line the status bar, the snapshot and `/health` all carry for a pause. */
-  private suspendedLine(suspension: Suspension): { kind: Suspension['kind']; text: string } {
-    if (suspension.kind === 'question') {
-      return { kind: 'question', text: `已暂停：等你回答「${suspension.question?.text ?? ''}」` };
-    }
-    return {
-      kind: 'budget',
-      text: `已暂停：预算到顶，等批准追加 ${suspension.budget?.additionalTokens ?? 0} token / ${suspension.budget?.additionalTurns ?? 0} 回合`,
-    };
+    return this.statusFace.currentStatus();
   }
 
   currentWork(): WorkState {
-    const budget = this.runTier === 'work' ? this.config.workBudget : this.config.budgets;
-    return {
-      active: this.machine.state === 'RUNNING',
-      label: this.workLabel,
-      startedAt: this.runStartedAt,
-      turns: this.runTurns,
-      maxTurns: budget.maxTurnsPerRun,
-      tokens: this.runTokens,
-      maxTokens: budget.maxTokensPerRun,
-    };
+    return this.statusFace.currentWork();
   }
 
   currentQueued(): string[] {
-    return [...(this.runtime?.steeringMessages ?? [])];
+    return this.statusFace.currentQueued();
   }
 
-  /** The TUI's Esc on a queued line: withdraw the newest steer the model has not seen. */
   withdrawSteering(): string | undefined {
-    const withdrawn = this.runtime?.withdrawSteering();
-    this.emitSteering();
-    return withdrawn;
+    return this.statusFace.withdrawSteering();
   }
 
-  /**
-   * The prompt of the run a kill interrupted, rebuilt from the session log (#210). `undefined` when
-   * the last start was not a recovery of a RUNNING run with a prompt on record. What to *do* with it
-   * — a new turn, the away report, or nothing — is a product decision this method does not make.
-   */
   interruptedRun(): { runId: string; text: string; chars: number } | undefined {
-    return this.interrupted;
+    return this.statusFace.interruptedRun();
   }
 
-  /** `/sleep` is the command that puts it into DORMANT; closing the window is only a detach. */
   async sleep(): Promise<void> {
-    if (this.machine.state === 'DORMANT') return;
-    if (this.machine.state !== 'IDLE') throw new Error(`sleep_requires_idle: state is ${this.machine.state}`);
-    await this.machine.dispatch('shutdown', { reason: 'sleep_command' });
-    this.trace.append('sleep_command', { state: this.machine.state });
+    return this.statusFace.sleep();
   }
 
-  /**
-   * The report shown before the conversation resumes. Building it consumes the away queue: it is
-   * reported once, because "what happened while you were away" is not a recurring banner.
-   */
   awayReport(): PresenceReport {
-    // The one production read of the session log. `recover()` is the tolerant read plus the one-time
-    // record of any damage, so a torn or corrupted log shows up in the report's own evidence instead
-    // of silently reading as "nothing happened while you were away".
-    const report = buildAwayReport({
-      projectId: this.config.projectId,
-      runtime: this.machine.runtime,
-      trace: this.trace.recover().records,
-      kernel: this.kernel,
-      now: this.now(),
-      ...(this.lastUpgrade ? { upgrade: this.lastUpgrade } : {}),
-    });
-    // Reported once: "what happened while you were away" is not a recurring banner.
-    this.lastUpgrade = undefined;
-    const patch: Record<string, unknown> = { lastAttachAt: this.now() };
-    if ((this.machine.runtime.awayQueue?.length ?? 0) > 0) patch.awayQueue = [];
-    try {
-      this.machine.updateRuntime(patch);
-    } catch (error) {
-      this.trace.append('attach_state_write_failed', { message: error instanceof Error ? error.message : String(error) });
-    }
-    return report;
+    return this.statusFace.awayReport();
   }
 
-  /** Date the absence when the last client leaves, so the next report has a window to read. */
   attachChanged(count: number): void {
-    try {
-      this.machine.updateRuntime(count > 0 ? { lastAttachAt: this.now() } : { lastDetachAt: this.now() });
-    } catch (error) {
-      this.trace.append('attach_state_write_failed', { count, message: error instanceof Error ? error.message : String(error) });
-    }
+    this.statusFace.attachChanged(count);
   }
 
   // ---- The install's first-wake probe (#203), asked over the same control socket. ----
@@ -2476,7 +1047,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     const source = (type ?? last?.[0]) as SurfacingSource | undefined;
     const entry = type === undefined ? last?.[1] : this.surfacedByType.get(type as SurfacingSource);
     if (!entry) return { text: '还没有浮现过该来源，无法停下。', receipt: true };
-    this.writeSurfacingFeedback(entry, 'stopped');
+    this.residentTick.writeSurfacingFeedback(entry, 'stopped');
     if (source !== undefined) this.surfacedByType.delete(source);
     return { text: `已停下 ${source} 的主动浮现；/surfacing resume <来源> 恢复。`, receipt: true };
   }
@@ -2535,247 +1106,6 @@ export class CompanionShell implements ShellControl, AttachShell {
     }
   }
 
-  // ---- Memory sovereignty entry points (#232): three commands over F9's face. ----
-
-  forgetPreview(start: number, end: number): CommandReply {
-    if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end) {
-      return { text: '删除窗口无效：起点必须早于终点（半开窗口 [起, 止)）。', receipt: true };
-    }
-    const projectId = this.config.projectId;
-    // The same half-open occurredAt filter deleteRange applies; this is a read, not a second rule.
-    const count = this.kernel.eventStore.queryEvents(1, 1, { projectId: [projectId], startTime: start, endTime: end }).total;
-    this.pendingForget = { start, end };
-    return {
-      text: [
-        `将删除 ${new Date(start).toISOString()} 至 ${new Date(end).toISOString()}（含起不含止）的 ${count} 条账本记录。`,
-        '引用这些记录的画像、程序、承诺、情节与图谱条目会随证据一并删除，然后重建。',
-        '数据库页会被重写；本机数据目录内的夜间快照、周归档与导出副本也会一并删除。',
-        '数据目录之外的导出文件与已复制到其他机器的备份不在覆盖范围内。',
-        '确认执行：/forget confirm。回执与审计只记范围、条数和审计 id，不记被删内容。',
-      ].join('\n'),
-      receipt: true,
-    };
-  }
-
-  forgetConfirm(): CommandReply {
-    const pending = this.pendingForget;
-    if (!pending) return { text: '还没有预览：先 /forget <起> <止> 看范围和条数。', receipt: true };
-    const projectId = this.config.projectId;
-    const result = this.kernel.sovereignty.deleteRange({
-      projectId,
-      start: pending.start,
-      end: pending.end,
-      reason: 'owner_command',
-    });
-    this.pendingForget = undefined;
-    this.trace.append('forget_range_deleted', {
-      projectId,
-      start: pending.start,
-      end: pending.end,
-      auditId: result.auditId,
-      deleted: result.deleted,
-    });
-    this.stateLedger.forget();
-    const scrubbed = forgetRuntimeText(this.machine.runtime, this.stateLedger);
-    this.machine.updateRuntime(scrubbed.runtime);
-    const promptsRemoved = this.trace.forgetWindow('run_prompt', pending.start, pending.end);
-    const deleted = Object.entries(result.deleted)
-      .filter(([, value]) => value > 0)
-      .map(([field, value]) => `${field} ${value}`)
-      .join(' · ');
-    const copies = [
-      `本机快照 ${result.artifacts.snapshotsRemoved} 个`,
-      `周归档 ${result.artifacts.archivesRemoved} 个`,
-      `数据目录内导出 ${result.artifacts.exportsRemoved} 个已删除`,
-      `${result.artifacts.notCovered.join('、')}不在覆盖范围内`,
-    ].join('；');
-    return {
-      text: `已删除 ${new Date(pending.start).toISOString()} 至 ${new Date(pending.end).toISOString()}：${deleted || '没有记录'}。副本：${copies}。checkpoint：文本字段只存账本引用，${scrubbed.cleared} 个失去引用的字段已清空；trace：run_prompt 记录 ${promptsRemoved} 条已删除。审计 ${result.auditId}。`,
-      receipt: true,
-      data: { sovereignty_delete: result },
-    };
-  }
-
-  exportMemory(path: string | undefined): CommandReply {
-    const arg = path?.trim() ?? '';
-    if (arg === 'confirm') {
-      const pending = this.pendingExport;
-      if (!pending) return { text: '还没有待确认的导出：先 /export <路径> 看落盘位置。', receipt: true };
-      return this.writeExport(pending.path, true);
-    }
-    const outputPath = arg !== ''
-      ? arg
-      : join(this.config.dataDir, 'exports', `memory-${new Date(this.now()).toISOString().replace(/[:.]/gu, '-')}.md`);
-    // Any new export invalidates an older unconfirmed request: a confirmation must belong to the
-    // path the owner just saw, not one two commands ago.
-    this.pendingExport = undefined;
-    if (!isWithin(this.config.dataDir, outputPath)) {
-      this.pendingExport = { path: outputPath };
-      return {
-        text: `导出会写到数据目录之外的 ${resolve(outputPath)}（文件权限 0600）。确认执行：/export confirm。`,
-        receipt: true,
-      };
-    }
-    return this.writeExport(outputPath, false);
-  }
-
-  private writeExport(outputPath: string, confirmed: boolean): CommandReply {
-    const result = this.kernel.sovereignty.exportArchive({ projectId: this.config.projectId, outputPath });
-    if (confirmed) this.pendingExport = undefined;
-    this.trace.append('memory_exported', { path: result.path, bytes: result.bytes, auditId: result.auditId });
-    const { events, profile, procedures, commitments, graph } = result.counts;
-    return {
-      text: `已导出 ${events} 条对话、${profile} 条画像、${procedures} 条程序、${commitments} 条承诺、${graph} 个图谱节点（${formatBytes(result.bytes)}）到 ${result.path}。审计 ${result.auditId}。`,
-      receipt: true,
-      data: { sovereignty_export: result },
-    };
-  }
-
-  async correctProfile(key: string, value: string): Promise<CommandReply> {
-    const projectId = this.config.projectId;
-    const entries = this.kernel.profile.entries({ projectId });
-    const exact = entries.filter((entry) => entry.key === key);
-    const matches = exact.length > 0 ? exact : entries.filter((entry) => entry.key.endsWith(`.${key}`));
-    if (matches.length === 0) {
-      const known = entries.slice(0, 12).map((entry) => `${entry.ledger}:${entry.key}`).join('、');
-      return this.proposeProcedureCorrection(key, value, known);
-    }
-    if (matches.length > 1) {
-      return {
-        text: `${key} 命中多条（${matches.map((entry) => `${entry.ledger}:${entry.key}`).join('、')}），请用完整键再试。`,
-        receipt: true,
-      };
-    }
-    const entry = matches[0]!;
-    // The correction names the owner's turn. The command line is that turn, recorded through the
-    // same backend every typed message uses, so pause/exclusion rules apply unchanged.
-    const turn = await this.backend.rememberTurnWithResult({
-      agentId: this.config.agentId,
-      projectId,
-      sessionId: this.config.sessionId,
-      userText: `/correct ${entry.key} ${value}`,
-    });
-    const correctionEventId = turn.rawEventIds[0];
-    if (!correctionEventId) return { text: '纠正未执行：纠正面需要一个用户回合，这次没有写进去。', receipt: true };
-    const corrected = this.kernel.profile.correct({
-      projectId,
-      ledger: entry.ledger,
-      key: entry.key,
-      value,
-      correctionEventId,
-    });
-    this.trace.append('profile_corrected', {
-      projectId,
-      ledger: entry.ledger,
-      key: entry.key,
-      version: corrected.version,
-      eventId: correctionEventId,
-    });
-    return {
-      text: `已纠正 ${entry.ledger} · ${entry.key}：${entry.value} → ${corrected.value}（v${corrected.version}）。下一次召回起全局按新值。`,
-      receipt: true,
-      data: { profile_correction: { ledger: entry.ledger, key: entry.key, value: corrected.value, version: corrected.version } },
-    };
-  }
-
-  /**
-   * `/correct` on a practice (#264). The compiler already reads `metadata.procedureCorrection`, but
-   * nothing in the shell wrote it. A proposal is not a correction: the mark is written only by
-   * `confirmProcedureCorrection`, and until then the book is untouched.
-   */
-  private proposeProcedureCorrection(key: string, value: string, knownProfiles: string): CommandReply {
-    const projectId = this.config.projectId;
-    this.kernel.procedures.compile({ projectId, now: this.now() });
-    const current = this.kernel.procedures.entries({ projectId }).filter((entry) => entry.status === 'current');
-    const named = current.filter((entry) =>
-      entry.key === key || `${entry.domain}:${entry.key}` === key || entry.domain === key);
-    // An imported guide and an own practice can share a key; the owner's correction replaces the
-    // practice they actually do, and the imported book stays recallable as what was read.
-    const own = named.filter((entry) => entry.origin !== 'imported');
-    const matches = own.length > 0 ? own : named;
-    if (matches.length === 0) {
-      return {
-        text: `没有叫 ${key} 的当前画像或做法条目。${knownProfiles ? `现有画像：${knownProfiles}` : '画像册目前是空的。'}`,
-        receipt: true,
-      };
-    }
-    if (matches.length > 1) {
-      return {
-        text: `${key} 命中多条做法（${matches.map((entry) => `${entry.domain}:${entry.key}`).join('、')}），请用完整键再试。`,
-        receipt: true,
-      };
-    }
-    const entry = matches[0]!;
-    this.pendingProcedureCorrection = {
-      domain: entry.domain,
-      key: entry.key,
-      value,
-      title: entry.title,
-      steps: [...entry.steps],
-    };
-    this.trace.append('procedure_correction_proposed', {
-      projectId,
-      domain: entry.domain,
-      key: entry.key,
-      entryId: entry.entryId,
-    });
-    return {
-      text: `提议：把做法「${entry.title}」（${entry.domain} · ${entry.key}）改为「${value}」。这是提议，尚未生效；确认请发 /correct confirm。`,
-      receipt: true,
-      data: { procedure_correction_proposal: { domain: entry.domain, key: entry.key, value } },
-    };
-  }
-
-  /** `/correct confirm`: write the practice correction and recompile, so the next recall reads it. */
-  async confirmProcedureCorrection(): Promise<CommandReply> {
-    const pending = this.pendingProcedureCorrection;
-    if (!pending) return { text: '还没有做法提议：先 /correct <做法键> <新做法>。', receipt: true };
-    const projectId = this.config.projectId;
-    // The mark is the compiler's evidence: a `user` turn carrying the domain and key. The command
-    // line is that turn, recorded through the same backend every typed message uses.
-    const turn = await this.backend.rememberTurnWithResult({
-      agentId: this.config.agentId,
-      projectId,
-      sessionId: this.config.sessionId,
-      userText: pending.value,
-      metadata: { procedureCorrection: { domain: pending.domain, key: pending.key } },
-    });
-    const correctionEventId = turn.rawEventIds[0];
-    if (!correctionEventId) return { text: '纠正未执行：做法纠正需要一个用户回合，这次没有写进去。', receipt: true };
-    this.pendingProcedureCorrection = undefined;
-    this.kernel.procedures.compile({ projectId, now: this.now() });
-    const entry = this.kernel.procedures.entries({ projectId }).find((candidate) =>
-      candidate.domain === pending.domain && candidate.key === pending.key && candidate.origin !== 'imported');
-    this.trace.append('procedure_corrected', {
-      projectId,
-      domain: pending.domain,
-      key: pending.key,
-      eventId: correctionEventId,
-      entryId: entry?.entryId,
-      version: entry?.version,
-      grade: entry?.grade,
-    });
-    if (!entry) {
-      return {
-        text: `已写入做法纠正，但重编译后没有找到 ${pending.domain} · ${pending.key} 的现行条目；审计 ${correctionEventId}。`,
-        receipt: true,
-      };
-    }
-    return {
-      text: `已纠正做法 ${pending.domain} · ${pending.key}：「${pending.steps.join('；')}」→「${pending.value}」（${entry.grade}，v${entry.version}）。下一次同类任务按新做法。`,
-      receipt: true,
-      data: {
-        procedure_correction: {
-          domain: pending.domain,
-          key: pending.key,
-          value: pending.value,
-          entryId: entry.entryId,
-          version: entry.version,
-          grade: entry.grade,
-        },
-      },
-    };
-  }
 
   /** The TUI route list; with no router (an injected provider) it is just the one label, as before. */
   modelRoutes(): string[] {
@@ -2832,253 +1162,24 @@ export class CompanionShell implements ShellControl, AttachShell {
     }
   }
 
-  // ---- Command proposals (spec §7, #165 round 22): the agent offers, the user decides. ----
-
-  /**
-   * The user's "Enter". This is the only caller of `executeProposal`, and the confirmation event it
-   * builds is the user's key — there is no other way for a proposal to reach the dispatcher, which
-   * reuses `runCommand` so a confirmed proposal and a typed `/pause` are the same execution. The
-   * agent's side is the `propose_command` tool (`plugins/proposal.ts`), which only records.
-   */
   async confirmProposal(id: string): Promise<{ ok: boolean; proposal?: CommandProposal; reason?: string; reply?: CommandReply }> {
-    const proposal = this.proposals.get(id);
-    const confirmation: ProposalConfirmation | undefined = proposal
-      ? { kind: 'user-confirm', proposalId: proposal.id, at: this.now() }
-      : undefined;
-    const outcome = await executeProposal(proposal, confirmation, {
-      dispatch: (command, args) => this.runCommand(command, args),
-      trace: this.trace,
-      now: this.now,
-    });
-    if (outcome.ok && proposal) this.proposals.settled(proposal);
-    return {
-      ok: outcome.ok,
-      ...(proposal ? { proposal } : {}),
-      ...(outcome.reason !== undefined ? { reason: outcome.reason } : {}),
-      ...(outcome.reply ? { reply: outcome.reply } : {}),
-    };
+    return this.proposalsHandlers.confirmProposal(id);
   }
 
-  /** The user's "Esc": retire a pending proposal; it can never be confirmed after this. */
   discardProposal(id: string): CommandProposal | undefined {
-    const proposal = this.proposals.discard(id);
-    // Esc on the budget offer is the owner's refusal (#228): the task closes as budget_exceeded and
-    // the receipt says so, instead of leaving a pause nobody can see the end of.
-    if (proposal && id === this.suspensionProposalId) {
-      this.suspensionProposalId = undefined;
-      this.rejectSuspended();
-    }
-    return proposal;
+    return this.proposalsHandlers.discardProposal(id);
   }
 
-  /** The pending offers, for tests and any face that wants the list rather than the transcript. */
   currentProposals(): CommandProposal[] {
-    return [...this.proposals.pending()];
+    return this.proposalsHandlers.currentProposals();
   }
 
-  // ---- The suspension faces (#228): one pause object, three exits (approve, refuse, supersede). ----
-
-  /**
-   * Offer the owner the one way to continue a budget pause. It reuses the command-proposal shape —
-   * Enter confirms `/continue`, Esc refuses it — because that is the mechanism this shell already
-   * has for "the agent asks, the owner decides". The offer is re-made after a restart: the pause is
-   * durable, the in-memory proposal registry is not.
-   */
-  private offerResume(suspensionId: string): void {
-    const suspension = this.machine.runtime.suspension;
-    if (!suspension || suspension.id !== suspensionId || suspension.kind !== 'budget') return;
-    const { proposal } = this.proposals.propose({
-      command: 'continue',
-      args: suspension.id,
-      reason: `预算到顶：再给 ${suspension.budget?.additionalTokens ?? 0} token / ${suspension.budget?.additionalTurns ?? 0} 回合就能继续（${suspension.budget?.basis ?? ''}）`,
-    });
-    this.suspensionProposalId = proposal.id;
-  }
-
-  /**
-   * `/continue`: the owner approves the estimate. The grant is written onto the assignment (so it
-   * survives a crash between approval and the run) and the pause is cleared in the same checkpoint
-   * write; the run itself is dispatched from the next tick of the event loop, like the plugin
-   * restart's resume, so the command's receipt reaches the socket first.
-   */
-  continueSuspended(): CommandReply {
-    const suspension = this.machine.runtime.suspension;
-    if (this.machine.state !== 'SUSPENDED' || !suspension) return { text: '现在没有挂起的 run，不需要续跑。', receipt: true };
-    if (suspension.kind !== 'budget') return { text: '这次挂起在等一个回答，不是等预算：直接回复即可。', receipt: true };
-    if (this.dailyBudgetExceeded()) this.announceDailyBudget('budget_approved');
-    const assignment = this.machine.runtime.openAssignment;
-    if (assignment && assignment.id !== suspension.assignmentId) {
-      this.trace.append('suspension_resume_refused', { id: suspension.id, reason: 'assignment_mismatch' });
-      return { text: '挂起对象与当前任务对不上，没有续跑（痕迹已记）。', receipt: true };
-    }
-    const grant = { tokens: suspension.budget?.additionalTokens ?? 0, turns: suspension.budget?.additionalTurns ?? 0 };
-    this.suspensionProposalId = undefined;
-    this.machine.updateRuntime({
-      ...(assignment ? { openAssignment: { ...assignment, grant, attempts: 0, nextResumeAt: undefined } } : {}),
-      suspension: undefined,
-    });
-    this.trace.append('suspension_approved', { id: suspension.id, assignmentId: assignment?.id ?? null, grant, basis: suspension.budget?.basis });
-    setTimeout(() => {
-      void this.resumeSuspendedRun(suspension.userText ?? '', grant).catch((error) =>
-        this.trace.append('suspension_resume_failed', { assignmentId: assignment?.id ?? null, message: error instanceof Error ? error.message : String(error) }),
-      );
-    }, 0);
-    return { text: `已批准：追加 ${grant.tokens} token / ${grant.turns} 回合，原地续跑。`, receipt: true };
-  }
-
-  private async resumeSuspendedRun(userText: string, grant?: { tokens: number; turns: number }): Promise<void> {
-    if (this.machine.state !== 'SUSPENDED') {
-      this.trace.append('suspension_resume_skipped', { reason: `state:${this.machine.state}` });
-      return;
-    }
-    await this.executeRun(userText, 'message_received', 'budget_approved', 'budget_approved', grant);
-  }
-
-  /**
-   * The owner refused. The task closes exactly as an unattended budget stop used to (#228): the
-   * assignment is gone, the trace keeps the refusal and the numbers it refused, and the lifecycle
-   * returns to standby through the `budget_rejected` edge.
-   */
-  private rejectSuspended(): void {
-    const suspension = this.machine.runtime.suspension;
-    if (this.machine.state !== 'SUSPENDED' || !suspension) return;
-    this.trace.append('suspension_rejected', {
-      id: suspension.id,
-      assignmentId: suspension.assignmentId,
-      kind: suspension.kind,
-      additionalTokens: suspension.budget?.additionalTokens ?? null,
-      closedAs: 'budget_exceeded',
-    });
-    this.machine.updateRuntime({ suspension: undefined, openAssignment: undefined });
-    void this.machine.dispatch('budget_rejected', { reason: 'owner_rejected_budget' }).catch((error) =>
-      this.trace.append('suspension_reject_failed', { id: suspension.id, message: error instanceof Error ? error.message : String(error) }),
-    );
-  }
-
-  /**
-   * A new instruction while a budget pause waits: the pause is closed and the trace says how. The
-   * assignment stays open (#246 A2): the new line attaches to it in `beginUserAssignment`, so the
-   * stop's place and findings are still in the next prompt.
-   */
-  private supersedeSuspension(reason: string): void {
-    const suspension = this.machine.runtime.suspension;
-    if (!suspension) return;
-    this.suspensionProposalId = undefined;
-    this.trace.append('suspension_superseded', {
-      id: suspension.id,
-      assignmentId: suspension.assignmentId,
-      kind: suspension.kind,
-      reason,
-      closedAs: 'budget_exceeded',
-    });
-    this.machine.updateRuntime({ suspension: undefined });
-  }
-
-  /**
-   * `ask_user`'s one entry (#228). Only a work run may wait for the owner: an autonomous run has no
-   * one to answer it and must not hold a pause open, so the tool refuses there and the model is told
-   * to carry on. The question is process-local until the run settles; the checkpointed object is
-   * written by `settleAssignment`.
-   */
   askUser(input: { question: string; context?: string }): { ok: boolean; text: string } {
-    const question = input.question.trim();
-    if (question === '') return { ok: false, text: 'invalid_arguments: "question" must be a non-empty string' };
-    if (this.runTier !== 'work' || this.machine.state !== 'RUNNING') {
-      this.trace.append('question_refused_autonomous', { chars: question.length });
-      return { ok: false, text: 'ask_user_unavailable: 这次是自主 run，没有人在等你的问题；不要等，直接按现有信息做完或收尾。' };
-    }
-    const contextRef = input.context?.trim();
-    this.pendingQuestion = {
-      text: question,
-      ...(contextRef ? { contextRef } : {}),
-    };
-    this.trace.append('question_registered', { chars: question.length, contextChars: contextRef?.length ?? 0 });
-    return { ok: true, text: '已登记问题：这次 run 到此挂起，用户回答后原任务原地续跑。不要再调用工具，也不要假装已经得到回答。' };
+    return this.proposalsHandlers.askUser(input);
   }
 
-  /**
-   * `declare_task`'s one entry (#246 A2). Whether a line starts a different task is a semantic
-   * judgement, so the shell does not read keywords: the front model says so through this explicit
-   * declaration, and the shell settles the old assignment the way a completed run does. The trace
-   * record is the auditable shape C5/D3 will consume.
-   */
   declareTask(input: { action?: string; runId?: string; domain?: string; key?: string; checklist?: boolean }): { ok: boolean; text: string } {
-    const action = input.action;
-    if (action !== 'start' && action !== 'end') {
-      return { ok: false, text: 'invalid_arguments: "action" must be "start" or "end"' };
-    }
-    if (this.runTier !== 'work' || this.machine.state !== 'RUNNING') {
-      this.trace.append('assignment_declaration_refused', { action, runId: input.runId, reason: `tier:${this.runTier}`, state: this.machine.state });
-      return { ok: false, text: 'declare_task_unavailable: 只有用户在场的 work run 才能声明任务边界；自主 run 不要调用。' };
-    }
-    const previous = this.machine.runtime.openAssignment;
-    if (action === 'end') {
-      if (!previous) {
-        this.trace.append('assignment_declaration_refused', { action, runId: input.runId, reason: 'no_open_assignment' });
-        return { ok: false, text: 'declare_task_refused: 现在没有 open assignment，无需声明结束。' };
-      }
-      // #263: the working set exits as a lane, not item by item. The assignment is the shell's
-      // working-set material; a protected item inside it is a constraint and stays (#255). The
-      // stub is written once the run's ledger row exists (at settle, or the next assembly after a
-      // restart), so it quotes the row rather than the model's memory of it.
-      const workingItem = this.lastLaneAssembly
-        ?.lanes.find((lane) => lane.lane === 'working_set')
-        ?.items.find((item) => item.id === `assignment:${previous.id}`);
-      const retained = workingItem?.protected === true
-        ? [...(this.machine.runtime.retainedConstraints ?? []), { id: `constraint:${previous.id}`, text: workingItem.text }]
-            .slice(-MAX_RETAINED_CONSTRAINTS)
-        : this.machine.runtime.retainedConstraints;
-      // #262: domain and key are the model's explicit fill at the end; steps and tools come from
-      // the task's captured tool calls, never from this input. Missing either means no entry.
-      const domain = input.domain?.trim() ?? '';
-      const key = input.key?.trim() ?? '';
-      const procedure = domain !== '' && key !== ''
-        ? { domain, key, checklist: input.checklist === true }
-        : undefined;
-      this.machine.updateRuntime({
-        openAssignment: undefined,
-        lastEndedTask: {
-          assignmentId: previous.id,
-          startedAt: previous.startedAt,
-          endedAt: this.now(),
-          ...(input.runId ? { runId: input.runId, turnId: `${input.runId}:0` } : {}),
-          ...(procedure ? { procedure } : {}),
-        },
-        ...(retained === undefined ? {} : { retainedConstraints: retained }),
-      });
-      this.trace.append('assignment_declared', {
-        action,
-        runId: input.runId,
-        previousAssignmentId: previous.id,
-        assignmentId: null,
-        textChars: previous.text.length,
-        protectedRetained: workingItem?.protected === true,
-        procedure: procedure ? `${procedure.domain}/${procedure.key}` : null,
-      });
-      return {
-        ok: true,
-        text: procedure
-          ? '已声明任务结束：open assignment 已收束，本 run 剩余部分不再把它当待办；做法条目将由本任务的真实工具轨迹生成。'
-          : '已声明任务结束：open assignment 已收束，本 run 剩余部分不再把它当待办。未填 domain/key，本次不写入做法册。',
-      };
-    }
-    const brief = this.currentRunUserText.trim().slice(0, 500);
-    const assignment = {
-      id: `assignment-${this.now().toString(36)}-${randomUUID().slice(0, 8)}`,
-      origin: 'user_message' as const,
-      text: brief,
-      latestUserText: brief,
-      startedAt: this.now(),
-    };
-    this.machine.updateRuntime({ openAssignment: assignment });
-    this.trace.append('assignment_declared', {
-      action,
-      runId: input.runId,
-      previousAssignmentId: previous?.id ?? null,
-      assignmentId: assignment.id,
-      textChars: brief.length,
-    });
-    return { ok: true, text: '已声明新任务：旧 assignment 已收束，新任务以最新用户消息为简报；后续只围绕它继续。' };
+    return this.proposalsHandlers.declareTask(input);
   }
 
   /**
@@ -3088,13 +1189,13 @@ export class CompanionShell implements ShellControl, AttachShell {
    */
   private readonly commandHost: CommandHost = {
     config: () => this.config,
-    lifecycle: () => ({ state: this.machine.state, seq: this.machine.seq, costDayTokens: this.machine.runtime.costDayTokens ?? 0, sandbox: this.sandboxState() }),
+    lifecycle: () => ({ state: this.machine.state, seq: this.machine.seq, costDayTokens: this.machine.runtime.costDayTokens ?? 0, sandbox: this.statusFace.sandboxState() }),
     contextTokens: () => this.contextTokenEstimate,
     contextToolOutput: () => this.lastToolOutput,
     contextLanes: () => (this.lastLaneAssembly ? laneAssemblyView(this.lastLaneAssembly) : undefined),
     contextMetrics: () => this.lastContextMetrics,
     promptCache: () => this.promptCache,
-    lastDream: () => this.lastDreamProduct(),
+    lastDream: () => this.pluginsAdmin.lastDreamProduct(),
     contextTools: () => this.executableToolNames(),
     commitments: () => this.commitments(),
     candidateQueue: () => this.candidateQueue(),
@@ -3109,14 +1210,14 @@ export class CompanionShell implements ShellControl, AttachShell {
     setCapturePaused: (paused: boolean) => {
       this.machine.updateRuntime({ capturePaused: paused });
       this.trace.append(paused ? 'capture_paused_command' : 'capture_resumed_command', { at: this.now() });
-      this.emitStatus();
+      this.statusFace.emitStatus();
     },
-    continueSuspended: () => this.continueSuspended(),
-    forgetPreview: (start: number, end: number) => this.forgetPreview(start, end),
-    forgetConfirm: () => this.forgetConfirm(),
-    exportMemory: (path: string | undefined) => this.exportMemory(path),
-    correctProfile: (key: string, value: string) => this.correctProfile(key, value),
-    confirmProcedureCorrection: () => this.confirmProcedureCorrection(),
+    continueSuspended: () => this.proposalsHandlers.continueSuspended(),
+    forgetPreview: (start: number, end: number) => this.sovereignty.forgetPreview(start, end),
+    forgetConfirm: () => this.sovereignty.forgetConfirm(),
+    exportMemory: (path: string | undefined) => this.sovereignty.exportMemory(path),
+    correctProfile: (key: string, value: string) => this.sovereignty.correctProfile(key, value),
+    confirmProcedureCorrection: () => this.sovereignty.confirmProcedureCorrection(),
     sessionModel: () => this.modelLabel,
     modelRoutes: () => this.modelRoutes(),
     modelRouter: () =>
@@ -3134,7 +1235,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     switchRoute: (name: string) => this.switchModelRoute(name),
     sleep: () => this.sleep(),
     upgrade: (source: string) => this.upgrade(source),
-    pluginReport: () => this.pluginReport(),
+    pluginReport: () => this.pluginsAdmin.pluginReport(),
     installPlugin: (spec: string) => this.installPlugin(spec),
   };
 
@@ -3143,526 +1244,16 @@ export class CompanionShell implements ShellControl, AttachShell {
     return this.host.commands.list().map(({ name, description, argumentHint }) => ({ name, description, argumentHint }));
   }
 
-  // ---- The native plugin registry (#223, converted in #224) -----------------------------------
-
-  /**
-   * `/plugins`: the registered list plus this process's load results. The registry file is re-read
-   * so a spec added since boot shows as "restart pending" instead of vanishing until the next start.
-   * The load status is the trace's own outcome, not the model's account of it.
-   */
-  pluginReport(): CommandReply {
-    const report = this.pluginReportData();
-    const lines = [
-      `已登记 ${report.registered.length} 个：${report.registered.length > 0 ? report.registered.join(', ') : '（空）'}`,
-    ];
-    for (const spec of report.registered) {
-      const result = report.results.find((entry) => entry.spec === spec);
-      if (!result) {
-        lines.push(`  - ${spec}：本进程未加载（启动后登记）；重启后生效`);
-        continue;
-      }
-      const parts = [
-        result.status,
-        result.version ? `v${result.version}` : '',
-        result.tools.length > 0 ? `tools=[${result.tools.join(', ')}]` : '',
-        result.reason ?? '',
-      ].filter(Boolean);
-      lines.push(`  - ${spec}：${parts.join(' · ')}`);
-    }
-    return { text: lines.join('\n'), receipt: true, data: { companion_plugins: report } };
+  installPlugin(spec: string): Promise<CommandReply> {
+    return this.pluginsAdmin.installPlugin(spec);
   }
 
-  private pluginReportData(): {
-    registered: string[];
-    results: Array<{ spec: string; status: string; version?: string; reason?: string; tools: string[]; commands: string[] }>;
-  } {
-    return {
-      registered: readPluginRegistry(this.config.dataDir),
-      results: this.pluginResults.map((entry) => ({
-        spec: entry.spec,
-        status: entry.status,
-        ...(entry.version ? { version: entry.version } : {}),
-        ...(entry.reason ? { reason: entry.reason } : {}),
-        tools: entry.tools,
-        commands: entry.commands,
-      })),
-    };
-  }
-
-  /** What `/health` reports: the registry this process started with, and every load's outcome. */
-  pluginHealth(): {
-    registered: string[];
-    results: Array<{ spec: string; status: string; version?: string; reason?: string; tools: string[]; commands: string[] }>;
-  } {
-    return {
-      registered: [...this.config.plugins],
-      results: this.pluginResults.map((entry) => ({
-        spec: entry.spec,
-        status: entry.status,
-        ...(entry.version ? { version: entry.version } : {}),
-        ...(entry.reason ? { reason: entry.reason } : {}),
-        tools: entry.tools,
-        commands: entry.commands,
-      })),
-    };
-  }
-
-  /**
-   * `/plugins add <spec>`: append to the registry, trace the registration with its source, then
-   * restart through the service manager that already owns this process. The confirmation that this
-   * will execute third-party code is the command-proposal gate — the companion offers the command,
-   * the owner confirms it, and `runCommand` runs it exactly like a typed command.
-   */
-  async installPlugin(rawSpec: string): Promise<CommandReply> {
-    const spec = rawSpec.trim();
-    if (spec === '' || /[\r\n]/u.test(spec)) {
-      this.trace.append('plugin_install_rejected', { spec, reason: 'invalid_plugin_spec' });
-      return { text: 'invalid_plugin_spec: 插件 spec 不能为空，也不能包含换行。', receipt: true };
-    }
-    const refused = checkPluginSpec(spec, {
-      cwd: this.config.workspaceRoot,
-      roots: [this.config.workspaceRoot, treeOfThisProcess()],
-      dataDir: this.config.dataDir,
-    });
-    if (refused) {
-      this.trace.append('plugin_install_rejected', { spec, reason: refused });
-      return { text: `插件未安装：${refused}`, receipt: true };
-    }
-    const path = pluginsConfigPath(this.config.dataDir);
-    let registry: string[];
-    try {
-      registry = readPluginRegistry(this.config.dataDir);
-    } catch (error) {
-      return { text: `登记失败：${error instanceof Error ? error.message : String(error)}。先修好 ${path} 再试。`, receipt: true };
-    }
-    if (registry.includes(spec)) {
-      return { text: `${spec} 已经在注册表里（${path}）。本进程的加载结果见 /plugins 或 /health 的 plugins。`, receipt: true };
-    }
-    const next = [...registry, spec];
-    writePluginRegistry(this.config.dataDir, next);
-    this.trace.append('plugin_registered', { spec, source: 'command', registry: path, registered: next });
-    const restart = this.schedulePluginRestart(spec);
-    return {
-      text: [
-        `已登记 ${spec} → ${path}（0600）。`,
-        restart.ok
-          ? `约 ${PLUGIN_RESTART_GRACE_MS} ms 后重启自己（${restart.detail}）；回来后 open-assignment 会续办。`
-          : `本进程没有服务管理器接管（${restart.detail}），需要手动重启常驻进程后生效。`,
-        '重启后用 /plugins 或 curl /health 核对是否真的加载。',
-      ].join('\n'),
-      receipt: true,
-    };
-  }
-
-  /**
-   * The existing restart path: a unit/plist on disk means a manager owns this process, so
-   * `restartService` stops and starts it. The reply must reach the socket first, hence the grace.
-   * Without a manager nothing here invents one — the receipt says the restart is the owner's.
-   */
-  private schedulePluginRestart(spec: string): { ok: boolean; detail: string } {
-    const target = this.serviceRestartTarget();
-    if (!target) {
-      this.trace.append('plugin_restart_skipped', { spec, reason: 'no_service_manager' });
-      return { ok: false, detail: '找不到接管本进程（且指向这个数据目录）的 systemd unit / launchd plist' };
-    }
-    const assignment = this.machine.runtime.openAssignment;
-    if (assignment) {
-      this.machine.updateRuntime({ resumeAfterRestart: { assignmentId: assignment.id, at: this.now(), reason: 'plugins' } });
-    }
-    const restart = this.options.restartResident ?? (() => restartService(defaultRunner(), target.spec, target.platform));
-    this.trace.append('plugin_restart_scheduled', {
-      spec,
-      service: target.spec.serviceName,
-      platform: target.platform,
-      graceMs: PLUGIN_RESTART_GRACE_MS,
-      resumeAssignmentId: assignment?.id ?? null,
-    });
-    const timer = setTimeout(() => {
-      void Promise.resolve()
-        .then(restart)
-        .catch((error) => this.trace.append('plugin_restart_failed', { service: target.spec.serviceName, message: error instanceof Error ? error.message : String(error) }));
-    }, PLUGIN_RESTART_GRACE_MS);
-    (timer as { unref?: () => void }).unref?.();
-    return { ok: true, detail: `${target.platform === 'linux' ? 'systemctl --user restart' : 'launchctl kickstart -k'} ${target.spec.serviceName}` };
-  }
-
-  /** The spec the installer's unit was rendered from, rebuilt from the state it recorded. */
-  private serviceRestartTarget(): { spec: ServiceSpec; platform: Platform } | undefined {
-    const choices = readInstallState(this.config.dataDir)?.choices ?? {};
-    const platform = choices.platform ?? process.platform;
-    if (platform !== 'linux' && platform !== 'darwin') return undefined;
-    const spec: ServiceSpec = {
-      serviceName: choices.serviceName ?? 'cogmem-companion',
-      bunPath: process.execPath,
-      shellDir: shellDirOfTree(treeOfThisProcess()),
-      dataDir: this.config.dataDir,
-      workspaceRoot: this.config.workspaceRoot,
-      projectId: this.config.projectId,
-      agentId: this.config.agentId,
-      httpPort: choices.httpPort ?? this.config.http.port,
-      envFile: join(this.config.dataDir, 'env'),
-      logFile: join(this.config.dataDir, 'service.log'),
-      homeDir: process.env.HOME ?? homedir(),
-      env: {},
-    };
-    const unitPath = servicePath(spec, platform);
-    if (!existsSync(unitPath)) return undefined;
-    // The manager owns *this* process only if the unit it would restart names this data dir. A unit
-    // for another install on the same machine is not this process's manager: restarting it would
-    // take down a resident that never asked. (Found by the suite restarting the dev service from a
-    // temp data dir — the guard is the fix, not a test-only setting.)
-    try {
-      return readFileSync(unitPath, 'utf8').includes(spec.dataDir) ? { spec, platform } : undefined;
-    } catch {
-      return undefined;
-    }
-  }
-
-  /**
-   * The one automatic continuation: a restart this surface asked for. The flag is cleared before the
-   * run, so a run that dies does not restart into another resume. A kill never sets it.
-   */
-  private resumeAfterRequestedRestart(): void {
-    const request = this.machine.runtime.resumeAfterRestart;
-    if (!request) return;
-    this.machine.updateRuntime({ resumeAfterRestart: undefined });
-    const assignment = this.machine.runtime.openAssignment;
-    if (!assignment || assignment.id !== request.assignmentId) {
-      this.trace.append('assignment_resume_skipped', { assignmentId: request.assignmentId, reason: assignment ? 'assignment_replaced' : 'no_assignment' });
-      return;
-    }
-    this.trace.append('assignment_resume', { assignmentId: assignment.id, reason: request.reason, requestedAt: request.at });
-    setTimeout(() => {
-      void this.resumeAssignment(assignment.id).catch((error) =>
-        this.trace.append('assignment_resume_failed', { assignmentId: assignment.id, message: error instanceof Error ? error.message : String(error) }),
-      );
-    }, 0);
-  }
-
-  private async resumeAssignment(assignmentId: string): Promise<void> {
-    const assignment = this.machine.runtime.openAssignment;
-    if (!assignment || assignment.id !== assignmentId) return;
-    if (this.machine.state !== 'IDLE') {
-      this.trace.append('assignment_resume_skipped', { assignmentId, reason: `state:${this.machine.state}` });
-      return;
-    }
-    if (this.dailyBudgetExceeded()) {
-      this.trace.append('daily_budget_exceeded', {
-        trigger: 'assignment_resume',
-        assignmentId,
-        day: this.localDay(this.now()),
-        spent: this.dailySpent(),
-        limit: this.config.dailyBudget.maxTokensPerDay,
-      });
-      return;
-    }
-    await this.executeRun(assignment.text, 'message_received', 'assignment_resume');
-  }
-
-  /**
-   * `/why`: read back the newest recall decision. This goes through the kernel's own `TraceStore`
-   * read face — `trace_events` is written by `RecallDecisionTrace` for every recall, and the
-   * emergence decision point calls the same recall lane, so both a recall and a surfacing have a row
-   * here. It is a read of what was decided, not a re-run (which would write a fresh row); no row is
-   * an answer the receipt gives plainly instead of guessing at one.
-   */
   whyReport(): string {
-    const emergence = this.trace.read().filter((record) => record.kind === 'emergence_decision').pop();
-    try {
-      const db = this.kernel.factStore.getDatabase();
-      const hasTraceTable = (db.query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'trace_events'`).all() as unknown[]).length > 0;
-      if (!hasTraceTable) {
-        return emergence ? this.emergenceWhyReport(emergence) : '本会话尚无召回决策痕迹（内核还没有 trace_events 表）。不编造。';
-      }
-      const store = new TraceStore(db);
-      const rows = store.queryByEventType('recall.result').filter((event) => {
-        if (event.projectId !== undefined && event.projectId !== this.config.projectId) return false;
-        // The trace table has no agent column, so the payload is where an owner can be named (the same
-        // reading the observatory uses): an unnamed row is project-level and shown, a named other is not.
-        const payload = event.payload as Record<string, unknown>;
-        const named = [payload.agentId, payload.agent, payload.sourceAgent].filter((value): value is string => typeof value === 'string');
-        return named.length === 0 || named.includes(this.config.agentId);
-      });
-      const last = rows[rows.length - 1];
-      if (!last) return emergence ? this.emergenceWhyReport(emergence) : '本会话尚无召回决策痕迹。不编造。';
-      // Whichever decision is newer is the one the receipt answers with: an asked recall after a
-      // surfaced candidate is the recall; the emergence step is shown until something newer lands.
-      if (emergence && Number(emergence.now ?? emergence.at ?? 0) >= last.timestamp) {
-        return this.emergenceWhyReport(emergence);
-      }
-      const payload = last.payload as Record<string, unknown>;
-      const selected = Array.isArray(payload.selectedIds) ? payload.selectedIds.map(String) : [];
-      const suppressed = Array.isArray(payload.suppressed) ? (payload.suppressed as Array<Record<string, unknown>>) : [];
-      const chain = store.getDecisionChain(last.id);
-      const lines = [
-        `最近一次召回决策 · ${new Date(last.timestamp).toISOString()}`,
-        `查询：${typeof payload.query === 'string' && payload.query !== '' ? payload.query : '（空）'}`,
-        `车道：${String(payload.lane ?? 'unknown')} · 理由：${String(payload.reason ?? 'unknown')}`,
-        `选中 ${selected.length} 条${selected.length > 0 ? `：${selected.join(', ')}` : ''}`,
-      ];
-      if (suppressed.length > 0) {
-        lines.push(`抑制 ${suppressed.length} 类：${suppressed.map((entry) => `${String(entry.reason ?? 'unknown')}×${Number(entry.count ?? 0)}`).join('、')}`);
-      }
-      lines.push(`来源链：${chain.length <= 1 ? '无父事件' : chain.map((event) => event.eventType).join(' ← ')}`);
-      return lines.join('\n');
-    } catch (error) {
-      // A read that failed is not "no trace": the receipt says which it was, or a broken database
-      // would read as an empty history.
-      this.trace.append('why_read_failed', { message: error instanceof Error ? error.message : String(error) });
-      if (emergence) return this.emergenceWhyReport(emergence);
-      return '读决策痕迹失败（内核读取报错）；没有可展示的内容。';
-    }
+    return this.pluginsAdmin.whyReport();
   }
 
-  /**
-   * The emergence decision's own trace: the F10 grade, the F8 occasion gate and the F7 modulation
-   * step, in the order F6 evaluated them. The shell only reports what the kernel decided; a
-   * missing step is named rather than guessed.
-   */
-  private emergenceWhyReport(record: Record<string, unknown>): string {
-    const at = typeof record.now === 'number' ? record.now : Number(record.at ?? 0);
-    const candidates = Array.isArray(record.candidates) ? record.candidates as Array<Record<string, unknown>> : [];
-    const withheld = Array.isArray(record.withheld) ? record.withheld as Array<Record<string, unknown>> : [];
-    const shown = candidates[0] ?? withheld[0];
-    const lines = [
-      `最近一次浮现决策 · ${new Date(at).toISOString()}`,
-      `通道：${String(record.channel ?? 'unknown')} · 场合：${String(record.occasion ?? 'unknown')} · 候选 ${candidates.length} 条`,
-    ];
-    if (!shown) {
-      lines.push('没有候选（无到期承诺/意图或唤醒意图）。');
-      return lines.join('\n');
-    }
-    const steps = Array.isArray(shown.steps) ? shown.steps as Array<Record<string, unknown>> : [];
-    const stepOf = (rule: string) => steps.find((step) => step.rule === rule);
-    const detailOf = (rule: string) => {
-      const detail = stepOf(rule)?.detail;
-      return detail && typeof detail === 'object' ? detail as Record<string, unknown> : {};
-    };
-    const sensitivity = stepOf('sensitivity');
-    const occasion = stepOf('occasion');
-    const modulation = stepOf('modulation');
-    const matched = Array.isArray(detailOf('sensitivity').matched) ? detailOf('sensitivity').matched as unknown[] : [];
-    lines.push(`来源：${String(shown.source ?? 'unknown')} · 分级：${String(sensitivity?.outcome ?? shown.sensitivity ?? 'unknown')}（命中 ${matched.length} 条标记）`);
-    lines.push(`场合闸：${String(occasion?.outcome ?? 'unknown')} · 决定：${String(detailOf('occasion').decision ?? 'unknown')} · 理由：${String(detailOf('occasion').reason ?? 'unknown')}`);
-    lines.push(`反馈：${String(modulation?.outcome ?? 'unknown')} · level=${String(detailOf('modulation').level ?? 'n/a')} · cooldownUntil=${String(detailOf('modulation').cooldownUntil ?? 'null')}`);
-    lines.push(candidates.length > 0
-      ? `候选：${String(shown.text ?? '')}`
-      : `抑制 ${withheld.length} 条：${String(shown.reason ?? 'unknown')}`);
-    lines.push(`步骤：${steps.map((step) => `${String(step.rule)}=${String(step.outcome)}`).join('; ')}`);
-    return lines.join('\n');
-  }
-
-  private lastDreamProduct(): { localDate: string; eventCount: number; summary: string } | undefined {
-    const records = this.trace.read().filter((record) => record.kind === 'dream_complete');
-    const last = records[records.length - 1];
-    if (!last) return undefined;
-    const localDate = String(last.localDate ?? '');
-    const events = this.kernel.getThreadEvents(`companion-dream:${localDate}`, { projectId: this.config.projectId, limit: 50 });
-    const product = events.find((event) => (event.payload as { metadata?: { kind?: unknown } } | undefined)?.metadata?.kind === 'dream-integration');
-    const summary = (product?.payload as { text?: unknown } | undefined)?.text;
-    return { localDate, eventCount: Number(last.eventCount ?? 0), summary: typeof summary === 'string' ? summary : `夜间整合 ${localDate}` };
-  }
-
-  // ---- The resident-form upgrade ------------------------------------------------------------------
-
-  /**
-   * `/upgrade <新版目录>`: stage the new tree, promise the report, hand the cycle to the supervisor.
-   *
-   * The gate is the first thing here and it is the requirement's own wording: only a *silent* state
-   * may be upgraded. RUNNING is someone's turn, DREAMING is the night's integration, WAKING is the
-   * instant between them — in all three the machine has work whose interruption is not this command's
-   * to decide silently. IDLE and DORMANT are the states where nothing is in flight.
-   *
-   * The resident does not stop itself. It writes the request, records the promise and returns; the
-   * supervisor stops, swaps, migrates, gates and restarts. The announcement below is what the user
-   * sees *before* that happens — the low-disturbance notice that the shell is going offline.
-   */
-  async upgrade(source: string): Promise<CommandReply> {
-    const state = this.machine.state;
-    if (state !== 'IDLE' && state !== 'DORMANT') {
-      this.trace.append('upgrade_refused', { state, reason: 'not_silent' });
-      const detail = state === 'RUNNING'
-        ? '一次对话/工作正在跑'
-        : state === 'DREAMING'
-          ? '夜间整合正在跑'
-          : '正在唤醒（时间语境注入中）';
-      return {
-        text: `现在不能升级：生命周期是 ${state}（${detail}）。升级只从静默态（IDLE / DORMANT）发起，等它回到 IDLE 再说；此刻不动，也不写快照。`,
-        receipt: true,
-      };
-    }
-    // No argument means the ordinary release path: install the next `cogmem` from npm. A directory
-    // (or a local tarball) is still accepted for developers, but it is not what a user is asked to do.
-    const trimmed = source.trim() === '' ? 'latest' : source.trim();
-    const pending = readUpgradeRequest(this.config.dataDir);
-    if (pending) {
-      this.trace.append('upgrade_refused', { reason: 'in_flight', upgradeId: pending.id });
-      return { text: `已经有一次升级在跑（${pending.fromVersion} → ${pending.toVersion}，id ${pending.id}）：它的结果还没回来，先等它报完。`, receipt: true };
-    }
-
-    let staged: { tree: string; version: string };
-    try {
-      staged = (this.options.stageUpgrade ?? stageUpgradeTree)({ source: trimmed, dataDir: this.config.dataDir, currentTree: treeOfThisProcess(), bunPath: process.execPath });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.trace.append('upgrade_stage_failed', { source: trimmed, message });
-      return { text: `升级没有开始：旁置安装失败（${message}）。没有写快照、没有动服务。`, receipt: true };
-    }
-
-    const id = newUpgradeId(this.now());
-    const fromVersion = readTreeVersion(treeOfThisProcess());
-    const request = this.buildUpgradeRequest(id, fromVersion, staged);
-    // The promise comes before anything can go offline: it is the durable statement that a report is
-    // owed, and it is closed by speaking that report (F2's own wake intention — no new bookkeeping).
-    const promise = this.machine.addWakeIntent({
-      at: this.now() + UPGRADE_REPORT_GRACE_MS,
-      reason: upgradePromiseReason(id),
-    });
-    writeUpgradeJson(upgradeRequestPath(this.config.dataDir), request);
-    this.trace.append('upgrade_announced', {
-      upgradeId: id,
-      from: fromVersion,
-      to: staged.version,
-      fromTree: request.fromTree,
-      toTree: staged.tree,
-      serviceMode: request.serviceMode,
-      promiseId: promise.id,
-    });
-
-    const requestPath = upgradeRequestPath(this.config.dataDir);
-    const spawned = await (this.options.upgradeSpawner
-      ?? ((upgradeRequest, path) => spawnUpgradeSupervisor(upgradeRequest, path, { run: defaultRunner() })))(request, requestPath);
-    if (!spawned.ok) {
-      // Nothing left this process, so nothing is owed: withdraw the request and the promise rather
-      // than leave a report that will never come.
-      clearUpgradeRequest(this.config.dataDir);
-      this.machine.consumeWakeIntent(promise.id);
-      this.trace.append('upgrade_spawn_failed', { upgradeId: id, message: spawned.detail });
-      return { text: `升级没有开始：${spawned.detail}。快照未写、服务未动，也没有留下回报承诺。`, receipt: true };
-    }
-    this.trace.append('upgrade_scheduled', { upgradeId: id, supervisor: spawned.detail });
-    return {
-      text: `好，我要短暂下线一会儿（${fromVersion} → ${staged.version}）：先给脑子整份快照，再用新版迁移 + 召回自检，过了才切换、起新版；任一步不过自动回滚旧版。回来就向你回报结果。`,
-      receipt: true,
-    };
-  }
-
-  private buildUpgradeRequest(id: string, fromVersion: string, staged: { tree: string; version: string }): UpgradeRequest {
-    const dataDir = this.config.dataDir;
-    const homeDir = process.env.HOME ?? homedir();
-    const install = readInstallState(dataDir);
-    const choices = install?.choices ?? {};
-    const base = {
-      id,
-      at: this.now(),
-      fromVersion,
-      fromTree: treeOfThisProcess(),
-      toVersion: staged.version,
-      toTree: staged.tree,
-      pid: process.pid,
-      dataDir,
-      dbPath: this.config.dbPath,
-      workspaceRoot: this.config.workspaceRoot,
-      projectId: this.config.projectId,
-      agentId: this.config.agentId,
-      httpPort: choices.httpPort ?? this.config.http.port,
-      socketPath: this.config.attach.socketPath ?? defaultSocketPath(dataDir),
-      bunPath: process.execPath,
-      homeDir,
-      serviceMode: false,
-      serviceName: choices.serviceName ?? 'cogmem-companion',
-      platform: choices.platform ?? process.platform,
-      envFile: join(dataDir, 'env'),
-      logFile: join(dataDir, 'service.log'),
-      // The reply that announces the disconnection is written right after this method returns; the
-      // supervisor waits this long before its first step so that it cannot cut the announcement off.
-      handoffGraceMs: 1_000,
-    } satisfies Omit<UpgradeRequest, 'handoffGraceMs'> & { handoffGraceMs: number };
-    // A unit/plist on disk is the fact that a manager owns this process, which decides how the
-    // supervisor has to be launched to survive the stop it performs.
-    return { ...base, serviceMode: serviceFileExists(base as UpgradeRequest) };
-  }
-
-  /**
-   * Speak an owed upgrade report, once, and close the promise with it.
-   *
-   * Three cases, and the third is the one the ticket calls a veto-level failure:
-   *
-   *  - an outcome nobody has reported → report it (this is requirement ③ and ④ in one path);
-   *  - a promise whose due instant has passed with no outcome and no live supervisor → report the
-   *    silence as a failure, because an upgrade that ends in silence is worse than one that failed;
-   *  - a request whose supervisor is still running → say nothing yet: it is mid-cycle, not silent.
-   */
-  private settleUpgradeReport(at: number): void {
-    const outcome = readUpgradeOutcome(this.config.dataDir);
-    if (outcome && outcome.reportedAt === undefined) {
-      this.markUpgradeReported(outcome, at);
-      return;
-    }
-    if (outcome) return;
-    const promise = this.machine.wakeIntents.find((intent) => !intent.consumedAt && isUpgradePromise(intent.reason));
-    const request = readUpgradeRequest(this.config.dataDir);
-    if (request) {
-      if (supervisorIsAlive(this.config.dataDir)) {
-        // Mid-cycle: the supervisor owns the record and has not finished. Saying "failed" here would
-        // be a lie about an upgrade that is still running.
-        this.trace.append('upgrade_report_waiting', { upgradeId: request.id, dueAt: promise?.at });
-        return;
-      }
-      // The handoff write and the supervisor's first act are not atomic: between them there is no pid
-      // file yet. Only the promise's due instant decides that the owner is gone, so a tick landing in
-      // that window cannot declare a veto-level failure about an upgrade that just started.
-      const silenceAfter = promise?.at ?? request.at + UPGRADE_REPORT_GRACE_MS;
-      if (at < silenceAfter) return;
-      const silence: UpgradeOutcome = {
-        id: request.id,
-        fromVersion: request.fromVersion,
-        toVersion: request.toVersion,
-        fromTree: request.fromTree,
-        toTree: request.toTree,
-        status: 'failed',
-        step: 'requested',
-        startedAt: request.at,
-        finishedAt: at,
-        checks: [],
-        error: '监督进程没有留下结果就消失了（升级后沉默）',
-        rollback: '未知：没有结果文件，无法确认旧版是否仍在服务；见 shell-events.jsonl 的 upgrade_* 记录',
-      };
-      clearUpgradeRequest(this.config.dataDir);
-      this.markUpgradeReported(silence, at);
-      return;
-    }
-    // The obligation outlived both records: report the promise rather than swallowing it.
-    if (promise && promise.at <= at) {
-      this.reportUpgradeText('升级回报承诺到期，但升级记录已经不在了（既没有结果，也没有在跑的请求）——按未回报处理。');
-      this.trace.append('upgrade_promise_orphaned', { promiseId: promise.id });
-      this.machine.consumeWakeIntent(promise.id);
-    }
-  }
-
-  private markUpgradeReported(outcome: UpgradeOutcome, at: number): void {
-    // Persisted with `reportedAt` set, so a restarted resident cannot report the same outcome twice —
-    // including the silence outcome, which is the one record that would otherwise exist nowhere.
-    writeUpgradeJson(upgradeOutcomePath(this.config.dataDir), { ...outcome, reportedAt: at });
-    const promise = this.machine.wakeIntents.find((intent) => !intent.consumedAt && isUpgradePromise(intent.reason));
-    if (promise) this.machine.consumeWakeIntent(promise.id);
-    this.trace.append('upgrade_reported', {
-      upgradeId: outcome.id,
-      status: outcome.status,
-      step: outcome.step,
-      from: outcome.fromVersion,
-      to: outcome.toVersion,
-      checks: outcome.checks.length,
-      failedChecks: outcome.checks.filter((check) => !check.ok).map((check) => check.id),
-      promiseClosed: promise?.id,
-    });
-    this.lastUpgrade = outcome;
-    this.reportUpgradeText(describeUpgradeOutcome(outcome));
-  }
-
-  /** The report reaches a face that is listening: the line channel prints it, the TUI reads it on attach. */
-  private reportUpgradeText(text: string): void {
-    void this.host.bus.emit('terminal_print', { text: `${text}\n` });
+  upgrade(source: string): Promise<CommandReply> {
+    return this.upgradeAdmin.upgrade(source);
   }
 
   async stop(): Promise<void> {
@@ -3692,112 +1283,5 @@ export class CompanionShell implements ShellControl, AttachShell {
       this.trace.append('shell_stopped', { state: this.machine.state });
     }
   }
-}
-
-/**
- * The reported prompt-cache ratio, or `undefined` when the provider reported no cache field. `miss`
- * is the provider's own miss count when it sends one (DeepSeek), otherwise the prompt less the hit —
- * the same denominator Pi's hit-rate display uses (`pi-coding-agent/dist/modes/interactive/components/
- * footer.js:105-107`: `cacheRead / (input + cacheRead + cacheWrite)`). A hit with no prompt size
- * yields no ratio: the divisor would be invented, and an invented ratio is worse than none.
- */
-function promptCacheAccount(usage: TurnUsage | undefined): { hit: number; miss: number; percent: number } | undefined {
-  const hit = usage?.cacheHit;
-  if (hit === undefined) return undefined;
-  const miss = usage?.cacheMiss ?? (usage?.input === undefined ? undefined : Math.max(0, usage.input - hit));
-  if (miss === undefined || hit + miss <= 0) return undefined;
-  return { hit, miss, percent: Math.round((hit / (hit + miss)) * 100) };
-}
-
-function truncate(text: string, limit: number): string {
-  return text.length <= limit ? text : `${text.slice(0, limit)}…`;
-}
-
-/**
- * The one digest stub a declared task end leaves (#263). Every fragment is an exact prefix of a
- * ledger row — the task's opening user line, the last conclusion before the end run, and the end
- * run's own closing line — never a model-written summary. The primary row is the conclusion, so
- * `read mem:<entryId's event>` opens the words that say what was done; the other rows are the
- * stub's `sourceRefs`. `turnId` names the end declaration's run; the ledger row for it is written
- * by capture before `settleAssignment` runs.
- */
-function buildTaskStub(
-  turns: readonly SessionTurn[],
-  input: { startedAt: number; turnId: string },
-): SessionDigestEntry | undefined {
-  const taskTurns = turns.filter((turn) => turn.occurredAt >= input.startedAt);
-  if (taskTurns.length === 0) return undefined;
-  const currentUser = taskTurns.find((turn) => turn.turnId === input.turnId && turn.role === 'user');
-  if (!currentUser) return undefined;
-  const currentAssistant = taskTurns.find((turn) => turn.turnId === input.turnId && turn.role === 'assistant');
-  const priorAssistant = [...taskTurns.slice(0, taskTurns.indexOf(currentUser))].reverse().find((turn) => turn.role === 'assistant');
-  const opening = taskTurns.find((turn) => turn.role === 'user') ?? taskTurns[0]!;
-  const closing = priorAssistant ?? currentAssistant ?? opening;
-  const quotes: Array<{ label: string; turn: SessionTurn }> = [];
-  const seen = new Set<string>();
-  const add = (label: string, turn: SessionTurn | undefined): void => {
-    if (!turn || seen.has(turn.eventId)) return;
-    seen.add(turn.eventId);
-    quotes.push({ label, turn });
-  };
-  add('任务', opening);
-  add('做了什么', priorAssistant);
-  add(priorAssistant ? '收束' : '做了什么', currentAssistant);
-  const text = quotes
-    .map((quote) => `${quote.label}：${exactLinePrefix(quote.turn.text, MAX_TASK_STUB_QUOTE_CHARS)}`)
-    .join(' · ');
-  return {
-    entryId: `digest:${closing.eventId}`,
-    kind: 'turn',
-    sessionId: closing.sessionId,
-    occurredAt: closing.occurredAt,
-    speaker: closing.speaker,
-    text,
-    sourceRefs: [...new Set([closing.eventId, ...quotes.map((quote) => quote.turn.eventId)])],
-    anchor: digestAnchors(text).length > 0,
-  };
-}
-
-/**
- * The procedure's evidence, from the task's captured tool calls only (#262). One step per real
- * call, in order, cut at the end declaration's own row: a call made after the task was declared
- * over is not a step of it, and the boundary tool is never a step. No calls before the boundary
- * means no evidence — the caller writes nothing rather than an empty practice. The compiler's
- * frozen caps (`MAX_STEPS` 16, `MAX_TOOLS` 8) are applied here so the trace records what was kept.
- */
-function procedureEvidenceOf(calls: readonly SessionToolCall[]): { steps: string[]; tools: string[]; declarationEventId: string } | undefined {
-  const end = calls.findIndex((call) =>
-    call.toolName === 'declare_task'
-    && (call.input as { action?: unknown } | undefined)?.action === 'end');
-  if (end < 0) return undefined;
-  const ordered = calls.slice(0, end).filter((call) => call.toolName !== 'declare_task');
-  if (ordered.length === 0) return undefined;
-  const steps = ordered.slice(0, 16).map((call) => {
-    const input = compactToolInput(call.input);
-    return input ? `${call.toolName}: ${input}` : call.toolName;
-  });
-  const tools = [...new Set(ordered.map((call) => call.toolName))].slice(0, 8);
-  return { steps, tools, declarationEventId: calls[end]!.eventId };
-}
-
-/** A tool call's input, one line and bounded: the step names what was called, not the whole file. */
-function compactToolInput(input: unknown): string {
-  if (input === undefined) return '';
-  const text = typeof input === 'string' ? input : JSON.stringify(input);
-  if (!text) return '';
-  const oneLine = text.replace(/\s+/gu, ' ').trim();
-  return oneLine.length <= 120 ? oneLine : `${oneLine.slice(0, 119)}…`;
-}
-
-/** The first non-empty line, cut to `limit`; the kept part is an exact prefix of the ledger row. */
-function exactLinePrefix(text: string, limit: number): string {
-  const line = text.split('\n').find((candidate) => candidate.trim() !== '') ?? text;
-  return line.length <= limit ? line : `${line.slice(0, limit - 1)}…`;
-}
-
-/** Whether `target` resolves inside `root`; a sibling whose name starts with `..` is not inside. */
-function isWithin(root: string, target: string): boolean {
-  const rel = relative(resolve(root), resolve(target));
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 
