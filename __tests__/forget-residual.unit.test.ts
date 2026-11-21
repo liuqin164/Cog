@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import type Database from 'bun:sqlite';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { createMemoryKernel } from '../src/factory.js';
@@ -66,6 +67,49 @@ test('deleteRange leaves the window text in no table, including FTS shadows', ()
     kernel.close();
   }
 }, 20_000);
+
+test('#374 deleteRange rewrites FTS5 segments at real scale so CJK dead bytes do not survive', () => {
+  const dir = makeTempDir('forget-fts-segments-');
+  const dbPath = join(dir, 'memory.sqlite');
+  const projectId = 'forget-fts-segments';
+  const secret = '北海道';
+  const marker = 'FTS_SEGMENT_374_MARKER';
+  const base = Date.UTC(2026, 0, 11);
+  const kernel = createMemoryKernel({ dbPath, projectTimeZone: 'UTC' });
+  try {
+    const db = kernel.factStore.getDatabase();
+    for (let index = 0; index < 2000; index += 1) {
+      kernel.recordRawEvent({
+        projectId,
+        threadId: 'fts-thread',
+        role: 'user',
+        content: `filler ${index} ${'あ'.repeat(10)}`,
+        occurredAt: base + index,
+      });
+    }
+    kernel.recordRawEvent({
+      projectId,
+      threadId: 'fts-thread',
+      role: 'user',
+      content: `私の好きな街は${secret}です ${marker}`,
+      occurredAt: base + 100_000,
+    });
+    const match = db.prepare(`SELECT COUNT(*) AS c FROM memory_events_fts WHERE memory_events_fts MATCH ?`);
+    expect(match.get(marker)).toEqual({ c: 1 });
+    expect(rowsHolding(db, secret).length).toBeGreaterThan(0);
+
+    kernel.sovereignty.deleteRange({ projectId, start: base + 100_000, end: base + 100_001 });
+
+    expect(match.get(marker)).toEqual({ c: 0 });
+    expect(rowsHolding(db, secret)).toEqual([]);
+    expect(db.prepare(`SELECT COUNT(*) AS c FROM memory_events_fts`).get()).toEqual({ c: 2000 });
+    for (const file of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+      if (existsSync(file)) expect(readFileSync(file).includes(Buffer.from(secret)), file).toBe(false);
+    }
+  } finally {
+    kernel.close();
+  }
+}, 60_000);
 
 function countRows(db: Database): Record<string, number> {
   const tables = ['project_branches', 'topology_membership', 'interaction_units', 'cognitive_nodes', 'trace_events'];
