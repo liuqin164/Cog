@@ -81,8 +81,8 @@ function commandTemplates(): Site[] {
 // one, has to be looked at again: render, resolve, and run it before adding it
 // here. Duplicates are meaningful, so this is compared with multiplicity.
 const EXPECTED_TEMPLATES = [
-  ['src/agent/AgentMemoryBackend.ts', "cogmem memory show --event ${cliArg(event.eventId)}${event.projectId ? ` --project ${cliArg(event.projectId)}` : ''} --before 2 --after 2 --json"],
-  ['src/agent/AgentMemoryBackend.ts', "cogmem memory show --event ${cliArg(event.eventId)}${event.projectId ? ` --project ${cliArg(event.projectId)}` : ''} --before 3 --after 3 --json"],
+  ['src/agent/AgentRecallEngine.ts', "cogmem memory show --event ${cliArg(event.eventId)}${event.projectId ? ` --project ${cliArg(event.projectId)}` : ''} --before 2 --after 2 --json"],
+  ['src/agent/AgentRecallEngine.ts', "cogmem memory show --event ${cliArg(event.eventId)}${event.projectId ? ` --project ${cliArg(event.projectId)}` : ''} --before 3 --after 3 --json"],
   ['src/atlas/MemoryAtlasService.ts', 'cogmem memory show --event ${cliArg(event.eventId)}${projectArg}'],
   ['src/atlas/MemoryAtlasService.ts', '${base} --before 2 --after 2 --json'],
   ['src/atlas/MemoryAtlasService.ts', '${base} --before 3 --after 3 --json'],
