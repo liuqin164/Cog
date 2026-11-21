@@ -317,8 +317,8 @@ describe('the six-step install', () => {
     expect(statSync(envPath).mode & 0o777).toBe(0o600);
     const env = readFileSync(envPath, 'utf8');
     expect(env).toContain('MG_MODEL=auto/deepseek-v4.1-flash');
-    expect(env).toContain('COGMEM_SHELL_TZ=');
-    expect(env).toContain('COGMEM_SHELL_DREAM_START=2');
+    expect(env).toContain('COG_TZ=');
+    expect(env).toContain('COG_DREAM_START=2');
     // The observatory's soul-write token (#283): minted once, owner-only.
     const tokenPath = join(harness.dataDir, 'observatory-token');
     expect(readFileSync(tokenPath, 'utf8').trim()).toMatch(/^[0-9a-f]{64}$/u);
@@ -357,18 +357,18 @@ describe('the six-step install', () => {
     const first = makeHarness({ probeOk: true });
     expect(await first.installer.run()).toBe(0);
     const envPath = join(first.dataDir, 'env');
-    const original = parseEnvFile(envPath).COGMEM_SHELL_SESSION;
+    const original = parseEnvFile(envPath).COG_SESSION;
     expect(original).toMatch(/^session-[0-9a-f-]{36}$/u);
 
     // A second fresh install is a different identity, not a copied constant.
     const other = makeHarness({ probeOk: true });
     expect(await other.installer.run()).toBe(0);
-    expect(parseEnvFile(join(other.dataDir, 'env')).COGMEM_SHELL_SESSION).not.toBe(original);
+    expect(parseEnvFile(join(other.dataDir, 'env')).COG_SESSION).not.toBe(original);
 
     // Losing install.json makes the place step run again; the value already on disk must survive.
     rmSync(join(first.dataDir, 'install.json'), { force: true });
     expect(await first.buildInstaller().run()).toBe(0);
-    expect(parseEnvFile(envPath).COGMEM_SHELL_SESSION).toBe(original);
+    expect(parseEnvFile(envPath).COG_SESSION).toBe(original);
     expect(first.io.lines.join('\n')).toContain('沿用已有');
   });
 
@@ -380,7 +380,7 @@ describe('the six-step install', () => {
     expect(await harness.installer.run()).toBe(0);
     const env = parseEnvFile(join(harness.dataDir, 'env'));
     expect(env.MG_API_KEY).toBe('keep-me');
-    expect(env.COGMEM_SHELL_SESSION).toMatch(/^session-[0-9a-f-]{36}$/u);
+    expect(env.COG_SESSION).toMatch(/^session-[0-9a-f-]{36}$/u);
   });
 
   test('a failed model probe stops cleanly at step 2 and names the reason', async () => {
@@ -393,7 +393,7 @@ describe('the six-step install', () => {
     expect(state.failedAt).toBe('model');
     // Nothing from the model step onward ran: the env file holds only the session id, no model key,
     // no service and no memory probe.
-    expect(readFileSync(join(harness.dataDir, 'env'), 'utf8')).toMatch(/^COGMEM_SHELL_SESSION=session-/u);
+    expect(readFileSync(join(harness.dataDir, 'env'), 'utf8')).toMatch(/^COG_SESSION=session-/u);
     expect(readFileSync(join(harness.dataDir, 'env'), 'utf8')).not.toContain('MG_API_KEY');
     expect(existsSync(join(harness.dataDir, 'attach.sock'))).toBe(false);
 

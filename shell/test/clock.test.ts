@@ -93,17 +93,17 @@ describe('the dream window and its target day (#327)', () => {
       dream: { runKernelNight: false, maxEpisodes: 5, windowStartHour: 3, windowEndHour: 3 },
     })).toThrow(/invalid_dream_window: start 3 equals end 3/u);
 
-    const previousStart = process.env.COGMEM_SHELL_DREAM_START;
-    const previousEnd = process.env.COGMEM_SHELL_DREAM_END;
-    process.env.COGMEM_SHELL_DREAM_START = '23';
-    process.env.COGMEM_SHELL_DREAM_END = '23';
+    const previousStart = process.env.COG_DREAM_START;
+    const previousEnd = process.env.COG_DREAM_END;
+    process.env.COG_DREAM_START = '23';
+    process.env.COG_DREAM_END = '23';
     try {
       expect(() => defaultShellConfig({ dataDir: dir, workspaceRoot: dir })).toThrow(/invalid_dream_window/u);
     } finally {
-      if (previousStart === undefined) delete process.env.COGMEM_SHELL_DREAM_START;
-      else process.env.COGMEM_SHELL_DREAM_START = previousStart;
-      if (previousEnd === undefined) delete process.env.COGMEM_SHELL_DREAM_END;
-      else process.env.COGMEM_SHELL_DREAM_END = previousEnd;
+      if (previousStart === undefined) delete process.env.COG_DREAM_START;
+      else process.env.COG_DREAM_START = previousStart;
+      if (previousEnd === undefined) delete process.env.COG_DREAM_END;
+      else process.env.COG_DREAM_END = previousEnd;
     }
   });
 });

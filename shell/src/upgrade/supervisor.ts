@@ -294,7 +294,7 @@ export function defaultUpgradeOps(options: DefaultOpsOptions): UpgradeOps {
       return { ok: true, detail: `systemctl start ${unit}`, ...(Number.isInteger(pid) && pid > 0 ? { pid } : {}) };
     }
     const command = residentArgsFor(request, shellDir);
-    const env = { ...process.env, ...parseEnvFile(request.envFile), COGMEM_SHELL_ATTACH: 'on' } as Record<string, string>;
+    const env = { ...process.env, ...parseEnvFile(request.envFile), COG_ATTACH: 'on' } as Record<string, string>;
     const pid = (options.spawnDetached ?? spawnDetached)([request.bunPath, ...command.slice(1)], { cwd: request.workspaceRoot, env });
     return pid === undefined ? { ok: false, detail: `could not start ${command.join(' ')}` } : { ok: true, detail: `spawned pid ${pid}`, pid };
   };

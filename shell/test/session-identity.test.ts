@@ -9,18 +9,18 @@ import { makeShell, makeTempDir, ScriptedProvider } from './helpers.ts';
 
 describe('session identity', () => {
   test('the configured session id wins, and an uninstalled shell no longer mints one per process', () => {
-    const previous = process.env.COGMEM_SHELL_SESSION;
+    const previous = process.env.COG_SESSION;
     try {
-      process.env.COGMEM_SHELL_SESSION = 'session-installed';
+      process.env.COG_SESSION = 'session-installed';
       expect(defaultShellConfig({ dataDir: makeTempDir() }).sessionId).toBe('session-installed');
-      delete process.env.COGMEM_SHELL_SESSION;
+      delete process.env.COG_SESSION;
       const first = defaultShellConfig({ dataDir: makeTempDir() }).sessionId;
       const second = defaultShellConfig({ dataDir: makeTempDir() }).sessionId;
       expect(first).toBe('session-default');
       expect(second).toBe(first);
     } finally {
-      if (previous === undefined) delete process.env.COGMEM_SHELL_SESSION;
-      else process.env.COGMEM_SHELL_SESSION = previous;
+      if (previous === undefined) delete process.env.COG_SESSION;
+      else process.env.COG_SESSION = previous;
     }
   });
 

@@ -537,12 +537,12 @@ export class Installer {
       + '机器可能丢失或共享时，请用全盘 / 卷加密（LUKS、FileVault 或加密目录）保护，并像对待数据库本身一样对待拷走的快照。');
     // One stable session identity per install (#248). A re-run or an upgrade reuses the value
     // already in the env file; only an install that has none mints one.
-    const existingSession = parseEnvFile(this.envPath).COGMEM_SHELL_SESSION;
+    const existingSession = parseEnvFile(this.envPath).COG_SESSION;
     if (existingSession) {
       this.io.say(`会话身份：沿用已有 ${existingSession}（重跑 / 升级不覆盖）`);
     } else {
       const sessionId = `session-${randomUUID()}`;
-      this.writeEnvFile({ COGMEM_SHELL_SESSION: sessionId });
+      this.writeEnvFile({ COG_SESSION: sessionId });
       this.io.say(`会话身份：新装生成 ${sessionId}（${this.envPath}，0600；重跑 / 升级不覆盖）`);
     }
     // The operating copy of the two cages. Never overwritten: a re-run must not undo an edited
@@ -899,10 +899,10 @@ export class Installer {
     this.choices.quietStartHour = quietStart;
     this.choices.quietEndHour = quietEnd;
     this.writeEnvFile({
-      COGMEM_SHELL_TZ: timeZone,
-      COGMEM_SHELL_DREAM_START: String(dreamStart),
-      COGMEM_SHELL_DREAM_END: String(dreamEnd),
-      ...(quietStart === null ? {} : { COGMEM_SHELL_QUIET_START: String(quietStart), COGMEM_SHELL_QUIET_END: String(quietEnd ?? 7) }),
+      COG_TZ: timeZone,
+      COG_DREAM_START: String(dreamStart),
+      COG_DREAM_END: String(dreamEnd),
+      ...(quietStart === null ? {} : { COG_QUIET_START: String(quietStart), COG_QUIET_END: String(quietEnd ?? 7) }),
     });
     this.io.say(`节律已写入：时区 ${timeZone}，做梦 ${dreamStart}:00-${dreamEnd}:00，勿扰 ${quietStart === null ? '关' : `${quietStart}:00-${quietEnd}:00`}`);
     return { ok: true };
@@ -1063,7 +1063,7 @@ export class Installer {
         cwd: this.choices.workspaceRoot,
         detached: true,
         stdio: 'ignore',
-        env: { ...process.env, ...parseEnvFile(this.envPath), COGMEM_SHELL_ATTACH: 'on' },
+        env: { ...process.env, ...parseEnvFile(this.envPath), COG_ATTACH: 'on' },
       });
       child.unref();
       this.resident = { pid: child.pid ?? 0, kill: () => { try { child.kill('SIGTERM'); } catch { /* already gone */ } } };
