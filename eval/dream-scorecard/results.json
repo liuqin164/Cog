@@ -1,13 +1,13 @@
 {
-  "generatedAt": "2026-11-21T13:44:08.821Z",
-  "head": "4f8f4527",
+  "generatedAt": "2026-11-21T20:31:58.647Z",
+  "head": "37e1cf8b",
   "model": "auto/deepseek-v4.1-flash",
   "baseUrl": "http://127.0.0.1:3425/v1",
   "classification": {
-    "items": 26,
+    "items": 32,
     "scored": 24,
-    "correct": 11,
-    "accuracy": 0.4583333333333333,
+    "correct": 21,
+    "accuracy": 0.875,
     "perClass": [
       {
         "role": "rule",
@@ -23,52 +23,52 @@
       },
       {
         "role": "commitment",
-        "precision": 0,
-        "recall": 0,
+        "precision": 1,
+        "recall": 1,
         "support": 4
       },
       {
         "role": "intention",
-        "precision": 0.2222222222222222,
-        "recall": 0.5,
+        "precision": 1,
+        "recall": 1,
         "support": 4
       },
       {
         "role": "experience",
-        "precision": 0.3333333333333333,
-        "recall": 0.25,
+        "precision": 0.8,
+        "recall": 1,
         "support": 4
       },
       {
         "role": "ordinary",
         "precision": 1,
-        "recall": 0.25,
+        "recall": 0.5,
         "support": 4
       }
     ],
     "worst": [
       {
-        "from": "commitment",
-        "to": "intention",
-        "count": 3
+        "from": "soul",
+        "to": "rule",
+        "count": 1
       },
       {
-        "from": "experience",
-        "to": "intention",
-        "count": 3
+        "from": "ordinary",
+        "to": "soul",
+        "count": 1
       },
       {
-        "from": "intention",
-        "to": "commitment",
-        "count": 2
+        "from": "ordinary",
+        "to": "experience",
+        "count": 1
       }
     ],
     "pairs": [
       {
         "pair": "rule_vs_one_off",
-        "correct": 1,
+        "correct": 2,
         "total": 2,
-        "accuracy": 0.5
+        "accuracy": 1
       },
       {
         "pair": "soul_vs_preference",
@@ -78,9 +78,9 @@
       },
       {
         "pair": "commitment_vs_intention",
-        "correct": 1,
+        "correct": 2,
         "total": 2,
-        "accuracy": 0.5
+        "accuracy": 1
       },
       {
         "pair": "correction_vs_new_fact",
@@ -95,6 +95,13 @@
       "newFactFalsePositives": 0,
       "newFactTotal": 1
     },
+    "groups": [
+      {
+        "group": "long-tail",
+        "correct": 6,
+        "total": 6
+      }
+    ],
     "results": [
       {
         "id": "rule-docs-language",
@@ -104,18 +111,13 @@
         "correct": true,
         "pair": "rule_vs_one_off",
         "candidates": [
-          "session_summary",
-          "semantic_tags",
-          "semantic_relation",
-          "indexing_decision",
-          "topic_summary",
+          "boundary",
           "summary",
           "indexing_decision",
-          "edge_adjustment",
-          "boundary",
-          "preferences",
           "semantic_tags",
-          "user_preference"
+          "semantic_relation",
+          "preferences",
+          "edge_adjustment"
         ],
         "correctionDetected": false
       },
@@ -126,17 +128,13 @@
         "source": "preferences.category",
         "correct": true,
         "candidates": [
-          "user_preference",
-          "semantic_tags",
-          "indexing_decision",
+          "boundary",
           "edge_adjustment",
-          "preferences",
-          "session_summary",
-          "semantic_relation",
-          "topic_summary",
-          "semantic_tags",
+          "indexing_decision",
           "summary",
-          "boundary"
+          "semantic_tags",
+          "preferences",
+          "semantic_relation"
         ],
         "correctionDetected": false
       },
@@ -147,11 +145,11 @@
         "source": "preferences.category",
         "correct": true,
         "candidates": [
-          "summary",
-          "preferences",
           "semantic_relation",
-          "user_preference",
-          "indexing_decision"
+          "summary",
+          "indexing_decision",
+          "boundary",
+          "preferences"
         ],
         "correctionDetected": false
       },
@@ -162,12 +160,14 @@
         "source": "preferences.category",
         "correct": true,
         "candidates": [
+          "session_summary",
+          "semantic_tags",
           "semantic_relation",
-          "boundary",
-          "indexing_decision",
-          "edge_adjustment",
-          "summary",
           "preferences",
+          "edge_adjustment",
+          "indexing_decision",
+          "boundary",
+          "summary",
           "semantic_tags"
         ],
         "correctionDetected": false
@@ -175,16 +175,15 @@
       {
         "id": "ordinary-one-off-room",
         "role": "ordinary",
-        "predicted": "intention",
-        "source": "temporal_fact_update",
-        "correct": false,
+        "predicted": "ordinary",
+        "source": "summary",
+        "correct": true,
         "pair": "rule_vs_one_off",
         "candidates": [
           "semantic_relation",
-          "temporal_fact_update",
-          "summary",
+          "indexing_decision",
           "session_summary",
-          "indexing_decision"
+          "summary"
         ],
         "correctionDetected": false
       },
@@ -196,12 +195,12 @@
         "correct": true,
         "pair": "soul_vs_preference",
         "candidates": [
+          "user_preference",
           "indexing_decision",
-          "summary",
+          "preferences",
           "semantic_tags",
           "semantic_relation",
-          "preferences",
-          "user_preference"
+          "summary"
         ],
         "correctionDetected": false
       },
@@ -212,12 +211,12 @@
         "source": "preferences.category",
         "correct": false,
         "candidates": [
+          "summary",
           "preferences",
+          "user_preference",
           "semantic_relation",
           "boundary",
-          "user_preference",
-          "indexing_decision",
-          "summary"
+          "indexing_decision"
         ],
         "correctionDetected": false
       },
@@ -229,10 +228,10 @@
         "correct": true,
         "candidates": [
           "semantic_relation",
-          "user_preference",
-          "indexing_decision",
           "summary",
-          "preferences"
+          "indexing_decision",
+          "preferences",
+          "user_preference"
         ],
         "correctionDetected": false
       },
@@ -243,12 +242,11 @@
         "source": "preferences.category",
         "correct": true,
         "candidates": [
-          "preferences",
           "user_preference",
+          "indexing_decision",
           "summary",
-          "semantic_relation",
-          "session_summary",
-          "indexing_decision"
+          "preferences",
+          "semantic_relation"
         ],
         "correctionDetected": false
       },
@@ -260,57 +258,53 @@
         "correct": false,
         "pair": "soul_vs_preference",
         "candidates": [
-          "indexing_decision",
+          "user_preference",
           "preferences",
           "semantic_relation",
           "summary",
-          "user_preference"
+          "indexing_decision"
         ],
         "correctionDetected": false
       },
       {
         "id": "commit-report",
         "role": "commitment",
-        "predicted": "intention",
-        "source": "temporal_fact_update",
-        "correct": false,
+        "predicted": "commitment",
+        "source": "long_term_goal",
+        "correct": true,
         "pair": "commitment_vs_intention",
         "candidates": [
-          "indexing_decision",
           "summary",
-          "project_memory",
-          "semantic_relation",
-          "temporal_fact_update"
+          "indexing_decision",
+          "long_term_goal",
+          "semantic_relation"
         ],
         "correctionDetected": false
       },
       {
         "id": "commit-answer",
         "role": "commitment",
-        "predicted": "intention",
-        "source": "temporal_fact_update",
-        "correct": false,
+        "predicted": "commitment",
+        "source": "long_term_goal",
+        "correct": true,
         "candidates": [
+          "semantic_relation",
           "indexing_decision",
-          "temporal_fact_update",
-          "summary",
-          "semantic_relation"
+          "long_term_goal",
+          "summary"
         ],
         "correctionDetected": false
       },
       {
         "id": "commit-payment",
         "role": "commitment",
-        "predicted": "intention",
-        "source": "temporal_fact_update",
-        "correct": false,
+        "predicted": "commitment",
+        "source": "long_term_goal",
+        "correct": true,
         "candidates": [
-          "project_memory",
-          "summary",
-          "session_summary",
-          "semantic_tags",
-          "temporal_fact_update",
           "indexing_decision",
+          "long_term_goal",
+          "summary",
           "semantic_relation"
         ],
         "correctionDetected": false
@@ -318,14 +312,14 @@
       {
         "id": "commit-design",
         "role": "commitment",
-        "predicted": "experience",
-        "source": "project_memory",
-        "correct": false,
+        "predicted": "commitment",
+        "source": "long_term_goal",
+        "correct": true,
         "candidates": [
-          "semantic_relation",
-          "project_memory",
+          "long_term_goal",
           "indexing_decision",
-          "summary"
+          "summary",
+          "semantic_relation"
         ],
         "correctionDetected": false
       },
@@ -337,27 +331,24 @@
         "correct": true,
         "pair": "commitment_vs_intention",
         "candidates": [
-          "session_summary",
-          "indexing_decision",
           "temporal_fact_update",
+          "semantic_relation",
           "summary",
-          "semantic_relation"
+          "indexing_decision"
         ],
         "correctionDetected": false
       },
       {
         "id": "intention-japanese",
         "role": "intention",
-        "predicted": "commitment",
-        "source": "long_term_goal",
-        "correct": false,
+        "predicted": "intention",
+        "source": "temporal_fact_update",
+        "correct": true,
         "candidates": [
-          "indexing_decision",
+          "summary",
           "temporal_fact_update",
           "semantic_relation",
-          "summary",
-          "long_term_goal",
-          "semantic_tags"
+          "indexing_decision"
         ],
         "correctionDetected": false
       },
@@ -368,25 +359,24 @@
         "source": "temporal_fact_update",
         "correct": true,
         "candidates": [
-          "session_summary",
           "semantic_relation",
           "summary",
-          "indexing_decision",
-          "temporal_fact_update"
+          "temporal_fact_update",
+          "indexing_decision"
         ],
         "correctionDetected": false
       },
       {
         "id": "intention-marathon",
         "role": "intention",
-        "predicted": "commitment",
-        "source": "long_term_goal",
-        "correct": false,
+        "predicted": "intention",
+        "source": "temporal_fact_update",
+        "correct": true,
         "candidates": [
+          "temporal_fact_update",
           "summary",
-          "indexing_decision",
           "semantic_relation",
-          "long_term_goal"
+          "indexing_decision"
         ],
         "correctionDetected": false
       },
@@ -397,12 +387,10 @@
         "source": "project_memory",
         "correct": true,
         "candidates": [
-          "topic_summary",
-          "edge_adjustment",
-          "project_memory",
-          "indexing_decision",
           "summary",
-          "session_summary",
+          "edge_adjustment",
+          "indexing_decision",
+          "project_memory",
           "semantic_tags",
           "semantic_relation"
         ],
@@ -411,47 +399,44 @@
       {
         "id": "experience-osaka",
         "role": "experience",
-        "predicted": "intention",
-        "source": "temporal_fact_update",
-        "correct": false,
+        "predicted": "experience",
+        "source": "project_memory",
+        "correct": true,
         "candidates": [
-          "semantic_tags",
-          "temporal_fact_update",
           "summary",
           "indexing_decision",
-          "semantic_relation"
+          "semantic_relation",
+          "project_memory"
         ],
         "correctionDetected": false
       },
       {
         "id": "experience-users",
         "role": "experience",
-        "predicted": "intention",
-        "source": "temporal_fact_update",
-        "correct": false,
+        "predicted": "experience",
+        "source": "project_memory",
+        "correct": true,
         "candidates": [
-          "edge_adjustment",
-          "indexing_decision",
-          "semantic_relation",
-          "summary",
-          "project_memory",
-          "semantic_tags",
           "session_summary",
-          "temporal_fact_update"
+          "semantic_tags",
+          "semantic_relation",
+          "edge_adjustment",
+          "project_memory",
+          "indexing_decision",
+          "summary"
         ],
         "correctionDetected": false
       },
       {
         "id": "experience-build",
         "role": "experience",
-        "predicted": "intention",
-        "source": "temporal_fact_update",
-        "correct": false,
+        "predicted": "experience",
+        "source": "project_memory",
+        "correct": true,
         "candidates": [
-          "summary",
           "semantic_relation",
-          "temporal_fact_update",
           "project_memory",
+          "summary",
           "indexing_decision"
         ],
         "correctionDetected": false
@@ -464,8 +449,8 @@
         "correct": true,
         "candidates": [
           "summary",
-          "semantic_relation",
-          "indexing_decision"
+          "indexing_decision",
+          "semantic_relation"
         ],
         "correctionDetected": false
       },
@@ -477,10 +462,10 @@
         "correct": false,
         "pair": "correction_vs_new_fact",
         "candidates": [
-          "semantic_relation",
-          "indexing_decision",
+          "summary",
           "project_memory",
-          "summary"
+          "semantic_relation",
+          "indexing_decision"
         ],
         "correctionDetected": false
       },
@@ -492,14 +477,11 @@
         "correct": true,
         "pair": "correction_vs_new_fact",
         "candidates": [
-          "project_memory",
-          "semantic_relation",
-          "correction",
-          "semantic_tags",
-          "temporal_fact_update",
           "indexing_decision",
+          "correction",
           "summary",
-          "session_summary"
+          "temporal_fact_update",
+          "semantic_relation"
         ],
         "correctionDetected": true
       },
@@ -510,19 +492,129 @@
         "source": "correction",
         "correct": true,
         "candidates": [
-          "summary",
-          "semantic_relation",
-          "temporal_fact_update",
           "correction",
-          "indexing_decision"
+          "summary",
+          "temporal_fact_update",
+          "indexing_decision",
+          "semantic_relation"
         ],
         "correctionDetected": true
+      },
+      {
+        "id": "longtail-rule-release",
+        "role": "rule",
+        "predicted": "rule",
+        "source": "boundary",
+        "correct": true,
+        "group": "long-tail",
+        "candidates": [
+          "project_memory",
+          "boundary",
+          "edge_adjustment",
+          "summary",
+          "semantic_relation",
+          "indexing_decision",
+          "semantic_tags"
+        ],
+        "correctionDetected": false
+      },
+      {
+        "id": "longtail-rule-ledger",
+        "role": "rule",
+        "predicted": "rule",
+        "source": "boundary",
+        "correct": true,
+        "group": "long-tail",
+        "candidates": [
+          "edge_adjustment",
+          "boundary",
+          "semantic_relation",
+          "semantic_tags",
+          "project_memory",
+          "indexing_decision",
+          "semantic_tags",
+          "summary"
+        ],
+        "correctionDetected": false
+      },
+      {
+        "id": "longtail-condition-merge",
+        "role": "rule",
+        "predicted": "rule",
+        "source": "boundary",
+        "correct": true,
+        "group": "long-tail",
+        "candidates": [
+          "session_summary",
+          "project_memory",
+          "boundary",
+          "semantic_tags",
+          "summary",
+          "indexing_decision",
+          "semantic_relation",
+          "edge_adjustment"
+        ],
+        "correctionDetected": false
+      },
+      {
+        "id": "longtail-negation-retry",
+        "role": "rule",
+        "predicted": "rule",
+        "source": "boundary",
+        "correct": true,
+        "group": "long-tail",
+        "candidates": [
+          "edge_adjustment",
+          "semantic_tags",
+          "boundary",
+          "project_memory",
+          "semantic_relation",
+          "indexing_decision",
+          "summary"
+        ],
+        "correctionDetected": false
+      },
+      {
+        "id": "longtail-condition-credentials",
+        "role": "rule",
+        "predicted": "rule",
+        "source": "boundary",
+        "correct": true,
+        "group": "long-tail",
+        "candidates": [
+          "boundary",
+          "semantic_tags",
+          "project_memory",
+          "semantic_relation",
+          "indexing_decision",
+          "edge_adjustment",
+          "summary"
+        ],
+        "correctionDetected": false
+      },
+      {
+        "id": "longtail-rule-weekend",
+        "role": "rule",
+        "predicted": "rule",
+        "source": "boundary",
+        "correct": true,
+        "group": "long-tail",
+        "candidates": [
+          "semantic_relation",
+          "semantic_tags",
+          "edge_adjustment",
+          "boundary",
+          "project_memory",
+          "indexing_decision",
+          "summary"
+        ],
+        "correctionDetected": false
       }
     ],
     "usage": {
-      "calls": 26,
-      "inputTokens": 22728,
-      "outputTokens": 33004
+      "calls": 32,
+      "inputTokens": 38495,
+      "outputTokens": 25058
     }
   },
   "compile": {
@@ -534,6 +626,7 @@
         "processed": 4,
         "failed": 0,
         "framesPassed": 4,
+        "processorErrors": 0,
         "deterministicFallbackFrames": 0,
         "fallbackNeedEpisodes": 0,
         "goldHits": 4,
@@ -560,21 +653,22 @@
             "hit": true
           }
         ],
-        "candidates": 20,
+        "candidates": 21,
         "queue": {
           "candidate": 0,
-          "needsConfirmation": 2,
-          "promoted": 18,
+          "needsConfirmation": 4,
+          "promoted": 17,
           "rejected": 0,
           "superseded": 0,
           "shadow": 0
         },
-        "decisions": 19,
+        "decisions": 18,
         "usage": {
           "calls": 8,
-          "inputTokens": 9028,
-          "outputTokens": 29375
-        }
+          "inputTokens": 13520,
+          "outputTokens": 18577
+        },
+        "temporalUpdates": []
       },
       {
         "id": "incident",
@@ -583,6 +677,7 @@
         "processed": 4,
         "failed": 0,
         "framesPassed": 4,
+        "processorErrors": 0,
         "deterministicFallbackFrames": 0,
         "fallbackNeedEpisodes": 0,
         "goldHits": 4,
@@ -609,21 +704,22 @@
             "hit": true
           }
         ],
-        "candidates": 32,
+        "candidates": 23,
         "queue": {
           "candidate": 0,
-          "needsConfirmation": 12,
+          "needsConfirmation": 3,
           "promoted": 20,
           "rejected": 0,
           "superseded": 0,
           "shadow": 0
         },
-        "decisions": 29,
+        "decisions": 21,
         "usage": {
           "calls": 8,
-          "inputTokens": 9050,
-          "outputTokens": 26977
-        }
+          "inputTokens": 13563,
+          "outputTokens": 22322
+        },
+        "temporalUpdates": []
       },
       {
         "id": "travel",
@@ -632,6 +728,7 @@
         "processed": 4,
         "failed": 0,
         "framesPassed": 4,
+        "processorErrors": 0,
         "deterministicFallbackFrames": 0,
         "fallbackNeedEpisodes": 0,
         "goldHits": 4,
@@ -658,46 +755,200 @@
             "hit": true
           }
         ],
-        "candidates": 26,
+        "candidates": 22,
         "queue": {
           "candidate": 0,
-          "needsConfirmation": 6,
-          "promoted": 20,
+          "needsConfirmation": 4,
+          "promoted": 18,
           "rejected": 0,
           "superseded": 0,
           "shadow": 0
         },
-        "decisions": 23,
+        "decisions": 19,
         "usage": {
           "calls": 8,
-          "inputTokens": 8969,
-          "outputTokens": 26751
-        }
+          "inputTokens": 13461,
+          "outputTokens": 13893
+        },
+        "temporalUpdates": []
+      },
+      {
+        "id": "reschedule",
+        "title": "中文时间性更新",
+        "episodes": 8,
+        "processed": 8,
+        "failed": 0,
+        "framesPassed": 8,
+        "processorErrors": 0,
+        "deterministicFallbackFrames": 0,
+        "fallbackNeedEpisodes": 0,
+        "goldHits": 4,
+        "goldTotal": 4,
+        "gold": [
+          {
+            "id": "review-moved",
+            "label": "评审会改到周三三点",
+            "hit": true
+          },
+          {
+            "id": "dinner-moved",
+            "label": "客户饭局改到周六十二点",
+            "hit": true
+          },
+          {
+            "id": "release-moved",
+            "label": "发布窗口改到周一十一点",
+            "hit": true
+          },
+          {
+            "id": "gym-moved",
+            "label": "健身课改到周日六点半",
+            "hit": true
+          }
+        ],
+        "candidates": 42,
+        "queue": {
+          "candidate": 0,
+          "needsConfirmation": 10,
+          "promoted": 32,
+          "rejected": 0,
+          "superseded": 0,
+          "shadow": 0
+        },
+        "decisions": 42,
+        "usage": {
+          "calls": 16,
+          "inputTokens": 27022,
+          "outputTokens": 37028
+        },
+        "temporalUpdates": [
+          {
+            "id": "review-time",
+            "query": "评审会定在什么时候？",
+            "oldValue": "两点",
+            "newValue": "三点",
+            "oldRetired": false,
+            "newPresent": true,
+            "hit": false,
+            "items": 5
+          },
+          {
+            "id": "dinner-time",
+            "query": "客户饭局定在什么时候？",
+            "oldValue": "七点",
+            "newValue": "十二点",
+            "oldRetired": false,
+            "newPresent": true,
+            "hit": false,
+            "items": 6
+          },
+          {
+            "id": "release-time",
+            "query": "发布窗口定在什么时候？",
+            "oldValue": "八点",
+            "newValue": "十一点",
+            "oldRetired": false,
+            "newPresent": true,
+            "hit": false,
+            "items": 8
+          },
+          {
+            "id": "gym-time",
+            "query": "健身课定在什么时候？",
+            "oldValue": "十点",
+            "newValue": "六点半",
+            "oldRetired": false,
+            "newPresent": true,
+            "hit": false,
+            "items": 6
+          }
+        ]
       }
     ],
     "totals": {
-      "episodes": 12,
-      "processed": 12,
+      "episodes": 20,
+      "processed": 20,
       "failed": 0,
-      "framesPassed": 12,
+      "framesPassed": 20,
+      "processorErrors": 0,
       "fallbackNeedEpisodes": 0,
       "deterministicFallbackFrames": 0,
-      "goldHits": 12,
-      "goldTotal": 12,
-      "candidates": 78,
-      "promoted": 58,
+      "goldHits": 16,
+      "goldTotal": 16,
+      "candidates": 108,
+      "promoted": 87,
       "rejected": 0,
-      "suppressed": 20
+      "suppressed": 21,
+      "temporalTotal": 4,
+      "temporalOldRetired": 0,
+      "temporalNewPresent": 4,
+      "temporalHits": 0
     },
     "usage": {
-      "calls": 24,
-      "inputTokens": 27047,
-      "outputTokens": 83103
+      "calls": 40,
+      "inputTokens": 67566,
+      "outputTokens": 91820
     }
   },
+  "calibration": {
+    "model": [
+      {
+        "bucket": "<0.60",
+        "candidates": 1,
+        "promoted": 0,
+        "survival": 0
+      },
+      {
+        "bucket": "0.60–<0.72",
+        "candidates": 8,
+        "promoted": 3,
+        "survival": 0.375
+      },
+      {
+        "bucket": "0.72–<0.74",
+        "candidates": 4,
+        "promoted": 1,
+        "survival": 0.25
+      },
+      {
+        "bucket": "0.74–<0.86",
+        "candidates": 19,
+        "promoted": 18,
+        "survival": 0.9473684210526315
+      },
+      {
+        "bucket": "0.86–<0.90",
+        "candidates": 9,
+        "promoted": 5,
+        "survival": 0.5555555555555556
+      },
+      {
+        "bucket": "0.90–<0.95",
+        "candidates": 18,
+        "promoted": 8,
+        "survival": 0.4444444444444444
+      },
+      {
+        "bucket": ">=0.95",
+        "candidates": 24,
+        "promoted": 1,
+        "survival": 0.041666666666666664
+      }
+    ],
+    "deterministic": {
+      "bucket": "deterministic (all)",
+      "candidates": 230,
+      "promoted": 227,
+      "survival": 0.9869565217391304
+    },
+    "modelCandidates": 83,
+    "modelPromoted": 36,
+    "deterministicCandidates": 230,
+    "deterministicPromoted": 227
+  },
   "usage": {
-    "calls": 50,
-    "inputTokens": 49775,
-    "outputTokens": 116107
+    "calls": 72,
+    "inputTokens": 106061,
+    "outputTokens": 116878
   }
 }

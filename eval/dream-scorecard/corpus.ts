@@ -30,6 +30,14 @@ export interface CompileScenario {
   title: string;
   days: CompileDay[];
   gold: GoldPoint[];
+  temporalUpdates?: TemporalUpdate[];
+}
+
+export interface TemporalUpdate {
+  id: string;
+  query: string;
+  oldValue: string;
+  newValue: string;
 }
 
 export const SCORED_ROLES: Exclude<DreamRole, 'correction'>[] = [
@@ -336,6 +344,42 @@ export const COMPILE_SCENARIOS: CompileScenario[] = [
       { id: 'oolong', label: '喜欢乌龙茶', groups: [['乌龙茶']] },
       { id: 'hotel-cancel', label: '订酒店要免费取消', groups: [['酒店'], ['免费取消', '取消']] },
       { id: 'osaka-trip', label: '大阪出差三天', groups: [['大阪'], ['出差'], ['三天', '3天']] },
+    ],
+  },
+  {
+    id: 'reschedule',
+    title: '中文时间性更新',
+    days: [
+      {
+        localDate: '2026-11-16',
+        turns: [
+          { userText: '评审会定在周二下午两点。', assistantText: '好，记在周二下午两点。' },
+          { userText: '客户饭局定在周五晚上七点。', assistantText: '好，周五晚上七点。' },
+          { userText: '发布窗口定在周四晚上八点。', assistantText: '好，周四晚上八点。' },
+          { userText: '健身课定在周六上午十点。', assistantText: '好，周六上午十点。' },
+        ],
+      },
+      {
+        localDate: '2026-11-17',
+        turns: [
+          { userText: '评审会改到周三下午三点。', assistantText: '好，改到周三下午三点。' },
+          { userText: '客户饭局改到周六中午十二点。', assistantText: '好，改到周六中午十二点。' },
+          { userText: '发布窗口改到周一上午十一点。', assistantText: '好，改到周一上午十一点。' },
+          { userText: '健身课改到周日早上六点半。', assistantText: '好，改到周日早上六点半。' },
+        ],
+      },
+    ],
+    gold: [
+      { id: 'review-moved', label: '评审会改到周三三点', groups: [['评审会'], ['周三', '三点']] },
+      { id: 'dinner-moved', label: '客户饭局改到周六十二点', groups: [['客户饭局', '饭局'], ['周六', '十二点']] },
+      { id: 'release-moved', label: '发布窗口改到周一十一点', groups: [['发布窗口', '发布'], ['周一', '十一点']] },
+      { id: 'gym-moved', label: '健身课改到周日六点半', groups: [['健身课', '健身'], ['周日', '六点半']] },
+    ],
+    temporalUpdates: [
+      { id: 'review-time', query: '评审会定在什么时候？', oldValue: '两点', newValue: '三点' },
+      { id: 'dinner-time', query: '客户饭局定在什么时候？', oldValue: '七点', newValue: '十二点' },
+      { id: 'release-time', query: '发布窗口定在什么时候？', oldValue: '八点', newValue: '十一点' },
+      { id: 'gym-time', query: '健身课定在什么时候？', oldValue: '十点', newValue: '六点半' },
     ],
   },
 ];

@@ -27,6 +27,28 @@ interface CandidateRecord {
   evidence: unknown;
 }
 
+interface CalibrationSample {
+  confidence: number;
+  deterministic: boolean;
+  promoted: boolean;
+}
+
+interface CalibrationBucket {
+  bucket: string;
+  candidates: number;
+  promoted: number;
+  survival: number | null;
+}
+
+interface CalibrationResult {
+  model: CalibrationBucket[];
+  deterministic: CalibrationBucket;
+  modelCandidates: number;
+  modelPromoted: number;
+  deterministicCandidates: number;
+  deterministicPromoted: number;
+}
+
 interface Usage {
   calls: number;
   inputTokens: number;
@@ -76,6 +98,18 @@ interface CompileScenarioResult {
   };
   decisions: number;
   usage: Usage;
+  temporalUpdates: TemporalUpdateResult[];
+}
+
+interface TemporalUpdateResult {
+  id: string;
+  query: string;
+  oldValue: string;
+  newValue: string;
+  oldRetired: boolean;
+  newPresent: boolean;
+  hit: boolean;
+  items: number;
 }
 
 interface ScorecardResult {
@@ -112,11 +146,26 @@ interface ScorecardResult {
       promoted: number;
       rejected: number;
       suppressed: number;
+      temporalTotal: number;
+      temporalOldRetired: number;
+      temporalNewPresent: number;
+      temporalHits: number;
     };
     usage: Usage;
   };
+  calibration: CalibrationResult;
   usage: Usage;
 }
+
+const CALIBRATION_BUCKETS: Array<{ label: string; min: number; max: number }> = [
+  { label: '<0.60', min: -Infinity, max: 0.6 },
+  { label: '0.60–<0.72', min: 0.6, max: 0.72 },
+  { label: '0.72–<0.74', min: 0.72, max: 0.74 },
+  { label: '0.74–<0.86', min: 0.74, max: 0.86 },
+  { label: '0.86–<0.90', min: 0.86, max: 0.9 },
+  { label: '0.90–<0.95', min: 0.9, max: 0.95 },
+  { label: '>=0.95', min: 0.95, max: Infinity },
+];
 
 const repo = resolve(import.meta.dir, '../..');
 const outDir = resolve(argument('out-dir') ?? import.meta.dir);
@@ -133,6 +182,7 @@ const runRoot = mkdtempSync(join(workRoot, 'run-'));
 process.env.TMPDIR = runRoot;
 
 const usage: Usage = { calls: 0, inputTokens: 0, outputTokens: 0 };
+const calibrationSamples: CalibrationSample[] = [];
 const config = ModelRegistry.defaultConfig();
 config.memory = {
   ...config.memory,
@@ -181,6 +231,7 @@ const result: ScorecardResult = {
   baseUrl,
   classification,
   compile,
+  calibration: summarizeCalibration(calibrationSamples),
   usage,
 };
 
@@ -192,6 +243,7 @@ if (!keep) rmSync(runRoot, { recursive: true, force: true });
 
 console.log(`classification ${classification.correct}/${classification.scored} (${percent(classification.correct, classification.scored)})`);
 console.log(`compile frames ${compile.totals.framesPassed}/${compile.totals.processed}, gold ${compile.totals.goldHits}/${compile.totals.goldTotal}`);
+console.log(`temporal old retired ${compile.totals.temporalOldRetired}/${compile.totals.temporalTotal}, hits ${compile.totals.temporalHits}/${compile.totals.temporalTotal}`);
 console.log(`usage ${usage.calls} calls, ${usage.inputTokens + usage.outputTokens} tokens`);
 
 async function runClassification(): Promise<ScorecardResult['classification']> {
@@ -222,6 +274,7 @@ async function runClassification(): Promise<ScorecardResult['classification']> {
     const prediction = predictRole(candidates);
     const correctionDetected = candidates.some((candidate) => candidate.candidateType === 'correction');
     kernel.promoteDreamCandidates({ projectId, limit: 200 });
+    recordCalibration(kernel.listDreamCandidates({ projectId, limit: 200 }) as CandidateRecord[]);
     results.push({
       id: item.id,
       role: item.role,
@@ -256,10 +309,14 @@ async function runCompile(): Promise<ScorecardResult['compile']> {
     promoted: sum.promoted + scenario.queue.promoted,
     rejected: sum.rejected + scenario.queue.rejected,
     suppressed: sum.suppressed + scenario.queue.needsConfirmation + scenario.queue.superseded,
+    temporalTotal: sum.temporalTotal + scenario.temporalUpdates.length,
+    temporalOldRetired: sum.temporalOldRetired + scenario.temporalUpdates.filter((item) => item.oldRetired).length,
+    temporalNewPresent: sum.temporalNewPresent + scenario.temporalUpdates.filter((item) => item.newPresent).length,
+    temporalHits: sum.temporalHits + scenario.temporalUpdates.filter((item) => item.hit).length,
   }), {
     episodes: 0, processed: 0, failed: 0, framesPassed: 0, processorErrors: 0, fallbackNeedEpisodes: 0,
     deterministicFallbackFrames: 0, goldHits: 0, goldTotal: 0, candidates: 0,
-    promoted: 0, rejected: 0, suppressed: 0,
+    promoted: 0, rejected: 0, suppressed: 0, temporalTotal: 0, temporalOldRetired: 0, temporalNewPresent: 0, temporalHits: 0,
   });
   return { scenarios, totals, usage: { calls: 0, inputTokens: 0, outputTokens: 0 } };
 }
@@ -312,7 +369,9 @@ async function runCompileScenario(scenario: CompileScenario): Promise<CompileSce
   const fallbackNeedEpisodes = episodeIds.length - framesPassed;
   const candidates = kernel.listDreamCandidates({ projectId, limit: 1_000 });
   const governance = kernel.promoteDreamCandidates({ projectId, limit: 1_000 });
+  recordCalibration(kernel.listDreamCandidates({ projectId, limit: 1_000 }) as CandidateRecord[]);
   const queue = kernel.getDreamCandidateQueue(projectId);
+  const temporalUpdates = measureTemporalUpdates(scenario, projectId, sealNow + 7 * HOUR);
   const text = JSON.stringify({ frames, candidates }).toLowerCase();
   const gold = scenario.gold.map((point) => ({
     id: point.id,
@@ -336,6 +395,63 @@ async function runCompileScenario(scenario: CompileScenario): Promise<CompileSce
     queue,
     decisions: governance.decisions.length,
     usage: deltaUsage(usage, before),
+    temporalUpdates,
+  };
+}
+
+function measureTemporalUpdates(scenario: CompileScenario, projectId: string, now: number): TemporalUpdateResult[] {
+  return (scenario.temporalUpdates ?? []).map((update) => {
+    const recalled = backend.recall({ agentId: 'owner', projectId, query: update.query, limit: 50, now });
+    const text = recalled.items.map((item) => item.text).join('\n');
+    const oldRetired = !text.includes(update.oldValue);
+    const newPresent = text.includes(update.newValue);
+    return {
+      id: update.id,
+      query: update.query,
+      oldValue: update.oldValue,
+      newValue: update.newValue,
+      oldRetired,
+      newPresent,
+      hit: oldRetired && newPresent,
+      items: recalled.items.length,
+    };
+  });
+}
+
+function recordCalibration(candidates: CandidateRecord[]): void {
+  for (const candidate of candidates) {
+    if (candidate.candidateType === 'diagnostic_conclusion') continue;
+    calibrationSamples.push({
+      confidence: candidate.confidence,
+      deterministic: record(candidate.content).source !== 'llm_dream_curator_candidate',
+      promoted: candidate.status === 'promoted',
+    });
+  }
+}
+
+function summarizeCalibration(samples: CalibrationSample[]): CalibrationResult {
+  const model = CALIBRATION_BUCKETS.map((bucket) => {
+    const items = samples.filter((sample) => !sample.deterministic && sample.confidence >= bucket.min && sample.confidence < bucket.max);
+    return calibrationBucket(bucket.label, items);
+  });
+  const deterministic = calibrationBucket('deterministic (all)', samples.filter((sample) => sample.deterministic));
+  return {
+    model,
+    deterministic,
+    modelCandidates: model.reduce((sum, bucket) => sum + bucket.candidates, 0),
+    modelPromoted: model.reduce((sum, bucket) => sum + bucket.promoted, 0),
+    deterministicCandidates: deterministic.candidates,
+    deterministicPromoted: deterministic.promoted,
+  };
+}
+
+function calibrationBucket(label: string, samples: CalibrationSample[]): CalibrationBucket {
+  const promoted = samples.filter((sample) => sample.promoted).length;
+  return {
+    bucket: label,
+    candidates: samples.length,
+    promoted,
+    survival: samples.length === 0 ? null : promoted / samples.length,
   };
 }
 
@@ -452,7 +568,7 @@ function emptyClassification(_before: Usage): ScorecardResult['classification'] 
 function emptyCompile(): ScorecardResult['compile'] {
   return {
     scenarios: [],
-    totals: { episodes: 0, processed: 0, failed: 0, framesPassed: 0, processorErrors: 0, fallbackNeedEpisodes: 0, deterministicFallbackFrames: 0, goldHits: 0, goldTotal: 0, candidates: 0, promoted: 0, rejected: 0, suppressed: 0 },
+    totals: { episodes: 0, processed: 0, failed: 0, framesPassed: 0, processorErrors: 0, fallbackNeedEpisodes: 0, deterministicFallbackFrames: 0, goldHits: 0, goldTotal: 0, candidates: 0, promoted: 0, rejected: 0, suppressed: 0, temporalTotal: 0, temporalOldRetired: 0, temporalNewPresent: 0, temporalHits: 0 },
     usage: { calls: 0, inputTokens: 0, outputTokens: 0 },
   };
 }
@@ -517,6 +633,23 @@ function renderMarkdown(result: ScorecardResult): string {
     ...result.compile.scenarios.map((scenario) => `| ${scenario.id} | ${scenario.episodes} | ${scenario.framesPassed}/${scenario.episodes} | ${scenario.processorErrors} | ${scenario.fallbackNeedEpisodes}/${scenario.episodes} | ${scenario.goldHits}/${scenario.goldTotal} | ${scenario.candidates} | ${scenario.queue.promoted} | ${scenario.queue.rejected} | ${scenario.queue.needsConfirmation + scenario.queue.superseded} |`),
     '',
     `Totals: episodes ${result.compile.totals.episodes}, processed ${result.compile.totals.processed}, failed ${result.compile.totals.failed}, frame pass ${result.compile.totals.framesPassed}/${result.compile.totals.episodes} (${percent(result.compile.totals.framesPassed, result.compile.totals.episodes)}), processor errors ${result.compile.totals.processorErrors}, fallback need ${result.compile.totals.fallbackNeedEpisodes}/${result.compile.totals.episodes} (${percent(result.compile.totals.fallbackNeedEpisodes, result.compile.totals.episodes)}), gold ${result.compile.totals.goldHits}/${result.compile.totals.goldTotal} (${percent(result.compile.totals.goldHits, result.compile.totals.goldTotal)}).`,
+    '',
+    '## Chinese temporal updates',
+    '',
+    '| case | query | old value | new value | old retired | new present | hit | recall items |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- |',
+    ...result.compile.scenarios.flatMap((scenario) => scenario.temporalUpdates.map((item) => `| ${item.id} | ${item.query} | ${item.oldValue} | ${item.newValue} | ${item.oldRetired ? 'yes' : 'no'} | ${item.newPresent ? 'yes' : 'no'} | ${item.hit ? 'yes' : 'no'} | ${item.items} |`)),
+    '',
+    `Old value retired: ${result.compile.totals.temporalOldRetired}/${result.compile.totals.temporalTotal}; new value present: ${result.compile.totals.temporalNewPresent}/${result.compile.totals.temporalTotal}; hit (old retired and new present): ${result.compile.totals.temporalHits}/${result.compile.totals.temporalTotal}.`,
+    '',
+    '## Confidence calibration',
+    '',
+    '| bucket | candidates | promoted | survival |',
+    '| --- | --- | --- | --- |',
+    ...result.calibration.model.map((bucket) => `| ${bucket.bucket} | ${bucket.candidates} | ${bucket.promoted} | ${percent(bucket.promoted, bucket.candidates)} |`),
+    `| ${result.calibration.deterministic.bucket} | ${result.calibration.deterministic.candidates} | ${result.calibration.deterministic.promoted} | ${percent(result.calibration.deterministic.promoted, result.calibration.deterministic.candidates)} |`,
+    '',
+    `Model candidates: ${result.calibration.modelPromoted}/${result.calibration.modelCandidates} promoted (${percent(result.calibration.modelPromoted, result.calibration.modelCandidates)}). Deterministic candidates: ${result.calibration.deterministicPromoted}/${result.calibration.deterministicCandidates} promoted (${percent(result.calibration.deterministicPromoted, result.calibration.deterministicCandidates)}).`,
     '',
     '## Cost',
     '',
