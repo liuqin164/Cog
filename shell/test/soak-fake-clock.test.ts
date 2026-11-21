@@ -1,17 +1,3 @@
-/**
- * #235 shell-layer soak: a fake clock, not a wall clock. The memory soak asks whether the process
- * retains memory; this one asks whether *time* makes the resident do more work than the events that
- * arrived. Every scenario advances the clock in fixed ticks and asserts a hard ceiling on model
- * calls, ledger rows and the user lane:
- *
- *   idle              240 ticks with no event: zero model calls, zero ledger rows.
- *   one message       one submit, then 240 ticks: exactly one run, no later row.
- *   promise expiry    one promise, ticks to its due instant: one autonomous run, then silence.
- *   mixed             messages and a promise across idle gaps: calls <= messages + promises.
- *
- * The lane assertion is the #229 contract at the time dimension: autonomous content is booked with
- * `origin=emergence` and never as `role=user`. This suite runs in CI with the rest of `shell/test`.
- */
 import { describe, expect, test } from 'bun:test';
 import type { CompanionShell } from '../src/app.ts';
 import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
@@ -25,7 +11,6 @@ function makeSoakShell(dir: string, provider: ScriptedProvider, clock: { now: nu
     dir,
     provider,
     {
-      // Keep the 2–5 dream window out of the fake day; the soak is about ticks, not the night.
       dream: { windowStartHour: 0, windowEndHour: 1, runKernelNight: false, maxEpisodes: 5 },
     },
     { now: () => clock.now },
@@ -53,7 +38,6 @@ function lanes(shell: CompanionShell) {
   };
 }
 
-/** #229's contract at the time dimension: an autonomous run never books a user turn. */
 function autonomousUserRows(shell: CompanionShell): number {
   return ledger(shell).filter((event) =>
     event.role === 'user'
@@ -136,7 +120,6 @@ describe('fake-clock soak (#235)', () => {
       const due = entry!.dueAt!;
       expect(due).toBeGreaterThan(clock.now);
 
-      // Walk the fake clock to the due instant in half-hour ticks, then past it.
       while (clock.now < due) {
         clock.now = Math.min(clock.now + 30 * 60_000, due);
         await tickWithoutDream(shell, clock.now);
@@ -151,7 +134,6 @@ describe('fake-clock soak (#235)', () => {
       console.log(`[soak-clock] promise after ticks ${afterDue}->${after}, calls ${provider.calls.length}`);
       expect(provider.calls).toHaveLength(2);
       expect(after).toBe(afterDue);
-      // One promise: its opened + surfaced rows, the autonomous task, and the ingest's two projections.
       expect(afterDue - afterMessage).toBeLessThanOrEqual(6);
       expect(lanes(shell)).toMatchObject({ user: 1, assistant: 1, system: 1, autonomous: 1 });
       expect(autonomousUserRows(shell)).toBe(0);
@@ -189,13 +171,11 @@ describe('fake-clock soak (#235)', () => {
       await advance(shell, clock, 60);
       const after = ledgerSize(shell);
       console.log(`[soak-clock] mixed calls ${provider.calls.length}, ledger ${afterDue}->${after}, lanes ${JSON.stringify(lanes(shell))}`);
-      // Two user messages, one promise: the due promise is the only autonomous run allowed.
       expect(provider.calls).toHaveLength(3);
       expect(after).toBe(afterDue);
       expect(lanes(shell).user).toBe(2);
       expect(lanes(shell)).toMatchObject({ user: 2, assistant: 2, system: 1, autonomous: 1 });
       expect(autonomousUserRows(shell)).toBe(0);
-      // Two turns (2 rows each) plus the promise's opened/surfaced/autonomous rows and projections.
       expect(ledgerSize(shell)).toBeLessThanOrEqual(10);
       expect(shell.machine.state).toBe('IDLE');
     } finally {
@@ -352,6 +332,8 @@ describe('dream scheduling (#327)', () => {
     const shell = dreamShell(makeTempDir('dream-backoff-'), clock);
     await shell.start();
     try {
+      const service = shell.host.getService<{ dreamTargetDate(at?: number): string }>('clock');
+      await seedDay(shell, service.dreamTargetDate(start), start - 60 * 60_000);
       const attempts: number[] = [];
       (shell as unknown as { dream: { integrate: () => Promise<never> } }).dream = {
         integrate: async () => {
