@@ -32,11 +32,11 @@ export class RunLoop {
       this.shell.statusFace.emitSteering();
       return undefined;
     }
-    this.shell.residentTick.acknowledgeSurfacing();
     if (this.shell.statusFace.dailyBudgetExceeded()) this.shell.statusFace.announceDailyBudget('user_message');
     if (this.shell.machine.state === 'SUSPENDED') return this.submitWhileSuspended(text);
     this.beginUserAssignment(text);
     this.shell.clock!.markInteraction(this.shell.now());
+    this.shell.residentTick.observeSurfacingReply(text);
     await this.wakeIfNeeded('message_received');
     if (this.shell.machine.state !== 'IDLE') throw new Error(`submit_requires_idle: state is ${this.shell.machine.state}`);
     return this.executeRun(text, 'message_received', 'user_message');
@@ -50,9 +50,9 @@ export class RunLoop {
    * There is no timeout for either kind — see `Suspension`'s comment.
    */
   private async submitWhileSuspended(text: string): Promise<RunSummary | undefined> {
-    this.shell.residentTick.acknowledgeSurfacing();
     const suspension = this.shell.machine.runtime.suspension;
     this.shell.clock!.markInteraction(this.shell.now());
+    this.shell.residentTick.observeSurfacingReply(text);
     if (suspension?.kind === 'question') {
       this.shell.machine.updateRuntime({ suspension: { ...suspension, answeredAt: this.shell.now() } });
       this.shell.trace.append('suspension_answered', { id: suspension.id, assignmentId: suspension.assignmentId, chars: text.trim().length });

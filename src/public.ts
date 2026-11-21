@@ -730,6 +730,7 @@ export {
   surfacingModulationOutcome,
 } from './surfacing/index.js';
 export type {
+  DeliverSurfacingInput,
   RecordSurfacingFeedbackInput,
   ResumeSurfacingTypeInput,
   SurfacingFeedbackAuditEntry,
@@ -740,6 +741,7 @@ export type {
   SurfacingFeedbackRecord,
   SurfacingFeedbackState,
   SurfacingModulationOutcome,
+  SurfacingPendingEntry,
   SurfacingResumeRecord,
   SurfacingTypeState,
 } from './surfacing/index.js';

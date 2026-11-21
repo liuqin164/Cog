@@ -94,7 +94,7 @@ interface TraceEntry {
   ok?: unknown;
 }
 
-function isOutcome(value: unknown): value is SurfacingFeedbackOutcome {
+function isOutcome(value: unknown): value is Exclude<SurfacingFeedbackOutcome, 'snoozed'> {
   return value === 'engaged' || value === 'ignored' || value === 'stopped';
 }
 

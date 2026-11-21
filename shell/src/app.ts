@@ -149,11 +149,6 @@ export class CompanionShell implements ShellControl, AttachShell {
       suppressed: unknown[];
     };
   };
-  /** The last candidate spoken per F6 source, so the owner's next line can close F7's loop. */
-  readonly surfacedByType = new Map<SurfacingSource, {
-    candidateId: string;
-    sourceRefs: Array<{ eventId?: string; sourceId?: string; contentHash?: string }>;
-  }>();
   private http?: HttpFaceHandle;
   private terminal?: TerminalChannel;
   private readonly channelContract: ChannelContract;
@@ -1069,13 +1064,11 @@ export class CompanionShell implements ShellControl, AttachShell {
   }
 
   stopSurfacing(type?: string): CommandReply {
-    const last = type === undefined ? [...this.surfacedByType.entries()].at(-1) : undefined;
-    const source = (type ?? last?.[0]) as SurfacingSource | undefined;
-    const entry = type === undefined ? last?.[1] : this.surfacedByType.get(type as SurfacingSource);
+    const pending = this.backend.surfacingPending({ projectId: this.config.projectId });
+    const entry = type === undefined ? pending.at(-1) : pending.filter((item) => item.type === type).at(-1);
     if (!entry) return { text: '还没有浮现过该来源，无法停下。', receipt: true };
     this.residentTick.writeSurfacingFeedback(entry, 'stopped');
-    if (source !== undefined) this.surfacedByType.delete(source);
-    return { text: `已停下 ${source} 的主动浮现；/surfacing resume <来源> 恢复。`, receipt: true };
+    return { text: `已停下 ${entry.type} 的主动浮现；/surfacing resume <来源> 恢复。`, receipt: true };
   }
 
   resumeSurfacing(type: string): CommandReply {
@@ -1090,7 +1083,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   snooze(minutes: number, commitmentId?: string): CommandReply {
     const projectId = this.config.projectId;
     const now = this.now();
-    const surfaced = this.surfacedByType.get('commitment')?.candidateId;
+    const surfaced = this.backend.surfacingPending({ projectId }).filter((item) => item.type === 'commitment').at(-1)?.candidateId;
     const surfacedId = surfaced?.startsWith('surfacing:commitment:') ? surfaced.slice('surfacing:commitment:'.length) : undefined;
     const entries = this.backend.listCommitments({ projectId, statuses: ['due_soon', 'overdue'], now });
     const target = commitmentId ?? surfacedId;
@@ -1100,6 +1093,9 @@ export class CompanionShell implements ShellControl, AttachShell {
     if (!entry) return { text: target === undefined ? '没有到期的承诺可以顺延。' : `没找到到期的承诺：${target}`, receipt: true };
     try {
       const snoozed = this.backend.snoozeCommitment({ projectId, commitmentId: entry.commitmentId, resumeAt: now + minutes * 60_000, reason: 'owner_snooze', now });
+      const pending = this.backend.surfacingPending({ projectId })
+        .find((item) => item.candidateId === `surfacing:commitment:${snoozed.commitmentId}`);
+      if (pending) this.residentTick.writeSurfacingFeedback(pending, 'snoozed');
       return {
         text: `已顺延「${snoozed.content}」到 ${new Date(snoozed.resumeAt ?? now + minutes * 60_000).toISOString()}。`,
         receipt: true,
