@@ -95,6 +95,11 @@ describe('in-process kernel host and its loopback HTTP face', () => {
       candidate('semantic_tags', 'needs_confirmation', now - 29 * DAY),
       candidate('preferences', 'needs_confirmation', now - 24 * DAY),
       candidate('semantic_tags', 'needs_confirmation', now - 31 * DAY),
+      candidate('user_preference', 'needs_confirmation', now - 29 * DAY),
+      candidate('long_term_goal', 'needs_confirmation', now - 10 * DAY),
+      candidate('boundary', 'needs_confirmation', now - 31 * DAY),
+      candidate('failure_lesson', 'needs_confirmation', now - 5 * DAY),
+      candidate('correction', 'needs_confirmation', now - 26 * DAY),
       candidate('semantic_tags', 'shadow'),
     ]);
     const db = kernel.factStore.getDatabase();
@@ -114,17 +119,17 @@ describe('in-process kernel host and its loopback HTTP face', () => {
         aliasConflicts: 1,
         candidateQueue: {
           candidate: 1,
-          needsConfirmation: 3,
+          needsConfirmation: 8,
           promoted: 0,
           rejected: 0,
           superseded: 0,
           shadow: 1,
-          needsConfirmationExpiringSoon: 2,
-          needsConfirmationOverdue: 1,
+          needsConfirmationExpiringSoon: 4,
+          needsConfirmationOverdue: 2,
           highPrivilege: {
-            needsConfirmation: 1,
-            needsConfirmationExpiringSoon: 1,
-            needsConfirmationOverdue: 0,
+            needsConfirmation: 5,
+            needsConfirmationExpiringSoon: 2,
+            needsConfirmationOverdue: 1,
           },
         },
       });
@@ -160,7 +165,8 @@ describe('in-process kernel host and its loopback HTTP face', () => {
       `, now - 30 * DAY));
       expect(health.backlog.candidateQueue.highPrivilege.needsConfirmation).toBe(count(`
         SELECT COUNT(*) AS count FROM deep_write_candidates
-        WHERE status = 'needs_confirmation' AND candidate_type = 'preferences'
+        WHERE status = 'needs_confirmation'
+          AND candidate_type IN ('preferences', 'user_preference', 'long_term_goal', 'boundary', 'failure_lesson')
       `));
 
       const spec: ServiceSpec = {
@@ -193,8 +199,8 @@ describe('in-process kernel host and its loopback HTTP face', () => {
       expect(report.backlog).toMatchObject(readings);
       const check = report.checks.find((entry) => entry.id === 'backlog');
       expect(check?.warn).toBe(true);
-      expect(check?.detail).toContain('needs_confirmation_expiring_soon=2');
-      expect(check?.detail).toContain('high_privilege_expiring_soon=1');
+      expect(check?.detail).toContain('needs_confirmation_expiring_soon=4');
+      expect(check?.detail).toContain('high_privilege_expiring_soon=2');
     } finally {
       face.stop();
       kernel.close();
