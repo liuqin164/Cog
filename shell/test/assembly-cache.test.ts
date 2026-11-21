@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
+import { ScriptedProvider, makeShell, makeTempDir, seedOpenAssignment } from './helpers.ts';
 
 const NO_DREAM = { runKernelNight: false, maxEpisodes: 5, windowStartHour: 0, windowEndHour: 1 };
 const asText = (messages: Array<{ content: unknown }> | undefined) => (messages ?? []).map((message) => String(message.content)).join('\n');
@@ -50,6 +50,7 @@ describe('one turn assembles once (#351)', () => {
     await shell.start();
     try {
       await seed(shell);
+      seedOpenAssignment(shell, '帮我看看部署窗口是什么时候');
       shell.machine.updateRuntime({ capturePaused: true });
       const db = shell.kernel.factStore.getDatabase();
       const query = db.query.bind(db);

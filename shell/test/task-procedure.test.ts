@@ -21,6 +21,30 @@ const shellFor = (prefix: string, provider: ScriptedProvider, contextSweetSpot =
   shellAt(makeTempDir(prefix), provider, contextSweetSpot);
 
 describe('the task-end producer leaves only the real trajectory (#262)', () => {
+  test('a fresh user message opens the assignment the end declaration needs (#371)', async () => {
+    const provider = new ScriptedProvider([
+      { text: '写一下。', toolCalls: [{ toolCallId: 'c1', toolName: 'write', input: { path: 'a.txt', content: 'x' } }] },
+      {
+        text: '做完了。',
+        toolCalls: [{ toolCallId: 'c2', toolName: 'declare_task', input: { action: 'end', domain: '发布', key: 'fresh' } }],
+      },
+      { text: '收尾。', toolCalls: [] },
+    ]);
+    const shell = shellFor('task-procedure-fresh-', provider);
+    await shell.start();
+    try {
+      await shell.submit('写一个文件');
+      expect(JSON.stringify(provider.calls[1]!.messages)).toContain('<open-assignment>');
+      expect(shell.trace.read().some((record) => record.kind === 'assignment_opened')).toBe(true);
+      const entry = shell.kernel.procedures.entries({ projectId: shell.config.projectId })
+        .find((candidate) => candidate.key === 'fresh');
+      expect(entry?.steps).toEqual(['write: {"path":"a.txt","content":"x"}']);
+      expect(shell.trace.read().some((record) => record.kind === 'task_procedure_written')).toBe(true);
+    } finally {
+      await shell.stop();
+    }
+  }, 30_000);
+
   test('two completed attempts establish the practice from captured calls only', async () => {
     const provider = new ScriptedProvider([
       {

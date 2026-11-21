@@ -153,6 +153,20 @@ export class RunLoop {
     }
   }
 
+  openAssignmentOnToolUse(): void {
+    if (this.shell.runTier !== 'work' || this.shell.machine.runtime.openAssignment) return;
+    const brief = this.shell.currentRunUserText.trim().slice(0, 500);
+    if (!brief) return;
+    const assignment = {
+      id: `assignment-${this.shell.now().toString(36)}-${randomUUID().slice(0, 8)}`,
+      origin: 'user_message' as const,
+      text: brief,
+      startedAt: this.shell.runStartedAt ?? this.shell.now(),
+    };
+    this.shell.machine.updateRuntime({ openAssignment: assignment });
+    this.shell.trace.append('assignment_opened', { assignmentId: assignment.id, chars: brief.length });
+  }
+
   /**
    * A whole-turn timeout stops the run instead of retrying (#240), so the transcript says why and
    * with which cap; otherwise a stopped turn leaves only the idle status behind.

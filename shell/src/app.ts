@@ -845,9 +845,9 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.emergence = this.host.getService('emergence');
     // Crash recovery needs to know what was running. The checkpoint records the calls that started and
     // have not finished, which is the list a replay would have to be judged against (see
-    // `refuseRecoveryReplay`). ponytail: two checkpoint writes per tool call; batch them if a run ever
-    // issues tools fast enough for the fsyncs to show up.
+    // `refuseRecoveryReplay`).
     this.host.bus.on('tool_execution_start', (event: { toolCallId?: string; toolName?: string }) => {
+      this.runLoop.openAssignmentOnToolUse();
       if (!event.toolCallId || !event.toolName) return;
       const inFlight = this.machine.runtime.inFlightToolCalls ?? [];
       if (inFlight.some((call) => call.toolCallId === event.toolCallId)) return;
