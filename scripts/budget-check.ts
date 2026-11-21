@@ -8,6 +8,7 @@ import { askPlugin } from '../shell/src/plugins/ask.ts';
 import { builtinToolsPlugin } from '../shell/src/plugins/builtin-tools.ts';
 import { memoryToolPlugin } from '../shell/src/plugins/memory-tool.ts';
 import { proposalPlugin } from '../shell/src/plugins/proposal.ts';
+import { selfInstallPlugin } from '../shell/src/plugins/self-install.ts';
 import { soulEditPlugin } from '../shell/src/plugins/soul-edit.ts';
 
 const ROOT = process.cwd();
@@ -77,6 +78,7 @@ function toolCount(): number {
     assignmentPlugin(),
     memoryToolPlugin({ agentId: 'budget', projectId: 'budget', sessionId: 'budget' }),
     soulEditPlugin(),
+    selfInstallPlugin({ proposals: undefined as never, admin: undefined as never, trace: undefined as never }),
   ];
   for (const plugin of plugins) plugin.apply(context as never, { workspaceRoot: ROOT });
   return names.size;

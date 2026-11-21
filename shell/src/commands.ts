@@ -126,6 +126,7 @@ export interface CommandHost {
    * existing service-manager path, not a new supervisor; without a manager the receipt says so.
    */
   installPlugin(spec: string): Promise<CommandReply>;
+  removePlugin(spec: string): Promise<CommandReply>;
 }
 
 export interface CoreCommand {
@@ -354,8 +355,8 @@ export const CORE_COMMANDS: readonly CoreCommand[] = [
   },
   {
     name: 'plugins',
-    description: '原生插件：查看已登记 / 已加载，或登记一个（登记后重启生效）',
-    argumentHint: '[add <包名或路径>]',
+    description: '原生插件：查看已登记 / 已加载，登记或摘除一个（登记后重启生效）',
+    argumentHint: '[add|remove <包名或路径>]',
     surfaces: ['palette', 'resident', 'tui'],
     run(host, args) {
       const [verb = '', ...rest] = args.trim().split(/\s+/u).filter(Boolean);
@@ -364,7 +365,12 @@ export const CORE_COMMANDS: readonly CoreCommand[] = [
         if (spec === '') return { text: '用法：/plugins add <包名或路径>（例如 ./plugins/hello.ts）', receipt: true };
         return host.installPlugin(spec);
       }
-      if (verb !== '' && verb !== 'list') return { text: '用法：/plugins [add <包名或路径>]', receipt: true };
+      if (verb === 'remove' || verb === 'rm') {
+        const spec = rest.join(' ');
+        if (spec === '') return { text: '用法：/plugins remove <包名或路径>', receipt: true };
+        return host.removePlugin(spec);
+      }
+      if (verb !== '' && verb !== 'list') return { text: '用法：/plugins [add|remove <包名或路径>]', receipt: true };
       return host.pluginReport();
     },
   },

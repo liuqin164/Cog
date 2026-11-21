@@ -22,11 +22,15 @@ export function isProposableCommand(command: string): boolean {
 
 export interface CommandProposal {
   id: string;
+  /** A plugin proposal is confirmed by the same owner key but never dispatches a command. */
+  kind?: 'command' | 'plugin';
   /** The core command's name, without the slash (`pause`). */
   command: string;
   args: string;
   /** One line the agent gives the user for why it is offering this. */
   reason: string;
+  /** Extra lines a proposal needs read before the owner decides. */
+  detail?: string[];
   status: ProposalStatus;
   createdAt: number;
   /** Set once it executed: the command's own receipt text. */

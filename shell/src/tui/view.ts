@@ -575,7 +575,9 @@ export function flattenEntry(entry: TranscriptEntry, width: number, env: RenderE
 
 function renderProposal(proposal: CommandProposal, width: number, env: RenderEnv): Row[] {
   const marker = env.unicode ? '⌁ ' : '# ';
-  const target = `/${proposal.command}${proposal.args === '' ? '' : ` ${proposal.args}`}`;
+  const target = proposal.kind === 'plugin'
+    ? `插件 ${proposal.args}`
+    : `/${proposal.command}${proposal.args === '' ? '' : ` ${proposal.args}`}`;
   const head = `提议 ${target} · ${proposal.reason}`;
   const headRows = (text: string, style: 'accent' | 'dim' | 'warn'): Row[] =>
     wrapPlain(text, Math.max(1, width - 2)).map((line, index) => [
@@ -588,12 +590,14 @@ function renderProposal(proposal: CommandProposal, width: number, env: RenderEnv
     case 'pending':
       return [
         ...headRows(head, 'accent'),
-        ...body('Enter 执行 · Esc 放弃（尚未执行）', 'dim'),
+        ...(proposal.detail ?? []).flatMap((line) => body(line, 'dim')),
+        ...body(proposal.kind === 'plugin' ? 'Enter 批准安装 · Esc 放弃（批准前不会加载）' : 'Enter 执行 · Esc 放弃（尚未执行）', 'dim'),
         [],
       ];
     case 'executed':
       return [
         ...headRows(`${head} · 已执行`, 'accent'),
+        ...(proposal.detail ?? []).flatMap((line) => body(line, 'dim')),
         ...body(proposal.resultText ?? '（命令已执行）'),
         [],
       ];

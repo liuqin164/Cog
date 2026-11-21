@@ -1,12 +1,13 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import type { CompanionShell } from './app.ts';
 import type { CommandReply } from './commands.ts';
 import { defaultRunner } from './install/service.ts';
 import { restartService, servicePath, type Platform, type ServiceSpec } from './install/service.ts';
 import { checkPluginSpec } from './plugins/load.ts';
 import { pluginsConfigPath, readPluginRegistry, writePluginRegistry } from './plugins/registry.ts';
+import { latestAuditForSpec, pluginWorkspaceDir } from './plugins/self-install.ts';
 import { readInstallState, shellDirOfTree, treeOfThisProcess } from './upgrade/paths.ts';
 
 /**
@@ -28,7 +29,7 @@ export class PluginsAdmin {
    * The load status is the trace's own outcome, not the model's account of it.
    */
   pluginReport(): CommandReply {
-    const report = this.pluginReportData();
+    const report = this.pluginState();
     const lines = [
       `已登记 ${report.registered.length} 个：${report.registered.length > 0 ? report.registered.join(', ') : '（空）'}`,
     ];
@@ -49,7 +50,7 @@ export class PluginsAdmin {
     return { text: lines.join('\n'), receipt: true, data: { companion_plugins: report } };
   }
 
-  private pluginReportData(): {
+  pluginState(): {
     registered: string[];
     results: Array<{ spec: string; status: string; version?: string; reason?: string; tools: string[]; commands: string[] }>;
   } {
@@ -86,38 +87,57 @@ export class PluginsAdmin {
 
   /**
    * `/plugins add <spec>`: append to the registry, trace the registration with its source, then
-   * restart through the service manager that already owns this process. The confirmation that this
-   * will execute third-party code is the command-proposal gate — the companion offers the command,
-   * the owner confirms it, and `runCommand` runs it exactly like a typed command.
+   * restart through the service manager that already owns this process. A manually typed command is
+   * the owner's own action; a proposal-origin install only reaches here after the attach card's
+   * confirmation.
    */
-  async installPlugin(rawSpec: string): Promise<CommandReply> {
+  async installPlugin(rawSpec: string, origin?: { proposalId: string; pluginName: string; provided?: string[] }): Promise<CommandReply> {
     const spec = rawSpec.trim();
     if (spec === '' || /[\r\n]/u.test(spec)) {
-      this.shell.trace.append('plugin_install_rejected', { spec, reason: 'invalid_plugin_spec' });
-      return { text: 'invalid_plugin_spec: 插件 spec 不能为空，也不能包含换行。', receipt: true };
+      this.shell.trace.append('plugin_install_rejected', { spec, reason: 'invalid_plugin_spec', ...(origin ? { id: origin.proposalId } : {}) });
+      return { text: 'invalid_plugin_spec: 插件 spec 不能为空，也不能包含换行。', receipt: true, data: { plugin_install: { ok: false, spec } } };
     }
+    const workspace = pluginWorkspaceDir(this.shell.config.dataDir);
     const refused = checkPluginSpec(spec, {
       cwd: this.shell.config.workspaceRoot,
-      roots: [this.shell.config.workspaceRoot, treeOfThisProcess()],
-      dataDir: this.shell.config.dataDir,
+      roots: origin ? [workspace] : [this.shell.config.workspaceRoot, treeOfThisProcess()],
+      ...(origin ? {} : { dataDir: this.shell.config.dataDir }),
     });
     if (refused) {
-      this.shell.trace.append('plugin_install_rejected', { spec, reason: refused });
-      return { text: `插件未安装：${refused}`, receipt: true };
+      this.shell.trace.append('plugin_install_rejected', { spec, reason: refused, ...(origin ? { id: origin.proposalId } : {}) });
+      return { text: `插件未安装：${refused}`, receipt: true, data: { plugin_install: { ok: false, spec } } };
     }
     const path = pluginsConfigPath(this.shell.config.dataDir);
     let registry: string[];
     try {
       registry = readPluginRegistry(this.shell.config.dataDir);
     } catch (error) {
-      return { text: `登记失败：${error instanceof Error ? error.message : String(error)}。先修好 ${path} 再试。`, receipt: true };
+      const message = error instanceof Error ? error.message : String(error);
+      this.shell.trace.append('plugin_install_rejected', { spec, reason: 'plugin_registry_unreadable', message, ...(origin ? { id: origin.proposalId } : {}) });
+      return { text: `登记失败：${message}。先修好 ${path} 再试。`, receipt: true, data: { plugin_install: { ok: false, spec } } };
     }
     if (registry.includes(spec)) {
-      return { text: `${spec} 已经在注册表里（${path}）。本进程的加载结果见 /plugins 或 /health 的 plugins。`, receipt: true };
+      this.shell.trace.append('plugin_install_rejected', { spec, reason: 'plugin_already_registered', ...(origin ? { id: origin.proposalId } : {}) });
+      return { text: `${spec} 已经在注册表里（${path}）。本进程的加载结果见 /plugins 或 /health 的 plugins。`, receipt: true, data: { plugin_install: { ok: false, spec } } };
     }
     const next = [...registry, spec];
     writePluginRegistry(this.shell.config.dataDir, next);
-    this.shell.trace.append('plugin_registered', { spec, source: 'command', registry: path, registered: next });
+    this.shell.trace.append('plugin_registered', {
+      spec,
+      source: origin ? 'plugin-proposal' : 'command',
+      registry: path,
+      registered: next,
+      ...(origin ? { id: origin.proposalId, name: origin.pluginName } : {}),
+    });
+    if (origin) {
+      this.shell.trace.append('plugin_install_pending_health', {
+        id: origin.proposalId,
+        name: origin.pluginName,
+        spec,
+        provided: origin.provided ?? [],
+        registeredAt: this.shell.now(),
+      });
+    }
     const restart = this.schedulePluginRestart(spec);
     return {
       text: [
@@ -128,6 +148,108 @@ export class PluginsAdmin {
         '重启后用 /plugins 或 curl /health 核对是否真的加载。',
       ].join('\n'),
       receipt: true,
+      data: { plugin_install: { ok: true, spec } },
+    };
+  }
+
+  async installProposal(id: string): Promise<{ ok: boolean; reply: CommandReply }> {
+    const proposal = this.shell.pluginProposals.get(id);
+    if (!proposal || proposal.approvedAt === undefined) {
+      this.shell.trace.append('plugin_approval_required', {
+        id,
+        name: proposal?.name ?? null,
+        spec: proposal?.sourcePath ?? null,
+      });
+      return { ok: false, reply: { text: 'plugin_approval_required: 插件提案尚未获批，不能加载。', receipt: true } };
+    }
+    const reply = await this.installPlugin(proposal.sourcePath, {
+      proposalId: proposal.id,
+      pluginName: proposal.name,
+      provided: proposal.permissions.provide,
+    });
+    const ok = (reply.data?.plugin_install as { ok?: boolean } | undefined)?.ok === true;
+    return { ok, reply };
+  }
+
+  async verifySelfInstalledPlugins(): Promise<void> {
+    const pending = new Map<string, Record<string, unknown>>();
+    for (const record of this.shell.trace.read()) {
+      const spec = typeof record.spec === 'string' ? record.spec : '';
+      if (spec === '') continue;
+      if (record.kind === 'plugin_install_pending_health') pending.set(spec, record);
+      else if (record.kind === 'plugin_health_ok' || record.kind === 'plugin_health_failed' || record.kind === 'plugin_removed') pending.delete(spec);
+    }
+    for (const [spec, record] of pending) {
+      const id = String(record.id ?? '');
+      const name = String(record.name ?? '');
+      const result = this.shell.pluginResults.find((entry) => entry.spec === spec);
+      let failure: string | undefined;
+      if (!result) failure = 'plugin_not_loaded_in_this_process';
+      else if (result.status !== 'loaded') failure = result.reason ?? 'plugin_load_failed';
+      else if (result.name !== name) failure = `plugin_name_mismatch: 期望 ${name}，实际 ${result.name ?? 'unknown'}`;
+      else if (this.shell.host.plugins.get(name)?.status !== 'started') failure = 'plugin_not_started';
+      else {
+        for (const service of Array.isArray(record.provided) ? record.provided as string[] : []) {
+          if (!this.shell.host.hasService(service)) {
+            failure = `plugin_service_missing: ${service}`;
+            break;
+          }
+        }
+      }
+      if (failure) {
+        this.shell.trace.append('plugin_health_failed', { id, name, spec, reason: failure });
+        await this.removePlugin(spec, 'health_check_failed', { proposalId: id, healthReason: failure });
+      } else if (result) {
+        this.shell.trace.append('plugin_health_ok', {
+          id,
+          name,
+          spec,
+          tools: result.tools,
+          commands: result.commands,
+        });
+      }
+    }
+  }
+
+  async removePlugin(
+    rawSpec: string,
+    reason = 'command',
+    extra: { proposalId?: string; healthReason?: string } = {},
+  ): Promise<CommandReply> {
+    const spec = rawSpec.trim();
+    let registry: string[];
+    try {
+      registry = readPluginRegistry(this.shell.config.dataDir);
+    } catch (error) {
+      return { text: `摘除失败：${error instanceof Error ? error.message : String(error)}`, receipt: true };
+    }
+    if (!registry.includes(spec)) {
+      return { text: `${spec} 不在注册表里，没有可摘除的插件。`, receipt: true };
+    }
+    writePluginRegistry(this.shell.config.dataDir, registry.filter((entry) => entry !== spec));
+    this.shell.config.plugins = this.shell.config.plugins.filter((entry) => entry !== spec);
+    const loadedIndex = this.shell.pluginResults.findIndex((entry) => entry.spec === spec);
+    const loaded = loadedIndex >= 0 ? this.shell.pluginResults[loadedIndex] : undefined;
+    if (loadedIndex >= 0) this.shell.pluginResults.splice(loadedIndex, 1);
+    if (loaded?.name) await this.shell.host.unload(loaded.name);
+    const workspace = resolve(pluginWorkspaceDir(this.shell.config.dataDir));
+    const source = resolve(spec);
+    const sourceDir = dirname(source);
+    const sourceRemoved = dirname(sourceDir) === workspace;
+    if (sourceRemoved) rmSync(sourceDir, { recursive: true, force: true });
+    const audit = latestAuditForSpec(this.shell.trace, spec);
+    this.shell.trace.append('plugin_removed', {
+      id: extra.proposalId ?? audit?.id ?? null,
+      name: loaded?.name ?? audit?.name ?? spec,
+      spec,
+      reason,
+      ...(extra.healthReason ? { healthReason: extra.healthReason } : {}),
+      sourceRemoved,
+    });
+    return {
+      text: `已摘除 ${spec}${loaded?.name ? `（${loaded.name}）` : ''}；${sourceRemoved ? '受控工作区源码已删除。' : '源码不在受控工作区，未删除。'}`,
+      receipt: true,
+      data: { plugin_remove: { spec, sourceRemoved } },
     };
   }
 
