@@ -30,6 +30,8 @@ jobs:
         with:
           bun-version: 1.3.11
       - run: bun install --frozen-lockfile
+      - name: Freeze-line budget
+        run: bun scripts/budget-check.ts
       - run: bun run prepublishOnly
       # `shell/` is a private package that lives inside this repo and is deliberately outside the
       # npm tarball (`files` in package.json), so `prepublishOnly` — typecheck, build, test, pack —
