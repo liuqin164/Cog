@@ -236,6 +236,8 @@ export interface MaintenanceTickResult {
     unboundRawEvents: number;
     bindingFailures: number;
     expiredConfirmationCandidates: number;
+    needsConfirmationExpiringSoon: number;
+    highPrivilegeNeedsConfirmationExpiringSoon: number;
     episodeDreamBacklog: number;
     unassignedEpisodeRawEvents: number;
   };

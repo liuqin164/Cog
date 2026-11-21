@@ -71,7 +71,7 @@ describe('in-process kernel host and its loopback HTTP face', () => {
     }
   });
 
-  test('health and doctor publish the same backlog readings as direct SQL (#390)', async () => {
+  test('health, doctor and maintenance tick publish the same backlog readings as direct SQL (#390, #393)', async () => {
     const dir = makeTempDir();
     const dbPath = join(dir, 'memory.sqlite');
     const kernel = createMemoryKernel({ dbPath, projectTimeZone: 'UTC' });
@@ -201,6 +201,15 @@ describe('in-process kernel host and its loopback HTTP face', () => {
       expect(check?.warn).toBe(true);
       expect(check?.detail).toContain('needs_confirmation_expiring_soon=4');
       expect(check?.detail).toContain('high_privilege_expiring_soon=2');
+
+      const tick = kernel.runMaintenanceTick({ projectId, now });
+      expect({
+        needsConfirmationExpiringSoon: tick.chargeVector.needsConfirmationExpiringSoon,
+        highPrivilegeNeedsConfirmationExpiringSoon: tick.chargeVector.highPrivilegeNeedsConfirmationExpiringSoon,
+      }).toEqual({
+        needsConfirmationExpiringSoon: health.backlog.candidateQueue.needsConfirmationExpiringSoon,
+        highPrivilegeNeedsConfirmationExpiringSoon: health.backlog.candidateQueue.highPrivilege.needsConfirmationExpiringSoon,
+      });
     } finally {
       face.stop();
       kernel.close();
