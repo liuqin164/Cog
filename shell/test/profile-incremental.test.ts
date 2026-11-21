@@ -3,6 +3,7 @@ import { laneReportLines } from '../src/state/session-lanes.ts';
 import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
 
 const NO_DREAM = { runKernelNight: false, maxEpisodes: 5, windowStartHour: 0, windowEndHour: 1 };
+const BASE = Date.UTC(2020, 0, 1, 12, 0, 0);
 
 describe('the profile lane compiles incrementally (#329)', () => {
   test('owner facts reach the next /context without a command', async () => {
@@ -12,13 +13,13 @@ describe('the profile lane compiles incrementally (#329)', () => {
       { text: '记下了。', toolCalls: [] },
       { text: '在。', toolCalls: [] },
     ]);
-    const shell = makeShell(makeTempDir('profile-lane-'), provider, { dream: NO_DREAM });
+    const shell = makeShell(makeTempDir('profile-lane-'), provider, { dream: NO_DREAM }, { now: () => BASE });
     await shell.start();
     try {
       await shell.submit('我住在东京都世田谷区三丁目十二号。');
       await shell.submit('我每天早上七点起床。');
       await shell.submit('我对花生过敏，回答请简短一点。');
-      await shell.tick(Date.now());
+      await shell.tick(BASE);
       await shell.submit('继续。');
 
       const projectId = shell.config.projectId;
@@ -39,11 +40,11 @@ describe('the profile lane compiles incrementally (#329)', () => {
 
   test('fifty idle ticks do not recompile the profile', async () => {
     const provider = new ScriptedProvider([{ text: '记下了。', toolCalls: [] }, { text: '在。', toolCalls: [] }]);
-    const shell = makeShell(makeTempDir('profile-ticks-'), provider, { dream: NO_DREAM });
+    const shell = makeShell(makeTempDir('profile-ticks-'), provider, { dream: NO_DREAM }, { now: () => BASE });
     await shell.start();
     try {
       await shell.submit('我对花生过敏。');
-      const base = Date.now();
+      const base = BASE;
       await shell.tick(base);
       const compiles = (): number => shell.trace.read().filter((record) => record.kind === 'profile_compiled').length;
       for (let index = 1; index <= 50; index += 1) await shell.tick(base + index * 30_000);
