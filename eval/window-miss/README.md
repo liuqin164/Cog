@@ -21,8 +21,8 @@ is already visible.
 ## Arms
 
 - **window** — each probe window is sent to the real `MemoryKernel.runDreamCurator` candidate path
-  separately, with `dreamMode: 'normal'`, then all candidates are governed with
-  `promoteDreamCandidates()`.
+  separately, with `dreamMode: 'normal'` and the bounded read-only prior-context lookup, then all
+  candidates are governed with `promoteDreamCandidates()`.
 - **wide** — the same events from every window of that probe are sent in one curator call, with
   the same model route, prompt, mode and governance. Only visibility changes.
 
@@ -49,7 +49,9 @@ data directory is touched. `WINDOW_MISS_LEDGER` or `--ledger` points at another 
 
 Each expectation names candidate types and gold term groups. A candidate or final durable row
 hits when every group has at least one term. A conflict hit must also carry evidence from at least
-two windows, unless a final summary row names both values.
+two windows, unless a final summary row names both values or the candidate cites the prior half in
+`priorContextRefs`. That is context, not evidence: the candidate's `evidenceEventIds` still come
+from the current window.
 
 For duplicates, the count is surviving durable rows (beliefs/facts) when governance produced any,
 otherwise matching candidates. More than one surviving copy is a miss.
