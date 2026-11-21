@@ -21,7 +21,6 @@ import {
   cogmemLauncherPath,
   hasCogmemLauncher,
   readCogmemLauncherTarget,
-  resolveCogmemInstallation,
   resolveCogmemInvocation,
   type InstallGate,
   type InstallGateDiagnostic,
@@ -446,22 +445,14 @@ if (envPath) {
     }
   }
 
-  // The managed launcher is what keeps a configuration valid across an upgrade, a
-  // moved checkout and a changed npm prefix (#114). Its absence is not a failure —
-  // `init` writes it — but a launcher that points at nothing is, because every
-  // configuration written after this one is calling a file that cannot run the CLI.
-  const launcherInvocation = resolveCogmemInstallation(process.env) ?? 'cogmem';
+  // This release does not write the managed launcher, so its absence says nothing.
+  // A launcher that points at nothing does: it is the state a moved 4.x install left.
   const launcherFinding = hasCogmemLauncher() && !readCogmemLauncherTarget()
     ? {
       code: 'launcher_target_missing',
       message: `The managed launcher ${cogmemLauncherPath()} has no installation to run. Delete it; this release does not write one.`,
     }
-    : !hasCogmemLauncher() && resolveCogmemInstallation(process.env)
-      ? {
-        code: 'launcher_missing',
-        message: `No managed launcher at ${cogmemLauncherPath()}: this release does not write one. Run ${launcherInvocation} install to register the companion.`,
-      }
-      : undefined;
+    : undefined;
   if (launcherFinding) {
     warn(launcherFinding.code, launcherFinding.message);
     gateDiagnostics.push(launcherFinding);
