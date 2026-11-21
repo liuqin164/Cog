@@ -18,7 +18,7 @@
 | 承诺 | 答应过的事，到期提醒一次 | emergence 插件查到期 + working_set 车道 | F16 测试；记分卡 A2 | ✅ |
 | 意图 | 它自己打算做的事，到点自醒 | resident-tick 唤醒循环扫 dueAt（compile＋list active＋schedule 自醒） | F22 测试（intention-book 契约＋wake-intention） | ✅ |
 | 灵魂 | 性格文本：主人可改，它只能提案 | pinned 车道每轮逐字注入；propose_soul_edit 只产草稿 | F17 测试（直写被拒 soul_agent_write_forbidden） | ✅ |
-| 遗忘 | 按时间窗真删账本及派生数据，含壳侧 checkpoint 引用与 trace 的 `run_prompt`（#331） | /forget 两步（预览→确认）；checkpoint 的 assignment/away/task 文本只存账本 eventId，恢复时回读 | #303 测试（secure_delete＋VACUUM）；#332 遍历式残留测试；#331 壳探针（四个文件零命中＋快照恢复 assignment/away）；记分卡 forget 由 3 文件残留转 0；10k 窗口 629 ms／峰值 210 MB（基线 621 ms／207 MB） | 旧库派生表按项目/事件关联删除；FTS 残留未复现，由遍历测试守住 |
+| 遗忘 | 按时间窗真删账本及派生数据，含壳侧 checkpoint 引用与 trace 的 `run_prompt`（#331） | /forget 两步（预览→确认）；checkpoint 的 assignment/away/task 文本只存账本 eventId，恢复时回读 | #303 测试（secure_delete＋VACUUM）；#332 sqlite_master 枚举全表全列的残留测试；#373 pending_bindings 随 interaction_units 级联并做 DB 字节扫描；#331 壳探针（四个文件零命中＋快照恢复 assignment/away）；记分卡 forget 由 3 文件残留转 0；10k 窗口 629 ms／峰值 210 MB（基线 621 ms／207 MB） | 旧库派生表按项目/事件关联删除；#373 后 pending_bindings 的 reference_text 随所属 unit 删除，模式驱动遍历守残留 |
 | 共享与导入 | 家族共享集合、外部记忆导入桥 | 内核 [shared] 开关 + import 通道（默认关） | #143/#146 测试 | ✅ |
 
 ## 二、壳 · 会话

@@ -170,6 +170,19 @@ export class KernelAgentMemoryBackend {
     }).total;
   }
 
+  countPendingBindingsBetween(input: { projectId: string; startTime: number; endTime: number }): number {
+    const row = this.kernel.factStore.getDatabase().prepare(`
+      SELECT COUNT(*) AS c FROM pending_bindings WHERE unit_id IN (
+        SELECT unit_id FROM interaction_units WHERE json_valid(message_neuron_ids_json) AND EXISTS (
+          SELECT 1 FROM json_each(message_neuron_ids_json) ref
+          JOIN memory_events event ON event.event_id = ref.value
+          WHERE COALESCE(event.project_id,'')=? AND event.occurred_at>=? AND event.occurred_at<?
+        )
+      )
+    `).get(input.projectId, input.startTime, input.endTime) as { c: number };
+    return Number(row.c);
+  }
+
   nextTurnSeq(threadId: string, projectId: string): number {
     return this.kernel.eventStore.getNextTurnSeq(threadId, projectId);
   }

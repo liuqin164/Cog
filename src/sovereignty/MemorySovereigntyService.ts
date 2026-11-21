@@ -79,6 +79,7 @@ export const SOVEREIGNTY_DELETE_COUNT_FIELDS = [
   'projectBranches',
   'topologyMembership',
   'interactionUnits',
+  'pendingBindings',
   'cognitiveNodes',
   'traceEvents',
 ] as const;
@@ -379,6 +380,13 @@ export class MemorySovereigntyService {
       deleted.topologyMembership = this.deleteIfTable('topology_membership',
         `DELETE FROM topology_membership WHERE neuron_id IN (SELECT id FROM _sovereignty_event_ids) OR COALESCE(project_id,'')=?`,
         [scope]);
+      deleted.pendingBindings = this.deleteIfTable('pending_bindings',
+        `DELETE FROM pending_bindings WHERE unit_id IN (
+           SELECT unit_id FROM interaction_units WHERE json_valid(message_neuron_ids_json) AND EXISTS (
+             SELECT 1 FROM json_each(message_neuron_ids_json) WHERE value IN (SELECT id FROM _sovereignty_event_ids)
+           )
+         )`,
+        []);
       deleted.interactionUnits = this.deleteIfTable('interaction_units',
         `DELETE FROM interaction_units WHERE json_valid(message_neuron_ids_json) AND EXISTS (
            SELECT 1 FROM json_each(message_neuron_ids_json) WHERE value IN (SELECT id FROM _sovereignty_event_ids)

@@ -104,6 +104,7 @@ newest-first, and the order does not change between runs.
 | `projectBranches` | Legacy project branches for the project. |
 | `topologyMembership` | Legacy topology rows naming a removed event. |
 | `interactionUnits` | Interaction units whose messages were removed. |
+| `pendingBindings` | Pending interaction references belonging to those units. |
 | `cognitiveNodes` | Legacy cognitive nodes for the project or a removed event. |
 | `traceEvents` | Recall traces stamped inside the window. |
 
