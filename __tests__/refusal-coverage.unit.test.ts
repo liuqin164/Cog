@@ -23,7 +23,6 @@ const WIRED = [
 ];
 /** Reaches a refusal through a path of its own, or does not speak the CLI protocol at all. */
 const EXCEPTIONS: Record<string, string> = {
-  'doctor': 'renders its own failing gate, which maps the same step definition',
   'observatory': 'answers over HTTP, where a CLI refusal document is not the protocol',
   'import-support': 'a helper module for import, not a command entry: errors surface at import.ts',
   'RefusalDocument': 'defines the shared exit every other entry calls',
@@ -34,7 +33,7 @@ const EXCEPTIONS: Record<string, string> = {
  * of the version check (#150): it reads the registry and writes a cache file, and it is silent by
  * contract, so it has no refusal document to render.
  */
-const NO_DATABASE = ['CliArgs', 'CliJson', 'cog', 'cogmem', 'install', 'normalize-transcript', 'version-check-refresh'];
+const NO_DATABASE = ['CliArgs', 'CliJson', 'cog', 'cogmem', 'doctor', 'install', 'normalize-transcript', 'version-check-refresh'];
 
 test('every entrypoint that opens a database renders refusals through the shared document', () => {
   const entries = readdirSync(BIN).filter((file) => file.endsWith('.ts')).map((file) => file.slice(0, -3));

@@ -39,8 +39,8 @@ before it touches the machine and names what is missing. The other flags are `--
 The default data directory is `~/.cogmem/companion` (mode 0700); the nightly snapshots and weekly
 archives there are complete plaintext copies of the database. A warning such as an unavailable
 local embedding model means a degraded install, not a failed one. After `cogmem install`,
-`cogmem` is usable directly: the management CLI resolves the companion's own database without
-a `~/.cogmem/config.toml`.
+`cogmem` is usable directly: data commands resolve the companion's own database without a
+`~/.cogmem/config.toml`, and `cogmem doctor` reads `install.json` plus the resident's `/health`.
 
 ### Vector provider
 
@@ -91,7 +91,8 @@ cogmem doctor
 ## 2. The kernel configuration file
 
 The companion installer writes its own settings, so a kernel `.cogmem/config.toml` is not created by
-any command. One is still read when you pass `--config <config.toml>`; every role has its own section:
+any command. Data commands still read one when you pass `--config <config.toml>`; every role has its
+own section:
 
 ```toml
 [embedding]
@@ -116,9 +117,25 @@ in the environment instead of the file. Valid providers are `deterministic_local
 `memory_model` and `reasoning_model`; anything else is refused at parse time as
 `invalid_model_provider` rather than silently falling back.
 
-`memory_model` is the one that decides whether the gate is degraded: while it reads `rule_only`,
-`doctor` reports the WARN. Setting it to a real provider and running `cogmem doctor` again is what
-turns the gate back to `OK`.
+`memory_model` is the one that decides whether the resident is degraded. While the running host
+reports `rule_only` or `unreachable` on `/health`, `cogmem doctor` reports the WARN; setting a real
+provider and restarting the resident turns the gate back to `OK`.
+
+### Config sources and precedence
+
+There are three source kinds: a kernel `config.toml`, the companion's `cogmem-cli.toml`, and the
+environment. Data commands resolve them in this order:
+
+1. `--config <file>` — an explicit path that must exist and be a file.
+2. `COGMEM_CONFIG` — the environment override the resident exports to its own bash children.
+3. The nearest project `.cogmem/config.toml`, walking up from the current directory.
+4. The global `~/.cogmem/config.toml`.
+5. The companion `<dataDir>/cogmem-cli.toml`, only when `<dataDir>/install.json` exists.
+
+`${ENV_VAR}` inside a TOML value (an API key, base URL or model) is the value-level environment
+override. `cogmem doctor` is deliberately outside this chain: it resolves the companion data
+directory from `install.json` (default `~/.cogmem/companion`) and reads the running host's `/health`
+and installation state, so it never opens the database and never picks a second config.
 
 ### The language the social vocabulary speaks
 
@@ -173,12 +190,8 @@ When a newer release exists, a normal command adds one line on stderr:
 cogmem <latest> is available (you have <current>). Run `/upgrade` in `cog`; it stops the resident, swaps the package, verifies it and starts it again.
 ```
 
-`cogmem doctor` reports the same thing in full, and separates three facts that an upgrade can leave
-disagreeing: the **disk** version, the **latest** release, and the **serving** version of a resident
-process. When a resident is still serving an older tree, doctor says so explicitly — `the resident
-process is still serving <serving> …; the disk is at <disk>` — and `--json` carries
-`version.disk`, `version.latest`, `version.updateAvailable`, `version.serving`, `version.skew` and
-`version.restartRequired`.
+The one-line notice is the update report. `cogmem doctor` does not read the release registry: it
+reports the health of the resident that is running now, from that resident's own `/health`.
 
 ### Turning the check off
 

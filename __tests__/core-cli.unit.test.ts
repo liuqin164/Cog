@@ -8,58 +8,10 @@ import { createMemoryKernel } from '../src/factory.js';
 import { makeTempDir } from './helpers/tmp.js';
 
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
-const doctorBin = join(coreRoot, 'src/bin/doctor.ts');
 const cogmemBin = join(coreRoot, 'src/bin/cogmem.ts');
 const snapshotBin = join(coreRoot, 'src/bin/snapshot.ts');
 const dreamBin = join(coreRoot, 'src/bin/dream.ts');
 const memoryBin = join(coreRoot, 'src/bin/memory.ts');
-
-test('doctor validates a structured cogmem config file', async () => {
-  const dir = makeTempDir('cogmem-doctor-');
-  const configPath = join(dir, '.cogmem', 'config.toml');
-  mkdirSync(join(dir, '.cogmem'), { recursive: true });
-  writeFileSync(configPath, [
-    '[core]',
-    'db_path = "brain.db"',
-    'vector_backend = "sqlite-vec"',
-  ].join('\n'));
-
-  const proc = Bun.spawn({
-    cmd: ['bun', doctorBin, '--config', configPath],
-    cwd: coreRoot,
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-  const output = await new Response(proc.stdout).text();
-  const errorOutput = await new Response(proc.stderr).text();
-  const exitCode = await proc.exited;
-
-  expect(errorOutput).toBe('');
-  expect(exitCode).toBe(0);
-  expect(output).toContain('OK configuration parsed');
-  expect(output).toContain('OK cogmem home');
-  expect(output).toContain('OK kernel ready');
-});
-
-test('doctor rejects legacy env-path configuration', async () => {
-  const dir = makeTempDir('cogmem-doctor-legacy-');
-  const envPath = join(dir, '.cogmem.env');
-  writeFileSync(envPath, 'COGMEM_DB=brain.db\n');
-
-  const proc = Bun.spawn({
-    cmd: ['bun', doctorBin, '--env-path', envPath],
-    cwd: coreRoot,
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-  const output = await new Response(proc.stdout).text();
-  const errorOutput = await new Response(proc.stderr).text();
-  const exitCode = await proc.exited;
-
-  expect(output).toBe('');
-  expect(exitCode).toBe(1);
-  expect(errorOutput).toContain('--env-path is no longer supported');
-});
 
 test('#88 memory recall reads a project whose agent is not the literal default', async () => {
   const dir = makeTempDir('cogmem-cli-recall-scope-');
@@ -106,47 +58,13 @@ test('#88 memory recall reads a project whose agent is not the literal default',
   kernel.close();
 });
 
-test('doctor prints a high vector dimension warning for structured config', async () => {
-  const dir = makeTempDir('cogmem-doctor-vector-warning-');
-  const configPath = join(dir, '.cogmem', 'config.toml');
-  mkdirSync(join(dir, '.cogmem'), { recursive: true });
-  writeFileSync(configPath, [
-    '[core]',
-    'db_path = "brain.db"',
-    'vector_dimension = 4096',
-  ].join('\n'));
-
-  const proc = Bun.spawn({
-    cmd: ['bun', doctorBin, '--config', configPath],
-    cwd: coreRoot,
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-  const output = await new Response(proc.stdout).text();
-  const errorOutput = await new Response(proc.stderr).text();
-  const exitCode = await proc.exited;
-
-  expect(errorOutput).toBe('');
-  expect(exitCode).toBe(0);
-  expect(output).toContain('WARN high_vector_dimension');
-  expect(output).toContain('100,000 memories');
-});
-
 test('snapshot export uses configured database and default snapshots directory', async () => {
   const dir = makeTempDir('cogmem-snapshot-config-');
   const configPath = join(dir, '.cogmem', 'config.toml');
   mkdirSync(join(dir, '.cogmem'), { recursive: true });
   writeFileSync(configPath, '[core]\ndb_path = "memory.db"\n');
 
-  const seed = Bun.spawn({
-    cmd: ['bun', doctorBin, '--config', configPath],
-    cwd: coreRoot,
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-  await new Response(seed.stdout).text();
-  await new Response(seed.stderr).text();
-  expect(await seed.exited).toBe(0);
+  createMemoryKernel({ dbPath: join(dir, '.cogmem', 'memory.db') }).close();
 
   const proc = Bun.spawn({
     cmd: ['bun', snapshotBin, 'export', '--config', configPath],
@@ -163,30 +81,6 @@ test('snapshot export uses configured database and default snapshots directory',
   const parsed = JSON.parse(output);
   expect(parsed.snapshotPath).toContain(join(dir, '.cogmem', 'snapshots'));
   expect(existsSync(parsed.snapshotPath)).toBe(true);
-});
-
-test('doctor --storage reads the configured database without --db', async () => {
-  // This was `cogmem re-embed status`, whose only job was to report backfill progress. The
-  // progress is storage state, so it reads from the storage report — and the property this
-  // test held (the database is resolved from the config, not from a flag) still holds there.
-  const dir = makeTempDir('cogmem-storage-config-');
-  const configPath = join(dir, '.cogmem', 'config.toml');
-  mkdirSync(join(dir, '.cogmem'), { recursive: true });
-  writeFileSync(configPath, '[core]\ndb_path = "memory.db"\n');
-
-  const proc = Bun.spawn({
-    cmd: ['bun', doctorBin, '--storage', '--config', configPath, '--json'],
-    cwd: coreRoot,
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-  const output = await new Response(proc.stdout).text();
-  const errorOutput = await new Response(proc.stderr).text();
-  expect({ exitCode: await proc.exited, stderr: errorOutput }).toEqual({ exitCode: 0, stderr: '' });
-  const parsed = JSON.parse(output) as { dbPath?: string; storage?: { rawEvents?: unknown; embeddings?: unknown } };
-  expect(parsed.dbPath).toBe(join(dir, '.cogmem', 'memory.db'));
-  expect(parsed.storage?.rawEvents).toBe(0);
-  expect(parsed.storage?.embeddings).toEqual({ completed: 0, total: 0, failed: 0 });
 });
 
 test('memory CLI explicit database recall requires an explicit project timezone', async () => {

@@ -630,14 +630,11 @@ test('agent import CLIs reject legacy env-path configuration', async () => {
 
 test('unified cogmem CLI dispatches doctor', async () => {
   const dir = makeTempDir('cogmem-unified-cli-');
-  const configPath = join(dir, '.cogmem', 'config.toml');
-  mkdirSync(dirname(configPath), { recursive: true });
-  writeFileSync(configPath, '[core]\ndb_path = "memory.db"\n');
 
-  const doctor = await runCli(['bun', cogmemBin, 'doctor', '--config', configPath]);
+  const doctor = await runCli(['bun', cogmemBin, 'doctor', '--json'], dir, { HOME: dir, COGMEM_UPDATE_CHECK: '0' });
   expect(doctor.stderr).toBe('');
   expect(doctor.exitCode).toBe(0);
-  expect(doctor.stdout).toContain('OK kernel ready');
+  expect((JSON.parse(doctor.stdout) as { installGate: { level: string } }).installGate.level).toBe('not_installed');
 });
 
 test('the package exposes two bins, and the migration commands come through the dispatcher', () => {

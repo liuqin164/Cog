@@ -39,9 +39,9 @@ cog
 5. **resident** — a user-level service (systemd user unit on Linux, launchd agent on macOS; no sudo), then `doctor` and the observatory address.
 6. **awake** — write a probe memory through the resident, restart it, and recall the probe. A failure here means the install did not happen.
 
-After `cogmem install`, `cogmem` works directly: the management CLI resolves the companion's own
-database, so `cogmem doctor` and `cogmem memory recall` operate on that install without a
-`~/.cogmem/config.toml`.
+After `cogmem install`, `cogmem` works directly: data commands resolve the companion's own database,
+and `cogmem doctor` reads the installer's `install.json` plus the running resident's `/health`
+without a `~/.cogmem/config.toml` or a second database connection.
 
 The default data directory is `~/.cogmem/companion` (mode 0700), with `memory.sqlite` and a `snapshots/` directory inside it. The resident listens on loopback only.
 
@@ -73,9 +73,9 @@ is nothing to launch by hand unless you want to.
 - On Linux the resident is a systemd **user** unit; on macOS it is a launchd **agent**. Both are
   user-level, so they do not need root and they come back after a reboot when the service manager
   is enabled.
-- `cogmem doctor` is the check: it reports the disk version, the serving version, whether the
-  resident is running, and whether the bash tool is isolated. A stale resident is reported rather
-  than silently trusted.
+- `cogmem doctor` is the check: it reads the running resident's `/health` and reports kernel
+  identity, database path, loopback bind, memory cap, context assembly, the service/process and
+  whether the bash tool is isolated. It never opens `memory.sqlite` itself.
 - `cogmem install` again repairs or re-registers the service. For a manual start against another
   tree, `cog --data <dir> --workspace <dir>` is the explicit form.
 

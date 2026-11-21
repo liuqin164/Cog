@@ -1,6 +1,5 @@
 import { expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { FacetQueryPlanner } from '../src/atlas/FacetQueryPlanner.js';
@@ -90,17 +89,12 @@ test('the fallback never throws, so a typo cannot stop Cogmem from starting', ()
  * Before the fix `episode_kinds = []` passed validation, so `resolveTaxonomy` answered `source: custom` with an
  * empty kind list, `doctor` reported `custom`, and every frame was judged `invalid_episode_kind`.
  */
-test('an empty vocabulary falls back to the default, and doctor records the fallback', () => {
+test('an empty vocabulary falls back to the default and records why', () => {
   const path = withConfig('[taxonomy]\nepisode_kinds = []\n');
   const loaded = loadCogmemConfig({ configPath: path, env: { HOME: '/nonexistent' } as never });
   expect(loaded.taxonomyStatus?.source).toBe('invalid-fell-back');
   expect(loaded.taxonomyStatus?.reasons).toContain('episode_kinds_must_not_be_empty');
   expect(loaded.taxonomyStatus?.taxonomy.episodeKinds.map((kind) => kind.id)).toEqual([...MEMORY_FRAME_EPISODE_KINDS]);
-
-  const run = spawnSync('bun', [join(import.meta.dir, '..', 'src', 'bin', 'cogmem.ts'), 'doctor', '--config', path], { encoding: 'utf8' });
-  const text = `${run.stdout ?? ''}${run.stderr ?? ''}`;
-  expect(text).toContain('taxonomy_fell_back');
-  expect(text).toContain('episode_kinds_must_not_be_empty');
 });
 
 /**

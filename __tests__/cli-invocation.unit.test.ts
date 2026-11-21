@@ -49,13 +49,6 @@ function installedLauncher(dir: string): string {
   return binDir;
 }
 
-function writeConfig(dir: string, body: string): string {
-  const configPath = join(dir, '.cogmem', 'config.toml');
-  mkdirSync(dirname(configPath), { recursive: true });
-  writeFileSync(configPath, body);
-  return configPath;
-}
-
 describe('the invocation resolver', () => {
   test('recall --json carries semanticIndex (#135)', async () => {
   // The CLI assembled its recall output by hand, so a field added to the backend result
@@ -175,10 +168,8 @@ describe('printed steps run as printed', () => {
   test('off PATH the gate step is absolute, and the export line is carried', async () => {
     const dir = makeTempDir('cogmem-invocation-gate-');
     const binDir = installedLauncher(dir);
-    const configPath = writeConfig(dir, '[core]\ndb_path = "memory.db"\n');
-    const launcher = join(binDir, 'cogmem');
 
-    const { stdout, exitCode } = await run(['bun', doctorBin, '--config', configPath, '--json'], {
+    const { stdout, exitCode } = await run([process.execPath, doctorBin, '--json'], {
       env: { COGMEM_BIN_DIR: binDir, PATH: '/usr/bin:/bin', HOME: dir },
     });
     expect(exitCode).toBe(0);
@@ -193,22 +184,13 @@ describe('printed steps run as printed', () => {
       if (step.actor === 'host' || step.id === 'fix_path') continue;
       expectRunnableCommand(step.command);
     }
-
-    // And the absolute command the gate printed actually executes, as printed.
-    const executed = await run([launcher, 'doctor', '--config', configPath, '--json'], {
-      cwd: dir,
-      env: { COGMEM_BIN_DIR: binDir, PATH: '/usr/bin:/bin', HOME: dir },
-    });
-    expect(executed.stderr).toBe('');
-    expect(executed.exitCode).toBe(0);
-    expect(JSON.parse(executed.stdout).installGate.level).toBe('warn');
   });
 
   test('the not-installed state carries the export line as well', async () => {
     const dir = makeTempDir('cogmem-invocation-freshinstall-');
     const binDir = installedLauncher(dir);
 
-    const { stdout, exitCode } = await run(['bun', doctorBin, '--config', join(dir, 'missing', 'config.toml'), '--json'], {
+    const { stdout, exitCode } = await run([process.execPath, doctorBin, '--json'], {
       env: { COGMEM_BIN_DIR: binDir, PATH: '/usr/bin:/bin', HOME: dir },
     });
     expect(exitCode).toBe(0);
@@ -225,7 +207,7 @@ describe('printed steps run as printed', () => {
     const binDir = installedLauncher(dir);
     const launcher = join(binDir, 'cogmem');
 
-    const { stdout } = await run(['bun', doctorBin, '--config', join(dir, 'missing', 'config.toml'), '--json'], {
+    const { stdout } = await run([process.execPath, doctorBin, '--json'], {
       env: { COGMEM_BIN_DIR: binDir, PATH: '/usr/bin:/bin', HOME: dir },
     });
     const parsed = JSON.parse(stdout) as { nextSteps: InstallStep[]; installGate: { level: string } };
@@ -345,7 +327,7 @@ test('the JSON command field names the command the way every other one does', ()
 
   // The commands that hand-roll their envelope are checked as they run.
   const runs: Array<[string, string[]]> = [
-    ['doctor.ts', ['--config', config]],
+    ['doctor.ts', ['--data', join(dir, 'companion')]],
     ['repair.ts', ['project-scope', '--from', 'a', '--to', 'b', '--dry-run', '--config', config]],
   ];
   for (const [file, args] of runs) {
