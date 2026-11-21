@@ -34,7 +34,7 @@
 | 时间 | 每轮注入分钟级当前时间，保前缀缓存 | clock 插件 | #320 测试（相邻请求前缀 100% 一致） | ✅ |
 | 秘密脱敏 | 密钥类文本进账本前抹掉 | capture 插件＋模型路由的 redactSecretText | 根套件脱敏测试 | ✅ |
 | 模型接入 | 自定义 OpenAI 协议端点＋mg 路由；SSE 流式，非 SSE 回退整包 | provider 插件每轮调用；delta 走既有 message_update | 3-chunk 流式测试（3 次 message_update、终文一致）与整包回退测试；真实网关 TTFT 3.46 s／总 18.8 s（上游首包 2.7 s，未达 1.5 s 目标） | ✅ 流式已接；TTFT 受上游限制 |
-| 嵌入 | 本地 bge 向量，可换 ollama/OpenAI 协议 | 召回车道算向量；壳启动 warm 成功后调 backfillEventEmbeddings 补嵌旧事件 | #313 测试；round 128 补嵌判别测试（换模型重开后 nearest 由空转命中、stale 转 false） | ✅ 换模型/维度后旧事件自动补嵌（#360 关）；仅壳本地嵌入 warm 成功后执行，失败不致命 |
+| 嵌入 | 本地 bge 向量，可换 ollama/OpenAI 协议 | 召回车道算向量；壳启动 warm 成功后调 backfillEventEmbeddings 补嵌旧事件；常驻 tick 每 60s 增量补嵌一批（默认 16 条，`freshness.embeddingBatch`/`intervalMs` 可配，扫完一圈从头再扫），并把未嵌入数/最老未嵌入年龄/未绑定数写入 /health 的 freshness 读数；回合级 queueEventEmbedding 失败的事件留在同一积压口径由下一轮补 | #313 测试；round 128 补嵌判别测试（换模型重开后 nearest 由空转命中、stale 转 false）；#388 常驻不重启：三类无向量事件＋未绑定事件一个 tick 归零，/health 与回合在慢嵌入等待期间照常作答；失败回合嵌入落积压后被 tick 补上 | ✅ 换模型/维度后旧事件自动补嵌（#360 关）；增量补嵌失败不致命，留在积压下一圈重试 |
 | 观测台（星海） | 网页看记忆/图谱、改灵魂 | kernel-host 挂 observatory，令牌文件鉴权 | #308 令牌测试；日常人工使用 | ✅ |
 | 终端 | `cog` TUI＋远程 attach | channels/terminal＋attach server | TUI 测试 | ✅ |
 | 网页工具 | 抓网页/搜索（插件） | 默认不加载，显式启用才挂 | #306 测试（默认零 fetch） | ✅ 可选 |
@@ -50,7 +50,7 @@
 
 | 功能 | 是什么 | 谁在用 | 靠什么证明 | 状态 |
 |---|---|---|---|---|
-| 健康与备份 | 整脑快照（距上次 ≥24h 触发，不依赖 Dream）＋健康自检；上下文装配失败进 /health、doctor 与 daily 报告，连续 3 次读作 degraded（#350） | 快照落 snapshots/；/health 面 | F19 恢复演练 13/13；#327 假时钟 48h 无 Dream 仍写 1 次快照；#350 context-assembly-health 探针（必抛错车道仍发请求、计数递增、3 次降级、恢复清零） | ✅ |
+| 健康与备份 | 整脑快照（距上次 ≥24h 触发，不依赖 Dream）＋健康自检；上下文装配失败进 /health、doctor 与 daily 报告，连续 3 次读作 degraded（#350）；/health 的 freshness 报未嵌入事件数、最老未嵌入年龄与未绑定事件数，由常驻 tick 的回填轮更新（读请求不扫账本） | 快照落 snapshots/；/health 面 | F19 恢复演练 13/13；#327 假时钟 48h 无 Dream 仍写 1 次快照；#350 context-assembly-health 探针（必抛错车道仍发请求、计数递增、3 次降级、恢复清零）；#388 freshness 三读一个 tick 内归零，回填等待嵌入时 /health 与回合不被堵 | ✅ |
 | 升级 | 预告→静默期→分阶段装→健康门→失败回滚 | upgrade/supervisor（`/upgrade` 是唯一正主） | 升级单元测试 | ⚠️ 实机升级考试未做 — 生存跑阶段验；`cogmem update` 与自动升级已删（#354 A） |
 | 安装/doctor | 一条命令装好＋自检 | install/installer＋shell doctor | box 六步自检实测；#354 B 的 doctor-no-db 测试（损坏 memory.sqlite 仍过、宿主停止则 resident-health FAIL）；#344 同伴-only HOME 与配置优先级矩阵（COGMEM_CONFIG > 项目 > 全局 > companion；recall 读同伴库）；#372 宿主 /health 暴露 storage 进度（raw events、embeddings completed/total/failed、recall decisions 行数/上限），doctor 读数与 EventEmbeddingStore.getProgress() 一致 | ✅ doctor 唯一实现 = 壳侧 runDoctor，管理面只读 install.json＋/health、不开 DB；嵌入覆盖与 recall 决策读数经 /health 恢复（#372）；重复安装/doctor 栈已合并（#354 A/B），旧 --config/--storage/secret/shared 读数删除；壳 env 覆盖统一 COG_ 前缀（#370，COGMEM_CONFIG 不变） |
 | 行为评测 | F13 场景集＋连续性记分卡 | eval/behavior＋记分卡 | F13 box 16/16；连续性记分卡 6/6（#367：长会话 593/600、max_request_tokens 5994/6000、夜间补做／浮现上限／预算恢复／SIGKILL 存续全绿） | ✅ 六条全绿（#367）；F13 box 本题未重跑 |
