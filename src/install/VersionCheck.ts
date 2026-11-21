@@ -188,7 +188,6 @@ export async function fetchLatestVersion(options: FetchLatestOptions = {}): Prom
     const response = await doFetch(`${registryUrl}/${encodeURIComponent(packageName)}/latest`, {
       // No version and no machine detail: the ticket forbids sending anything about
       // this install, and a User-Agent carrying `cogmem/<version>` is exactly that.
-      // The same identifier `update-release` sends, so one product has one name.
       headers: { Accept: 'application/json', 'User-Agent': 'cogmem-update' },
       signal: controller.signal,
     });
