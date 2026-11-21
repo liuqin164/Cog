@@ -22,6 +22,7 @@ const DEFAULT_MODEL = 'auto/deepseek-v4.1-flash';
 interface CandidateRecord {
   candidateType: string;
   status: string;
+  statusReason?: string;
   confidence: number;
   content: unknown;
   evidence: unknown;
@@ -31,6 +32,7 @@ interface CalibrationSample {
   confidence: number;
   deterministic: boolean;
   promoted: boolean;
+  statusReason?: string;
 }
 
 interface CalibrationBucket {
@@ -45,6 +47,8 @@ interface CalibrationResult {
   deterministic: CalibrationBucket;
   modelCandidates: number;
   modelPromoted: number;
+  modelEligible: number;
+  excludedByReason: Array<{ reason: string; count: number }>;
   deterministicCandidates: number;
   deterministicPromoted: number;
 }
@@ -166,6 +170,13 @@ const CALIBRATION_BUCKETS: Array<{ label: string; min: number; max: number }> = 
   { label: '0.90–<0.95', min: 0.9, max: 0.95 },
   { label: '>=0.95', min: 0.95, max: Infinity },
 ];
+
+const CONFIDENCE_DECISION_REASONS = new Set([
+  'organization_candidate_below_min_confidence',
+  'summary_like_below_min_promote_confidence',
+  'preference_like_below_min_promote_confidence',
+  'below_min_promote_confidence',
+]);
 
 const repo = resolve(import.meta.dir, '../..');
 const outDir = resolve(argument('out-dir') ?? import.meta.dir);
@@ -425,24 +436,39 @@ function recordCalibration(candidates: CandidateRecord[]): void {
       confidence: candidate.confidence,
       deterministic: record(candidate.content).source !== 'llm_dream_curator_candidate',
       promoted: candidate.status === 'promoted',
+      statusReason: candidate.statusReason,
     });
   }
 }
 
 function summarizeCalibration(samples: CalibrationSample[]): CalibrationResult {
+  const modelSamples = samples.filter((sample) => !sample.deterministic);
+  const eligible = modelSamples.filter(isConfidenceDecision);
   const model = CALIBRATION_BUCKETS.map((bucket) => {
-    const items = samples.filter((sample) => !sample.deterministic && sample.confidence >= bucket.min && sample.confidence < bucket.max);
+    const items = eligible.filter((sample) => sample.confidence >= bucket.min && sample.confidence < bucket.max);
     return calibrationBucket(bucket.label, items);
   });
   const deterministic = calibrationBucket('deterministic (all)', samples.filter((sample) => sample.deterministic));
+  const excluded = new Map<string, number>();
+  for (const sample of modelSamples) {
+    if (isConfidenceDecision(sample)) continue;
+    const reason = sample.statusReason ?? 'no_confidence_decision';
+    excluded.set(reason, (excluded.get(reason) ?? 0) + 1);
+  }
   return {
     model,
     deterministic,
-    modelCandidates: model.reduce((sum, bucket) => sum + bucket.candidates, 0),
-    modelPromoted: model.reduce((sum, bucket) => sum + bucket.promoted, 0),
+    modelCandidates: modelSamples.length,
+    modelPromoted: modelSamples.filter((sample) => sample.promoted).length,
+    modelEligible: eligible.length,
+    excludedByReason: [...excluded].map(([reason, count]) => ({ reason, count })).sort((a, b) => b.count - a.count),
     deterministicCandidates: deterministic.candidates,
     deterministicPromoted: deterministic.promoted,
   };
+}
+
+function isConfidenceDecision(sample: CalibrationSample): boolean {
+  return sample.promoted || (sample.statusReason !== undefined && CONFIDENCE_DECISION_REASONS.has(sample.statusReason));
 }
 
 function calibrationBucket(label: string, samples: CalibrationSample[]): CalibrationBucket {
@@ -644,12 +670,17 @@ function renderMarkdown(result: ScorecardResult): string {
     '',
     '## Confidence calibration',
     '',
+    `Candidates are bucketed only when CPU governance decided them on confidence: promoted, or held below a confidence threshold. ${result.calibration.modelEligible}/${result.calibration.modelCandidates} model candidates reached that decision.`,
+    '',
     '| bucket | candidates | promoted | survival |',
     '| --- | --- | --- | --- |',
     ...result.calibration.model.map((bucket) => `| ${bucket.bucket} | ${bucket.candidates} | ${bucket.promoted} | ${percent(bucket.promoted, bucket.candidates)} |`),
     `| ${result.calibration.deterministic.bucket} | ${result.calibration.deterministic.candidates} | ${result.calibration.deterministic.promoted} | ${percent(result.calibration.deterministic.promoted, result.calibration.deterministic.candidates)} |`,
     '',
     `Model candidates: ${result.calibration.modelPromoted}/${result.calibration.modelCandidates} promoted (${percent(result.calibration.modelPromoted, result.calibration.modelCandidates)}). Deterministic candidates: ${result.calibration.deterministicPromoted}/${result.calibration.deterministicCandidates} promoted (${percent(result.calibration.deterministicPromoted, result.calibration.deterministicCandidates)}).`,
+    result.calibration.excludedByReason.length
+      ? `Gated before a confidence decision: ${result.calibration.excludedByReason.map((item) => `${item.reason} ${item.count}`).join('; ')}.`
+      : 'Gated before a confidence decision: none.',
     '',
     '## Cost',
     '',
