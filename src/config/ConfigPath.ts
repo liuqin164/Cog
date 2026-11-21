@@ -62,6 +62,56 @@ export function defaultCogmemConfigPath(env: EnvLike = process.env): string {
   return join(defaultCogmemHome(env), 'config.toml');
 }
 
+interface CompanionInstall {
+  dataDir: string;
+  projectId?: string;
+  agentId?: string;
+}
+
+function readCompanionInstall(env: EnvLike): CompanionInstall | undefined {
+  const companionDir = join(defaultCogmemHome(env), 'companion');
+  const installPath = join(companionDir, 'install.json');
+  if (!existsSync(installPath)) return undefined;
+  try {
+    const state = JSON.parse(readFileSync(installPath, 'utf8')) as {
+      choices?: { dataDir?: unknown; projectId?: unknown; agentId?: unknown };
+    };
+    const choices = state.choices;
+    const dataDir = typeof choices?.dataDir === 'string' && choices.dataDir.trim()
+      ? resolvePath(choices.dataDir, companionDir, env)
+      : companionDir;
+    const projectId = typeof choices?.projectId === 'string' && choices.projectId.trim()
+      ? choices.projectId
+      : undefined;
+    const agentId = typeof choices?.agentId === 'string' && choices.agentId.trim()
+      ? choices.agentId
+      : undefined;
+    return { dataDir, projectId, agentId };
+  } catch {
+    return undefined;
+  }
+}
+
+export function companionCliConfigPath(env: EnvLike = process.env): string | undefined {
+  const install = readCompanionInstall(env);
+  return install ? join(install.dataDir, 'cogmem-cli.toml') : undefined;
+}
+
+export interface CompanionCliIdentity {
+  projectId: string;
+  agentId: string;
+}
+
+export function companionIdentityForConfig(configPath: string, env: EnvLike = process.env): CompanionCliIdentity | undefined {
+  const expected = companionCliConfigPath(env);
+  if (!expected || resolve(expected) !== resolve(configPath)) return undefined;
+  const install = readCompanionInstall(env);
+  return {
+    projectId: install?.projectId ?? 'companion',
+    agentId: install?.agentId ?? 'cogmem-companion',
+  };
+}
+
 export function resolveCogmemConfigPath(options: CogmemConfigResolutionOptions = {}): CogmemConfigResolution {
   const cwd = resolve(options.cwd || process.cwd());
   const env = options.env || process.env;
@@ -94,6 +144,11 @@ export function resolveCogmemConfigPath(options: CogmemConfigResolutionOptions =
   if (projectConfig) return { kind: 'toml', path: projectConfig };
 
   if (existsSync(globalConfig)) return { kind: 'toml', path: globalConfig };
+
+  const companionConfig = companionCliConfigPath(env);
+  if (companionConfig) {
+    return existsSync(companionConfig) ? { kind: 'toml', path: companionConfig } : { kind: 'missing', path: companionConfig };
+  }
 
   return { kind: 'missing', path: globalConfig };
 }

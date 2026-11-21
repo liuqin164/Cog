@@ -5,10 +5,10 @@ Cog has two commands that both sound like "install", and this page keeps them ap
 - `cogmem install` — the companion installer used by the README Quick Start. It installs the
   resident, registers the user-level service and runs a first-wake smoke test. An agent
   installing the companion follows [`docs/agent-install.md`](agent-install.md).
-- `cogmem init` — the kernel CLI's setup wizard. It writes `.cogmem/config.toml` for a bare
-  kernel install. Sections 1 to 7 below are the operator-facing account of that path: why an
-  unattended `cogmem init --yes` stops, what `rule_only` can actually do, and the two ways to
-  finish it.
+- `cogmem init` — the kernel CLI's setup wizard for a bare kernel install. It is not part of the
+  companion path and is not needed after `cogmem install`. Sections 1 to 7 below are the
+  operator-facing account of that path: why an unattended `cogmem init --yes` stops, what
+  `rule_only` can actually do, and the two ways to finish it.
 
 Nothing below is a bug report or a to-do: `rule_only` is a legal end state, and the install gate
 is working when it says `WARN`. Every command and field below was checked against the `--help`
@@ -42,8 +42,10 @@ install before it touches the machine and names what is missing. The other flags
 
 The default data directory is `~/.cogmem/companion` (mode 0700); the nightly snapshots and weekly
 archives there are complete plaintext copies of the database. A warning such as an unavailable
-local embedding model means a degraded install, not a failed one. `cogmem init` is not this
-installer: it initializes a bare kernel and is described below.
+local embedding model means a degraded install, not a failed one. After `cogmem install`,
+`cogmem` is usable directly: the management CLI resolves the companion's own database without
+`cogmem init` and without a `~/.cogmem/config.toml`. `cogmem init` initializes a bare kernel and
+is described below.
 
 ### Vector provider
 
