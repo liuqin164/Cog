@@ -3,7 +3,7 @@
 # recorded pid is still alive, recovers a stale lock after a kill.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-DATA_DIR="${COGMEM_SHELL_DATA:-$PWD/.cogmem-shell}"
+DATA_DIR="${COG_DATA:-$PWD/.cogmem-shell}"
 mkdir -p "$DATA_DIR"
 PID_FILE="$DATA_DIR/survival.pid"
 if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then

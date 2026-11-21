@@ -172,7 +172,7 @@ export class StatusFace {
 
   /**
    * The token budget and the emergence count share this day boundary: the configured project time
-   * zone (#285), which is the installer's `COGMEM_SHELL_TZ`, not a hard-coded Asia/Tokyo.
+   * zone (#285), which is the installer's `COG_TZ`, not a hard-coded Asia/Tokyo.
    */
   localDay(at: number): string {
     return new Intl.DateTimeFormat('en-CA', { timeZone: this.shell.config.timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(at));

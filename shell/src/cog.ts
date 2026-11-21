@@ -111,7 +111,7 @@ function spawnResident(parsed: Parsed, config: ShellConfig): void {
     cwd: config.workspaceRoot,
     detached: true,
     stdio: 'ignore',
-    env: { ...process.env, ...env, COGMEM_SHELL_ATTACH: 'on' },
+    env: { ...process.env, ...env, COG_ATTACH: 'on' },
   });
   child.unref();
 }

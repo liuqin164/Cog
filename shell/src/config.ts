@@ -126,12 +126,12 @@ function envAllowEmpty(name: string): string | undefined {
   return process.env[name];
 }
 
-/** `COGMEM_SHELL_TAIL_TURNS` is operator policy; a non-integer is a startup error, not a silent 8. */
+/** `COG_TAIL_TURNS` is operator policy; a non-integer is a startup error, not a silent 8. */
 function tailTurnsFromEnv(): number {
-  const raw = env('COGMEM_SHELL_TAIL_TURNS');
+  const raw = env('COG_TAIL_TURNS');
   if (raw === undefined) return 8;
   const value = Number(raw);
-  if (!Number.isInteger(value) || value < 0) throw new Error(`invalid_tail_turns: COGMEM_SHELL_TAIL_TURNS=${raw}`);
+  if (!Number.isInteger(value) || value < 0) throw new Error(`invalid_tail_turns: COG_TAIL_TURNS=${raw}`);
   return value;
 }
 
@@ -177,8 +177,8 @@ function embeddingDimensionsFromEnv(): number | undefined {
 }
 
 function quietFromEnv(): ShellConfig['quiet'] {
-  const start = env('COGMEM_SHELL_QUIET_START');
-  const end = env('COGMEM_SHELL_QUIET_END');
+  const start = env('COG_QUIET_START');
+  const end = env('COG_QUIET_END');
   if (start === undefined && end === undefined) return undefined;
   const startHour = Number(start);
   const endHour = Number(end);
@@ -188,7 +188,7 @@ function quietFromEnv(): ShellConfig['quiet'] {
     || !Number.isInteger(endHour) || endHour < 0 || endHour > 23
     || startHour === endHour
   ) {
-    throw new Error(`invalid_quiet_window: COGMEM_SHELL_QUIET_START=${start ?? ''} COGMEM_SHELL_QUIET_END=${end ?? ''}; both hours are required, 0-23, and must differ`);
+    throw new Error(`invalid_quiet_window: COG_QUIET_START=${start ?? ''} COG_QUIET_END=${end ?? ''}; both hours are required, 0-23, and must differ`);
   }
   return { startHour, endHour };
 }
@@ -275,10 +275,10 @@ function installedCompanion(): { dataDir: string; choices: Record<string, unknow
 }
 
 export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellConfig {
-  const explicitData = overrides.dataDir ?? env('COGMEM_SHELL_DATA');
+  const explicitData = overrides.dataDir ?? env('COG_DATA');
   const installed = explicitData ? undefined : installedCompanion();
   const choices = installed?.choices ?? {};
-  const workspaceRoot = overrides.workspaceRoot ?? env('COGMEM_SHELL_WORKSPACE') ?? (typeof choices.workspaceRoot === 'string' ? choices.workspaceRoot : undefined) ?? process.cwd();
+  const workspaceRoot = overrides.workspaceRoot ?? env('COG_WORKSPACE') ?? (typeof choices.workspaceRoot === 'string' ? choices.workspaceRoot : undefined) ?? process.cwd();
   const dataDir = explicitData ?? installed?.dataDir ?? `${workspaceRoot}/.cogmem-shell`;
   const operating = readBudgetConfig(dataDir);
   const autonomous: RunBudget = { ...DEFAULT_AUTONOMOUS_BUDGET, ...operating.autonomous };
@@ -287,10 +287,10 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
   const night: NightBudget = { ...DEFAULT_NIGHT_BUDGET, ...operating.night };
   const maxIdleTurns = overrides.maxIdleTurns ?? operating.maxIdleTurns ?? DEFAULT_MAX_IDLE_TURNS;
   const dream = overrides.dream ?? {
-    windowStartHour: Number(env('COGMEM_SHELL_DREAM_START') ?? 2),
-    windowEndHour: Number(env('COGMEM_SHELL_DREAM_END') ?? 5),
-    runKernelNight: env('COGMEM_SHELL_DREAM_KERNEL') !== 'off',
-    maxEpisodes: Number(env('COGMEM_SHELL_DREAM_MAX_EPISODES') ?? 25),
+    windowStartHour: Number(env('COG_DREAM_START') ?? 2),
+    windowEndHour: Number(env('COG_DREAM_END') ?? 5),
+    runKernelNight: env('COG_DREAM_KERNEL') !== 'off',
+    maxEpisodes: Number(env('COG_DREAM_MAX_EPISODES') ?? 25),
   };
   if (dream.windowStartHour === dream.windowEndHour) {
     throw new Error(`invalid_dream_window: start ${dream.windowStartHour} equals end ${dream.windowEndHour}; a zero-length window never runs Dream`);
@@ -300,14 +300,14 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
   const registryPlugins = readPluginRegistry(dataDir);
   return {
     workspaceRoot,
-    projectId: overrides.projectId ?? env('COGMEM_SHELL_PROJECT') ?? (typeof choices.projectId === 'string' ? choices.projectId : undefined) ?? 'companion',
-    agentId: overrides.agentId ?? env('COGMEM_SHELL_AGENT') ?? (typeof choices.agentId === 'string' ? choices.agentId : undefined) ?? 'cogmem-companion',
+    projectId: overrides.projectId ?? env('COG_PROJECT') ?? (typeof choices.projectId === 'string' ? choices.projectId : undefined) ?? 'companion',
+    agentId: overrides.agentId ?? env('COG_AGENT') ?? (typeof choices.agentId === 'string' ? choices.agentId : undefined) ?? 'cogmem-companion',
     // The installer writes this once per install and never overwrites it. A hand-run shell that was
     // never installed keeps one fixed id instead of minting a new lane each process start.
-    sessionId: overrides.sessionId ?? env('COGMEM_SHELL_SESSION') ?? 'session-default',
-    dbPath: overrides.dbPath ?? env('COGMEM_SHELL_DB') ?? `${dataDir}/memory.sqlite`,
+    sessionId: overrides.sessionId ?? env('COG_SESSION') ?? 'session-default',
+    dbPath: overrides.dbPath ?? env('COG_DB') ?? `${dataDir}/memory.sqlite`,
     dataDir,
-    timeZone: overrides.timeZone ?? env('COGMEM_SHELL_TZ') ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC',
+    timeZone: overrides.timeZone ?? env('COG_TZ') ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC',
     model: overrides.model ?? {
       baseUrl: env('MG_BASE_URL') ?? 'http://127.0.0.1:3425/v1',
       apiKey: env('MG_API_KEY') ?? 'magpie',
@@ -333,16 +333,16 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
     idleWakeIntervalMs: overrides.idleWakeIntervalMs ?? 30 * 60_000,
     tickIntervalMs: overrides.tickIntervalMs ?? 30_000,
     http: overrides.http ?? {
-      enabled: env('COGMEM_SHELL_HTTP') !== 'off',
-      port: Number(env('COGMEM_SHELL_HTTP_PORT') ?? (typeof choices.httpPort === 'number' ? choices.httpPort : undefined) ?? 7338),
+      enabled: env('COG_HTTP') !== 'off',
+      port: Number(env('COG_HTTP_PORT') ?? (typeof choices.httpPort === 'number' ? choices.httpPort : undefined) ?? 7338),
       hostname: '127.0.0.1',
     },
     plugins: overrides.plugins ?? registryPlugins,
-    terminalEnabled: overrides.terminalEnabled ?? env('COGMEM_SHELL_TERMINAL') !== 'off',
+    terminalEnabled: overrides.terminalEnabled ?? env('COG_TERMINAL') !== 'off',
     embedding: overrides.embedding ?? embeddingFromEnv(),
     attach: overrides.attach ?? {
-      enabled: env('COGMEM_SHELL_ATTACH') === 'on',
-      socketPath: env('COGMEM_SHELL_ATTACH_SOCKET'),
+      enabled: env('COG_ATTACH') === 'on',
+      socketPath: env('COG_ATTACH_SOCKET'),
     },
   };
 }

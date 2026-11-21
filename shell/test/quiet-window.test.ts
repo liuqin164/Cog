@@ -54,21 +54,21 @@ describe('the quiet window gates proactive speech (#328)', () => {
   }, 30_000);
 
   test('the config reads a cross-midnight window and refuses a broken one', () => {
-    const previousStart = process.env.COGMEM_SHELL_QUIET_START;
-    const previousEnd = process.env.COGMEM_SHELL_QUIET_END;
+    const previousStart = process.env.COG_QUIET_START;
+    const previousEnd = process.env.COG_QUIET_END;
     try {
-      process.env.COGMEM_SHELL_QUIET_START = '23';
-      process.env.COGMEM_SHELL_QUIET_END = '7';
+      process.env.COG_QUIET_START = '23';
+      process.env.COG_QUIET_END = '7';
       const dir = makeTempDir();
       expect(defaultShellConfig({ dataDir: dir }).quiet).toEqual({ startHour: 23, endHour: 7 });
 
-      process.env.COGMEM_SHELL_QUIET_END = '23';
+      process.env.COG_QUIET_END = '23';
       expect(() => defaultShellConfig({ dataDir: dir })).toThrow('invalid_quiet_window');
     } finally {
-      if (previousStart === undefined) delete process.env.COGMEM_SHELL_QUIET_START;
-      else process.env.COGMEM_SHELL_QUIET_START = previousStart;
-      if (previousEnd === undefined) delete process.env.COGMEM_SHELL_QUIET_END;
-      else process.env.COGMEM_SHELL_QUIET_END = previousEnd;
+      if (previousStart === undefined) delete process.env.COG_QUIET_START;
+      else process.env.COG_QUIET_START = previousStart;
+      if (previousEnd === undefined) delete process.env.COG_QUIET_END;
+      else process.env.COG_QUIET_END = previousEnd;
     }
   });
 });
