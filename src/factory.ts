@@ -33,6 +33,7 @@ import { LocalSemanticCompiler } from './engine/LocalSemanticCompiler.js';
 import { PipelineMetrics } from './engine/PipelineMetrics.js';
 import type { EmbeddingProvider } from './embedding/EmbeddingProvider.js';
 import { EventEmbeddingStore } from './embedding/EventEmbeddingStore.js';
+import { RECALL_TRACE_MAX_ROWS } from './observability/RecallDecisionTrace.js';
 import type { EncryptionProvider } from './encryption/index.js';
 import { TopicAliasRegistry, TopicGovernance, TopicPathRegistry as UserTopicPathRegistry, TopicRelationGraph } from './topic/index.js';
 import { CorrectionResolver } from './episode/CorrectionResolver.js';
@@ -2057,11 +2058,24 @@ export class MemoryKernel extends KernelServices {
   getHealthStatus() {
     const lastRun = this.pipelineMetrics.getLastRun();
     const pipelineP99Ms = this.pipelineMetrics.getPipelineP99();
+    const db = this.factStore.getDatabase();
+    const count = (sql: string): number => Number((db.prepare(sql).get() as { count?: number } | null)?.count ?? 0);
+    let recallDecisions: { rows: number; maxRows: number };
+    try {
+      recallDecisions = { rows: count(`SELECT COUNT(*) AS count FROM trace_events`), maxRows: RECALL_TRACE_MAX_ROWS };
+    } catch {
+      recallDecisions = { rows: 0, maxRows: RECALL_TRACE_MAX_ROWS };
+    }
     return {
       status: 'ok',
       package: 'cogmem',
       dbPath: this.dbPath,
       stats: this.getStats(),
+      storage: {
+        rawEvents: count(`SELECT COUNT(*) AS count FROM memory_events`),
+        embeddings: this.eventEmbeddingStore.getProgress(),
+        recallDecisions,
+      },
       vectorRecall: this.semanticIndexEnabled() ? 'active' : 'disabled',
       embeddingModelId: this.embeddingProvider?.modelId,
       hasStaleVectors: this.embeddingProvider

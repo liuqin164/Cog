@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
 import { dirname, join } from 'node:path';
 import { createMemoryKernel } from 'cogmem';
+import { RECALL_TRACE_MAX_ROWS } from 'cogmem/internal';
 import { startKernelHttpFace } from '../src/kernel-host.ts';
 import { makeTempDir } from './helpers.ts';
 
@@ -47,6 +48,27 @@ function rawRequest(
 }
 
 describe('in-process kernel host and its loopback HTTP face', () => {
+  test('health reports the storage progress the doctor reads (#372)', async () => {
+    const dir = makeTempDir();
+    const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.sqlite'), projectTimeZone: 'UTC' });
+    const first = kernel.recordRawEvent({ projectId: 'companion', threadId: 't', role: 'user', content: 'one' }).eventId;
+    kernel.recordRawEvent({ projectId: 'companion', threadId: 't', role: 'user', content: 'two' });
+    kernel.eventEmbeddingStore.upsert(first, 'model-a', new Float32Array([1, 0]), 'companion');
+    const face = await startKernelHttpFace(kernel, { port: 0, hostname: '127.0.0.1' });
+    try {
+      const health = await (await fetch(face.healthUrl)).json() as { storage?: unknown };
+      expect(health.storage).toEqual({
+        rawEvents: 2,
+        embeddings: kernel.eventEmbeddingStore.getProgress(),
+        recallDecisions: { rows: 0, maxRows: RECALL_TRACE_MAX_ROWS },
+      });
+      expect(health.storage).toMatchObject({ embeddings: { completed: 1, total: 2, failed: 0 } });
+    } finally {
+      face.stop();
+      kernel.close();
+    }
+  });
+
   test('the HTTP face starts on the kernel the shell owns and stops cleanly', async () => {
     const dir = makeTempDir();
     const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.sqlite'), projectTimeZone: 'UTC' });
