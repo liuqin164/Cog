@@ -55,8 +55,10 @@ interface ExpectationResult {
   windows: number;
   narrowCandidates: number;
   narrowRows: number;
+  narrowPriorRefs: number;
   wideCandidates: number;
   wideRows: number;
+  widePriorRefs: number;
   narrowCount: number;
   wideCount: number;
   narrowHit: boolean;
@@ -220,6 +222,8 @@ function compare(probe: Probe, windowArm: ArmResult, wideArm: ArmResult): Expect
   const wideCandidates = matchingCandidates(wideArm.candidates, expectation, wideArm.windowByEvent);
   const narrowRows = matchingRows(windowArm.rows, expectation);
   const wideRows = matchingRows(wideArm.rows, expectation);
+  const narrowPriorRefs = priorRefs(narrowCandidates);
+  const widePriorRefs = priorRefs(wideCandidates);
   const narrowCount = expectation.mode === 'dedupe'
     ? (narrowRows.length > 0 ? narrowRows.length : narrowCandidates.length)
     : narrowCandidates.length + narrowRows.length;
@@ -244,8 +248,10 @@ function compare(probe: Probe, windowArm: ArmResult, wideArm: ArmResult): Expect
     windows: probe.windows.length,
     narrowCandidates: narrowCandidates.length,
     narrowRows: narrowRows.length,
+    narrowPriorRefs,
     wideCandidates: wideCandidates.length,
     wideRows: wideRows.length,
+    widePriorRefs,
     narrowCount,
     wideCount,
     narrowHit,
@@ -269,7 +275,8 @@ function matchingCandidates(candidates: CandidateRecord[], expectation: Expectat
     if (expectation.minEvidenceWindows) {
       const ids = evidenceIds(candidate);
       const windows = new Set(ids.map((id) => windowByEvent.get(id)).filter(Boolean));
-      if (windows.size < expectation.minEvidenceWindows) return false;
+      const covered = windows.size + (priorRefCount(candidate) > 0 ? 1 : 0);
+      if (covered < expectation.minEvidenceWindows) return false;
     }
     return true;
   });
@@ -297,6 +304,17 @@ function evidenceIds(candidate: CandidateRecord): string[] {
   return candidate.evidence
     .map((item) => item && typeof item === 'object' ? (item as { eventId?: unknown }).eventId : undefined)
     .filter((id): id is string => typeof id === 'string');
+}
+
+function priorRefCount(candidate: CandidateRecord): number {
+  const content = candidate.content && typeof candidate.content === 'object'
+    ? candidate.content as { priorContextRefs?: unknown }
+    : {};
+  return Array.isArray(content.priorContextRefs) ? content.priorContextRefs.length : 0;
+}
+
+function priorRefs(candidates: CandidateRecord[]): number {
+  return candidates.reduce((sum, candidate) => sum + priorRefCount(candidate), 0);
 }
 
 function finalRows(path: string, projectId: string): FinalRow[] {
@@ -363,11 +381,11 @@ function renderMarkdown(result: EvalResult): string {
     '',
     '## Attribution',
     '',
-    '| probe | kind | window | narrow candidates | narrow rows | wide candidates | wide rows | narrow count | wide count | verdict | visible in one window |',
-    '| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |',
+    '| probe | kind | window | narrow candidates | narrow rows | narrow prior refs | wide candidates | wide rows | wide prior refs | narrow count | wide count | verdict | visible in one window |',
+    '| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |',
   ];
   for (const item of result.results) {
-    lines.push(`| ${item.probeId} | ${item.kind} | ${item.windows} | ${item.narrowCandidates} | ${item.narrowRows} | ${item.wideCandidates} | ${item.wideRows} | ${item.narrowCount} | ${item.wideCount} | ${item.verdict} | ${item.visibleInOneWindow ? 'yes' : 'no'} |`);
+    lines.push(`| ${item.probeId} | ${item.kind} | ${item.windows} | ${item.narrowCandidates} | ${item.narrowRows} | ${item.narrowPriorRefs} | ${item.wideCandidates} | ${item.wideRows} | ${item.widePriorRefs} | ${item.narrowCount} | ${item.wideCount} | ${item.verdict} | ${item.visibleInOneWindow ? 'yes' : 'no'} |`);
   }
   lines.push('', '## Counts', '', '| kind | expected | handled | window miss | model miss |', '| --- | ---: | ---: | ---: | ---: |');
   for (const key of ['duplicate', 'conflict', 'procedure', 'all'] as const) {

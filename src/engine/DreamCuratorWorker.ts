@@ -21,6 +21,13 @@ import { normalizeEpisodeKind } from '../semantic/MemoryFrameTypes.js';
 import type { MemoryFrameV1 } from '../semantic/MemoryFrameTypes.js';
 import { truncate } from '../utils/Values.js';
 import type { MemoryTaxonomy } from '../config/MemoryTaxonomy.js';
+import { ClaimKeyGenerator } from '../binding/ClaimKeyGenerator.js';
+import {
+  readPriorContext,
+  type PriorContextProvider,
+  type PriorContextSlice,
+  type PriorContextSourceRef,
+} from './PriorContext.js';
 
 export interface DreamCuratorRunOptions {
   projectId?: string;
@@ -41,6 +48,7 @@ export interface DreamCuratorRunOptions {
   dreamJobLeaseId?: string;
   leaseUntil?: number;
   attemptGeneration?: number;
+  priorContextProvider?: PriorContextProvider;
 }
 
 export interface DreamCuratorRunResult {
@@ -502,6 +510,7 @@ export class DreamCuratorWorker {
       '- Assistant messages may provide conversational context, but they must not be treated as user preferences, user goals, user corrections, or user boundaries unless a user event explicitly confirms them.',
       '- Tool results and task events are observations only. They may support diagnostic or causal-link candidates, but they must not create user-owned memory by themselves.',
       '- If an event contains <COGMEM_RECALL_CONTEXT>, <COGMEM_TURN_BRIDGE>, <COGMEM_SESSION_STATE>, or <COGMEM_STRATEGY_CONTEXT>, treat that content as host-side memory context metadata, not as user-authored evidence.',
+      '- <COGMEM_PRIOR_CONTEXT> is read-only context, not evidence. Cite it in priorContextRefs, never in evidenceEventIds; a conflict or update may then cite one current evidence event.',
       '',
       'Candidate bucket semantics:',
       '- longTermGoalCandidates: an explicit commitment the user makes to another party (答应/承诺/保证/承诺交付/答复), even when it has a deadline; a dated promise is not a temporal fact update.',
@@ -516,10 +525,11 @@ export class DreamCuratorWorker {
       '',
       'Dream mode rules:',
       '- micro: extract only direct high-value candidates from this episode; do not infer cross-episode conclusions.',
-      '- normal: perform bounded deduplication and conflict hints inside the supplied episode.',
+      '- normal: perform bounded deduplication and conflict hints inside the supplied episode and prior context; when a prior value differs, emit one update naming the old and the new value.',
       '- deep: inspect consistency across all supplied raw events, but never invent or scan evidence outside them.',
     ].join('\n');
 
+    const priorContext = this.buildPriorContext(events, options);
     const userPrompt = JSON.stringify({
       task: 'Generate candidate-only memory curation output.',
       dreamMode: options.dreamMode || 'normal',
@@ -528,6 +538,7 @@ export class DreamCuratorWorker {
       semanticSummaryHint: options.semanticSummary
         ? { ...options.semanticSummary, evidencePolicy: 'hint_only_not_evidence' }
         : undefined,
+      priorContext: priorContext?.block,
       allowedCandidateBuckets: [
         'userPreferenceCandidates',
         'projectMemoryCandidates',
@@ -570,6 +581,7 @@ export class DreamCuratorWorker {
           'evidenceRoles',
           'sourceLimitations',
         ],
+        priorContext: 'When prior context holds a different value, emit temporalFactUpdateCandidates or conflictCandidates with previousValue (verbatim prior) and newValue (verbatim current). Put prior ids in priorContextRefs, never evidenceEventIds.',
         evidenceEventIds: options.sourceEpisodeId
           ? 'non-empty array of exact raw event ids from this episode. Never use ["all"].'
           : 'array of exact raw event ids. Use ["all"] only for legacy window-level session/topic summaries, never for user preferences, goals, corrections, or boundaries.',
@@ -602,7 +614,15 @@ export class DreamCuratorWorker {
       return diagnostic ? [diagnostic] : [];
     }
     this.supersedeProviderWarnings(options.projectId);
-    return this.flattenProviderCandidates(parsed, events, now, status, Boolean(options.sourceEpisodeId), options.projectId);
+    return this.flattenProviderCandidates(
+      parsed,
+      events,
+      now,
+      status,
+      Boolean(options.sourceEpisodeId),
+      options.projectId,
+      priorContext?.items.flatMap((item) => item.sourceRefs) ?? [],
+    );
   }
 
   private flattenProviderCandidates(
@@ -612,6 +632,7 @@ export class DreamCuratorWorker {
     status: 'candidate' | 'shadow',
     requireExactEvidence = false,
     authoritativeProjectId?: string,
+    priorContextRefs: PriorContextSourceRef[] = [],
   ): Array<Omit<DeepWriteCandidateInput, 'runId'>> {
     const buckets: Array<[string, string, string]> = [
       ['userPreferenceCandidates', 'user_preference', 'user_preference'],
@@ -631,9 +652,13 @@ export class DreamCuratorWorker {
     ];
     const candidates: Array<Omit<DeepWriteCandidateInput, 'runId'>> = [];
     const validEventIds = new Set(events.map((event) => event.eventId));
+    const hasTopLevelBuckets = buckets.some(([bucket]) => Array.isArray(parsed[bucket]));
+    const bucketsRecord = !hasTopLevelBuckets && parsed.candidates && typeof parsed.candidates === 'object' && !Array.isArray(parsed.candidates)
+      ? parsed.candidates as Record<string, unknown>
+      : parsed;
 
     for (const [bucket, candidateType, promotionTargetType] of buckets) {
-      const values = Array.isArray(parsed[bucket]) ? parsed[bucket] as unknown[] : [];
+      const values = Array.isArray(bucketsRecord[bucket]) ? bucketsRecord[bucket] as unknown[] : [];
       for (const value of values) {
         if (!value || typeof value !== 'object') continue;
 
@@ -659,7 +684,7 @@ export class DreamCuratorWorker {
           const distinctEvidenceIds = new Set(rawEvidenceIds);
           if (
             rawEvidenceIds.includes('all')
-            || distinctEvidenceIds.size < 2
+            || (distinctEvidenceIds.size < 2 && priorContextRefs.length === 0)
             || rawEvidenceIds.some((id) => !validEventIds.has(id))
           ) {
             continue;
@@ -689,6 +714,7 @@ export class DreamCuratorWorker {
               ? { providerProjectIdWarning: record.projectId }
               : {}),
             candidateBucket: bucket,
+            ...(priorContextRefs.length > 0 ? { priorContextRefs } : {}),
           },
           evidence,
           promotionTargetType,
@@ -918,6 +944,20 @@ export class DreamCuratorWorker {
     }
   }
 
+  private buildPriorContext(events: MemoryEvent[], options: DreamCuratorRunOptions): PriorContextSlice | undefined {
+    const keys = priorContextKeys(events);
+    if (keys.length === 0) return undefined;
+    const provider = options.priorContextProvider
+      ?? ((query) => readPriorContext({ eventStore: this.deps.eventStore, frameStore: this.deps.memoryFrameStore }, query));
+    const slice = provider({
+      projectId: options.projectId || events[0]?.projectId,
+      keys,
+      asOf: Math.max(...events.map((event) => event.occurredAt)) + 1,
+      excludeEventIds: events.map((event) => event.eventId),
+    });
+    return slice.items.length > 0 ? slice : undefined;
+  }
+
   private resolveGenerateText(options: DreamCuratorRunOptions): TextGenerateFn | undefined {
     if (options.generateText) return options.generateText;
     if (!this.deps.modelRegistry || this.deps.modelRegistry.isRuleOnly('memory')) return undefined;
@@ -980,8 +1020,8 @@ export class DreamCuratorWorker {
 }
 
 function hasPairedConflictClaims(record: Record<string, unknown>): boolean {
-  const incoming = String(record.newStatement || record.claim || '').trim();
-  const prior = String(record.possiblySupersededStatement || record.priorStatement || '').trim();
+  const incoming = String(record.newStatement || record.newValue || record.claim || '').trim();
+  const prior = String(record.possiblySupersededStatement || record.priorStatement || record.previousValue || '').trim();
   return incoming.length > 0 && prior.length > 0 && incoming !== prior;
 }
 
@@ -1080,6 +1120,28 @@ function extractTopics(text: string): string[] {
     if (text.toLowerCase().includes(topic.toLowerCase())) topics.push(topic);
   }
   return [...new Set(topics)];
+}
+
+function priorContextKeys(events: MemoryEvent[]): string[] {
+  const claimKeys = new ClaimKeyGenerator();
+  const keys = new Set<string>();
+  const add = (value: string | undefined): void => {
+    const key = String(value || '').trim();
+    if (key.length >= 2 && keys.size < 24) keys.add(key);
+  };
+  for (const event of events) {
+    const text = eventText(event);
+    const topics = extractTopics(text);
+    for (const topic of topics) add(topic);
+    const topicPath = inferTopicPath(text, topics);
+    add(topicPath);
+    add(claimKeys.generate(text, topicPath));
+    for (const token of text.match(/[A-Za-z][A-Za-z0-9_-]{2,}/gu) ?? []) add(token);
+    for (const run of text.match(/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]+/gu) ?? []) {
+      for (let index = 0; index + 2 <= run.length; index += 1) add(run.slice(index, index + 2));
+    }
+  }
+  return [...keys];
 }
 
 function inferTopicPath(text: string, topics: string[]): string {
