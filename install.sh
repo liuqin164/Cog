@@ -8,9 +8,8 @@ set -euo pipefail
 
 INSTALL_HOME="${COGMEM_INSTALL_HOME:-$HOME/.cogmem/pkg}"
 BIN_DIR="${COGMEM_BIN_DIR:-$HOME/.bun/bin}"
-# The most general name wins, then the npm-specific one, then the tarball. The same
-# order as `resolveLatestNpmSpec` in src/bin/update-release.ts, so setting two of
-# these cannot install one thing and update another.
+# The most general name wins, then the npm-specific one, then the tarball. One
+# implementation, so setting two of these cannot install one thing and update another.
 PACKAGE_SPEC="${COGMEM_PACKAGE_SPEC:-${COGMEM_NPM_SPEC:-${COGMEM_RELEASE_TARBALL:-latest}}}"
 
 log() {

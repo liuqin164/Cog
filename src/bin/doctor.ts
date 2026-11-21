@@ -28,7 +28,6 @@ import {
   type InstallStep,
 } from '../install/InstallSteps.js';
 import { assertCliArgs } from './CliArgs.js';
-import { readLastUpdateTrace } from '../install/AutoUpgrade.js';
 import { readResidentSessions, resolveResidentSessionDir, systemctlCommand, type ResidentSession } from '../install/ResidentSession.js';
 import { checkForUpdate, refreshUpdateCache, type UpdateStatus } from '../install/VersionCheck.js';
 import { CORE_VERSION } from '../version.js';
@@ -222,7 +221,6 @@ function restartHint(session: ResidentSession): string {
 async function collectVersionReport(
   configPath: string,
   workspaceRoot: string,
-  homeDir: string,
   gateDiagnostics: InstallGateDiagnostic[],
 ): Promise<void> {
   const diskVersion = CORE_VERSION;
@@ -231,7 +229,6 @@ async function collectVersionReport(
   // host's stdio session are separate processes and can be on separate versions.
   const sessions = readResidentSessions(resolveResidentSessionDir({ configPath, workspaceRoot }));
   const skewed = sessions.filter(({ session }) => session.version !== diskVersion);
-  const lastUpdate = readLastUpdateTrace(homeDir);
 
   if (updateStatus.enabled) {
     ok(updateStatus.latestVersion
@@ -278,7 +275,6 @@ async function collectVersionReport(
     })),
     skew: skewed.length > 0,
     restartRequired: skewed.length > 0,
-    lastUpdate: lastUpdate ?? null,
   };
 }
 
@@ -477,7 +473,7 @@ if (envPath) {
 
   // #150: disk vs registry vs the serving process. Collected before the kernel opens
   // so a skew is reported even when the database is what fails next.
-  await collectVersionReport(resolution.path, workspaceRoot, loaded.homeDir, gateDiagnostics);
+  await collectVersionReport(resolution.path, workspaceRoot, gateDiagnostics);
 
   let kernelDbPath: string | undefined;
   try {

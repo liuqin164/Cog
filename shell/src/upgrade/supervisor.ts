@@ -2,8 +2,8 @@
  * The upgrade supervisor: the out-of-process half of the resident-form upgrade (#165).
  *
  * A resident must not swap the package it is running from and restart itself — the process that
- * stops itself mid-upgrade is how a service ends up neither old nor new (`docs/install.md`,
- * `src/install/AutoUpgrade.ts`). So the resident writes a request, hands off to this process, and
+ * stops itself mid-upgrade is how a service ends up neither old nor new (`docs/install.md`). So the
+ * resident writes a request, hands off to this process, and
  * this process owns the whole cycle:
  *
  *   stop → snapshot → migrate+gate → switch → start → health, and the report at the end, whatever
