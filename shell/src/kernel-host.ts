@@ -110,9 +110,9 @@ async function openObservatory(
 export async function startKernelHttpFace(kernel: unknown, options: HttpFaceOptions): Promise<HttpFaceHandle> {
   const kernelHealth = (): Record<string, unknown> => {
     try {
-      const health = (kernel as { getHealthStatus?: () => { status?: string; package?: string; dbPath?: string } }).getHealthStatus?.();
+      const health = (kernel as { getHealthStatus?: () => { status?: string; package?: string; dbPath?: string; storage?: unknown } }).getHealthStatus?.();
       if (!health) return { status: 'unknown' };
-      return { status: health.status ?? 'unknown', package: health.package, dbPath: health.dbPath };
+      return { status: health.status ?? 'unknown', package: health.package, dbPath: health.dbPath, storage: health.storage };
     } catch (error) {
       return { status: 'error', message: error instanceof Error ? error.message : String(error) };
     }
@@ -128,13 +128,15 @@ export async function startKernelHttpFace(kernel: unknown, options: HttpFaceOpti
       // The install doctor's window into a *running* resident. Opening a second kernel to ask the
       // first how it is would be two writers on one file, which CONCURRENT_ACCESS.md forbids.
       if (url.pathname === '/health') {
+        const { storage, ...kernel } = kernelHealth();
         return Response.json({
           status: options.healthStatus?.() ?? 'ok',
           service: 'cogmem-companion-shell',
           version: productVersion(),
           bind: options.hostname,
           port: httpServer.port ?? options.port,
-          kernel: kernelHealth(),
+          kernel,
+          storage,
           // The process's own RSS and the unit's ceiling (#226): the doctor reads them here rather
           // than asking systemd, so the same number is visible with no service manager.
           memory: readMemoryUsage(),

@@ -238,6 +238,7 @@ async function main(): Promise<void> {
     healthUrl,
     installState: statePath,
     checks: report.checks,
+    ...(report.storage ? { storage: report.storage } : {}),
   }, gate, text, options.json);
 }
 

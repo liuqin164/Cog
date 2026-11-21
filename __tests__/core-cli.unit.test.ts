@@ -9,9 +9,70 @@ import { makeTempDir } from './helpers/tmp.js';
 
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const cogmemBin = join(coreRoot, 'src/bin/cogmem.ts');
+const doctorBin = join(coreRoot, 'src/bin/doctor.ts');
 const snapshotBin = join(coreRoot, 'src/bin/snapshot.ts');
 const dreamBin = join(coreRoot, 'src/bin/dream.ts');
 const memoryBin = join(coreRoot, 'src/bin/memory.ts');
+const BUN_DIR = dirname(process.execPath);
+
+test('doctor reads storage progress from the resident health face, never the database (#372)', async () => {
+  const home = makeTempDir('cogmem-storage-health-');
+  const dataDir = join(home, '.cogmem', 'companion');
+  const dbPath = join(dataDir, 'memory.sqlite');
+  mkdirSync(join(dataDir, 'snapshots'), { recursive: true, mode: 0o700 });
+  writeFileSync(join(dataDir, 'attach.sock'), '');
+  writeFileSync(dbPath, 'this is not a sqlite database\n');
+  const storage = {
+    rawEvents: 3,
+    embeddings: { completed: 1, total: 3, failed: 0 },
+    recallDecisions: { rows: 4, maxRows: 5000 },
+  };
+  const server = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    fetch: () => Response.json({
+      status: 'ok',
+      bind: '127.0.0.1',
+      state: 'IDLE',
+      kernel: { status: 'ok', package: 'cogmem', dbPath },
+      memory: { rssBytes: 1, source: 'proc' },
+      storage,
+    }),
+  });
+  try {
+    writeFileSync(join(dataDir, 'install.json'), JSON.stringify({
+      schema: 1,
+      done: ['preflight', 'place', 'model', 'rhythm', 'resident', 'awake'],
+      choices: { dataDir, projectId: 'companion', agentId: 'cogmem-companion', httpPort: server.port, platform: 'linux', serviceName: 'cogmem-companion' },
+      pid: process.pid,
+    }));
+    const proc = Bun.spawn({
+      cmd: [process.execPath, doctorBin, '--json'],
+      cwd: coreRoot,
+      stdout: 'pipe',
+      stderr: 'pipe',
+      env: {
+        ...process.env,
+        HOME: home,
+        NO_COLOR: '1',
+        COGMEM_UPDATE_CHECK: '0',
+        PATH: [BUN_DIR, process.env.PATH].filter(Boolean).join(':'),
+      },
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: '' });
+    const parsed = JSON.parse(stdout) as { storage?: unknown; checks: Array<{ id: string; detail: string }> };
+    expect(parsed.storage).toEqual(storage);
+    expect(parsed.checks.find((check) => check.id === 'storage')?.detail)
+      .toBe('storage raw_events=3 embeddings=1/3 recall_decisions=4/5000');
+  } finally {
+    server.stop(true);
+  }
+});
 
 test('#88 memory recall reads a project whose agent is not the literal default', async () => {
   const dir = makeTempDir('cogmem-cli-recall-scope-');
