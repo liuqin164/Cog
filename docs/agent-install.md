@@ -113,7 +113,9 @@ The operator-facing install page is [`docs/install.md`](install.md).
 cogmem doctor --json
 ```
 
-`doctor` is the final gate. In `--json` it answers with a gate `level` of
+`doctor` is the final gate. It reads the installer's `install.json` and the
+running resident's `/health`; it does not open the database. In `--json` it
+answers with a gate `level` of
 `not_installed`, `ok`, `warn`, or `fail`; the human output prints the same
 four as **not installed**, **OK**, **WARN**, and **FAIL**. It always names the
 next step.
@@ -122,14 +124,14 @@ next step.
 - **warn** — proceed, but quote the warning verbatim in your report.
 - **fail** — stop. Paste the `doctor` output back to the user and do nothing
   further. Do not work around a fail.
-- **not_installed** — means "no config yet" (exit 0). If this is a fresh
-  companion install, the installer and the CLI disagree about where the
-  install lives: stop and report that disagreement. Do not create a second
-  config to make the message go away.
+- **not_installed** — means "no finished companion install at the default data
+  directory yet" (exit 0). If this is a fresh companion install, the installer
+  and the CLI disagree about where the install lives: stop and report that
+  disagreement. Do not create a second config to make the message go away.
 
-If the reason is `no_upgrade_path`, the database was created before 4.0 and
-this release will not upgrade it. Do not import the old database file or a
-snapshot of it: that is the same file and meets the same refusal. The
+If a later data command reports `no_upgrade_path`, the database was created
+before 4.0 and this release will not upgrade it. Do not import the old database
+file or a snapshot of it: that is the same file and meets the same refusal. The
 supported path is to keep the old install, export its conversations to files,
 create a new database, and import those files (`cogmem import openclaw` /
 `cogmem import hermes`, or `cogmem episode import --format jsonl --file <path>`).

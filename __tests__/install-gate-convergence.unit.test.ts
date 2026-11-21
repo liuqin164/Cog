@@ -26,15 +26,8 @@ function run(cmd: string[], options: { cwd: string; env?: Record<string, string>
   ]).then(([stdout, stderr, exitCode]) => ({ stdout, stderr, exitCode }));
 }
 
-function writeConfig(dir: string, body: string): string {
-  const configPath = join(dir, '.cogmem', 'config.toml');
-  mkdirSync(dirname(configPath), { recursive: true });
-  writeFileSync(configPath, body);
-  return configPath;
-}
-
-async function doctor(dir: string, configPath: string, env: Record<string, string> = {}) {
-  const result = await run(['bun', doctorBin, '--config', configPath, '--json'], { cwd: dir, env: { HOME: join(dir, 'home'), ...env } });
+async function doctor(dir: string, env: Record<string, string> = {}) {
+  const result = await run([process.execPath, doctorBin, '--json'], { cwd: dir, env: { HOME: join(dir, 'home'), ...env } });
   expect(result.stderr).toBe('');
   expect(result.exitCode).toBe(0);
   return JSON.parse(result.stdout) as {
@@ -46,7 +39,6 @@ describe('the gate reports the managed launcher (#114)', () => {
   test('a launcher with nothing to run is a diagnostic, and the fix names a real command', async () => {
     const dir = makeTempDir('cogmem-gate-shim-');
     const home = join(dir, 'home');
-    const configPath = writeConfig(dir, '[core]\ndb_path = "memory.db"\n');
     // The state a host configuration lands in after the installation moves and nothing
     // rewrote the launcher: the recorded target is gone, so every host calling it fails.
     const shimDir = join(home, '.cogmem', 'bin');
@@ -54,7 +46,7 @@ describe('the gate reports the managed launcher (#114)', () => {
     writeFileSync(join(shimDir, 'cogmem.target'), join(dir, 'moved-away', 'cogmem') + '\n');
     writeFileSync(join(shimDir, 'cogmem'), '#!/bin/sh\nexit 127\n');
 
-    const parsed = await doctor(dir, configPath) as unknown as { installGate: { diagnostics: Array<{ code: string; message: string }> } };
+    const parsed = await doctor(dir) as unknown as { installGate: { diagnostics: Array<{ code: string; message: string }> } };
     const finding = parsed.installGate.diagnostics.find((diagnostic) => diagnostic.code === 'launcher_target_missing');
     expect(finding).toBeDefined();
     expect(finding!.message).toContain(join(shimDir, 'cogmem'));
@@ -62,7 +54,7 @@ describe('the gate reports the managed launcher (#114)', () => {
 
     // A launcher that is fine says nothing: a warning here would be noise on every run.
     writeFileSync(join(shimDir, 'cogmem.target'), process.execPath + '\n');
-    const clean = await doctor(dir, configPath) as unknown as { installGate: { diagnostics: Array<{ code: string }> } };
+    const clean = await doctor(dir) as unknown as { installGate: { diagnostics: Array<{ code: string }> } };
     expect(clean.installGate.diagnostics.some((diagnostic) => diagnostic.code.startsWith('shim_'))).toBe(false);
   });
 });

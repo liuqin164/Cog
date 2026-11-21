@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -105,13 +105,10 @@ describe('install step shape', () => {
 });
 
 describe('the install gate answers four outcomes', () => {
-  test('with no config anywhere it reports not installed and exits 0', async () => {
+  test('with no companion install it reports not installed and exits 0', async () => {
     const home = makeTempDir('cogmem-gate-missing-');
     const cwd = makeTempDir('cogmem-gate-cwd-');
-    // An explicit path that does not exist yet: the state every fresh install is
-    // in. Naming it keeps the case independent of any config on this machine.
-    const configPath = join(home, '.cogmem', 'config.toml');
-    const { stdout, stderr, exitCode } = await run(['bun', doctorBin, '--config', configPath, '--json'], {
+    const { stdout, stderr, exitCode } = await run([process.execPath, doctorBin, '--json'], {
       cwd,
       env: { HOME: home, COGMEM_BIN_DIR: join(home, 'bin') },
     });
@@ -123,16 +120,15 @@ describe('the install gate answers four outcomes', () => {
     expect(parsed.nextSteps.length).toBeGreaterThan(0);
     expect(parsed.nextSteps.some((step: InstallStep) => step.actor === 'operator')).toBe(true);
     expect(parsed.nextSteps.some((step: InstallStep) => step.actor === 'agent')).toBe(true);
-    expect(existsSync(join(home, '.cogmem', 'config.toml'))).toBe(false);
+    expect(parsed.installGate.diagnostics[0].code).toBe('missing_install');
   });
 
   test('text mode lists the same commands as JSON, in the same order', async () => {
     const home = makeTempDir('cogmem-gate-text-');
     const cwd = makeTempDir('cogmem-gate-text-cwd-');
-    const configPath = join(home, '.cogmem', 'config.toml');
     const env = { HOME: home, COGMEM_BIN_DIR: join(home, 'bin') };
-    const asJson = await run(['bun', doctorBin, '--config', configPath, '--json'], { cwd, env });
-    const asText = await run(['bun', doctorBin, '--config', configPath], { cwd, env });
+    const asJson = await run([process.execPath, doctorBin, '--json'], { cwd, env });
+    const asText = await run([process.execPath, doctorBin], { cwd, env });
     const steps = JSON.parse(asJson.stdout).nextSteps as InstallStep[];
     let cursor = -1;
     for (const step of steps) {
@@ -143,42 +139,17 @@ describe('the install gate answers four outcomes', () => {
     expect(asText.exitCode).toBe(asJson.exitCode);
   });
 
-  test('a rule_only config reports WARN and exits 0', async () => {
-    const dir = makeTempDir('cogmem-gate-ruleonly-');
-    const configPath = join(dir, '.cogmem', 'config.toml');
-    mkdirSync(dirname(configPath), { recursive: true });
-    writeFileSync(configPath, [
-      '[core]',
-      'db_path = "memory.db"',
-      'vector_backend = "sqlite-vec"',
-      '[memory_model]',
-      'provider = "rule_only"',
-      'model = "rule_only"',
-    ].join('\n'));
-    const { stdout, stderr, exitCode } = await run(['bun', doctorBin, '--config', configPath, '--json'], {
-      env: { COGMEM_BIN_DIR: join(dir, 'bin') },
-    });
-    expect(stderr).toBe('');
-    expect(exitCode).toBe(0);
-    const parsed = JSON.parse(stdout);
-    expect(parsed.installGate.level).toBe('warn');
-    expect(parsed.installGate.diagnostics.some((d: { code: string }) => d.code === 'rule_only')).toBe(true);
-  });
-
   test('a CLI directory outside PATH is a WARN with the exact export line', async () => {
     const dir = makeTempDir('cogmem-gate-path-');
-    const configPath = join(dir, '.cogmem', 'config.toml');
     const binDir = join(dir, 'bin');
-    mkdirSync(dirname(configPath), { recursive: true });
     mkdirSync(binDir, { recursive: true });
     writeFileSync(join(binDir, 'cogmem'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-    writeFileSync(configPath, '[core]\ndb_path = "memory.db"\n');
-    const { stdout, exitCode } = await run(['bun', doctorBin, '--config', configPath, '--json'], {
+    const { stdout, exitCode } = await run([process.execPath, doctorBin, '--json'], {
       env: { COGMEM_BIN_DIR: binDir, PATH: '/usr/bin:/bin', HOME: dir },
     });
     expect(exitCode).toBe(0);
     const parsed = JSON.parse(stdout);
-    expect(parsed.installGate.level).toBe('warn');
+    expect(parsed.installGate.level).toBe('not_installed');
     expect(parsed.installGate.diagnostics.some((d: { code: string }) => d.code === 'cli_not_on_path')).toBe(true);
     const fixPath = parsed.nextSteps.find((step: InstallStep) => step.id === 'fix_path');
     expect(fixPath.actor).toBe('operator');
@@ -186,28 +157,5 @@ describe('the install gate answers four outcomes', () => {
     const absolute = parsed.nextSteps.find((step: InstallStep) => step.id === 'use_absolute_bin');
     expect(absolute.actor).toBe('agent');
     expect(absolute.command).toContain(binDir);
-  });
-
-  test('a broken config reports FAIL and exits 1 in text and JSON modes', async () => {
-    const dir = makeTempDir('cogmem-gate-fail-');
-    const configPath = join(dir, '.cogmem', 'config.toml');
-    mkdirSync(dirname(configPath), { recursive: true });
-    writeFileSync(configPath, [
-      '[core]',
-      'db_path = "memory.db"',
-      '[memory_model]',
-      'provider = "not_a_provider"',
-    ].join('\n'));
-    const text = await run(['bun', doctorBin, '--config', configPath], {});
-    expect(text.exitCode).toBe(1);
-    expect(text.stderr).toContain('FAIL');
-
-    const json = await run(['bun', doctorBin, '--config', configPath, '--json'], {});
-    expect(json.exitCode).toBe(1);
-    expect(json.stderr).toBe('');
-    const parsed = JSON.parse(json.stdout);
-    expect(parsed.installGate.level).toBe('fail');
-    expect(parsed.installGate.exitCode).toBe(1);
-    expect(parsed.installGate.diagnostics[0].code).toBe('invalid_model_provider');
   });
 });

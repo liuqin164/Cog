@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -135,7 +135,6 @@ describe('the resident session records', () => {
     expect(detectSystemdScope() === undefined).toBe(unit === undefined);
   });
 });
-
 describe('stopping and starting the resident process', () => {
   test('systemd is the one that stops and starts a process it owns', async () => {
     const calls: string[][] = [];
@@ -199,82 +198,5 @@ describe('stopping and starting the resident process', () => {
     } finally {
       proc.kill('SIGKILL');
     }
-  });
-});
-
-describe('doctor reports the skew between disk and serving process', () => {
-  function doctorBin(): string {
-    return join(coreRoot, 'src/bin/doctor.ts');
-  }
-
-  function makeWorkspace(): { dir: string; configPath: string } {
-    const dir = makeTempDir('cogmem-doctor-skew-');
-    const configPath = join(dir, '.cogmem', 'config.toml');
-    mkdirSync(dirname(configPath), { recursive: true });
-    writeFileSync(configPath, '[core]\ndb_path = "memory.db"\nvector_backend = "sqlite-vec"\n[memory_model]\nprovider = "rule_only"\nmodel = "rule_only"\n');
-    return { dir, configPath };
-  }
-
-  async function runDoctor(dir: string, args: string[]): Promise<{ stdout: string; exitCode: number }> {
-    const proc = Bun.spawn({
-      cmd: [process.execPath, doctorBin(), ...args],
-      cwd: dir,
-      stdout: 'pipe',
-      stderr: 'pipe',
-      env: { ...process.env, HOME: dir, COGMEM_UPDATE_CHECK: '0', TMPDIR: join(coreRoot, '.cogmem/tmp') },
-    });
-    const [stdout, , exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ]);
-    return { stdout, exitCode };
-  }
-
-  test('one version on disk and another serving is stated, not averaged away', async () => {
-    const { dir, configPath } = makeWorkspace();
-    const child = await spawnCogmemish();
-    try {
-      writeResidentSession(join(dir, '.cogmem', 'sessions'), session({
-        pid: child.pid,
-        version: '4.0.0',
-        systemdUnit: 'cogmem-observatory.service',
-        systemdScope: 'user',
-      }));
-      const result = await runDoctor(dir, ['--json', '--config', configPath]);
-      expect(result.exitCode).toBe(0);
-      const body = JSON.parse(result.stdout) as {
-        version?: { disk?: string; serving?: Array<{ version?: string; systemdUnit?: string; pid?: number }>; skew?: boolean; restartRequired?: boolean };
-        installGate?: { diagnostics?: Array<{ code?: string }> };
-      };
-      expect(body.version?.serving?.[0]?.version).toBe('4.0.0');
-      expect(body.version?.serving?.[0]?.systemdUnit).toBe('cogmem-observatory.service');
-      expect(body.version?.disk).not.toBe('4.0.0');
-      expect(body.version?.skew).toBe(true);
-      expect(body.version?.restartRequired).toBe(true);
-      expect(body.installGate?.diagnostics?.map((d) => d.code)).toContain('version_skew');
-
-      // The human line names the exact command that converges them.
-      const human = Bun.spawnSync({
-        cmd: [process.execPath, doctorBin(), '--config', configPath],
-        cwd: dir,
-        stdout: 'pipe',
-        stderr: 'pipe',
-        env: { ...process.env, HOME: dir, COGMEM_UPDATE_CHECK: '0', TMPDIR: join(coreRoot, '.cogmem/tmp') },
-      });
-      expect(human.stdout.toString()).toContain('systemctl --user restart cogmem-observatory.service');
-    } finally {
-      child.stop();
-    }
-  });
-
-  test('with nothing serving there is no skew and the disk version is the answer', async () => {
-    const { dir, configPath } = makeWorkspace();
-    const result = await runDoctor(dir, ['--json', '--config', configPath]);
-    const body = JSON.parse(result.stdout) as { version?: { serving?: unknown; skew?: boolean; disk?: string } };
-    expect(body.version?.serving).toEqual([]);
-    expect(body.version?.skew).toBe(false);
-    const manifest = JSON.parse(readFileSync(join(coreRoot, 'package.json'), 'utf8')) as { version: string };
-    expect(body.version?.disk).toBe(manifest.version);
   });
 });

@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 import {
   loadCogmemConfig,
@@ -288,5 +288,42 @@ test('createMemoryKernelFromConfig opens the TOML configured database', () => {
 
   expect(kernel.getHealthStatus().dbPath).toBe(dbPath);
   kernel.close();
+});
+
+test('the config source matrix is explicit, project, global, companion', () => {
+  const root = makeTempDir('cogmem-config-matrix-');
+  const home = join(root, 'home');
+  const project = join(root, 'project');
+  const companionDir = join(home, '.cogmem', 'companion');
+  const explicit = join(root, 'explicit.toml');
+  const envConfig = join(root, 'env.toml');
+  const projectConfig = join(project, '.cogmem', 'config.toml');
+  const globalConfig = join(home, '.cogmem', 'config.toml');
+  const companionConfig = join(companionDir, 'cogmem-cli.toml');
+  mkdirSync(dirname(projectConfig), { recursive: true });
+  mkdirSync(dirname(globalConfig), { recursive: true });
+  mkdirSync(companionDir, { recursive: true });
+  writeFileSync(explicit, '[core]\ndb_path = "explicit.db"\n');
+  writeFileSync(envConfig, '[core]\ndb_path = "env.db"\n');
+  writeFileSync(projectConfig, '[core]\ndb_path = "project.db"\n');
+  writeFileSync(globalConfig, '[core]\ndb_path = "global.db"\n');
+  writeFileSync(companionConfig, '[core]\ndb_path = "companion.db"\n');
+  writeFileSync(join(companionDir, 'install.json'), JSON.stringify({
+    schema: 1,
+    done: [],
+    choices: { dataDir: companionDir },
+    updatedAt: 0,
+  }));
+  const env = { HOME: home };
+
+  expect(resolveCogmemConfigPath({ cwd: project, env: { ...env, COGMEM_CONFIG: envConfig } }).path).toBe(envConfig);
+  expect(resolveCogmemConfigPath({ cwd: project, env, configPath: explicit }).path).toBe(explicit);
+  expect(resolveCogmemConfigPath({ cwd: project, env }).path).toBe(projectConfig);
+
+  rmSync(projectConfig);
+  expect(resolveCogmemConfigPath({ cwd: project, env }).path).toBe(globalConfig);
+
+  rmSync(globalConfig);
+  expect(resolveCogmemConfigPath({ cwd: project, env }).path).toBe(companionConfig);
 });
 

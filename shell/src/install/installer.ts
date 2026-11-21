@@ -23,15 +23,15 @@ import { MODEL_PRESETS, modelEnv, probeModel, type ModelChoice, type ModelProvid
 import { RouteStore, safeRouteName, type ModelRoute } from '../model/routes.ts';
 import {
   installService,
+  defaultRunner,
   residentArgs,
   restartService,
   uninstallService,
-  type CommandResult,
   type Platform,
   type Runner,
   type ServiceSpec,
 } from './service.ts';
-import { runDoctor, type DoctorReport, type HealthPayload } from './doctor.ts';
+import { defaultFetchHealth, runDoctor, type DoctorReport, type HealthPayload } from './doctor.ts';
 import { openProbeSession, type ProbeReply, type ProbeSession } from './attach.ts';
 import { createTerminalIO, type InstallIO, type TerminalStreams } from './io.ts';
 import { pluginsConfigPath, writePluginRegistry } from '../plugins/registry.ts';
@@ -152,31 +152,6 @@ export interface InstallerOptions {
 
 /** A step that completed with a degradation: not green, but not a reason to stop the install (#280). */
 type StepResult = { ok: true; warnings?: string[] } | { ok: false; message: string; hint?: string };
-
-/** The real runner: spawn, collect, never echo a key (callers only pass commands, not secrets). */
-export function defaultRunner(): Runner {
-  return (command, args, options = {}) =>
-    new Promise<CommandResult>((resolvePromise) => {
-      const child = spawn(command, args, {
-        cwd: options.cwd,
-        env: { ...process.env, ...options.env },
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      let stdout = '';
-      let stderr = '';
-      child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8'); });
-      child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8'); });
-      const timer = options.timeoutMs ? setTimeout(() => child.kill('SIGKILL'), options.timeoutMs) : undefined;
-      child.on('error', (error) => {
-        if (timer) clearTimeout(timer);
-        resolvePromise({ code: 127, stdout, stderr: `${stderr}${error.message}` });
-      });
-      child.on('close', (code) => {
-        if (timer) clearTimeout(timer);
-        resolvePromise({ code: code ?? 1, stdout, stderr });
-      });
-    });
-}
 
 export function parseEnvFile(path: string): Record<string, string> {
   if (!existsSync(path)) return {};
@@ -966,7 +941,6 @@ export class Installer {
     return runDoctor({
       dataDir: this.choices.dataDir,
       dbPath: this.dbPath,
-      agentId: this.choices.agentId,
       socketPath: this.socketPath,
       healthUrl: this.healthUrl,
       fetchHealth: () => (this.hooks.fetchHealth ?? defaultFetchHealth)(this.healthUrl),
@@ -1090,12 +1064,6 @@ export class Installer {
       }
     }
   }
-}
-
-export async function defaultFetchHealth(url: string): Promise<HealthPayload> {
-  const response = await fetch(url, { signal: AbortSignal.timeout(2_000) });
-  if (!response.ok) throw new Error(`health HTTP ${response.status}`);
-  return (await response.json()) as HealthPayload;
 }
 
 export const INSTALL_USAGE = [

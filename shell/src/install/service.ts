@@ -7,6 +7,7 @@
  * sequence are testable without a live service manager.
  */
 import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { cliEntry } from './layout.ts';
 
@@ -25,6 +26,31 @@ export interface RunOptions {
 }
 
 export type Runner = (command: string, args: string[], options?: RunOptions) => Promise<CommandResult>;
+
+/** The real runner: spawn, collect, never echo a key (callers only pass commands, not secrets). */
+export function defaultRunner(): Runner {
+  return (command, args, options = {}) =>
+    new Promise<CommandResult>((resolvePromise) => {
+      const child = spawn(command, args, {
+        cwd: options.cwd,
+        env: { ...process.env, ...options.env },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let stdout = '';
+      let stderr = '';
+      child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8'); });
+      child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8'); });
+      const timer = options.timeoutMs ? setTimeout(() => child.kill('SIGKILL'), options.timeoutMs) : undefined;
+      child.on('error', (error) => {
+        if (timer) clearTimeout(timer);
+        resolvePromise({ code: 127, stdout, stderr: `${stderr}${error.message}` });
+      });
+      child.on('close', (code) => {
+        if (timer) clearTimeout(timer);
+        resolvePromise({ code: code ?? 1, stdout, stderr });
+      });
+    });
+}
 
 /**
  * The resident's cgroup ceiling (#226). `MemoryHigh` is the throttle, `MemoryMax` the hard limit;

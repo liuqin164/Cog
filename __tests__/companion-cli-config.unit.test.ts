@@ -5,7 +5,6 @@ import { fileURLToPath } from 'node:url';
 
 import { KernelAgentMemoryBackend } from '../src/agent/index.js';
 import { createMemoryKernel } from '../src/factory.js';
-import { CORE_VERSION } from '../src/version.js';
 import { makeTempDir } from './helpers/tmp.js';
 
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -35,6 +34,21 @@ function run(args: string[], options: { cwd: string; home: string; env?: Record<
   ]).then(([stdout, stderr, exitCode]) => ({ stdout, stderr, exitCode }));
 }
 
+async function remember(dbPath: string, token: string): Promise<void> {
+  const kernel = createMemoryKernel({ dbPath });
+  try {
+    await new KernelAgentMemoryBackend(kernel).rememberTurnWithResult({
+      agentId: 'cogmem-companion',
+      projectId: 'companion',
+      sessionId: 'companion-cli',
+      userText: token,
+      assistantText: '记下了。',
+    });
+  } finally {
+    kernel.close();
+  }
+}
+
 async function companionOnlyHome(token: string) {
   const home = makeTempDir('cogmem-companion-cli-');
   const companionDir = join(home, '.cogmem', 'companion');
@@ -48,47 +62,27 @@ async function companionOnlyHome(token: string) {
     choices: { dataDir: companionDir, projectId: 'companion', agentId: 'cogmem-companion' },
     updatedAt: 0,
   }));
-  const kernel = createMemoryKernel({ dbPath });
-  try {
-    await new KernelAgentMemoryBackend(kernel).rememberTurnWithResult({
-      agentId: 'cogmem-companion',
-      projectId: 'companion',
-      sessionId: 'companion-cli',
-      userText: token,
-      assistantText: '记下了。',
-    });
-  } finally {
-    kernel.close();
-  }
+  await remember(dbPath, token);
   return { home, companionDir, configPath, dbPath };
 }
 
 describe('the management CLI on a companion-only install (#344)', () => {
-  test('doctor resolves the companion config and reports the real install', async () => {
+  test('doctor reads the install state, not the kernel config', async () => {
     const token = '部署窗口同伴库探针';
-    const { home, configPath, dbPath } = await companionOnlyHome(token);
-    const { stdout, stderr, exitCode } = await run([cogmemBin, 'doctor', '--json'], {
-      cwd: home,
-      home,
-    });
+    const { home, companionDir } = await companionOnlyHome(token);
+    const { stdout, stderr } = await run([cogmemBin, 'doctor', '--json'], { cwd: home, home });
 
     expect(stderr).toBe('');
-    expect(exitCode).toBe(0);
     const parsed = JSON.parse(stdout) as {
-      configPath?: string;
-      dbPath?: string;
+      dataDir?: string;
+      installState?: string;
       installGate: { level: string; diagnostics: Array<{ code: string }> };
-      nextSteps: Array<{ id: string; command: string }>;
-      version: { disk: string; serving: unknown[] };
-      health: { status: string };
+      nextSteps: Array<{ id: string }>;
     };
-    expect(parsed.installGate.level).not.toBe('not_installed');
-    expect(parsed.installGate.diagnostics.some((diagnostic) => diagnostic.code === 'missing_config')).toBe(false);
-    expect(parsed.configPath).toBe(configPath);
-    expect(parsed.dbPath).toBe(dbPath);
-    expect(parsed.version.disk).toBe(CORE_VERSION);
-    expect(Array.isArray(parsed.version.serving)).toBe(true);
-    expect(parsed.health.status).not.toBe('');
+    expect(parsed.dataDir).toBe(companionDir);
+    expect(parsed.installState).toBe(join(companionDir, 'install.json'));
+    expect(parsed.installGate.diagnostics.some((diagnostic) => diagnostic.code === 'missing_install')).toBe(false);
+    expect(parsed.installGate.diagnostics.map((diagnostic) => diagnostic.code)).toContain('resident-health');
     expect(parsed.nextSteps.some((step) => step.id === 'operator_init' || step.id === 'agent_init')).toBe(false);
   }, 30_000);
 
@@ -128,43 +122,47 @@ describe('the management CLI on a companion-only install (#344)', () => {
   }, 30_000);
 });
 
-describe('bare-kernel and explicit config resolution do not regress (#344)', () => {
+describe('config source precedence does not regress (#344)', () => {
   test('a global config wins over the companion fallback', async () => {
-    const token = '同伴配置不应抢走全局配置';
-    const { home } = await companionOnlyHome(token);
+    const companionToken = '同伴配置不应抢走全局配置';
+    const { home } = await companionOnlyHome(companionToken);
     const globalConfig = join(home, '.cogmem', 'config.toml');
     const globalDb = join(home, '.cogmem', 'memory.db');
     writeFileSync(globalConfig, `[core]\ndb_path = ${JSON.stringify(globalDb)}\n`);
-    const kernel = createMemoryKernel({ dbPath: globalDb });
-    kernel.close();
+    await remember(globalDb, '全局配置优先探针');
 
-    const { stdout, stderr, exitCode } = await run([cogmemBin, 'doctor', '--json'], { cwd: home, home });
-    expect(stderr).toBe('');
-    expect(exitCode).toBe(0);
-    const parsed = JSON.parse(stdout) as { configPath?: string; dbPath?: string };
-    expect(parsed.configPath).toBe(globalConfig);
-    expect(parsed.dbPath).toBe(globalDb);
+    const hit = await run([cogmemBin, 'memory', 'recall', '--query', '全局配置优先探针', '--project', 'companion', '--agent', 'cogmem-companion', '--json'], { cwd: home, home });
+    expect(hit.exitCode).toBe(0);
+    expect(JSON.stringify((JSON.parse(hit.stdout) as { items: unknown[] }).items)).toContain('全局配置优先探针');
+
+    const shadowed = await run([cogmemBin, 'memory', 'recall', '--query', companionToken, '--project', 'companion', '--agent', 'cogmem-companion', '--json'], { cwd: home, home });
+    expect(shadowed.exitCode).toBe(0);
+    expect(JSON.stringify((JSON.parse(shadowed.stdout) as { items: unknown[] }).items)).not.toContain(companionToken);
   }, 30_000);
 
   test('COGMEM_CONFIG still wins over the companion fallback', async () => {
-    const token = '显式配置优先';
-    const { home } = await companionOnlyHome(token);
+    const companionToken = '显式配置优先';
+    const { home } = await companionOnlyHome(companionToken);
     const envConfig = join(home, 'explicit', 'config.toml');
     const envDb = join(home, 'explicit', 'memory.db');
     mkdirSync(dirname(envConfig), { recursive: true });
     writeFileSync(envConfig, `[core]\ndb_path = ${JSON.stringify(envDb)}\n`);
-    const kernel = createMemoryKernel({ dbPath: envDb });
-    kernel.close();
+    await remember(envDb, '环境变量配置优先探针');
 
-    const { stdout, stderr, exitCode } = await run([cogmemBin, 'doctor', '--json'], {
+    const hit = await run([cogmemBin, 'memory', 'recall', '--query', '环境变量配置优先探针', '--project', 'companion', '--agent', 'cogmem-companion', '--json'], {
       cwd: home,
       home,
       env: { COGMEM_CONFIG: envConfig },
     });
-    expect(stderr).toBe('');
-    expect(exitCode).toBe(0);
-    const parsed = JSON.parse(stdout) as { configPath?: string; dbPath?: string };
-    expect(parsed.configPath).toBe(envConfig);
-    expect(parsed.dbPath).toBe(envDb);
+    expect(hit.exitCode).toBe(0);
+    expect(JSON.stringify((JSON.parse(hit.stdout) as { items: unknown[] }).items)).toContain('环境变量配置优先探针');
+
+    const shadowed = await run([cogmemBin, 'memory', 'recall', '--query', companionToken, '--project', 'companion', '--agent', 'cogmem-companion', '--json'], {
+      cwd: home,
+      home,
+      env: { COGMEM_CONFIG: envConfig },
+    });
+    expect(shadowed.exitCode).toBe(0);
+    expect(JSON.stringify((JSON.parse(shadowed.stdout) as { items: unknown[] }).items)).not.toContain(companionToken);
   }, 30_000);
 });

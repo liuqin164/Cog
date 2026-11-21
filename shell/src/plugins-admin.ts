@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { CompanionShell } from './app.ts';
 import type { CommandReply } from './commands.ts';
-import { defaultRunner } from './install/installer.ts';
+import { defaultRunner } from './install/service.ts';
 import { restartService, servicePath, type Platform, type ServiceSpec } from './install/service.ts';
 import { checkPluginSpec } from './plugins/load.ts';
 import { pluginsConfigPath, readPluginRegistry, writePluginRegistry } from './plugins/registry.ts';

@@ -28,7 +28,7 @@ function usage(): string {
     'Usage: cogmem <command> [args]',
     '',
     'Commands:',
-    '  doctor               validate config, kernel, storage and the install gate',
+    '  doctor               check the running companion and the install gate',
     '  memory               audit/search/show raw and compiled memory; run dream/candidates queue',
     '  import <host>        import memory files from one host (openclaw | hermes)',
     '  observatory          serve the memory observatory on loopback (reads zero-write; soul editor writes)',

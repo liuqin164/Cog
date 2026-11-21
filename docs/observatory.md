@@ -196,9 +196,7 @@ Two consequences worth stating rather than discovering:
 
 **Retention.** `trace_events` is append-only, so `RECALL_TRACE_MAX_ROWS` (5,000 rows, newest win)
 bounds it: the writer sweeps with one `DELETE` per 256 appends, and the sweep target sits one interval
-below the ceiling so the table cannot pass it. `cogmem doctor --storage` reports
-`recall_decisions=<rows>/<cap>`; a database where nothing has recalled reports `0`, and a table that
-cannot be read at all is left out rather than printed as zero.
+below the ceiling so the table cannot pass it.
 
 **Cost.** Measured on the 20,343-event corpus: recall median 209.84 ms before the write existed and
 205.35 ms after (25 samples each, same script, fresh copies of the same file — the difference is inside
@@ -294,18 +292,8 @@ session to reconnect, because the observatory answers plain HTTP rather than a p
 
 The resident process does not hot-reload: it keeps the code it started with. So after a package
 update the process still answers as the old version until it is restarted, and **both versions are
-real** — one on disk, one serving. `cogmem doctor` reports that state rather than picking a number:
-
-```
-OK version 4.2.0 (latest 4.2.0)
-OK resident process 4.1.0 (pid 3021, http, cogmem-observatory.service)
-WARN version_skew: the resident process is still serving 4.1.0 (pid 3021); the disk is at 4.2.0. Run `systemctl --user restart cogmem-observatory.service` to take effect.
-```
-
-The unit name comes from the process's own cgroup, so it is the one systemd started, not one this
-document assumed. `cogmem doctor --json` carries the same facts under `version`: `disk`, `latest`,
-`updateAvailable`, `serving` (one entry per process, with `pid`, `version`, `transport`,
-`url`, `systemdUnit`), `skew` and `restartRequired`.
+real** — one on disk, one serving. `GET /health` carries the serving process's `version`; the
+upgrade supervisor's report carries the switch and the restart.
 
 Upgrades are started from `/upgrade` in `cog`, not from a timer, and there is no automatic upgrade.
 The resident writes the request and a supervisor stops, swaps, migrates, gates and restarts it; see

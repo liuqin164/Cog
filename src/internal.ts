@@ -1,6 +1,8 @@
 /** @public @since 2.0.0 Core public compatibility export surface. */
 export * from './factory.js';
 export * from './config/CogmemConfig.js';
+export * from './install/InstallSteps.js';
+export * from './bin/CliJson.js';
 export * from './adapters/index.js';
 export * from './algorithm/AlgorithmReviewBackend.js';
 export * from './batch/IngestionCursorStore.js';

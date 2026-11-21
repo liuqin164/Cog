@@ -310,7 +310,13 @@ test('shipped docs only show invocations the CLI accepts', () => {
 
   const flagsFor = (entry: string): Set<string> => {
     // `install` is a shim over the shell installer, whose own `INSTALL_USAGE` is the flag list.
-    const source = readSource(entry === 'install' ? join('shell', 'src', 'install', 'installer.ts') : join('src', 'bin', `${entry}.ts`));
+    const source = readSource(
+      entry === 'install'
+        ? join('shell', 'src', 'install', 'installer.ts')
+        : entry === 'doctor'
+          ? join('shell', 'src', 'install', 'doctor-cli.ts')
+          : join('src', 'bin', `${entry}.ts`),
+    );
     const flags = new Set([...source.matchAll(/--([a-z][a-z0-9-]*)/g)].map((m) => m[1]!));
     for (const array of source.matchAll(/extraFlags:\s*\[([^\]]*)\]/g)) {
       for (const name of array[1]!.matchAll(/'([a-z][a-z0-9-]*)'/g)) flags.add(name[1]!);

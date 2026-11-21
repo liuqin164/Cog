@@ -194,13 +194,14 @@ test('the merged dream entry point refuses --promote, and names the step that do
 test('#83 --out writes the same JSON the command prints, and says so on failure', async () => {
   const dir = makeTempDir('cogmem-cli-out-');
   const target = join(dir, 'report.json');
-  const config = join(dir, 'config.toml');
+  const dataDir = join(dir, 'companion');
 
   const written = Bun.spawnSync({
-    cmd: ['bun', cogmemBin, 'doctor', '--json', '--config', config, '--out', target],
+    cmd: ['bun', cogmemBin, 'doctor', '--json', '--data', dataDir, '--out', target],
     cwd: join(import.meta.dir, '..'),
     stdout: 'pipe',
     stderr: 'pipe',
+    env: { ...process.env, COGMEM_UPDATE_CHECK: '0' },
   });
   expect(written.exitCode).toBe(0);
   expect(existsSync(target)).toBe(true);
@@ -214,10 +215,11 @@ test('#83 --out writes the same JSON the command prints, and says so on failure'
   // leave a half-written file where the caller asked for a report.
   const missingParent = join(dir, 'no-such-dir', 'report.json');
   const failed = Bun.spawnSync({
-    cmd: ['bun', cogmemBin, 'doctor', '--json', '--config', config, '--out', missingParent],
+    cmd: ['bun', cogmemBin, 'doctor', '--json', '--data', dataDir, '--out', missingParent],
     cwd: join(import.meta.dir, '..'),
     stdout: 'pipe',
     stderr: 'pipe',
+    env: { ...process.env, COGMEM_UPDATE_CHECK: '0' },
   });
   expect(failed.exitCode).not.toBe(0);
   expect(String(failed.stderr)).toContain('no-such-dir');
@@ -227,14 +229,15 @@ test('#83 --out writes the same JSON the command prints, and says so on failure'
 test('#83 --out replaces an existing file whole, and a failed run leaves the old one intact', async () => {
   const dir = makeTempDir('cogmem-cli-out-atomic-');
   const target = join(dir, 'report.json');
-  const config = join(dir, 'config.toml');
+  const dataDir = join(dir, 'companion');
   writeFileSync(target, '{"previous":true}');
 
   const ok = Bun.spawnSync({
-    cmd: ['bun', cogmemBin, 'doctor', '--json', '--config', config, '--out', target],
+    cmd: ['bun', cogmemBin, 'doctor', '--json', '--data', dataDir, '--out', target],
     cwd: join(import.meta.dir, '..'),
     stdout: 'pipe',
     stderr: 'pipe',
+    env: { ...process.env, COGMEM_UPDATE_CHECK: '0' },
   });
   expect(ok.exitCode).toBe(0);
   // Replaced whole: the old document is gone, not merged or truncated mid-write.
@@ -247,10 +250,11 @@ test('#83 --out replaces an existing file whole, and a failed run leaves the old
   const asDir = join(dir, 'a-directory');
   mkdirSync(asDir);
   const failed = Bun.spawnSync({
-    cmd: ['bun', cogmemBin, 'doctor', '--json', '--config', config, '--out', asDir],
+    cmd: ['bun', cogmemBin, 'doctor', '--json', '--data', dataDir, '--out', asDir],
     cwd: join(import.meta.dir, '..'),
     stdout: 'pipe',
     stderr: 'pipe',
+    env: { ...process.env, COGMEM_UPDATE_CHECK: '0' },
   });
   expect(failed.exitCode).not.toBe(0);
   expect(readFileSync(target, 'utf8')).toBe(before);
@@ -286,12 +290,12 @@ test('#83 snapshot export keeps --out meaning the snapshot, not the JSON', async
  * `--json` in the working directory and exited 0. A missing value is a usage error.
  */
 function runDoctorWith(dir: string, args: string[]) {
-  const config = join(dir, 'config.toml');
   return Bun.spawnSync({
-    cmd: ['bun', cogmemBin, 'doctor', '--json', '--config', config, ...args],
+    cmd: ['bun', cogmemBin, 'doctor', '--json', '--data', join(dir, 'companion'), ...args],
     cwd: join(import.meta.dir, '..'),
     stdout: 'pipe',
     stderr: 'pipe',
+    env: { ...process.env, COGMEM_UPDATE_CHECK: '0' },
   });
 }
 

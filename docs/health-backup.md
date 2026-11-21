@@ -63,8 +63,8 @@ otherwise. A read-only database makes `check` skip the transition write instead 
 |---|---|---|---|
 | `model_unavailable` | `model_route` is degraded. | The companion says the memory model is unavailable and queues the turn; it does not fabricate an answer. Recall stays lexical and says so through `semanticIndexEnabled()`. | `health.check`, `doctor`, `/observatory/health` |
 | `dream_failing` | `dream_streak` reaches `dreamFailureNights`. | One health notice per failed streak, sent through F18's highest tier; the returned decision carries its trace. | `health.notice`, `health-changed` |
-| `db_read_only` | `db_writable` is degraded. | Read-only companion mode: writes are refused with `health_read_only`; recall and the observatory read path keep working; the state is explicit in `health.mode`. | `health.check`, `health.assertWritable`, `doctor` |
-| `kernel_integrity_failed` | `kernel_integrity` is degraded. | The companion reports the corpus as unreadable rather than answering from a damaged index; the next step is a restore from a verified snapshot. | `health.check`, `doctor` |
+| `db_read_only` | `db_writable` is degraded. | Read-only companion mode: writes are refused with `health_read_only`; recall and the observatory read path keep working; the state is explicit in `health.mode`. | `health.check`, `health.assertWritable`, `/observatory/health` |
+| `kernel_integrity_failed` | `kernel_integrity` is degraded. | The companion reports the corpus as unreadable rather than answering from a damaged index; the next step is a restore from a verified snapshot. | `health.check`, `/observatory/health` |
 
 ## Health state and events (frozen)
 
@@ -130,7 +130,7 @@ with `night-dnd` and a normally interruptible channel it is `deliver` / `proacti
 | `location` | `<paths.snapshots_dir>/brain-<ISO>.snap` and `brain-<ISO>.json`. |
 | `retention` | The newest `7` nightly snapshots are kept; older `.snap` and `.json` pairs are deleted. Weekly archives are separate (below). |
 | `verification` | Every snapshot is checked for `checksum`, `opens` and `counts` before it is reported. |
-| `query` | `cogmem backup list --json`, `cogmem doctor --json`, `GET /observatory/health`. |
+| `query` | `cogmem backup list --json`, `GET /observatory/health`. |
 | `failure` | A snapshot that cannot be written fails the Night. The Dream rows are already committed and a re-run is idempotent. |
 
 The snapshot reuses `SnapshotExporter`: `VACUUM INTO`, forgotten rows removed, sha256 over the DB
@@ -240,7 +240,7 @@ close the ticket.
 | `/observatory/health` | `GET`, `HEAD` | no | The last health report, the recent Dream runs, the latest frame and atlas compile instants, the latest context-budget receipt, the anomaly counts, the latest snapshot's verification, and the surfacing gate's windowed counts plus its current priors (#239). |
 
 The page reads the read-only connection. It never runs a check, because a check can record a
-transition; the last report is what the shell or `doctor` persisted. A database that has never been
+transition; the last report is what the shell persisted. A database that has never been
 checked answers `checked: false` rather than inventing a status.
 
 The surfacing block reads two existing records and writes neither: the owner's feedback rows in
@@ -258,7 +258,7 @@ remain readable from the database.
 | `mode` | `read_only` when `db_writable` is degraded, else `normal`. |
 | `writes` | `assertWritable` throws `health_read_only`; the kernel's agent-facing write paths call it before appending. |
 | `reads` | Recall, the books, the event stream and the observatory read path are unchanged. |
-| `status` | `health.check` and `doctor` name the mode; the page shows it. |
+| `status` | `health.check` names the mode; the page shows it. |
 
 ## Errors (frozen)
 
@@ -287,8 +287,9 @@ remain readable from the database.
 
 ## What this round wires
 
-- `MemoryKernel.health` runs the self-checks; `doctor` prints them and the snapshot state; the shell
-  tick runs `check` so a transition is recorded without a person asking.
+- `MemoryKernel.health` runs the self-checks; the shell tick runs `check` so a transition is
+  recorded without a person asking. `cogmem doctor` reads the running host's `/health` and never
+  opens the database; the observatory page reads the last report.
 - `MemoryKernel.backup.snapshot` runs at the end of `runNight` when a snapshots directory is
   configured; the week's first verified copy is kept as a weekly archive beside the nightly window.
   `cogmem backup snapshot|list|bundle|restore` is the operator face.

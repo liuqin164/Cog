@@ -11,7 +11,6 @@ import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { bwrapUsable } from '../plugins/builtin-tools.ts';
 import { formatBytes } from '../memory.ts';
-import { DEFAULT_SOUL, readSoul } from './soul.ts';
 import { serviceStatus, type Platform, type Runner, type ServiceSpec } from './service.ts';
 
 export interface HealthPayload {
@@ -27,12 +26,12 @@ export interface HealthPayload {
     consecutive: number;
     lastFailure: { at: number; message: string } | null;
   };
+  memoryModel?: { state?: string; line?: string };
 }
 
 export interface DoctorContext {
   dataDir: string;
   dbPath: string;
-  agentId: string;
   socketPath: string;
   healthUrl: string;
   fetchHealth: () => Promise<HealthPayload>;
@@ -42,8 +41,6 @@ export interface DoctorContext {
   /** `service` checks the unit; `process` checks the pid an install without a manager left behind. */
   mode: 'service' | 'process';
   pid?: number;
-  /** The soul that should be readable back; defaults to the shipped v0. */
-  expectedSoul?: string;
 }
 
 export interface DoctorCheck {
@@ -110,6 +107,15 @@ export async function runDoctor(ctx: DoctorContext): Promise<DoctorReport> {
       ok: LOOPBACK.has(health.bind),
       detail: `bind=${health.bind}`,
     });
+    if (health.memoryModel !== undefined) {
+      const state = health.memoryModel.state ?? 'unknown';
+      checks.push({
+        id: 'memory-model',
+        ok: true,
+        warn: state !== 'reachable',
+        detail: health.memoryModel.line ?? `memory model ${state}`,
+      });
+    }
     // The unit's ceiling is only observable through the resident's own cgroup reading. A service
     // install must have one; a no-manager process legitimately has none.
     const memory = health.memory;
@@ -130,20 +136,7 @@ export async function runDoctor(ctx: DoctorContext): Promise<DoctorReport> {
   // 4. The control socket `cog` attaches to.
   checks.push({ id: 'attach-socket', ok: existsSync(ctx.socketPath), detail: ctx.socketPath });
 
-  // 5. The soul is readable back, byte for byte.
-  try {
-    const row = readSoul(ctx.dbPath, ctx.agentId);
-    const expected = ctx.expectedSoul ?? DEFAULT_SOUL;
-    checks.push({
-      id: 'soul',
-      ok: row !== undefined && row.content === expected,
-      detail: row ? `v${row.version} ${Buffer.byteLength(row.content)} bytes` : 'no soul row',
-    });
-  } catch (error) {
-    checks.push({ id: 'soul', ok: false, detail: error instanceof Error ? error.message : String(error) });
-  }
-
-  // 6. The service manager knows the unit (or the process an install without one left behind).
+  // 5. The service manager knows the unit (or the process an install without one left behind).
   if (ctx.mode === 'process') {
     let alive = false;
     try {
@@ -185,7 +178,7 @@ export async function runDoctor(ctx: DoctorContext): Promise<DoctorReport> {
     }
   }
 
-  // 7. bash isolation. A missing bubblewrap is a WARN, not a FAIL: the shell still runs, but every
+  // 6. bash isolation. A missing bubblewrap is a WARN, not a FAIL: the shell still runs, but every
   // bash result says `[sandbox: off]` and `/status` reports it, so the degradation is not silent.
   const sandbox = bwrapUsable();
   checks.push({
@@ -198,4 +191,10 @@ export async function runDoctor(ctx: DoctorContext): Promise<DoctorReport> {
   });
 
   return { ok: checks.every((check) => check.ok || check.warn === true), checks };
+}
+
+export async function defaultFetchHealth(url: string): Promise<HealthPayload> {
+  const response = await fetch(url, { signal: AbortSignal.timeout(2_000) });
+  if (!response.ok) throw new Error(`health HTTP ${response.status}`);
+  return (await response.json()) as HealthPayload;
 }
