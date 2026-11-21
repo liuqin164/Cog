@@ -27,12 +27,14 @@ No product code is touched and no prompt is reimplemented in the eval.
 
 ## Corpus
 
-`corpus.ts` has 26 classification items and 3 compile scenarios (4 turns each).
+`corpus.ts` has 26 classification items, 6 long-tail probes, and 3 compile scenarios (4 turns each).
 
 Classification covers the six roles: rule, soul, commitment, intention, experience, ordinary.
 The four confusion pairs are `rule_vs_one_off`, `commitment_vs_intention`,
 `soul_vs_preference`, and `correction_vs_new_fact`. The two correction items are reported
-separately and excluded from six-class accuracy.
+separately and excluded from six-class accuracy. The six `long-tail` probes put the rule,
+negation, or condition after a long neutral head; they are reported as a group and excluded from
+the six-role metric.
 
 Compile scenarios are `launch` (release rules, a commitment, an intention), `incident` (an
 experience, a correction, a soul statement), and `travel` (an intention, a preference, a rule, an
@@ -60,6 +62,7 @@ about a hidden classifier.
 
 - **Classification accuracy** — scored items only, six roles; per-role precision/recall and the
   three largest off-diagonal confusions. Pair accuracy and correction detection are separate.
+- **Group probes** — per-group hit counts for items excluded from six-role accuracy.
 - **Frame pass rate** — episodes whose night output has a frame with
   `sourceAuthority: 'processor'`, over episodes drained.
 - **Fallback need** — episodes with no processor frame, over episodes drained. The nightly path

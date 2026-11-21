@@ -45,7 +45,7 @@
 | 功能 | 是什么 | 谁在用 | 靠什么证明 | 状态 |
 |---|---|---|---|---|
 | 做梦 | 夜里整理账本：分类、编译、摘要；触发改为壳空闲 + 待编译量（未策展事件/未编译集数）达阈值，夜间（2–5）5 分钟空闲/1 条、白天 60 分钟/2 条，夜间优先；02:00 折的是昨天，错过窗口下一 tick 补最近一日（跨多日只补最近一日并记跳过天数），失败按 5/10/20/30 分钟退避、整夜最多 5 次 | resident tick 按 idle+backlog+时段权重触发 runKernelNight，每次决策写 dream_trigger trace（backlogEvents/backlogEpisodes/idleMs/thresholds） | box 整夜实测（61 事件→10 候选）；F13 行为评测；#326 测试：memory 角色跟随激活路线、不可达写 memory_model_unavailable 并计入失败夜；#327 假时钟 6 例（窗口内、补课、跨日、23→6 一夜一次、退避上限、48h 无 Dream）；#379 假时钟一周（凌晨 3 点对话、静夜、白天零散三种夜型：backlog 4/4/8 清空、白天不抢占、状态机表零改动） | ✅ 模型不可达时不再静默：/health 与 /status 显示记忆模型降级；补课与重试风暴已修（#327）；触发策略见 #379 |
-| 分类 | 新记忆按角色归类（规则/画像/承诺/意图/经历） | Dream 内调 memory 模型（Route A），主人 /candidates 审 | #231 测试；成本上限在 budgets.json | ✅ |
+| 分类 | 新记忆按角色归类（规则/画像/承诺/意图/经历）；策展输入按角色限长（user 8000／assistant 3000／tool·task 1200），超长保留头尾并标出省略字数与原始长度，整集 24000 字总闸按 tool→assistant→user 压缩 | Dream 内调 memory 模型（Route A），主人 /candidates 审 | #231 测试；成本上限在 budgets.json；#387 记分卡长尾组 6/6（改前 0/6），主集 12/24 持平 | ✅ |
 
 ## 四、治理与运维
 

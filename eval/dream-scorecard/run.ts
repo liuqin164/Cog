@@ -40,6 +40,7 @@ interface ClassificationItemResult {
   source: string;
   correct: boolean;
   pair?: string;
+  group?: string;
   candidates: string[];
   correctionDetected: boolean;
 }
@@ -90,6 +91,7 @@ interface ScorecardResult {
     worst: Array<{ from: DreamRole; to: DreamRole; count: number }>;
     pairs: Array<{ pair: string; correct: number; total: number; accuracy: number }>;
     correction: { detected: number; total: number; newFactFalsePositives: number; newFactTotal: number };
+    groups: Array<{ group: string; correct: number; total: number }>;
     results: ClassificationItemResult[];
     usage: Usage;
   };
@@ -225,6 +227,7 @@ async function runClassification(): Promise<ScorecardResult['classification']> {
       source: correctionDetected && item.role === 'correction' ? 'correction' : prediction.source,
       correct: item.role === prediction.role || (item.role === 'correction' && correctionDetected),
       pair: item.pair,
+      group: item.group,
       candidates: candidates.map((candidate) => candidate.candidateType),
       correctionDetected,
     });
@@ -333,7 +336,7 @@ async function runCompileScenario(scenario: CompileScenario): Promise<CompileSce
 }
 
 function summarizeClassification(results: ClassificationItemResult[]): ScorecardResult['classification'] {
-  const scored = results.filter((item) => item.role !== 'correction');
+  const scored = results.filter((item) => item.role !== 'correction' && !item.group);
   const correct = scored.filter((item) => item.correct).length;
   const perClass = SCORED_ROLES.map((role) => {
     const support = scored.filter((item) => item.role === role).length;
@@ -364,6 +367,11 @@ function summarizeClassification(results: ClassificationItemResult[]): Scorecard
   });
   const correctionItems = results.filter((item) => item.role === 'correction');
   const newFactItems = results.filter((item) => item.pair === 'correction_vs_new_fact' && item.role !== 'correction');
+  const groups = [...new Set(results.map((item) => item.group).filter((group): group is string => Boolean(group)))]
+    .map((group) => {
+      const items = results.filter((item) => item.group === group);
+      return { group, correct: items.filter((item) => item.correct).length, total: items.length };
+    });
   return {
     items: results.length,
     scored: scored.length,
@@ -378,6 +386,7 @@ function summarizeClassification(results: ClassificationItemResult[]): Scorecard
       newFactFalsePositives: newFactItems.filter((item) => item.correctionDetected).length,
       newFactTotal: newFactItems.length,
     },
+    groups,
     results,
     usage: { calls: 0, inputTokens: 0, outputTokens: 0 },
   };
@@ -495,6 +504,7 @@ function renderMarkdown(result: ScorecardResult): string {
     ...result.classification.pairs.map((pair) => `| ${pair.pair} | ${pair.correct} | ${pair.total} | ${percent(pair.correct, pair.total)} |`),
     '',
     `Correction detection: ${result.classification.correction.detected}/${result.classification.correction.total}; new-fact false positives: ${result.classification.correction.newFactFalsePositives}/${result.classification.correction.newFactTotal}.`,
+    `Group probes: ${result.classification.groups.map((group) => `${group.group} ${group.correct}/${group.total}`).join('; ') || 'none'}.`,
     '',
     '## Compile',
     '',
