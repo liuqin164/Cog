@@ -2083,6 +2083,8 @@ export class MemoryKernel extends KernelServices {
         unboundRawEvents: backlog.unboundEvents,
         bindingFailures,
         expiredConfirmationCandidates: reviewQueueAging.expired,
+        needsConfirmationExpiringSoon: backlog.candidateQueue.needsConfirmationExpiringSoon,
+        highPrivilegeNeedsConfirmationExpiringSoon: backlog.candidateQueue.highPrivilege.needsConfirmationExpiringSoon,
         episodeDreamBacklog: episodeDream.pending + episodeDream.failed,
         unassignedEpisodeRawEvents,
       },
