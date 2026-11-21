@@ -1380,6 +1380,7 @@ export class AgentRecallEngine {
     }));
     const checked = PRIVATE_CHECKED_ITEMS.get(this);
     const kept = forensic ? superseded : superseded.filter((item) => {
+      if (checked?.has(item)) return true;
       if (this.withholdPrivateItem(item)) return false;
       checked?.add(item);
       return true;
