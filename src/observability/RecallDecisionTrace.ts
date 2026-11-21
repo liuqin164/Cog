@@ -28,8 +28,8 @@ import { TraceWriter } from './TraceWriter.js';
  *
  * The newest win. One row per recall, so this is a few megabytes at the cap. The sweep keeps
  * `RECALL_TRACE_MAX_ROWS - PRUNE_EVERY + 1` and runs at most every `PRUNE_EVERY` appends, which is
- * what makes this number the real bound rather than the sweep target — `cogmem doctor --storage`
- * prints `<rows>/<this>` and a value above it would be a bug.
+ * what makes this number the real bound rather than the sweep target — a value above it
+ * would be a bug.
  *
  * ponytail: a row cap, not an age policy — upgrade to "older than N days" if a day's volume ever
  * matters more than a count.
