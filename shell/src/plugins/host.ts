@@ -270,6 +270,7 @@ interface PluginRecord {
   provided: string[];
   disposers: Array<() => void | Promise<void>>;
   unsubscribes: Array<() => void>;
+  fatal: boolean;
   error?: string;
 }
 
@@ -311,14 +312,22 @@ export class PluginHost {
     return entry.value as T;
   }
 
-  register(plugin: NativePlugin, config: unknown = {}): void {
+  register(plugin: NativePlugin, config: unknown = {}, options: { fatal?: boolean } = {}): void {
     if (this.started) throw new Error('plugin_host_started: register plugins before start()');
     if (this.plugins.has(plugin.name)) throw new Error(`plugin_name_conflict: "${plugin.name}" is registered twice`);
     for (const name of plugin.provide ?? []) {
       const existing = this.findProvider(name);
       if (existing && existing !== plugin.name) throw new ServiceConflictError(name, existing, plugin.name);
     }
-    this.plugins.set(plugin.name, { plugin, config, status: 'registered', provided: plugin.provide ?? [], disposers: [], unsubscribes: [] });
+    this.plugins.set(plugin.name, {
+      plugin,
+      config,
+      status: 'registered',
+      provided: plugin.provide ?? [],
+      disposers: [],
+      unsubscribes: [],
+      fatal: options.fatal ?? true,
+    });
     this.order.push(plugin.name);
   }
 
@@ -377,9 +386,11 @@ export class PluginHost {
         record.status = 'failed';
         record.error = error instanceof Error ? error.message : String(error);
         this.options.trace?.append('plugin_failed', { name, message: record.error });
+        if (!record.fatal) {
+          await this.unload(name);
+          continue;
+        }
         await this.stop();
-        // A conflict is the host's own rule and keeps its type; anything else is wrapped with the
-        // plugin name so the CLI can say who failed.
         if (error instanceof ServiceConflictError || error instanceof ToolNameConflictError || error instanceof CommandNameConflictError || error instanceof PluginDependencyError || error instanceof PluginCycleError) throw error;
         throw new Error(`plugin_failed: ${name}: ${record.error}`);
       }

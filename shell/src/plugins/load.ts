@@ -7,7 +7,7 @@
  * rules. A spec that cannot be imported is named and skipped, because one bad registry entry must
  * not cost the resident — the same rule the removed compatibility layer used for its plugins.
  */
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -107,8 +107,13 @@ export function checkPluginSpec(
   }
   if (!resolved.url.startsWith('file:')) return undefined;
 
-  const entry = fileURLToPath(resolved.url);
+  let entry = fileURLToPath(resolved.url);
   if (resolved.pathish) {
+    try {
+      entry = realpathSync(entry);
+    } catch {
+      return `plugin_not_found: ${entry}`;
+    }
     const contained = options.roots.some((root) => {
       try {
         insideWorkspace(root, entry, options.dataDir);
@@ -162,7 +167,7 @@ export async function loadNativePlugins(host: PluginHost, specs: readonly string
       if (!isNativePlugin(module.default)) {
         throw new Error('plugin_invalid: the default export must be a NativePlugin with name and apply');
       }
-      host.register(module.default);
+      host.register(module.default, {}, { fatal: false });
       results.push({
         spec,
         status: 'loaded',

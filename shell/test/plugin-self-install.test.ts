@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { AttachClient } from '../src/attach/client.ts';
 import type { AttachServerMessage, AttachSnapshot } from '../src/attach/server.ts';
@@ -22,6 +22,9 @@ const GREETING_SOURCE = `export default {
 
 const FAILING_SOURCE = `throw new Error('boom at import');
 export default { name: 'broken-plugin', apply() {} };
+`;
+
+const APPLY_FAILING_SOURCE = `export default { name: 'broken-apply', apply() { throw new Error('boom at apply'); } };
 `;
 
 function proposing(input: Record<string, unknown>): ScriptedProvider {
@@ -224,6 +227,57 @@ describe('plugin self-install runs through the owner approval gate', () => {
     }
   }, 45_000);
 
+  test('a self-installed plugin whose apply throws is removed instead of failing startup', async () => {
+    const dir = makeTempDir('plugin-self-install-apply-fail-');
+    const dataDir = join(dir, 'data');
+    const workspaceRoot = join(dir, 'ws');
+    const firstConfig = defaultShellConfig({ dataDir, workspaceRoot });
+    const first = makeShell(dir, new ScriptedProvider([{ text: 'ok', toolCalls: [] }]), { dataDir, plugins: firstConfig.plugins });
+    await first.start();
+    let id = '';
+    let sourcePath = '';
+    try {
+      const proposed = first.pluginProposals.propose({ name: 'broken-apply', purpose: '构造 apply 失败例', source: APPLY_FAILING_SOURCE, permissions: { provide: [], inject: [], data: [] } });
+      expect(proposed.accepted).toBe(true);
+      id = proposed.proposal!.id;
+      sourcePath = proposed.proposal!.sourcePath;
+      const approved = await first.confirmProposal(id);
+      expect(approved.ok).toBe(true);
+      expect(JSON.parse(readFileSync(join(dataDir, 'plugins.json'), 'utf8'))).toEqual([sourcePath]);
+    } finally {
+      await first.stop();
+    }
+
+    const secondConfig = defaultShellConfig({ dataDir, workspaceRoot });
+    const second = makeShell(dir, new ScriptedProvider([{ text: 'ok', toolCalls: [] }]), {
+      dataDir,
+      plugins: secondConfig.plugins,
+      http: { enabled: true, port: 0, hostname: '127.0.0.1' },
+    });
+    await second.start();
+    try {
+      expect(JSON.parse(readFileSync(join(dataDir, 'plugins.json'), 'utf8'))).toEqual([]);
+      expect(existsSync(dirname(sourcePath))).toBe(false);
+      const applyFailure = kinds(second, 'plugin_failed').find((record) => record.name === 'broken-apply');
+      expect(String(applyFailure?.message)).toContain('boom at apply');
+      const failed = kinds(second, 'plugin_health_failed');
+      expect(failed).toHaveLength(1);
+      expect(String(failed[0].reason)).toContain('boom at apply');
+      expect(kinds(second, 'plugin_removed')[0].reason).toBe('health_check_failed');
+
+      const health = (await (await fetch(`${second.httpUrl}/health`)).json()) as {
+        plugins?: { registered: string[]; results: unknown[] };
+      };
+      expect(health.plugins?.registered).toEqual([]);
+      expect(health.plugins?.results).toEqual([]);
+      const status = await second.host.tools.invoke('plugin_proposal_status', { toolCallId: 's3', input: { id } }, { runId: 'test' });
+      expect(status.output).toContain('removed');
+      expect(status.output).toContain('boom at apply');
+    } finally {
+      await second.stop();
+    }
+  }, 45_000);
+
   test('the attach card carries the decision facts, and only its confirm enters the install chain', async () => {
     const dir = makeTempDir('plugin-self-install-attach-');
     const dataDir = join(dir, 'data');
@@ -288,6 +342,33 @@ describe('plugin proposals reject the boundaries before anything is loaded', () 
       expect(result.accepted).toBe(false);
       expect(result.reason).toContain('path_outside_plugin_workspace');
       expect(kinds(shell, 'plugin_proposal_rejected')[0]?.reason).toContain('path_outside_plugin_workspace');
+      expect(existsSync(join(shell.config.dataDir, 'plugins.json'))).toBe(false);
+    } finally {
+      await shell.stop();
+    }
+  });
+
+  test('a symlink inside the plugin workspace that escapes it is refused and traced', async () => {
+    const dir = makeTempDir('plugin-self-install-symlink-');
+    const outside = join(dir, 'outside-plugin.ts');
+    writeFileSync(outside, GREETING_SOURCE, 'utf8');
+    const shell = makeShell(dir, new ScriptedProvider([{ text: 'ok', toolCalls: [] }]));
+    await shell.start();
+    try {
+      const workspace = join(shell.config.dataDir, 'plugin-workspace');
+      mkdirSync(workspace, { recursive: true });
+      const link = join(workspace, 'escape.ts');
+      symlinkSync(outside, link);
+      const result = shell.pluginProposals.propose({
+        name: 'hello-plugin',
+        purpose: '符号链接越界',
+        sourcePath: link,
+        permissions: { provide: [], inject: [], data: [] },
+      });
+      expect(result.accepted).toBe(false);
+      expect(result.reason).toContain('path_outside_plugin_workspace');
+      expect(kinds(shell, 'plugin_proposal_rejected')[0]?.reason).toContain('path_outside_plugin_workspace');
+      expect(shell.pluginProposals.pending()).toHaveLength(0);
       expect(existsSync(join(shell.config.dataDir, 'plugins.json'))).toBe(false);
     } finally {
       await shell.stop();
