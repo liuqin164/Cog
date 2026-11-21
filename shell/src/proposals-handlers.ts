@@ -20,6 +20,8 @@ export class ProposalsHandlers {
    * agent's side is the `propose_command` tool (`plugins/proposal.ts`), which only records.
    */
   async confirmProposal(id: string): Promise<{ ok: boolean; proposal?: CommandProposal; reason?: string; reply?: CommandReply }> {
+    const credential = this.shell.credentials.proposal(id);
+    if (credential) return { ok: false, proposal: credential, reason: 'credential_input_required' };
     const plugin = this.shell.pluginProposals.get(id);
     if (plugin) {
       if (plugin.status !== 'pending') {
@@ -56,6 +58,11 @@ export class ProposalsHandlers {
 
   /** The user's "Esc": retire a pending proposal; it can never be confirmed after this. */
   discardProposal(id: string): CommandProposal | undefined {
+    const credential = this.shell.credentials.proposal(id);
+    if (credential) {
+      this.shell.credentials.cancel(id, 'terminal');
+      return credential;
+    }
     const plugin = this.shell.pluginProposals.discard(id);
     if (plugin) return plugin;
     const proposal = this.shell.proposals.discard(id);
@@ -70,7 +77,10 @@ export class ProposalsHandlers {
 
   /** The pending offers, for tests and any face that wants the list rather than the transcript. */
   currentProposals(): CommandProposal[] {
-    return [...this.shell.proposals.pending(), ...this.shell.pluginProposals.pending()];
+    return [...this.shell.proposals.pending(), ...this.shell.pluginProposals.pending(), ...this.shell.credentials.pending().flatMap((request) => {
+      const proposal = this.shell.credentials.proposal(request.id);
+      return proposal ? [proposal] : [];
+    })];
   }
 
   // ---- The suspension faces (#228): one pause object, three exits (approve, refuse, supersede). ----

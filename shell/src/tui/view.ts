@@ -133,6 +133,18 @@ export type Overlay =
   | { kind: 'commitments' }
   | { kind: 'info'; title: string };
 
+export interface CredentialPrompt {
+  id: string;
+  service: string;
+  purpose: string;
+  prompt: string;
+  index: number;
+  total: number;
+  value: string;
+  secret: boolean;
+  error?: string;
+}
+
 export const MAX_TOOL_OUTPUT_ROWS = 12;
 /**
  * The transcript mirrored for attached views (and the TUI's own view) is bounded (#226). The ledger
@@ -159,6 +171,7 @@ export class TuiView {
   queued: string[] = [];
   presence?: PresenceReport;
   overlay?: Overlay;
+  credential?: CredentialPrompt;
   follow = true;
   scrollTop = 0;
   newMessages = false;
@@ -575,10 +588,13 @@ export function flattenEntry(entry: TranscriptEntry, width: number, env: RenderE
 
 function renderProposal(proposal: CommandProposal, width: number, env: RenderEnv): Row[] {
   const marker = env.unicode ? '⌁ ' : '# ';
-  const target = proposal.kind === 'plugin'
-    ? `插件 ${proposal.args}`
-    : `/${proposal.command}${proposal.args === '' ? '' : ` ${proposal.args}`}`;
-  const head = `提议 ${target} · ${proposal.reason}`;
+  const credential = proposal.kind === 'credential';
+  const target = credential
+    ? `凭据 ${proposal.credential?.service ?? proposal.args}`
+    : proposal.kind === 'plugin'
+      ? `插件 ${proposal.args}`
+      : `/${proposal.command}${proposal.args === '' ? '' : ` ${proposal.args}`}`;
+  const head = `${credential ? '请求' : '提议'} ${target} · ${proposal.reason}`;
   const headRows = (text: string, style: 'accent' | 'dim' | 'warn'): Row[] =>
     wrapPlain(text, Math.max(1, width - 2)).map((line, index) => [
       seg(index === 0 ? marker : '  ', style),
@@ -591,19 +607,19 @@ function renderProposal(proposal: CommandProposal, width: number, env: RenderEnv
       return [
         ...headRows(head, 'accent'),
         ...(proposal.detail ?? []).flatMap((line) => body(line, 'dim')),
-        ...body(proposal.kind === 'plugin' ? 'Enter 批准安装 · Esc 放弃（批准前不会加载）' : 'Enter 执行 · Esc 放弃（尚未执行）', 'dim'),
+        ...body(credential ? 'Enter 开始输入 · Esc 取消（值不会进入对话）' : proposal.kind === 'plugin' ? 'Enter 批准安装 · Esc 放弃（批准前不会加载）' : 'Enter 执行 · Esc 放弃（尚未执行）', 'dim'),
         [],
       ];
     case 'executed':
       return [
-        ...headRows(`${head} · 已执行`, 'accent'),
+        ...headRows(`${head} · ${credential ? '已保存' : '已执行'}`, 'accent'),
         ...(proposal.detail ?? []).flatMap((line) => body(line, 'dim')),
         ...body(proposal.resultText ?? '（命令已执行）'),
         [],
       ];
     case 'discarded':
       return [
-        ...headRows(`${head} · 已放弃，提议失效`, 'dim'),
+        ...headRows(`${head} · ${credential ? '已取消，未保存' : '已放弃，提议失效'}`, 'dim'),
         [],
       ];
     default:

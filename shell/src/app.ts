@@ -25,8 +25,10 @@ import { cagePlugin, RunCage, type CageTier } from './plugins/cage.ts';
 import { builtinToolsPlugin } from './plugins/builtin-tools.ts';
 import { coreCommandFor, availableCoreCommand, unknownCommandReply, type CommandHost, type CommandReply } from './commands.ts';
 import { proposalPlugin } from './plugins/proposal.ts';
+import { credentialPlugin } from './plugins/credential.ts';
 import { askPlugin } from './plugins/ask.ts';
 import { CommandProposals, isProposableCommand, type CommandProposal } from './proposals.ts';
+import { CredentialService, type CredentialSubmission } from './credentials.ts';
 import { capturePlugin } from './plugins/capture.ts';
 import { sessionContextPlugin } from './plugins/session-context.ts';
 import { assignmentPlugin } from './plugins/assignment.ts';
@@ -116,6 +118,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   readonly lock: ProcessLock;
   /** The agent's command offers and the user's answers; the transcript element's source of truth. */
   readonly proposals: CommandProposals;
+  readonly credentials: CredentialService;
   readonly sovereignty: SovereigntyCommands;
   readonly proposalsHandlers: ProposalsHandlers;
   readonly pluginsAdmin: PluginsAdmin;
@@ -329,6 +332,14 @@ export class CompanionShell implements ShellControl, AttachShell {
       (proposal) => void this.host.bus.emit('companion_command_proposal', { proposal }),
     );
     this.host.seedService('proposals', this.proposals);
+    this.credentials = new CredentialService(
+      this.config.dataDir,
+      this.trace,
+      this.now,
+      () => this.runTier === 'work' && this.machine.state === 'RUNNING',
+      (proposal) => void this.host.bus.emit('companion_command_proposal', { proposal }),
+    );
+    this.host.seedService('credentials', this.credentials);
     // Every transition is also a bus event, so a plugin can observe the lifecycle without reading the
     // checkpoint file. This one carries the companion prefix.
     this.machine.onTransition((record) => {
@@ -543,6 +554,7 @@ export class CompanionShell implements ShellControl, AttachShell {
         healthStatus: () => (this.contextAssemblyConsecutive >= 3 ? 'degraded' : 'ok'),
         connectedAgents: () => [this.config.agentId],
         tracePath: join(this.config.dataDir, 'shell-events.jsonl'),
+        credentials: this.credentials,
       });
       this.trace.append('http_face_started', { url: this.http.baseUrl, port: this.http.port });
     }
@@ -726,8 +738,10 @@ export class CompanionShell implements ShellControl, AttachShell {
       onMemoryRead: () => {
         this.drillsSinceAssembly += 1;
       },
+      credentials: this.credentials,
     });
     this.host.register(proposalPlugin());
+    this.host.register(credentialPlugin());
     this.host.register(askPlugin());
     this.host.register(assignmentPlugin());
     this.host.register(capturePlugin({ agentId: this.config.agentId, projectId: this.config.projectId, sessionId: this.config.sessionId, paused: () => this.capturePaused }));
@@ -1183,6 +1197,14 @@ export class CompanionShell implements ShellControl, AttachShell {
 
   currentProposals(): CommandProposal[] {
     return this.proposalsHandlers.currentProposals();
+  }
+
+  submitCredential(id: string, values: Record<string, string>, surface = 'terminal'): CredentialSubmission {
+    return this.credentials.submit(id, values, surface);
+  }
+
+  cancelCredential(id: string, surface = 'terminal'): boolean {
+    return this.credentials.cancel(id, surface);
   }
 
   askUser(input: { question: string; context?: string }): { ok: boolean; text: string } {

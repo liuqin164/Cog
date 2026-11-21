@@ -6,6 +6,7 @@ import { STATES } from '../shell/src/state/table.ts';
 import { assignmentPlugin } from '../shell/src/plugins/assignment.ts';
 import { askPlugin } from '../shell/src/plugins/ask.ts';
 import { builtinToolsPlugin } from '../shell/src/plugins/builtin-tools.ts';
+import { credentialPlugin } from '../shell/src/plugins/credential.ts';
 import { memoryToolPlugin } from '../shell/src/plugins/memory-tool.ts';
 import { proposalPlugin } from '../shell/src/plugins/proposal.ts';
 import { selfInstallPlugin } from '../shell/src/plugins/self-install.ts';
@@ -73,6 +74,7 @@ function toolCount(): number {
   };
   const plugins = [
     builtinToolsPlugin(),
+    credentialPlugin(),
     proposalPlugin(),
     askPlugin(),
     assignmentPlugin(),

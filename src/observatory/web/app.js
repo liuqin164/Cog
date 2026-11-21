@@ -4,7 +4,8 @@
  * Three views over one snapshot, one scope (project + agent) and one watermark, so a reader always
  * knows which moment of which corpus they are looking at: a 3D star map of the Memory Atlas, the
  * ledger's shape over time, and the recall decisions that were actually stored. A fourth view is
- * the one governance write exception (#194): the owner edits an agent's soul, version by version.
+ * the governance write exceptions: the owner edits an agent's soul (#194) and enters credential
+ * requests (#383) in the trusted page.
  *
  * The star map encodes three things and no more — the arm is a node's top-level grouping, the colour
  * is its node type, the size is support and activation. Radius is a hash scatter: a second meaning
@@ -57,6 +58,9 @@ const state = {
   soul: null,
   soulLoading: false,
   soulError: null,
+  credentials: null,
+  credentialsLoading: false,
+  credentialsError: null,
   health: null,
   healthLoading: false,
   healthError: null,
@@ -109,7 +113,7 @@ let writeToken = sessionStorage.getItem(WRITE_TOKEN_KEY) || null;
 async function postJson(path, body) {
   // Out-of-band by design: the owner pastes the token from `<dataDir>/observatory-token`, so no
   // HTTP route hands the long-lived write token to any local GET (#308).
-  if (!writeToken) throw new Error('没有写入令牌：把数据目录下 observatory-token 的内容粘贴到 Soul 页的令牌框。');
+  if (!writeToken) throw new Error('没有写入令牌：把数据目录下 observatory-token 的内容粘贴到凭据或 Soul 页的令牌框。');
   const url = new URL(`./${path.replace(/^\//, '')}`, location.href);
   const response = await fetch(url, {
     method: 'POST',
@@ -880,6 +884,7 @@ function renderPanel(options = {}) {
   if (state.view === 'recalls') { renderRecallsPanel(panel); return; }
   if (state.view === 'timeline') { renderTimelinePanel(panel); return; }
   if (state.view === 'soul') { renderSoulPanel(panel); return; }
+  if (state.view === 'credentials') { renderCredentialsPanel(panel); return; }
   if (state.view === 'health') { renderHealthPanel(panel); return; }
   if (state.selectedNode) { renderNodePanel(panel, options); return; }
   renderOverviewPanel(panel);
@@ -1010,6 +1015,153 @@ function renderSoul() {
   }
   editor.append(history);
   root.append(editor);
+}
+
+function renderCredentialsPanel(panel) {
+  panel.append(panelHeader('凭据', '请求在可信面输入；值直达 0600 保险库，不进对话、日志或模型上下文。'));
+  const data = state.credentials;
+  if (!data) {
+    panel.append(el('p', { class: 'dim', text: state.credentialsLoading ? '读取中…' : (state.credentialsError || '没有待处理的凭据请求。') }));
+    return;
+  }
+  panel.append(el('dl', { class: 'kv' }, [
+    el('dt', { text: '待处理' }), el('dd', { text: num(data.pending?.length ?? 0) }),
+    el('dt', { text: '已保存引用' }), el('dd', { text: num(data.refs?.length ?? 0) }),
+  ]));
+}
+
+function credentialTokenInput() {
+  const input = el('input', {
+    class: 'soul-token',
+    type: 'password',
+    placeholder: '写入令牌',
+    autocomplete: 'off',
+    spellcheck: 'false',
+  });
+  input.value = writeToken ?? '';
+  input.addEventListener('input', () => {
+    writeToken = input.value.trim() || null;
+    if (writeToken) sessionStorage.setItem(WRITE_TOKEN_KEY, writeToken);
+    else sessionStorage.removeItem(WRITE_TOKEN_KEY);
+  });
+  return input;
+}
+
+function renderCredentials() {
+  const root = $('view-credentials');
+  root.innerHTML = '';
+  if (state.demo) {
+    root.append(emptyState('演示模式没有凭据', '凭据只对真实数据目录开放。'));
+    return;
+  }
+  const editor = el('div', { class: 'soul-editor' });
+  editor.append(el('h2', { text: '凭据请求' }));
+  editor.append(el('p', { class: 'hint', text: '接下来的输入不会进入对话与账本，模型看不到。账号正常回显，密码完全不回显。' }));
+  editor.append(credentialTokenInput());
+  if (state.credentialsError) editor.append(el('p', { class: 'soul-error', text: state.credentialsError }));
+  if (state.credentialsLoading) {
+    editor.append(el('div', { class: 'skeleton w60' }), el('div', { class: 'skeleton' }));
+  }
+  const data = state.credentials;
+  const pending = data?.pending ?? [];
+  if (data && pending.length === 0) editor.append(el('p', { class: 'dim', text: '当前没有待处理的凭据请求。' }));
+  for (const request of pending) {
+    const form = el('div', { class: 'section' });
+    form.append(el('h3', { text: `${request.service} · ${request.purpose}` }));
+    form.append(el('p', { class: 'hint', text: `请求方 ${request.requestedBy} · ${stamp(request.createdAt)}` }));
+    const fields = [];
+    for (const field of request.fields) {
+      const input = el('input', {
+        class: 'soul-token',
+        type: field.secret ? 'password' : 'text',
+        placeholder: field.label || field.name,
+        autocomplete: 'off',
+        spellcheck: 'false',
+      });
+      fields.push({ name: field.name, input });
+      form.append(el('label', { class: 'hint', text: field.label || field.name }));
+      form.append(input);
+    }
+    const save = el('button', { type: 'button', class: 'primary', text: '保存到保险库' });
+    save.addEventListener('click', () => {
+      const values = {};
+      for (const field of fields) values[field.name] = field.input.value;
+      void saveCredential(request.id, values);
+    });
+    const cancel = el('button', { type: 'button', text: '取消' });
+    cancel.addEventListener('click', () => { void cancelCredential(request.id); });
+    form.append(el('div', { class: 'soul-toolbar' }, [save, cancel]));
+    editor.append(form);
+  }
+  editor.append(el('h2', { text: '已保存的引用' }));
+  const refs = data?.refs ?? [];
+  if (data && refs.length === 0) editor.append(el('p', { class: 'dim', text: '还没有保存过凭据。' }));
+  const history = el('ul', { class: 'soul-history' });
+  for (const entry of refs) {
+    const item = el('li', { class: 'soul-version' });
+    item.append(el('span', { class: 'v', text: entry.ref }));
+    item.append(el('span', { class: 'meta', text: `${entry.service} · ${stamp(entry.createdAt)}` }));
+    const revoke = el('button', { type: 'button', text: '撤销' });
+    revoke.addEventListener('click', () => {
+      if (confirm(`撤销 ${entry.ref}？撤销后使用会立即失败。`)) void revokeCredential(entry.ref);
+    });
+    item.append(revoke);
+    history.append(item);
+  }
+  editor.append(history);
+  root.append(editor);
+}
+
+async function loadCredentials() {
+  state.credentialsLoading = true;
+  state.credentialsError = null;
+  renderCredentials();
+  try {
+    state.credentials = await api('credentials');
+  } catch (error) {
+    state.credentials = null;
+    state.credentialsError = error.message;
+  } finally {
+    state.credentialsLoading = false;
+    renderCredentials();
+    renderPanel();
+  }
+}
+
+async function saveCredential(id, values) {
+  state.credentialsError = null;
+  try {
+    await postJson('credentials/submit', { id, values });
+    await loadCredentials();
+  } catch (error) {
+    state.credentialsError = error.message;
+    renderCredentials();
+    renderPanel();
+  }
+}
+
+async function cancelCredential(id) {
+  state.credentialsError = null;
+  try {
+    await postJson('credentials/cancel', { id });
+    await loadCredentials();
+  } catch (error) {
+    state.credentialsError = error.message;
+    renderCredentials();
+    renderPanel();
+  }
+}
+
+async function revokeCredential(ref) {
+  state.credentialsError = null;
+  try {
+    await postJson('credentials/revoke', { ref });
+    await loadCredentials();
+  } catch (error) {
+    state.credentialsError = error.message;
+    renderCredentials();
+    renderPanel();
+  }
 }
 
 async function loadSoul() {
@@ -1469,13 +1621,14 @@ function renderLegend() {
 
 function showView(view) {
   state.view = view;
-  for (const name of ['starmap', 'timeline', 'recalls', 'soul', 'health']) {
+  for (const name of ['starmap', 'timeline', 'recalls', 'soul', 'credentials', 'health']) {
     $(`tab-${name}`).setAttribute('aria-selected', String(name === view));
     $(`view-${name}`).classList.toggle('on', name === view);
   }
   if (view === 'recalls') renderRecalls();
   if (view === 'timeline') renderTimeline();
   if (view === 'soul') void loadSoul();
+  if (view === 'credentials') void loadCredentials();
   if (view === 'health') void loadHealth();
   if (view === 'starmap') map.needsFrame = true;
   renderPanel();
@@ -1513,6 +1666,7 @@ function applyLoaded() {
   renderTimeline();
   renderRecalls();
   if (state.view === 'soul') void loadSoul();
+  if (state.view === 'credentials') void loadCredentials();
   if (state.view === 'health') void loadHealth();
   renderPanel();
 }
@@ -1549,6 +1703,7 @@ $('tab-starmap').addEventListener('click', () => showView('starmap'));
 $('tab-timeline').addEventListener('click', () => showView('timeline'));
 $('tab-recalls').addEventListener('click', () => showView('recalls'));
 $('tab-soul').addEventListener('click', () => showView('soul'));
+$('tab-credentials').addEventListener('click', () => showView('credentials'));
 $('tab-health').addEventListener('click', () => showView('health'));
 $('scope-all').addEventListener('click', () => { state.agent = null; reload(); });
 $('project-select').addEventListener('change', (event) => { state.projectId = event.target.value; reload(); });

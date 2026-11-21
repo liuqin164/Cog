@@ -13,6 +13,7 @@ import type { EventBus } from '../bus.ts';
 import type { TraceLog } from '../trace.ts';
 import type { CommandReply } from '../commands.ts';
 import type { CommandProposal } from '../proposals.ts';
+import type { CredentialSubmission } from '../credentials.ts';
 import { TuiView, type PresenceReport, type StatusState, type TranscriptEntry, type WorkState } from '../tui/view.ts';
 
 /** Every event the TUI consumes. One list, so a new event is forwarded by adding it here. */
@@ -57,6 +58,8 @@ export type AttachClientMessage =
   /** The user's answer to a command proposal (spec §7): Enter or Esc on the element. */
   | { t: 'command-confirm'; id: string }
   | { t: 'command-discard'; id: string }
+  | { t: 'credential-submit'; id: string; values: Record<string, string> }
+  | { t: 'credential-cancel'; id: string }
   | { t: 'withdraw' }
   | { t: 'wake' }
   | { t: 'detach' }
@@ -85,6 +88,8 @@ export interface AttachShell {
   confirmProposal(id: string): Promise<{ ok: boolean; proposal?: CommandProposal; reason?: string }>;
   /** The user's discard of a command proposal; it is retired and never runs. */
   discardProposal(id: string): CommandProposal | undefined;
+  submitCredential(id: string, values: Record<string, string>, surface?: string): CredentialSubmission;
+  cancelCredential(id: string, surface?: string): boolean;
   withdrawSteering(): string | undefined;
   sleep(): Promise<void>;
   awayReport(): PresenceReport;
@@ -227,6 +232,16 @@ export class AttachServer {
       }
       case 'command-discard':
         this.options.shell.discardProposal(message.id);
+        break;
+      case 'credential-submit': {
+        const result = this.options.shell.submitCredential(message.id, message.values, 'terminal');
+        if (!result.ok) {
+          this.send(socket, { t: 'event', name: 'companion_command_result', payload: { name: 'credential', text: `凭据未保存：${result.reason}`, receipt: true } });
+        }
+        break;
+      }
+      case 'credential-cancel':
+        this.options.shell.cancelCredential(message.id, 'terminal');
         break;
       case 'withdraw': {
         const withdrawn = this.options.shell.withdrawSteering();

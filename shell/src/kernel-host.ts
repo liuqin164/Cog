@@ -53,6 +53,15 @@ export interface HttpFaceOptions {
   connectedAgents?: () => string[];
   /** The shell's trace file; the observatory reads its surfacing counts from it. */
   tracePath?: string;
+  credentials?: HttpCredentialFace;
+}
+
+export interface HttpCredentialFace {
+  pending(): Array<{ id: string; service: string; purpose: string; fields: Array<{ name: string; label?: string; secret?: boolean }>; requestedBy: string; createdAt: number }>;
+  refs(): Array<{ ref: string; service: string; createdAt: number }>;
+  submit(id: string, values: Record<string, string>, surface: string): { ok: true; ref: string } | { ok: false; reason: string };
+  cancel(id: string, surface: string): boolean;
+  revoke(ref: string): boolean;
 }
 
 export interface HttpFaceHandle {
@@ -73,6 +82,7 @@ async function openObservatory(
   dbPath: string | undefined,
   connectedAgents?: () => string[],
   tracePath?: string,
+  credentials?: HttpCredentialFace,
 ): Promise<{ db: Database; handle: (request: Request, remoteAddress?: string) => Promise<Response | null> } | undefined> {
   if (!dbPath || dbPath === ':memory:' || dbPath.startsWith('file:')) return undefined;
   try {
@@ -99,6 +109,7 @@ async function openObservatory(
       db,
       handle: routesModule.createObservatoryRoutes(observatory, events, soul, {
         token: tokenModule.readObservatoryToken(dirname(dbPath)),
+        credentials,
       }),
     };
   } catch {
@@ -118,7 +129,7 @@ export async function startKernelHttpFace(kernel: unknown, options: HttpFaceOpti
     }
   };
 
-  const observatory = await openObservatory(kernel, kernelHealth().dbPath as string | undefined, options.connectedAgents, options.tracePath);
+  const observatory = await openObservatory(kernel, kernelHealth().dbPath as string | undefined, options.connectedAgents, options.tracePath, options.credentials);
 
   const httpServer = Bun.serve({
     port: options.port,

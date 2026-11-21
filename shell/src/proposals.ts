@@ -20,10 +20,22 @@ export function isProposableCommand(command: string): boolean {
   return (PROPOSABLE_COMMANDS as readonly string[]).includes(command);
 }
 
+export interface CredentialField {
+  name: string;
+  label?: string;
+  secret?: boolean;
+}
+
+export interface CredentialRequestSpec {
+  service: string;
+  purpose: string;
+  fields: CredentialField[];
+}
+
 export interface CommandProposal {
   id: string;
-  /** A plugin proposal is confirmed by the same owner key but never dispatches a command. */
-  kind?: 'command' | 'plugin';
+  kind?: 'command' | 'plugin' | 'credential';
+  credential?: CredentialRequestSpec;
   /** The core command's name, without the slash (`pause`). */
   command: string;
   args: string;
