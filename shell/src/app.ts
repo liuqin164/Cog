@@ -32,6 +32,7 @@ import { sessionContextPlugin } from './plugins/session-context.ts';
 import { assignmentPlugin } from './plugins/assignment.ts';
 import { memoryToolPlugin } from './plugins/memory-tool.ts';
 import { soulEditPlugin } from './plugins/soul-edit.ts';
+import { PluginProposals, selfInstallPlugin } from './plugins/self-install.ts';
 import { dreamPlugin } from './plugins/dream.ts';
 import { emergencePlugin } from './plugins/emergence.ts';
 import { terminalPlugin, TerminalChannel, type ShellControl } from './channels/terminal.ts';
@@ -118,6 +119,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   readonly sovereignty: SovereigntyCommands;
   readonly proposalsHandlers: ProposalsHandlers;
   readonly pluginsAdmin: PluginsAdmin;
+  readonly pluginProposals: PluginProposals;
   readonly upgradeAdmin: UpgradeAdmin;
   readonly statusFace: StatusFace;
   readonly contextLanes: ContextLanes;
@@ -305,6 +307,14 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.sovereignty = new SovereigntyCommands(this);
     this.proposalsHandlers = new ProposalsHandlers(this);
     this.pluginsAdmin = new PluginsAdmin(this);
+    this.pluginProposals = new PluginProposals({
+      dataDir: this.config.dataDir,
+      workspaceRoot: this.config.workspaceRoot,
+      trace: this.trace,
+      now: this.now,
+      serviceExists: (name) => this.host.hasService(name) || [...this.host.plugins.values()].some((record) => record.provided.includes(name)),
+      onChange: (proposal) => void this.host.bus.emit('companion_command_proposal', { proposal }),
+    });
     this.upgradeAdmin = new UpgradeAdmin(this);
     this.statusFace = new StatusFace(this);
     this.contextLanes = new ContextLanes(this);
@@ -509,6 +519,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       this.lock.release(process.pid);
       throw error;
     }
+    await this.pluginsAdmin.verifySelfInstalledPlugins();
     if (this.config.http.enabled) {
       this.http = await startKernelHttpFace(this.kernel, {
         ...this.config.http,
@@ -761,6 +772,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       },
     }));
     this.host.register(soulEditPlugin());
+    this.host.register(selfInstallPlugin({ proposals: this.pluginProposals, admin: this.pluginsAdmin, trace: this.trace }));
     this.host.register(dreamPlugin({
       agentId: this.config.agentId,
       projectId: this.config.projectId,
@@ -1236,6 +1248,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     upgrade: (source: string) => this.upgrade(source),
     pluginReport: () => this.pluginsAdmin.pluginReport(),
     installPlugin: (spec: string) => this.installPlugin(spec),
+    removePlugin: (spec: string) => this.pluginsAdmin.removePlugin(spec),
   };
 
   /** The palette's plugin half: the resident is the only process that holds the registry. */

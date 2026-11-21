@@ -20,6 +20,22 @@ export class ProposalsHandlers {
    * agent's side is the `propose_command` tool (`plugins/proposal.ts`), which only records.
    */
   async confirmProposal(id: string): Promise<{ ok: boolean; proposal?: CommandProposal; reason?: string; reply?: CommandReply }> {
+    const plugin = this.shell.pluginProposals.get(id);
+    if (plugin) {
+      if (plugin.status !== 'pending') {
+        return { ok: false, proposal: plugin, reason: `proposal_not_pending: ${plugin.status}` };
+      }
+      const approved = this.shell.pluginProposals.markApproved(plugin.id);
+      if (!approved) return { ok: false, proposal: plugin, reason: 'no_such_proposal' };
+      const outcome = await this.shell.pluginsAdmin.installProposal(plugin.id);
+      const settled = this.shell.pluginProposals.settle(plugin.id, outcome.reply.text, outcome.ok) ?? approved;
+      return {
+        ok: outcome.ok,
+        proposal: settled,
+        ...(outcome.ok ? {} : { reason: outcome.reply.text }),
+        reply: outcome.reply,
+      };
+    }
     const proposal = this.shell.proposals.get(id);
     const confirmation: ProposalConfirmation | undefined = proposal
       ? { kind: 'user-confirm', proposalId: proposal.id, at: this.shell.now() }
@@ -40,6 +56,8 @@ export class ProposalsHandlers {
 
   /** The user's "Esc": retire a pending proposal; it can never be confirmed after this. */
   discardProposal(id: string): CommandProposal | undefined {
+    const plugin = this.shell.pluginProposals.discard(id);
+    if (plugin) return plugin;
     const proposal = this.shell.proposals.discard(id);
     // Esc on the budget offer is the owner's refusal (#228): the task closes as budget_exceeded and
     // the receipt says so, instead of leaving a pause nobody can see the end of.
@@ -52,7 +70,7 @@ export class ProposalsHandlers {
 
   /** The pending offers, for tests and any face that wants the list rather than the transcript. */
   currentProposals(): CommandProposal[] {
-    return [...this.shell.proposals.pending()];
+    return [...this.shell.proposals.pending(), ...this.shell.pluginProposals.pending()];
   }
 
   // ---- The suspension faces (#228): one pause object, three exits (approve, refuse, supersede). ----
