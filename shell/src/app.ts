@@ -817,11 +817,12 @@ export class CompanionShell implements ShellControl, AttachShell {
       trace: this.trace,
     })));
     await this.host.start();
-    // The host has run every `apply`, so the registrations each plugin actually made are readable.
+    this.cage = this.host.getService<RunCage>('cage');
     for (const result of this.pluginResults) {
       if (result.status !== 'loaded' || !result.name) continue;
       result.tools = this.host.tools.list().filter((tool) => tool.source === `plugin:${result.name}`).map((tool) => tool.name);
       result.commands = this.host.commands.list().filter((command) => command.source === `plugin:${result.name}`).map((command) => command.name);
+      this.cage.allowTools(result.tools);
     }
     for (const result of this.pluginResults) {
       if (result.status !== 'failed') continue;
@@ -829,7 +830,6 @@ export class CompanionShell implements ShellControl, AttachShell {
       void this.host.bus.emit('terminal_print', { text: `plugin ${result.spec} failed to load: ${result.reason}\n` });
     }
     this.clock = this.host.getService<ClockService>('clock');
-    this.cage = this.host.getService<RunCage>('cage');
     const model = this.host.getService<ModelProvider>('model');
     this.runtime = new AgentRuntime({
       bus: this.host.bus,

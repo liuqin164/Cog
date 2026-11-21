@@ -86,11 +86,17 @@ export class RunCage implements RunBudget {
     return this.config.toolWhitelist.includes(name);
   }
 
-  /** An optional plugin adds its own tool names when it is explicitly registered. */
   allowTools(names: readonly string[]): void {
     if (this.config.toolWhitelist === null) return;
     for (const name of names) {
       if (!this.config.toolWhitelist.includes(name)) this.config.toolWhitelist.push(name);
+    }
+  }
+
+  disallowTools(names: readonly string[]): void {
+    if (this.config.toolWhitelist === null) return;
+    for (let index = this.config.toolWhitelist.length - 1; index >= 0; index -= 1) {
+      if (names.includes(this.config.toolWhitelist[index])) this.config.toolWhitelist.splice(index, 1);
     }
   }
 

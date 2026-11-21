@@ -195,6 +195,14 @@ export class PluginsAdmin {
             break;
           }
         }
+        if (!failure) {
+          for (const tool of result.tools) {
+            if (!this.shell.cage?.toolAllowed(tool)) {
+              failure = `tool_not_in_whitelist: ${tool}`;
+              break;
+            }
+          }
+        }
       }
       if (failure) {
         this.shell.trace.append('plugin_health_failed', { id, name, spec, reason: failure });
@@ -232,6 +240,7 @@ export class PluginsAdmin {
     const loaded = loadedIndex >= 0 ? this.shell.pluginResults[loadedIndex] : undefined;
     if (loadedIndex >= 0) this.shell.pluginResults.splice(loadedIndex, 1);
     if (loaded?.name) await this.shell.host.unload(loaded.name);
+    if (loaded && loaded.tools.length > 0) this.shell.cage?.disallowTools(loaded.tools);
     const workspace = resolve(pluginWorkspaceDir(this.shell.config.dataDir));
     const source = resolve(spec);
     const sourceDir = dirname(source);
