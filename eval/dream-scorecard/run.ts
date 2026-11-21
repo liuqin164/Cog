@@ -58,6 +58,7 @@ interface CompileScenarioResult {
   processed: number;
   failed: number;
   framesPassed: number;
+  processorErrors: number;
   deterministicFallbackFrames: number;
   fallbackNeedEpisodes: number;
   goldHits: number;
@@ -100,6 +101,7 @@ interface ScorecardResult {
       processed: number;
       failed: number;
       framesPassed: number;
+      processorErrors: number;
       fallbackNeedEpisodes: number;
       deterministicFallbackFrames: number;
       goldHits: number;
@@ -242,6 +244,7 @@ async function runCompile(): Promise<ScorecardResult['compile']> {
     processed: sum.processed + scenario.processed,
     failed: sum.failed + scenario.failed,
     framesPassed: sum.framesPassed + scenario.framesPassed,
+    processorErrors: sum.processorErrors + scenario.processorErrors,
     fallbackNeedEpisodes: sum.fallbackNeedEpisodes + scenario.fallbackNeedEpisodes,
     deterministicFallbackFrames: sum.deterministicFallbackFrames + scenario.deterministicFallbackFrames,
     goldHits: sum.goldHits + scenario.goldHits,
@@ -251,7 +254,7 @@ async function runCompile(): Promise<ScorecardResult['compile']> {
     rejected: sum.rejected + scenario.queue.rejected,
     suppressed: sum.suppressed + scenario.queue.needsConfirmation + scenario.queue.superseded,
   }), {
-    episodes: 0, processed: 0, failed: 0, framesPassed: 0, fallbackNeedEpisodes: 0,
+    episodes: 0, processed: 0, failed: 0, framesPassed: 0, processorErrors: 0, fallbackNeedEpisodes: 0,
     deterministicFallbackFrames: 0, goldHits: 0, goldTotal: 0, candidates: 0,
     promoted: 0, rejected: 0, suppressed: 0,
   });
@@ -320,6 +323,7 @@ async function runCompileScenario(scenario: CompileScenario): Promise<CompileSce
     processed: tick.processedEpisodeCount,
     failed: tick.failedEpisodeCount,
     framesPassed,
+    processorErrors: tick.semanticProcessorFailedCount,
     deterministicFallbackFrames,
     fallbackNeedEpisodes,
     goldHits: gold.filter((point) => point.hit).length,
@@ -439,7 +443,7 @@ function emptyClassification(_before: Usage): ScorecardResult['classification'] 
 function emptyCompile(): ScorecardResult['compile'] {
   return {
     scenarios: [],
-    totals: { episodes: 0, processed: 0, failed: 0, framesPassed: 0, fallbackNeedEpisodes: 0, deterministicFallbackFrames: 0, goldHits: 0, goldTotal: 0, candidates: 0, promoted: 0, rejected: 0, suppressed: 0 },
+    totals: { episodes: 0, processed: 0, failed: 0, framesPassed: 0, processorErrors: 0, fallbackNeedEpisodes: 0, deterministicFallbackFrames: 0, goldHits: 0, goldTotal: 0, candidates: 0, promoted: 0, rejected: 0, suppressed: 0 },
     usage: { calls: 0, inputTokens: 0, outputTokens: 0 },
   };
 }
@@ -498,11 +502,11 @@ function renderMarkdown(result: ScorecardResult): string {
     '',
     '## Compile',
     '',
-    '| scenario | episodes | frame pass | fallback need | gold points | candidates | promoted | rejected | suppressed |',
-    '| --- | --- | --- | --- | --- | --- | --- | --- | --- |',
-    ...result.compile.scenarios.map((scenario) => `| ${scenario.id} | ${scenario.episodes} | ${scenario.framesPassed}/${scenario.episodes} | ${scenario.fallbackNeedEpisodes}/${scenario.episodes} | ${scenario.goldHits}/${scenario.goldTotal} | ${scenario.candidates} | ${scenario.queue.promoted} | ${scenario.queue.rejected} | ${scenario.queue.needsConfirmation + scenario.queue.superseded} |`),
+    '| scenario | episodes | frame pass | processor errors | fallback need | gold points | candidates | promoted | rejected | suppressed |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+    ...result.compile.scenarios.map((scenario) => `| ${scenario.id} | ${scenario.episodes} | ${scenario.framesPassed}/${scenario.episodes} | ${scenario.processorErrors} | ${scenario.fallbackNeedEpisodes}/${scenario.episodes} | ${scenario.goldHits}/${scenario.goldTotal} | ${scenario.candidates} | ${scenario.queue.promoted} | ${scenario.queue.rejected} | ${scenario.queue.needsConfirmation + scenario.queue.superseded} |`),
     '',
-    `Totals: episodes ${result.compile.totals.episodes}, processed ${result.compile.totals.processed}, failed ${result.compile.totals.failed}, frame pass ${result.compile.totals.framesPassed}/${result.compile.totals.episodes} (${percent(result.compile.totals.framesPassed, result.compile.totals.episodes)}), fallback need ${result.compile.totals.fallbackNeedEpisodes}/${result.compile.totals.episodes} (${percent(result.compile.totals.fallbackNeedEpisodes, result.compile.totals.episodes)}), gold ${result.compile.totals.goldHits}/${result.compile.totals.goldTotal} (${percent(result.compile.totals.goldHits, result.compile.totals.goldTotal)}).`,
+    `Totals: episodes ${result.compile.totals.episodes}, processed ${result.compile.totals.processed}, failed ${result.compile.totals.failed}, frame pass ${result.compile.totals.framesPassed}/${result.compile.totals.episodes} (${percent(result.compile.totals.framesPassed, result.compile.totals.episodes)}), processor errors ${result.compile.totals.processorErrors}, fallback need ${result.compile.totals.fallbackNeedEpisodes}/${result.compile.totals.episodes} (${percent(result.compile.totals.fallbackNeedEpisodes, result.compile.totals.episodes)}), gold ${result.compile.totals.goldHits}/${result.compile.totals.goldTotal} (${percent(result.compile.totals.goldHits, result.compile.totals.goldTotal)}).`,
     '',
     '## Cost',
     '',
