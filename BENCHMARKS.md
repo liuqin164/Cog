@@ -145,7 +145,7 @@ and the scorecard above runs the kernel and measures it. The group machinery is 
 placeholder, and it now says so instead of inventing numbers.
 ## BrainEval 3.6.0
 
-`cogmem brain-eval --input samples.json` is the end-to-end memory-brain gate. It fails on recall below 90%, precision below 80%, provenance below 95%, binding purity below 90%, temporal current-truth accuracy below 95%, or any false entity merge, invalid user-belief ownership, context pollution, source mismatch, stale/cross-project leakage, context-budget violation, or prospective activation without confirmation. Input samples can include domain checks for canonical topic paths, entity merge decisions, user evidence ownership, temporal versions, context pollution, and exact source event identity.
+The `BrainEval` suite (`__tests__/brain-eval-*.test.ts`) is the end-to-end memory-brain gate. It fails on recall below 90%, precision below 80%, provenance below 95%, binding purity below 90%, temporal current-truth accuracy below 95%, or any false entity merge, invalid user-belief ownership, context pollution, source mismatch, stale/cross-project leakage, context-budget violation, or prospective activation without confirmation. Input samples can include domain checks for canonical topic paths, entity merge decisions, user evidence ownership, temporal versions, context pollution, and exact source event identity.
 
 Release fixtures must include at least one check for every domain metric. Missing binding, entity, user-belief, temporal, context-pollution, or source-fidelity checks fail closed instead of receiving a synthetic perfect score.
 
@@ -154,10 +154,6 @@ Episode fixtures also measure `episodeGroupingAccuracy`, `episodeBoundaryAccurac
 Atlas fixtures enforce project isolation, node/hop/evidence bounds, exact evidence locators, weighted path reconstruction, composable facet resurrection, pure read behavior, explicit activation touch, and canonical-source immutability. Runtime reliability fixtures cover read-only CLI inspection during a long-lived SQLite connection and audited `needs_confirmation` review transitions.
 
 Strategy-policy evaluation consumes precomputed `StrategyRolloutOutcome` records:
-
-```bash
-cogmem brain-eval --input strategy-outcomes.json --strategy-rollout --json
-```
 
 It does not call a model or generate online rollouts. `StrategyDiversitySelector` can apply farthest-point selection to supplied vectors for offline fixture diversity. `ContextPolicyScorer` gates on median score, worst-decile score, exact source fidelity, zero unsafe/stale/cross-project leakage, zero over-budget outcomes, strategy adherence, and p95 latency. The top-fraction score is reported for exploration only and never overrides a safety failure.
 

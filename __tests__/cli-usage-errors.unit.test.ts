@@ -44,7 +44,6 @@ test('a missing subcommand exits non-zero instead of printing usage as success',
     ['dream', ['dream']],
     ['episode', ['episode']],
     ['repair', ['repair']],
-    ['strategy', ['strategy']],
   ] as const) {
     const r = run(args as string[], dir);
     expect({ label, code: r.code }).toEqual({ label, code: 1 });

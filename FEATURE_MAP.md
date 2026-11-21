@@ -50,6 +50,6 @@
 | 功能 | 是什么 | 谁在用 | 靠什么证明 | 状态 |
 |---|---|---|---|---|
 | 健康与备份 | 整脑快照（距上次 ≥24h 触发，不依赖 Dream）＋健康自检；上下文装配失败进 /health、doctor 与 daily 报告，连续 3 次读作 degraded（#350） | 快照落 snapshots/；/health 面 | F19 恢复演练 13/13；#327 假时钟 48h 无 Dream 仍写 1 次快照；#350 context-assembly-health 探针（必抛错车道仍发请求、计数递增、3 次降级、恢复清零） | ✅ |
-| 升级 | 预告→静默期→分阶段装→健康门→失败回滚 | upgrade/supervisor | 升级单元测试 | ⚠️ 实机升级考试未做 — 生存跑阶段验 |
-| 安装/doctor | 一条命令装好＋自检 | install/installer＋doctor | box 六步自检实测；core-cli 的 doctor --storage 断言（含 embeddings 覆盖读数，round 128 恢复）；#344 同伴-only HOME 判别测试（doctor 解析 `<dataDir>/cogmem-cli.toml`、recall 读同伴库；全局配置与 COGMEM_CONFIG 优先不回归） | doctor 嵌入覆盖读数已恢复（#360）；#344 同伴安装后管理 CLI 直接可用；⚠️ 与内核侧安装栈重复 — #354 待定 |
+| 升级 | 预告→静默期→分阶段装→健康门→失败回滚 | upgrade/supervisor（`/upgrade` 是唯一正主） | 升级单元测试 | ⚠️ 实机升级考试未做 — 生存跑阶段验；`cogmem update` 与自动升级已删（#354 A） |
+| 安装/doctor | 一条命令装好＋自检 | install/installer＋doctor | box 六步自检实测；core-cli 的 doctor --storage 断言（含 embeddings 覆盖读数，round 128 恢复）；#344 同伴-only HOME 判别测试（doctor 解析 `<dataDir>/cogmem-cli.toml`、recall 读同伴库；全局配置与 COGMEM_CONFIG 优先不回归） | doctor 嵌入覆盖读数已恢复（#360）；#344 同伴安装后管理 CLI 直接可用；安装已合并（#354 A：唯一安装 = `cogmem install`，`init` 删除）；doctor 合并待 B 半 |
 | 行为评测 | F13 场景集＋连续性记分卡 | eval/behavior＋记分卡 | F13 box 16/16；记分卡基线 2/6 | ⚠️ 记分卡全绿等队列清空后复测 |

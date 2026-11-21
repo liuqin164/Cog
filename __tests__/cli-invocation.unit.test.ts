@@ -136,7 +136,7 @@ test('every command answers --help with its usage, not with an error', async () 
   const commands = [...block.matchAll(/^\s*'?([a-z][a-z0-9-]*)'?:/gm)].map((m) => m[1]!);
   // A parse sanity floor, not a count contract: the surface is being shortened on purpose
   // (#141, #142), and an exact number here would fight that instead of guarding the parse.
-  expect(commands.length).toBeGreaterThanOrEqual(15);
+  expect(commands.length).toBeGreaterThanOrEqual(13);
 
   const offenders: string[] = [];
   for (const command of commands) {
@@ -345,7 +345,6 @@ test('the JSON command field names the command the way every other one does', ()
 
   // The commands that hand-roll their envelope are checked as they run.
   const runs: Array<[string, string[]]> = [
-    ['cleanup.ts', ['--dry-run']],
     ['doctor.ts', ['--config', config]],
     ['repair.ts', ['project-scope', '--from', 'a', '--to', 'b', '--dry-run', '--config', config]],
   ];
@@ -402,7 +401,7 @@ test('every dispatched command is named in --help', () => {
   const source = readFileSync(join(coreRoot, 'src', 'bin', 'cogmem.ts'), 'utf8');
   const map = source.slice(source.indexOf('const COMMANDS'), source.indexOf('};', source.indexOf('const COMMANDS')));
   const commands = [...map.matchAll(/'?([a-z][a-z-]*)'?:\s*'/g)].map((m) => m[1]!);
-  expect(commands.length).toBeGreaterThan(15);
+  expect(commands.length).toBeGreaterThanOrEqual(13);
 
   const help = new TextDecoder().decode(Bun.spawnSync({
     cmd: ['bun', join(coreRoot, 'src', 'bin', 'cogmem.ts'), '--help'], cwd: coreRoot, stdout: 'pipe', stderr: 'pipe',
