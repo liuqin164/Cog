@@ -2474,7 +2474,7 @@ export class MemoryKernel extends KernelServices {
 /**
  * SQLite creates the database file but not its parent directories, so a
  * `--db` pointing at a fresh path failed with `unable to open database file`
- * on any machine that had not run `cogmem init` against that path yet.
+ * on any machine that had not created that path yet.
  */
 function ensureDatabaseDirectory(dbPath?: string): void {
   if (!dbPath || dbPath === ':memory:' || dbPath.startsWith('file:')) return;

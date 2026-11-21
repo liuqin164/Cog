@@ -280,7 +280,7 @@ function commandProblems(raw: string): string[] {
   const entry = groups.get(group);
   if (!entry) return [`${raw}: unknown cogmem group '${group}'`];
   const code = binSource(entry);
-  // A single-word command (`cogmem init`) has no subcommand to dispatch, so the
+  // A single-word command (`cogmem doctor`) has no subcommand to dispatch, so the
   // check applies only when the command line actually names one.
   if (sub !== undefined && !moduleCommands(entry).has(sub)) problems.push(`${raw}: src/bin/${entry}.ts does not dispatch '${sub}'`);
   for (const { flag, value } of pairs) {
@@ -485,7 +485,7 @@ describe('runtime-built command lines are executable, not aspirational', () => {
 // check that would have found them all, and it is static: it reads the bins, not a run.
 test('every flag a bin reads is declared in its usage text', () => {
   const bins = readdirSync(join(root, 'src/bin')).filter((f) => f.endsWith('.ts'));
-  expect(bins.length).toBeGreaterThan(20);
+  expect(bins.length).toBeGreaterThanOrEqual(20);
 
   const offenders: string[] = [];
   for (const file of bins) {

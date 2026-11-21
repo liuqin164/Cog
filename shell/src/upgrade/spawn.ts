@@ -38,7 +38,6 @@ export function upgradeUnitName(id: string): string {
 /**
  * Whether systemd started this process, read from the two marks systemd itself sets.
  *
- * The same pair the kernel's version check reads (`src/install/VersionCheck.ts`, `isSystemdManaged`).
  * It decides something `serviceMode` cannot: a process can sit in a unit's cgroup while the unit file
  * is gone, and then the supervisor still has to leave the cgroup before the stop.
  */

@@ -1,21 +1,12 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
-  appendUpdateTrace,
-  AUTO_UPGRADE_LOCK_FILENAME,
-  decideAutoUpgrade,
-  readLastUpdateTrace,
-  runAutoUpgrade,
-  updateLogPath,
-} from '../src/install/AutoUpgrade.js';
-import {
   checkForUpdate,
   compareVersions,
   isNewerVersion,
-  isSystemdManaged,
   isUpdateCacheFresh,
   loadUpdateSettings,
   maybeStartVersionCheck,
@@ -28,9 +19,8 @@ import { makeTempDir } from './helpers/tmp.js';
 
 /**
  * #150. What is asserted here is the contract the ticket fixed: the check is
- * cached for about a day, silent when the registry cannot be reached, switchable
- * off, and the automatic upgrade is off until an operator says otherwise — and
- * stays off under systemd without a second, separate confirmation.
+ * cached for about a day, silent when the registry cannot be reached, and
+ * switchable off.
  */
 
 function writeConfig(dir: string, body: string): string {
@@ -55,24 +45,18 @@ describe('version comparison', () => {
 });
 
 describe('update settings', () => {
-  test('the check is on by default and the automatic upgrade is off', () => {
+  test('the check is on by default', () => {
     const home = makeTempDir('cogmem-update-settings-');
     writeConfig(home, BASE_CONFIG);
     const settings = loadUpdateSettings({ env: { HOME: home }, cwd: home });
     expect(settings.check).toBe(true);
-    expect(settings.autoUpgrade).toBe(false);
-    expect(settings.autoUpgradeInService).toBe(false);
     expect(settings.cachePath).toBe(join(home, '.cogmem', 'update-check.json'));
-    expect(settings.homeDir).toBe(join(home, '.cogmem'));
   });
 
-  test('the config switches the check off and the upgrade on, and the environment can switch it off', () => {
+  test('the config switches the check off, and the environment can too', () => {
     const home = makeTempDir('cogmem-update-settings-');
-    const configPath = writeConfig(home, `${BASE_CONFIG}[update]\ncheck = false\nauto_upgrade = true\nauto_upgrade_in_service = true\n`);
-    const fromConfig = loadUpdateSettings({ env: { HOME: home }, configPath });
-    expect(fromConfig.check).toBe(false);
-    expect(fromConfig.autoUpgrade).toBe(true);
-    expect(fromConfig.autoUpgradeInService).toBe(true);
+    const configPath = writeConfig(home, `${BASE_CONFIG}[update]\ncheck = false\n`);
+    expect(loadUpdateSettings({ env: { HOME: home }, configPath }).check).toBe(false);
 
     const enabled = writeConfig(join(home, 'other'), `${BASE_CONFIG}[update]\ncheck = true\n`);
     expect(loadUpdateSettings({ env: { HOME: home, COGMEM_UPDATE_CHECK: '0' }, configPath: enabled }).check).toBe(false);
@@ -105,6 +89,7 @@ describe('the registry read', () => {
     expect(status.updateAvailable).toBe(true);
     expect(status.stale).toBe(false);
     expect(renderUpdateNotice(status)).toContain('cogmem 5.0.1 is available');
+    expect(renderUpdateNotice(status)).toContain('/upgrade');
   });
 
   test('a registry failure is silent, cached, and retried on the shorter cadence', async () => {
@@ -160,157 +145,6 @@ describe('the registry read', () => {
   });
 });
 
-describe('systemd detection', () => {
-  test('the manager marks its own children', () => {
-    expect(isSystemdManaged({})).toBe(false);
-    expect(isSystemdManaged({ INVOCATION_ID: 'abc' })).toBe(true);
-    expect(isSystemdManaged({ NOTIFY_SOCKET: '/run/systemd/notify' })).toBe(true);
-    // Either mark is enough: systemd sets INVOCATION_ID on a service and the socket
-    // only for a notify one, and the rule is about the manager, not the type.
-    expect(decideAutoUpgrade({ autoUpgrade: true, autoUpgradeInService: false }, '9.9.9', '4.1.0', { NOTIFY_SOCKET: '/run/systemd/notify' }).reason)
-      .toBe('systemd_requires_explicit_opt_in');
-  });
-});
-
-describe('the automatic upgrade decision', () => {
-  test('off by default, and nothing to do when the version is current', () => {
-    expect(decideAutoUpgrade({ autoUpgrade: false, autoUpgradeInService: false }, '9.9.9', '4.1.0', {}).reason)
-      .toBe('auto_upgrade_disabled');
-    expect(decideAutoUpgrade({ autoUpgrade: true, autoUpgradeInService: false }, '4.1.0', '4.1.0', {}).reason)
-      .toBe('up_to_date');
-  });
-
-  test('opted in, it is allowed — except under systemd, where it needs its own confirmation', () => {
-    const optedIn = { autoUpgrade: true, autoUpgradeInService: false };
-    expect(decideAutoUpgrade(optedIn, '9.9.9', '4.1.0', {}).allowed).toBe(true);
-    const systemd = decideAutoUpgrade(optedIn, '9.9.9', '4.1.0', { INVOCATION_ID: 'abc' });
-    expect(systemd.allowed).toBe(false);
-    expect(systemd.reason).toBe('systemd_requires_explicit_opt_in');
-    expect(decideAutoUpgrade({ autoUpgrade: true, autoUpgradeInService: true }, '9.9.9', '4.1.0', { INVOCATION_ID: 'abc' }).allowed)
-      .toBe(true);
-  });
-});
-
-describe('the automatic upgrade run', () => {
-  const settings = (home: string) => ({
-    check: true,
-    autoUpgrade: true,
-    autoUpgradeInService: false,
-    registryUrl: 'https://registry.invalid',
-    packageName: 'cogmem',
-    cachePath: join(home, 'cache.json'),
-    homeDir: join(home, '.cogmem'),
-  });
-
-  test('it runs the existing update command in its staged form, and never a restart', async () => {
-    const home = makeTempDir('cogmem-auto-upgrade-');
-    const calls: string[][] = [];
-    const outcome = await runAutoUpgrade({
-      settings: settings(home),
-      latestVersion: '9.9.9',
-      currentVersion: '4.1.0',
-      env: {},
-      cliEntry: '/fake/cogmem.ts',
-      run: async (cmd) => { calls.push(cmd); return 0; },
-    });
-    expect(outcome).toMatchObject({ attempted: true, status: 'staged', exitCode: 0 });
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!.slice(1)).toEqual(['/fake/cogmem.ts', 'update', '--yes', '--stage-only', '--json']);
-    // The lock is released, so the next day's check can run.
-    expect(existsSync(join(home, '.cogmem', AUTO_UPGRADE_LOCK_FILENAME))).toBe(false);
-  });
-
-  test('under systemd the ordinary opt-in is not enough, so nothing runs', async () => {
-    const home = makeTempDir('cogmem-auto-upgrade-');
-    const calls: string[][] = [];
-    const outcome = await runAutoUpgrade({
-      settings: settings(home),
-      latestVersion: '9.9.9',
-      currentVersion: '4.1.0',
-      env: { INVOCATION_ID: 'abc' },
-      cliEntry: '/fake/cogmem.ts',
-      run: async (cmd) => { calls.push(cmd); return 0; },
-    });
-    expect(outcome.attempted).toBe(false);
-    expect(outcome.decision.reason).toBe('systemd_requires_explicit_opt_in');
-    expect(calls).toHaveLength(0);
-  });
-
-  test('a failed update is reported as failed and stops there', async () => {
-    const home = makeTempDir('cogmem-auto-upgrade-');
-    let runs = 0;
-    const outcome = await runAutoUpgrade({
-      settings: settings(home),
-      latestVersion: '9.9.9',
-      currentVersion: '4.1.0',
-      env: {},
-      cliEntry: '/fake/cogmem.ts',
-      run: async () => { runs += 1; return 1; },
-    });
-    expect(outcome).toMatchObject({ attempted: true, status: 'failed', exitCode: 1 });
-    // No retry loop: the failure is the end of this check.
-    expect(runs).toBe(1);
-  });
-
-  test('one upgrade at a time: a held lock refuses the second', async () => {
-    const home = makeTempDir('cogmem-auto-upgrade-');
-    const lockDir = join(home, '.cogmem');
-    mkdirSync(lockDir, { recursive: true });
-    writeFileSync(join(lockDir, AUTO_UPGRADE_LOCK_FILENAME), '');
-    const outcome = await runAutoUpgrade({
-      settings: settings(home),
-      latestVersion: '9.9.9',
-      currentVersion: '4.1.0',
-      env: {},
-      cliEntry: '/fake/cogmem.ts',
-      run: async () => { throw new Error('must not run'); },
-    });
-    expect(outcome.attempted).toBe(false);
-    expect(outcome.decision.reason).toBe('lock_held');
-  });
-
-  test('a lock whose timestamp is ahead of the clock is held, not read as stale', async () => {
-    // mtimeMs is sub-millisecond while Date.now() is truncated, so a file written in
-    // the same millisecond can look "in the future". Treating that as stale let the
-    // second upgrade run — the one thing the lock exists to prevent (#202).
-    const home = makeTempDir('cogmem-auto-upgrade-lock-skew-');
-    const lockDir = join(home, '.cogmem');
-    mkdirSync(lockDir, { recursive: true });
-    const lockPath = join(lockDir, AUTO_UPGRADE_LOCK_FILENAME);
-    writeFileSync(lockPath, '');
-    const ahead = (Date.now() + 60_000) / 1000;
-    utimesSync(lockPath, ahead, ahead);
-    const outcome = await runAutoUpgrade({
-      settings: settings(home),
-      latestVersion: '9.9.9',
-      currentVersion: '4.1.0',
-      env: {},
-      cliEntry: '/fake/cogmem.ts',
-      run: async () => { throw new Error('must not run'); },
-    });
-    expect(outcome.attempted).toBe(false);
-    expect(outcome.decision.reason).toBe('lock_held');
-  });
-});
-
-describe('the governance trace', () => {  test('each update appends one line, and the last one is the state', () => {
-    const home = makeTempDir('cogmem-update-trace-');
-    appendUpdateTrace(home, { at: 1, command: 'update', stageOnly: true, trigger: 'auto', from: '4.1.0', to: '4.2.0', status: 'staged', gateLevel: 'ok', restartRequired: true });
-    appendUpdateTrace(home, { at: 2, command: 'update', stageOnly: false, trigger: 'operator', from: '4.1.0', to: '4.2.0', status: 'completed' });
-    expect(readFileSync(updateLogPath(home), 'utf8').trim().split('\n')).toHaveLength(2);
-    expect(readLastUpdateTrace(home)).toMatchObject({ at: 2, status: 'completed', from: '4.1.0', to: '4.2.0', trigger: 'operator' });
-    // The two traces are told apart: an unattended stage is not a manual one.
-    expect(readLastUpdateTrace(home)).not.toMatchObject({ stageOnly: true });
-  });
-
-  test('a trace that cannot be written does not fail the update', () => {
-    expect(() => appendUpdateTrace('/proc/nope/not-a-dir', {
-      at: 1, command: 'update', stageOnly: false, trigger: 'operator', status: 'completed',
-    })).not.toThrow();
-    expect(readLastUpdateTrace('/proc/nope/not-a-dir')).toBeUndefined();
-  });
-});
-
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 describe('the one-line notice on a command', () => {
@@ -331,18 +165,17 @@ describe('the one-line notice on a command', () => {
     return { stdout, stderr, exitCode };
   }
 
-  test('a normal command adds it, and update does not announce the release it just installed', async () => {
+  test('a normal command adds it, and --json does not', async () => {
     const home = makeTempDir('cogmem-notice-');
     mkdirSync(join(home, '.cogmem'), { recursive: true });
     writeFileSync(join(home, '.cogmem', 'update-check.json'), JSON.stringify({ checkedAt: Date.now(), latestVersion: '9.9.9' }));
 
-    const normal = await runCli(['cleanup', '--dry-run'], home);
+    const normal = await runCli(['doctor'], home);
     expect(normal.stderr).toContain('cogmem 9.9.9 is available');
+    expect(normal.stderr).toContain('/upgrade');
 
-    // The process running `update` is the one that was just replaced, so its own
-    // version is the old one; announcing the release it installed would be wrong.
-    const update = await runCli(['update', '--dry-run'], home);
-    expect(update.stderr).not.toContain('is available');
+    const json = await runCli(['doctor', '--json'], home);
+    expect(json.stderr).not.toContain('is available');
   }, 60_000);
 });
 

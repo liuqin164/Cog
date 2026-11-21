@@ -8,9 +8,7 @@ import { checkForUpdate, maybeStartVersionCheck, renderUpdateNotice } from '../i
 import { assertCliArgs } from './CliArgs.js';
 
 const COMMANDS: Record<string, string> = {
-  init: 'init',
   doctor: 'doctor',
-  update: 'update',
   memory: 'memory',
   observatory: 'observatory',
   repair: 'repair',
@@ -19,12 +17,9 @@ const COMMANDS: Record<string, string> = {
   snapshot: 'snapshot',
   backup: 'backup',
   prospective: 'prospective',
-  strategy: 'strategy',
-  'brain-eval': 'brain-eval',
   episode: 'episode',
   dream: 'dream',
   daily: 'daily',
-  cleanup: 'cleanup',
   install: 'install',
 };
 
@@ -33,9 +28,7 @@ function usage(): string {
     'Usage: cogmem <command> [args]',
     '',
     'Commands:',
-    '  init                 interactive setup',
     '  doctor               validate config, kernel, storage and the install gate',
-    '  update               show or run package update command',
     '  memory               audit/search/show raw and compiled memory; run dream/candidates queue',
     '  import <host>        import memory files from one host (openclaw | hermes)',
     '  observatory          serve the memory observatory on loopback (reads zero-write; soul editor writes)',
@@ -44,12 +37,9 @@ function usage(): string {
     '  snapshot             export/import snapshots',
     '  backup               nightly snapshot, list, bundle, restore',
     '  prospective          manage confirmed-only future-memory candidates; never executes tasks',
-    '  strategy             inspect current-turn memory policy and read-only outcome telemetry',
-    '  brain-eval           evaluate recall, provenance, leakage, budget, and false activation',
     '  episode              append, import, inspect, seal, or repair conversation episodes',
     '  dream                conditionally process sealed episode backlog',
     '  daily                write a zero-model-call daily report from the ledger and trace',
-    '  cleanup              remove the managed launcher after its installation is gone',
     '  install              install the resident companion (six steps, first wake self-check)',
     '',
     'JSON output: commands with --json emit cogmem.cli.v1. Object fields stay top-level, and arrays are named for what they hold: items (recall, prospective list), events (list, search), decisions (govern), episodes (episode list), and nodes/edges/matchedFacets/nextActions/warnings on Atlas reads.',
@@ -104,10 +94,8 @@ async function main(): Promise<void> {
   const binDir = resolveCliBinDir(process.argv[1], env);
   if (binDir) env.COGMEM_BIN_DIR = binDir;
 
-  // #150: start the daily check in the background, never wait for it. `update` is
-  // excluded because it is the thing the check would call — starting a check from
-  // an update would be the recursion, not the feature.
-  if (command !== 'update' && maybeStartVersionCheck({ env, configPath: explicitConfig(rest) }).started) {
+  // #150: start the daily check in the background, never wait for it.
+  if (maybeStartVersionCheck({ env, configPath: explicitConfig(rest) }).started) {
     // A resident entrypoint started directly (systemd, a fixture) starts the check
     // itself; this mark is how it knows the dispatcher already did.
     env.COGMEM_VERSION_CHECK_STARTED = '1';
@@ -139,9 +127,7 @@ async function main(): Promise<void> {
  * `observatory`, and for `--help`, which a test asserts writes nothing to stderr.
  */
 function printUpdateNotice(command: string, rest: string[], env: Record<string, string | undefined>): void {
-  // Not `update`: the process asking is the one that was just replaced, so its own
-  // `CORE_VERSION` is the old one and it would announce the release it just installed.
-  if (command === 'update' || command === 'observatory') return;
+  if (command === 'observatory') return;
   if (rest.includes('--json') || rest.includes('--help') || rest.includes('-h')) return;
   const notice = renderUpdateNotice(checkForUpdate({ env, configPath: explicitConfig(rest) }));
   if (notice) process.stderr.write(`${notice}\n`);

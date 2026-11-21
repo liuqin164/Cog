@@ -21,14 +21,12 @@ import {
   cogmemLauncherPath,
   hasCogmemLauncher,
   readCogmemLauncherTarget,
-  resolveCogmemInstallation,
   resolveCogmemInvocation,
   type InstallGate,
   type InstallGateDiagnostic,
   type InstallStep,
 } from '../install/InstallSteps.js';
 import { assertCliArgs } from './CliArgs.js';
-import { readLastUpdateTrace } from '../install/AutoUpgrade.js';
 import { readResidentSessions, resolveResidentSessionDir, systemctlCommand, type ResidentSession } from '../install/ResidentSession.js';
 import { checkForUpdate, refreshUpdateCache, type UpdateStatus } from '../install/VersionCheck.js';
 import { CORE_VERSION } from '../version.js';
@@ -222,7 +220,6 @@ function restartHint(session: ResidentSession): string {
 async function collectVersionReport(
   configPath: string,
   workspaceRoot: string,
-  homeDir: string,
   gateDiagnostics: InstallGateDiagnostic[],
 ): Promise<void> {
   const diskVersion = CORE_VERSION;
@@ -231,7 +228,6 @@ async function collectVersionReport(
   // host's stdio session are separate processes and can be on separate versions.
   const sessions = readResidentSessions(resolveResidentSessionDir({ configPath, workspaceRoot }));
   const skewed = sessions.filter(({ session }) => session.version !== diskVersion);
-  const lastUpdate = readLastUpdateTrace(homeDir);
 
   if (updateStatus.enabled) {
     ok(updateStatus.latestVersion
@@ -278,7 +274,6 @@ async function collectVersionReport(
     })),
     skew: skewed.length > 0,
     restartRequired: skewed.length > 0,
-    lastUpdate: lastUpdate ?? null,
   };
 }
 
@@ -390,7 +385,7 @@ const storage = hasFlag('--storage');
 const json = hasFlag('--json');
 
 if (envPath) {
-  fail('--env-path is no longer supported. Use cogmem init to create .cogmem/config.toml, then run cogmem doctor --config <config.toml>.');
+  fail('--env-path is no longer supported. Use cogmem install to create the companion config, then run cogmem doctor --config <config.toml>.');
 } else {
   const resolution = resolveCogmemConfigPath({ configPath });
   // The PATH question is asked before the branch, not inside it: a fresh
@@ -450,22 +445,14 @@ if (envPath) {
     }
   }
 
-  // The managed launcher is what keeps a configuration valid across an upgrade, a
-  // moved checkout and a changed npm prefix (#114). Its absence is not a failure —
-  // `init` writes it — but a launcher that points at nothing is, because every
-  // configuration written after this one is calling a file that cannot run the CLI.
-  const launcherInvocation = resolveCogmemInstallation(process.env) ?? 'cogmem';
+  // This release does not write the managed launcher, so its absence says nothing.
+  // A launcher that points at nothing does: it is the state a moved 4.x install left.
   const launcherFinding = hasCogmemLauncher() && !readCogmemLauncherTarget()
     ? {
       code: 'launcher_target_missing',
-      message: `The managed launcher ${cogmemLauncherPath()} has no installation to run. Run ${launcherInvocation} cleanup to remove it (the state an uninstall leaves), or ${launcherInvocation} init --yes in ${workspaceRoot} to point it at this installation.`,
+      message: `The managed launcher ${cogmemLauncherPath()} has no installation to run. Delete it; this release does not write one.`,
     }
-    : !hasCogmemLauncher() && resolveCogmemInstallation(process.env)
-      ? {
-        code: 'launcher_missing',
-        message: `No managed launcher at ${cogmemLauncherPath()}: a configuration written from here names this installation's own path, and stops working when that path changes. Run ${launcherInvocation} init --yes in ${workspaceRoot} to create one.`,
-      }
-      : undefined;
+    : undefined;
   if (launcherFinding) {
     warn(launcherFinding.code, launcherFinding.message);
     gateDiagnostics.push(launcherFinding);
@@ -477,7 +464,7 @@ if (envPath) {
 
   // #150: disk vs registry vs the serving process. Collected before the kernel opens
   // so a skew is reported even when the database is what fails next.
-  await collectVersionReport(resolution.path, workspaceRoot, loaded.homeDir, gateDiagnostics);
+  await collectVersionReport(resolution.path, workspaceRoot, gateDiagnostics);
 
   let kernelDbPath: string | undefined;
   try {

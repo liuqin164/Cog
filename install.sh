@@ -1,17 +1,15 @@
 #!/usr/bin/env bash
 # The Cog installer.
 #
-# It installs the package, links the CLI and stops. It never runs the setup
-# wizard and never writes config: setup is `cogmem init`, verification is
-# `cogmem doctor`. Both are named at the end, one per Install path, so a person
-# and an agent each get the command they should run next. See ADR-0003.
+# It installs the package, links the CLI and stops. It never runs setup and never
+# writes config: installation is `cogmem install`, verification is `cogmem doctor`.
+# See ADR-0003.
 set -euo pipefail
 
 INSTALL_HOME="${COGMEM_INSTALL_HOME:-$HOME/.cogmem/pkg}"
 BIN_DIR="${COGMEM_BIN_DIR:-$HOME/.bun/bin}"
-# The most general name wins, then the npm-specific one, then the tarball. The same
-# order as `resolveLatestNpmSpec` in src/bin/update-release.ts, so setting two of
-# these cannot install one thing and update another.
+# The most general name wins, then the npm-specific one, then the tarball. One
+# implementation, so setting two of these cannot install one thing and update another.
 PACKAGE_SPEC="${COGMEM_PACKAGE_SPEC:-${COGMEM_NPM_SPEC:-${COGMEM_RELEASE_TARBALL:-latest}}}"
 
 log() {
@@ -169,12 +167,6 @@ print_next_steps() {
 }
 
 main() {
-  # Accepted and ignored, so existing scripts that set it keep running. The
-  # installer no longer runs the wizard, so there is nothing left to skip.
-  if [ "${COGMEM_SKIP_INIT:-}" != "" ]; then
-    log "COGMEM_SKIP_INIT is set and ignored: setup is always a separate step now."
-  fi
-
   ensure_bun
   ensure_install_home
 

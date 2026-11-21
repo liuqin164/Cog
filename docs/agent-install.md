@@ -17,10 +17,8 @@ CLI is right — stop and report the disagreement instead of improvising.
   `cogmem-<command>` spellings (for example `cogmem-init`, `cogmem-doctor`) and
   the `cogmem-mcp` server bin were removed. If any message tells you to run
   one, that message is stale — run the subcommand form instead and report it.
-- `cogmem install` is the companion installer described here. `cogmem init` is
-  the kernel CLI's setup wizard for a bare kernel install; it is **not** part
-  of this companion path. Do not run `cogmem init` while following this
-  document.
+- `cogmem install` is the companion installer described here. It is the only
+  install command; there is no separate setup wizard.
 - Never write an API key, never invent an encryption passphrase, never spend
   money. If a step needs one of those and the user has not supplied it, stop
   and say so. An unattended install that cannot finish without a human
@@ -54,9 +52,8 @@ curl -fsSL https://raw.githubusercontent.com/liuqin164/Cog/main/install.sh | bas
 ```
 
 The installer only installs the package and links both declared bins, `cog`
-and `cogmem`. It never runs the setup wizard and never writes config —
-`COGMEM_SKIP_INIT` exists and is ignored, because setup has been a separate
-step since 3.x. If it prints a next step, follow it; do not add your own.
+and `cogmem`. It never runs setup and never writes config. If it prints a next
+step, follow it; do not add your own.
 
 ## 3. Run the companion installer
 
@@ -108,8 +105,7 @@ step that failed. Do not skip a step or work around a failure. A warning is
 not a failure: the install finished degraded, and you must quote the warning
 verbatim.
 
-The operator-facing distinction between this installer and the kernel's
-`cogmem init` is in [`docs/install.md`](install.md).
+The operator-facing install page is [`docs/install.md`](install.md).
 
 ## 4. Gate
 
@@ -129,7 +125,7 @@ next step.
 - **not_installed** — means "no config yet" (exit 0). If this is a fresh
   companion install, the installer and the CLI disagree about where the
   install lives: stop and report that disagreement. Do not create a second
-  config or run `cogmem init` to make the message go away.
+  config to make the message go away.
 
 If the reason is `no_upgrade_path`, the database was created before 4.0 and
 this release will not upgrade it. Do not import the old database file or a

@@ -1,5 +1,4 @@
 #!/usr/bin/env bun
-import { decideAutoUpgrade, runAutoUpgrade } from '../install/AutoUpgrade.js';
 import { loadUpdateSettings, refreshUpdateCache } from '../install/VersionCheck.js';
 
 /**
@@ -7,21 +6,16 @@ import { loadUpdateSettings, refreshUpdateCache } from '../install/VersionCheck.
  *
  * `cogmem` starts this and does not wait for it, and so does the resident observatory when it
  * is launched directly. Everything that
- * could take time — the registry read, and the staged upgrade when one is opted
- * in — happens here, out of the caller's way.
+ * could take time — the registry read — happens here, out of the caller's way.
  *
- * It writes nothing to stdout or stderr. Its results are the cache file and, when
- * it stages an upgrade, the update log that `cogmem update` appends to. A check
+ * It writes nothing to stdout or stderr. Its result is the cache file. A check
  * that fails is a check that says nothing, which is the ticket's requirement and
  * also the only behaviour that cannot corrupt a host's JSON-RPC stream.
  */
 async function main(): Promise<void> {
   const settings = loadUpdateSettings({});
   if (!settings.check) return;
-  const cache = await refreshUpdateCache({});
-  if (!cache.latestVersion) return;
-  if (!decideAutoUpgrade(settings, cache.latestVersion).allowed) return;
-  await runAutoUpgrade({ settings, latestVersion: cache.latestVersion });
+  await refreshUpdateCache({});
 }
 
 main().catch(() => {

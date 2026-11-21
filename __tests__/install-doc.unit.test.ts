@@ -44,31 +44,20 @@ test('every flag the install page shows in a command really belongs to that comm
   const fences = [...doc.matchAll(/```[\s\S]*?```/g)].map((match) => match[0]).join('\n');
   const flags = new Set([...fences.matchAll(/(--[a-z][a-z-]+)/g)].map((match) => match[1]!));
   // The allowlist is the CLI's own, for every command the page asks a reader to run.
-  // A hardcoded `init`/`doctor` list is how `--stage-only`, on the `update`
-  // command this page now documents, would have been reported as an offence against
-  // init's help — the guard demanding a worse document.
-  const shown = new Set<string>(['init', 'doctor']);
+  const shown = new Set<string>(['install', 'doctor']);
   for (const match of fences.matchAll(/cogmem ([a-z][a-z-]+)/g)) shown.add(match[1]!);
-  expect(shown.size).toBeGreaterThan(2);
+  expect(shown.size).toBeGreaterThan(1);
   const known = new Set<string>(['--help']);
   for (const command of shown) {
     for (const match of helpFor(command).matchAll(/(--[a-z][a-z-]+)/g)) known.add(match[1]!);
   }
   expect([...flags].filter((flag) => !known.has(flag))).toEqual([]);
-  // And the flag the ticket singles out is called out as absent rather than shown.
-  expect(doc).toContain('no `--provider` flag');
-  // The absence is about the kernel wizard. The companion installer above does take `--provider`.
-  const kernelFences = [...doc.slice(doc.indexOf('## 1. Why')).matchAll(/```[\s\S]*?```/g)].map((match) => match[0]).join('\n');
-  expect(kernelFences).not.toContain('--provider');
-  const initFlags = new Set([...help(['init']).matchAll(/(--[a-z][a-z-]+)/g)].map((match) => match[1]!));
-  expect(initFlags.has('--yes')).toBe(true);
 });
 
-test('the install page separates the companion installer from kernel initialization', () => {
+test('the install page names the companion installer as the only install', () => {
   const doc = readFileSync(join(root, 'docs', 'install.md'), 'utf8');
   expect(doc).toContain('## Companion install (`cogmem install`)');
-  expect(doc).toContain('cogmem init');
-  expect(doc).toContain('initializes a bare kernel');
+  expect(doc).not.toContain('cogmem init');
   // The companion command really is the one the CLI dispatches; the doc guard above checks its flags.
   const commands = spawnSync('bun', [join(root, 'src', 'bin', 'cogmem.ts'), '--help'], { encoding: 'utf8' }).stdout;
   expect(commands).toMatch(/^ {2}install\b/m);

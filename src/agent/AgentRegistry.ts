@@ -8,8 +8,8 @@
  * project scope each is confined to — which is what the observatory lists and what the future
  * child-agents will be recorded in.
  *
- * Read-only by design. The credential minting (`cogmem init --register-agent`) and the
- * token lookup are gone, so nothing here writes a file and nothing trusts a presented secret.
+ * Read-only by design. Credential minting and the token lookup are gone, so nothing here
+ * writes a file and nothing trusts a presented secret.
  * An entry no longer needs a credential to be understood; an existing `agents.json` written by
  * the old command still loads, because the unknown credential fields are ignored.
  *

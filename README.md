@@ -40,8 +40,8 @@ cog
 6. **awake** — write a probe memory through the resident, restart it, and recall the probe. A failure here means the install did not happen.
 
 After `cogmem install`, `cogmem` works directly: the management CLI resolves the companion's own
-database, so `cogmem doctor` and `cogmem memory recall` operate on that install without
-`cogmem init` and without a `~/.cogmem/config.toml`.
+database, so `cogmem doctor` and `cogmem memory recall` operate on that install without a
+`~/.cogmem/config.toml`.
 
 The default data directory is `~/.cogmem/companion` (mode 0700), with `memory.sqlite` and a `snapshots/` directory inside it. The resident listens on loopback only.
 
@@ -60,7 +60,7 @@ A missing `--provider`, `--base-url` or `--model` stops the install before it to
 
 Without a memory model, Cog runs in `rule_only` mode: storing and literal recall work, paraphrases do not, and `cogmem doctor` reports `WARN — installed but degraded` rather than pretending. That is a legal configuration.
 
-What you get is the companion, not a memory library. `cog` attaches to the resident (or starts it) and opens the terminal interface; `cogmem` stays the management CLI (`doctor`, `update`, `observatory`, `memory`, `episode`, `dream`, `backup` and the rest). Both bins live in the same package.
+What you get is the companion, not a memory library. `cog` attaches to the resident (or starts it) and opens the terminal interface; `cogmem` stays the management CLI (`doctor`, `observatory`, `memory`, `episode`, `dream`, `backup` and the rest). Upgrades are `/upgrade` inside `cog`, not a second command. Both bins live in the same package.
 
 ## Start the companion
 

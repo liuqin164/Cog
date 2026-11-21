@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -14,7 +14,6 @@ import { makeTempDir } from './helpers/tmp.js';
 
 const coreRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const doctorBin = join(coreRoot, 'src/bin/doctor.ts');
-const initBin = join(coreRoot, 'src/bin/init.ts');
 
 // The CLI under test must be reachable even when a case narrows PATH, so the
 // directory holding this Bun binary is always kept on it.
@@ -54,7 +53,6 @@ test('the installed layout is recognised, so the gate cannot report OK off PATH'
   expect(resolveCliBinDir('src/bin/doctor.ts', { PATH: '/usr/bin:/bin' })).toBeUndefined();
   rmSync(home, { recursive: true, force: true });
 });
-
 describe('install step shape', () => {
   test('every step names exactly one actor and only agent steps are automation-safe', () => {
     const steps: InstallStep[] = [
@@ -71,15 +69,12 @@ describe('install step shape', () => {
     }
   });
 
-  test('both Install paths are named, each with its actor', () => {
+  test('the companion installer is the one setup step', () => {
     const steps = installPathSteps('/opt/bin/cogmem');
-    const operator = steps.find((step) => step.id === 'operator_init');
-    const agent = steps.find((step) => step.id === 'agent_init');
+    const operator = steps.find((step) => step.id === 'companion_install');
     expect(operator?.actor).toBe('operator');
     expect(operator?.safeForAutomation).toBe(false);
-    expect(agent?.actor).toBe('agent');
-    expect(agent?.safeForAutomation).toBe(true);
-    expect(agent?.command).toContain('init --yes');
+    expect(operator?.command).toBe('/opt/bin/cogmem install');
     expect(steps.some((step) => step.command.includes('doctor'))).toBe(true);
   });
 
@@ -214,118 +209,5 @@ describe('the install gate answers four outcomes', () => {
     expect(parsed.installGate.level).toBe('fail');
     expect(parsed.installGate.exitCode).toBe(1);
     expect(parsed.installGate.diagnostics[0].code).toBe('invalid_model_provider');
-  });
-});
-
-describe('init --yes settles Human-required settings conservatively', () => {
-  test('no key and no passphrase are written, and the install lands in rule_only', async () => {
-    const dir = makeTempDir('cogmem-init-conservative-');
-    const home = join(dir, 'home');
-    mkdirSync(home, { recursive: true });
-    const { stdout, exitCode } = await run(
-      ['bun', initBin, '--yes', '--json', '--no-probe', '--home', join(home, '.cogmem')],
-      { cwd: dir, env: { HOME: home, OPENAI_API_KEY: 'sk-should-not-be-written', ANTHROPIC_API_KEY: 'sk-ant-should-not-be-written' } },
-    );
-    expect(exitCode).toBe(0);
-    const parsed = JSON.parse(stdout);
-    expect(parsed.config.memoryModel.provider).toBe('rule_only');
-    expect(parsed.config.reasoningModel.provider).toBe('rule_only');
-    expect(parsed.config.encryption).toBe(false);
-
-    const written = readFileSync(join(home, '.cogmem', 'config.toml'), 'utf8');
-    expect(written).not.toContain('sk-should-not-be-written');
-    expect(written).not.toContain('sk-ant-should-not-be-written');
-    expect(written).not.toContain('api_key');
-    expect(written).not.toContain('encryption_passphrase');
-    expect(written).toContain('encryption = false');
-  });
-
-  test('every Human-required fallback names the setting and the command that sets it', async () => {
-    const dir = makeTempDir('cogmem-init-warnings-');
-    const home = join(dir, 'home');
-    mkdirSync(home, { recursive: true });
-    const { stdout } = await run(
-      ['bun', initBin, '--yes', '--json', '--no-probe', '--home', join(home, '.cogmem')],
-      { cwd: dir, env: { HOME: home } },
-    );
-    const warnings = JSON.parse(stdout).warnings as Array<{ code: string; setting: string; message: string; command: string }>;
-    const codes = warnings.map((warning) => warning.code);
-    expect(codes).toContain('embedding_provider_defaulted');
-    expect(codes).toContain('model_provider_defaulted');
-    expect(codes).toContain('encryption_defaulted');
-    for (const warning of warnings) {
-      expect(warning.setting.length).toBeGreaterThan(0);
-      expect(warning.message.length).toBeGreaterThan(0);
-      expect(warning.command.length).toBeGreaterThan(0);
-    }
-  });
-
-  test('Agent-decidable settings keep their defaults', async () => {
-    const dir = makeTempDir('cogmem-init-decidable-');
-    const home = join(dir, 'home');
-    mkdirSync(home, { recursive: true });
-    const { stdout } = await run(
-      ['bun', initBin, '--yes', '--json', '--no-probe', '--home', join(home, '.cogmem')],
-      { cwd: dir, env: { HOME: home } },
-    );
-    const parsed = JSON.parse(stdout);
-    expect(parsed.config.dbPath).toBe('memory.db');
-    expect(parsed.config.vectorBackend).toBe('sqlite-vec');
-    expect(parsed.config.piiRedaction).toEqual({ email: true, phone: true, ssn: true });
-  });
-
-  test('--dry-run shows the same values and the same warnings as the real write', async () => {
-    const dir = makeTempDir('cogmem-init-dryrun-');
-    const home = join(dir, 'home');
-    mkdirSync(home, { recursive: true });
-    const args = ['bun', initBin, '--yes', '--json', '--no-probe', '--home', join(home, '.cogmem')];
-    const dry = await run([...args, '--dry-run'], { cwd: dir, env: { HOME: home } });
-    expect(existsSync(join(home, '.cogmem', 'config.toml'))).toBe(false);
-    const wet = await run(args, { cwd: dir, env: { HOME: home } });
-    const dryParsed = JSON.parse(dry.stdout);
-    const wetParsed = JSON.parse(wet.stdout);
-    expect(dryParsed.dryRun).toBe(true);
-    expect(dryParsed.written).toBe(false);
-    expect(wetParsed.written).toBe(true);
-    expect(dryParsed.config).toEqual(wetParsed.config);
-    expect(dryParsed.warnings).toEqual(wetParsed.warnings);
-  });
-
-  test('--yes defaults to project scope and --scope overrides it', async () => {
-    const dir = makeTempDir('cogmem-init-scope-');
-    const home = join(dir, 'home');
-    const workspace = join(dir, 'workspace');
-    mkdirSync(home, { recursive: true });
-    mkdirSync(workspace, { recursive: true });
-
-    const project = await run(['bun', initBin, '--yes', '--json', '--no-probe'], {
-      cwd: workspace,
-      env: { HOME: home },
-    });
-    expect(project.exitCode).toBe(0);
-    expect(existsSync(join(workspace, '.cogmem', 'config.toml'))).toBe(true);
-    expect(existsSync(join(home, '.cogmem', 'config.toml'))).toBe(false);
-
-    const global = await run(
-      ['bun', initBin, '--yes', '--json', '--no-probe', '--scope', 'global', '--home', join(home, '.cogmem')],
-      { cwd: workspace, env: { HOME: home } },
-    );
-    expect(global.exitCode).toBe(0);
-    expect(existsSync(join(home, '.cogmem', 'config.toml'))).toBe(true);
-  });
-
-  test('an existing config is refused without touching it', async () => {
-    const dir = makeTempDir('cogmem-init-exists-');
-    const home = join(dir, 'home');
-    const configPath = join(home, '.cogmem', 'config.toml');
-    mkdirSync(dirname(configPath), { recursive: true });
-    writeFileSync(configPath, '[core]\ndb_path = "keep-me.db"\n');
-
-    const { exitCode } = await run(
-      ['bun', initBin, '--yes', '--no-probe', '--home', join(home, '.cogmem')],
-      { cwd: dir, env: { HOME: home } },
-    );
-    expect(exitCode).toBe(1);
-    expect(readFileSync(configPath, 'utf8')).toContain('keep-me.db');
   });
 });

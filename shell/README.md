@@ -222,7 +222,7 @@ printed and never enters the trace.
 
 ## `upgrade`: the resident form (#165)
 
-`/upgrade` upgrades the *resident* the way `cogmem update` upgrades a CLI install: 停服 → 换版 →
+`/upgrade` is the one upgrade path: 停服 → 换版 →
 迁移 → 启服, with rollback. With no argument it installs the next `cogmem` from npm; a version or
 tarball names the release, and a directory stays available as a developer path. The full contract is
 [`UPGRADE.md`](UPGRADE.md); the short shape:

@@ -1,14 +1,8 @@
 # Installing Cog
 
-Cog has two commands that both sound like "install", and this page keeps them apart:
-
-- `cogmem install` — the companion installer used by the README Quick Start. It installs the
-  resident, registers the user-level service and runs a first-wake smoke test. An agent
-  installing the companion follows [`docs/agent-install.md`](agent-install.md).
-- `cogmem init` — the kernel CLI's setup wizard for a bare kernel install. It is not part of the
-  companion path and is not needed after `cogmem install`. Sections 1 to 7 below are the
-  operator-facing account of that path: why an unattended `cogmem init --yes` stops, what
-  `rule_only` can actually do, and the two ways to finish it.
+`cogmem install` is the one installer. It installs the resident, registers the user-level service
+and runs a first-wake smoke test. An agent installing the companion follows
+[`docs/agent-install.md`](agent-install.md).
 
 Nothing below is a bug report or a to-do: `rule_only` is a legal end state, and the install gate
 is working when it says `WARN`. Every command and field below was checked against the `--help`
@@ -46,8 +40,7 @@ The default data directory is `~/.cogmem/companion` (mode 0700); the nightly sna
 archives there are complete plaintext copies of the database. A warning such as an unavailable
 local embedding model means a degraded install, not a failed one. After `cogmem install`,
 `cogmem` is usable directly: the management CLI resolves the companion's own database without
-`cogmem init` and without a `~/.cogmem/config.toml`. `cogmem init` initializes a bare kernel and
-is described below.
+a `~/.cogmem/config.toml`.
 
 ### Vector provider
 
@@ -78,50 +71,27 @@ Switching model or dimension does not silently reuse old vectors. The resident k
 falls back to lexical recall with the same honest label if the provider fails. A remote install
 does not download the local 99 MiB model.
 
-## 1. Why `cogmem init --yes` stops here
+## 1. Degraded installs: what `rule_only` means
 
-Unattended, `init` settles four settings conservatively and warns about each one instead of
-guessing. The warnings are the point — an unattended run tells you what it did not decide.
+The installer asks for the model route. If you leave it unset, or the provider cannot be reached,
+the install finishes degraded rather than failing: storage and literal recall work, paraphrases do
+not, and `cogmem doctor` reports `WARN — installed but degraded` and names the next step.
 
-| Settings it will not choose | Why |
-| --- | --- |
-| A model provider | Choosing one for you can mean choosing who gets paid. |
-| Any API key | Copying one out of your environment writes a secret to disk. |
-| An encryption passphrase | Inventing one creates a database nobody can ever open again. |
+That is a legal end state, not a broken one. Rerunning `cogmem install` with the route named finishes
+it:
 
-The distinctions between unattended, agent-driven and interactive installs are specified in
-ADR-0003, which is the authority for that sectioning; this page is the operator-facing account
-of the same behaviour, and the two must not drift apart.
+```bash
+export MG_API_KEY=...
+cogmem install --yes --provider openai_compatible --base-url https://api.example.com/openai --model your-model
+cogmem doctor
+```
 
-## 2. What `rule_only` means
+`doctor` goes back to `OK — installed and working` once a real memory model answers.
 
-What works: storing and recalling memory, with literal matching, all of it. This is a working
-install, not a broken one.
+## 2. The kernel configuration file
 
-What is missing: with no model provider there is no semantic matching, so a paraphrase of a
-question does not find the record that answers it. `cogmem doctor` reports this as
-`WARN — installed but degraded`, and names the next step. Compare that with `FAIL`, which means
-something is actually wrong.
-
-How to check it yourself: a recall result reports `semanticIndex`, so you can see whether the
-semantic path ran instead of guessing from how the answers feel.
-
-## 3. Finishing the install
-
-Both routes end the same way — run `cogmem doctor`, and the gate must go from
-`WARN — installed but degraded` back to `OK — installed and working`.
-
-### Route A: the wizard
-
-Run `cogmem init` with no `--yes`. The wizard asks for the provider, the key and the passphrase.
-There is deliberately **no `--provider` flag**: `cogmem init --help` lists
-`--config --dry-run --home --json --no-probe --scope --vector-dimension --yes`,
-and provider selection is the wizard's job.
-
-### Route B: edit the configuration
-
-The same three decisions live in `.cogmem/config.toml`. Each model role has its own section, and
-each section carries `provider` and `api_key`:
+The companion installer writes its own settings, so a kernel `.cogmem/config.toml` is not created by
+any command. One is still read when you pass `--config <config.toml>`; every role has its own section:
 
 ```toml
 [embedding]
@@ -166,7 +136,7 @@ Both spellings are accepted — `[project] language` wins over a top-level `lang
 measured on a fresh install, `thanks so much!` comes back with an answer while no language is declared,
 and comes back empty with `residue_empty` once `language = "en"` is set.
 
-## 4. Installer environment variables
+## 3. Installer environment variables
 
 `install.sh` installs the package and links the CLI, then stops. It never runs the wizard and
 never writes config, so `curl | bash` cannot ask questions on one machine and invent answers on
@@ -174,7 +144,6 @@ another.
 
 | Variable | What it does |
 | --- | --- |
-| `COGMEM_SKIP_INIT` | Still accepted, and now does nothing. |
 | `COGMEM_PACKAGE_SPEC` | Selects what is installed: a version, a range, a tarball, a path, or a URL or `npm:`/`github:` location. |
 | `COGMEM_NPM_SPEC`, `COGMEM_RELEASE_TARBALL` | Older names for the same setting, in that order of precedence. |
 | `COGMEM_INSTALL_HOME`, `COGMEM_BIN_DIR` | Move the package home and the linked CLI, so the same script installs a locally packed build without the package itself coming from the registry — its dependencies still resolve from the registry unless they are already cached. |
@@ -189,7 +158,7 @@ If the next command reports `cogmem: command not found`, the CLI was linked into
 outside your `PATH`. The installer prints the exact `export` line to fix it, and `cogmem doctor`
 reports the same directory as a WARN.
 
-## 5. Staying current
+## 4. Staying current
 
 Cog checks the registry for a newer release once a day, and tells you when there is one. It is
 worth saying what the check does *not* do: it reads version metadata only, sends nothing about this
@@ -201,13 +170,13 @@ than on every command.
 When a newer release exists, a normal command adds one line on stderr:
 
 ```
-cogmem <latest> is available (you have <current>). Run `cogmem update`; restart the resident process afterwards if one is running.
+cogmem <latest> is available (you have <current>). Run `/upgrade` in `cog`; it stops the resident, swaps the package, verifies it and starts it again.
 ```
 
 `cogmem doctor` reports the same thing in full, and separates three facts that an upgrade can leave
 disagreeing: the **disk** version, the **latest** release, and the **serving** version of a resident
-process. After an update that staged a package but did not restart the service, doctor says so
-explicitly — `the resident process is still serving <serving> …; the disk is at <disk>` — and `--json` carries
+process. When a resident is still serving an older tree, doctor says so explicitly — `the resident
+process is still serving <serving> …; the disk is at <disk>` — and `--json` carries
 `version.disk`, `version.latest`, `version.updateAvailable`, `version.serving`, `version.skew` and
 `version.restartRequired`.
 
@@ -221,54 +190,15 @@ check = false
 Nothing is read, and no line is added to any command's output. `COGMEM_UPDATE_CHECK=0` does the same
 for one process.
 
-### Updating by hand
+### Upgrading
 
-`cogmem update --yes` runs the whole cycle and finishes it: it stops the resident process, swaps
-the package, opens the database with the new build — which is what runs an additive migration —
-verifies the result through the same gate a fresh install uses, and starts the service again. When
-the release is already installed it does nothing at all, so it is safe to run from a timer.
+The resident upgrades itself from `/upgrade` in `cog`. It stages the next package beside the
+serving one, snapshots the brain before the new version opens it, runs the health gate, and rolls
+back if any check fails. Only a silent resident (`IDLE` or `DORMANT`) may start it, and the result
+is reported on the next attach. There is no automatic upgrade and no second command: the contract
+is in [`shell/UPGRADE.md`](https://github.com/liuqin164/Cog/blob/main/shell/UPGRADE.md).
 
-```bash
-cogmem update --dry-run     # print the command and the gate, change nothing
-cogmem update --yes         # stop, swap, migrate, verify, start
-cogmem update --yes --stage-only   # swap and verify, but never stop or start the service
-```
-
-If any step fails, the update stops there and says which one: a stop that fails leaves the package
-untouched; a failed install or a failed gate reinstalls the previous version, starts the old service
-again and exits non-zero. Every run appends one line to `<.cogmem>/logs/update.jsonl` with the
-from/to versions, the status, the step and the gate result.
-
-### Opting in to automatic updates
-
-Off unless you say otherwise, and deliberately so: a consequential act is decided by a person
-(ADR-0003). Turning it on is you deciding in advance.
-
-```toml
-[update]
-auto_upgrade = true
-```
-
-With it on, a check that finds a newer release stages it — swap and verify — and records that a
-restart is owed. It never restarts anything, not even when the process running the service is the
-one that asked: a process that kills and re-execs itself mid-upgrade is how a service ends up
-neither old nor new. Restarting is the service manager's job, and the section on the resident
-process in [`docs/observatory.md`](observatory.md) gives the timer and the unit that do it.
-
-Under systemd that ordinary opt-in is not enough, because the process that would be upgraded is the
-one serving requests. The upgrade degrades to check-and-report unless you add the second, separate
-confirmation:
-
-```toml
-[update]
-auto_upgrade = true
-auto_upgrade_in_service = true   # only when the service manager owns the restart
-```
-
-One upgrade runs at a time: a lock beside the config refuses a second, and a lock left by a killed
-process is cleared after an hour.
-
-## 6. Platforms
+## 5. Platforms
 
 The resident is a user-level service: a systemd user unit on Linux, a launchd agent on macOS. It
 does not need root. Windows is not supported; `cogmem install` refuses the platform at preflight,
@@ -288,7 +218,7 @@ HTTP face, `AF_NETLINK` for interface discovery) complete the sandbox. The unit 
 resident, but `StartLimitIntervalSec=300` / `StartLimitBurst=5` stop a deterministic crash loop so
 the last log survives; `doctor` reports a unit that stopped that way instead of calling it healthy.
 
-## 7. Old databases, snapshots and encryption
+## 6. Old databases, snapshots and encryption
 
 A database created before 4.0 cannot be opened by this release. It is identified and refused with
 a message beginning `no_upgrade_path:`; the file is left byte-for-byte unchanged, with no backup

@@ -3,11 +3,12 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { defaultCogmemHome, resolveCogmemConfigPath, type EnvLike } from '../config/ConfigPath.js';
-import { DEFAULT_NPM_PACKAGE } from '../bin/update-release.js';
 import { CORE_VERSION } from '../version.js';
 
+const DEFAULT_NPM_PACKAGE = 'cogmem';
+
 /**
- * The version check behind `cogmem update`'s own notice (#150).
+ * The version check behind the one-line update notice (#150).
  *
  * Four properties, all of them requirements rather than polish:
  *  - **It never blocks.** A caller reads the cache and moves on; the network
@@ -37,20 +38,9 @@ const REQUEST_TIMEOUT_MS = 3000;
 export interface UpdateSettings {
   /** `[update] check`, on unless turned off. */
   check: boolean;
-  /** `[update] auto_upgrade`, off unless turned on (ADR-0003). */
-  autoUpgrade: boolean;
-  /**
-   * `[update] auto_upgrade_in_service`: the second, separate confirmation a
-   * service manager needs. A process that was started by systemd does not get to
-   * upgrade the package it is running from on the strength of the ordinary
-   * opt-in alone (#150, systemd clause 3).
-   */
-  autoUpgradeInService: boolean;
   registryUrl: string;
   packageName: string;
   cachePath: string;
-  /** The directory the cache and the update log live in, when a config named one. */
-  homeDir: string;
   /** The config that was actually read, so the detached child reads the same one. */
   configPath?: string;
 }
@@ -109,14 +99,9 @@ export function loadUpdateSettings(options: UpdateCheckOptions = {}): UpdateSett
   const registry = env.COGMEM_UPDATE_REGISTRY?.trim() || DEFAULT_UPDATE_REGISTRY;
   return {
     check: envUpdateCheck(env) ?? (update.check !== false),
-    autoUpgrade: update.auto_upgrade === true,
-    autoUpgradeInService: update.auto_upgrade_in_service === true,
     registryUrl: registry.replace(/\/+$/u, ''),
     packageName: DEFAULT_NPM_PACKAGE,
     cachePath: options.cachePath ?? join(homeDir, UPDATE_CACHE_FILENAME),
-    // The config's own directory when there is one, so the update log lands beside
-    // the database rather than in a home the operator may not have configured.
-    homeDir: resolution.kind === 'toml' ? dirname(resolution.path) : homeDir,
     configPath: resolution.kind === 'toml' ? resolution.path : undefined,
   };
 }
@@ -203,7 +188,6 @@ export async function fetchLatestVersion(options: FetchLatestOptions = {}): Prom
     const response = await doFetch(`${registryUrl}/${encodeURIComponent(packageName)}/latest`, {
       // No version and no machine detail: the ticket forbids sending anything about
       // this install, and a User-Agent carrying `cogmem/<version>` is exactly that.
-      // The same identifier `update-release` sends, so one product has one name.
       headers: { Accept: 'application/json', 'User-Agent': 'cogmem-update' },
       signal: controller.signal,
     });
@@ -261,11 +245,6 @@ export function isNewerVersion(candidate: string, current: string): boolean {
   return compareVersions(candidate, current) > 0;
 }
 
-/** A process started by systemd, told apart from a shell by the manager's own marks. */
-export function isSystemdManaged(env: EnvLike = process.env): boolean {
-  return Boolean(env.INVOCATION_ID || env.NOTIFY_SOCKET);
-}
-
 /**
  * The one line the CLI adds after a normal command's output.
  *
@@ -274,7 +253,7 @@ export function isSystemdManaged(env: EnvLike = process.env): boolean {
  */
 export function renderUpdateNotice(status: UpdateStatus): string | undefined {
   if (!status.enabled || !status.updateAvailable || !status.latestVersion) return undefined;
-  return `cogmem ${status.latestVersion} is available (you have ${status.currentVersion}). Run \`cogmem update\`; restart the resident process afterwards if one is running.`;
+  return `cogmem ${status.latestVersion} is available (you have ${status.currentVersion}). Run \`/upgrade\` in cog; it stops the resident, swaps the package, verifies it and starts it again.`;
 }
 
 /**

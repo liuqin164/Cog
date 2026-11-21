@@ -18,8 +18,8 @@ const BIN = join(import.meta.dir, '..', 'src', 'bin');
  * their database open, so it flagged two of twenty-four files that were already correct.
  */
 const WIRED = [
-  'backup', 'daily', 'dream', 'episode', 'import', 'init',
-  'memory', 'prospective', 'repair', 'snapshot', 'strategy', 'update',
+  'backup', 'daily', 'dream', 'episode', 'import',
+  'memory', 'prospective', 'repair', 'snapshot',
 ];
 /** Reaches a refusal through a path of its own, or does not speak the CLI protocol at all. */
 const EXCEPTIONS: Record<string, string> = {
@@ -34,7 +34,7 @@ const EXCEPTIONS: Record<string, string> = {
  * of the version check (#150): it reads the registry and writes a cache file, and it is silent by
  * contract, so it has no refusal document to render.
  */
-const NO_DATABASE = ['CliArgs', 'CliJson', 'brain-eval', 'cleanup', 'cog', 'cogmem', 'install', 'normalize-transcript', 'update-release', 'version-check-refresh'];
+const NO_DATABASE = ['CliArgs', 'CliJson', 'cog', 'cogmem', 'install', 'normalize-transcript', 'version-check-refresh'];
 
 test('every entrypoint that opens a database renders refusals through the shared document', () => {
   const entries = readdirSync(BIN).filter((file) => file.endsWith('.ts')).map((file) => file.slice(0, -3));
