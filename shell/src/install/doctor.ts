@@ -27,6 +27,13 @@ export interface HealthPayload {
     lastFailure: { at: number; message: string } | null;
   };
   memoryModel?: { state?: string; line?: string };
+  storage?: StorageProgress;
+}
+
+export interface StorageProgress {
+  rawEvents?: number;
+  embeddings?: { completed: number; total: number; failed: number };
+  recallDecisions?: { rows: number; maxRows: number };
 }
 
 export interface DoctorContext {
@@ -57,6 +64,7 @@ export interface DoctorCheck {
 export interface DoctorReport {
   ok: boolean;
   checks: DoctorCheck[];
+  storage?: StorageProgress;
 }
 
 function mode(path: string): number {
@@ -67,6 +75,7 @@ const LOOPBACK = new Set(['127.0.0.1', '::1', 'localhost']);
 
 export async function runDoctor(ctx: DoctorContext): Promise<DoctorReport> {
   const checks: DoctorCheck[] = [];
+  let storage: StorageProgress | undefined;
 
   // 1. The data directory is the private one the installer made.
   try {
@@ -106,6 +115,21 @@ export async function runDoctor(ctx: DoctorContext): Promise<DoctorReport> {
       id: 'loopback-only',
       ok: LOOPBACK.has(health.bind),
       detail: `bind=${health.bind}`,
+    });
+    storage = health.storage;
+    checks.push({
+      id: 'storage',
+      ok: true,
+      detail: storage
+        ? [
+          `storage raw_events=${storage.rawEvents ?? '?'}`,
+          ...(storage.embeddings
+            ? [`embeddings=${storage.embeddings.completed}/${storage.embeddings.total}`,
+              ...(storage.embeddings.failed > 0 ? [`embedding_failures=${storage.embeddings.failed}`] : [])]
+            : []),
+          ...(storage.recallDecisions ? [`recall_decisions=${storage.recallDecisions.rows}/${storage.recallDecisions.maxRows}`] : []),
+        ].join(' ')
+        : 'resident reports no storage reading (older build?)',
     });
     if (health.memoryModel !== undefined) {
       const state = health.memoryModel.state ?? 'unknown';
@@ -190,7 +214,7 @@ export async function runDoctor(ctx: DoctorContext): Promise<DoctorReport> {
       : 'bubblewrap unavailable: bash runs unsandboxed and says so; install bubblewrap on Linux to restore isolation',
   });
 
-  return { ok: checks.every((check) => check.ok || check.warn === true), checks };
+  return { ok: checks.every((check) => check.ok || check.warn === true), checks, ...(storage ? { storage } : {}) };
 }
 
 export async function defaultFetchHealth(url: string): Promise<HealthPayload> {
