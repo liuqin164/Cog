@@ -3,7 +3,7 @@
  * deterministic modulation it applies to the proactive channel.
  *
  * A reaction is a first-class ledger event on `surfacing-feedback:<projectId>`: `engaged`,
- * `ignored` or `stopped`. State is derived from those rows, the way F2 and F5 store their state —
+ * `ignored`, `stopped` or `snoozed`. State is derived from those rows, the way F2 and F5 store their state —
  * **no table, no column, no migration**. The rules are fixed and call no model: consecutive
  * ignores raise a type's level, a level doubles the cooldown before that type may surface again,
  * a stop holds the type until the owner explicitly resumes it, and an engaged reaction clears the
@@ -24,16 +24,13 @@ export const SURFACING_FEEDBACK_CONTRACT_VERSION = 1;
  */
 export const SURFACING_FEEDBACK_TYPES = ['wake-intention', 'prospective-memory', 'profile', 'procedure', 'commitment', 'ledger'] as const;
 
-/** The owner's three reactions. Frozen. */
-export const SURFACING_FEEDBACK_OUTCOMES = ['engaged', 'ignored', 'stopped'] as const;
+export const SURFACING_FEEDBACK_OUTCOMES = ['engaged', 'ignored', 'stopped', 'snoozed'] as const;
 export type SurfacingFeedbackOutcome = (typeof SURFACING_FEEDBACK_OUTCOMES)[number];
 
-/** The ledger event types this face writes. Frozen. */
-export const SURFACING_FEEDBACK_EVENT_TYPES = ['SURFACING_FEEDBACK_RECORDED', 'SURFACING_TYPE_RESUMED'] as const;
+export const SURFACING_FEEDBACK_EVENT_TYPES = ['SURFACING_DELIVERED', 'SURFACING_FEEDBACK_RECORDED', 'SURFACING_TYPE_RESUMED'] as const;
 export type SurfacingFeedbackEventType = (typeof SURFACING_FEEDBACK_EVENT_TYPES)[number];
 
-/** The face's methods. Frozen; adding one is additive, removing or renaming one is not. */
-export const SURFACING_FEEDBACK_API_METHODS = ['record', 'state', 'resume', 'audit'] as const;
+export const SURFACING_FEEDBACK_API_METHODS = ['record', 'state', 'resume', 'audit', 'deliver', 'pending'] as const;
 
 /**
  * The frozen rule parameters. `level` is `floor(consecutiveIgnored / ignoredThreshold)`, capped at
@@ -44,9 +41,10 @@ export const SURFACING_FEEDBACK_RULES = {
   ignoredThreshold: 3,
   maxLevel: 3,
   baseCooldownMs: 6 * 60 * 60 * 1000,
+  ignoreAfterMs: 24 * 60 * 60 * 1000,
 } as const;
 
-export const SURFACING_FEEDBACK_RULE_FIELDS = ['ignoredThreshold', 'maxLevel', 'baseCooldownMs'] as const;
+export const SURFACING_FEEDBACK_RULE_FIELDS = ['ignoredThreshold', 'maxLevel', 'baseCooldownMs', 'ignoreAfterMs'] as const;
 export const SURFACING_FEEDBACK_EVENT_FIELDS = [
   'eventId',
   'projectId',
@@ -100,6 +98,14 @@ export interface RecordSurfacingFeedbackInput {
   now?: number;
 }
 
+export interface DeliverSurfacingInput {
+  projectId: string;
+  candidateId: string;
+  content: string;
+  sourceRefs?: MemorySourceRef[];
+  now?: number;
+}
+
 export interface SurfacingFeedbackRecord {
   eventId: string;
   projectId: string;
@@ -108,6 +114,14 @@ export interface SurfacingFeedbackRecord {
   outcome: SurfacingFeedbackOutcome;
   sourceRefs: MemorySourceRef[];
   occurredAt: number;
+}
+
+export interface SurfacingPendingEntry {
+  candidateId: string;
+  type: SurfacingSource;
+  content: string;
+  sourceRefs: MemorySourceRef[];
+  deliveredAt: number;
 }
 
 export interface ResumeSurfacingTypeInput {
@@ -252,6 +266,49 @@ export class SurfacingFeedback {
     return { eventId: event.eventId, projectId, candidateId, type, outcome: input.outcome, sourceRefs, occurredAt: now };
   }
 
+  deliver(input: DeliverSurfacingInput): SurfacingPendingEntry {
+    const projectId = requireText(input.projectId, 'project_id_required');
+    const candidateId = requireText(input.candidateId, 'surfacing_candidate_id_required');
+    const type = typeOfCandidate(candidateId);
+    if (input.sourceRefs !== undefined && !Array.isArray(input.sourceRefs)) {
+      throw feedbackError('invalid_surfacing_feedback_source_refs');
+    }
+    const now = requireNow(input.now);
+    const sourceRefs = input.sourceRefs ?? [];
+    const content = typeof input.content === 'string' ? input.content : String(input.content ?? '');
+    this.events.append({
+      streamId: `surfacing-feedback:${projectId}`,
+      streamType: 'system',
+      eventType: 'SURFACING_DELIVERED',
+      projectId,
+      sourceId: 'surfacing-feedback',
+      occurredAt: now,
+      payload: { projectId, candidateId, type, content, sourceRefs, occurredAt: now },
+    });
+    return { candidateId, type, content, sourceRefs, deliveredAt: now };
+  }
+
+  pending(input: { projectId: string }): SurfacingPendingEntry[] {
+    const projectId = requireText(input.projectId, 'project_id_required');
+    const entries = new Map<string, SurfacingPendingEntry>();
+    for (const row of this.loadRows(projectId)) {
+      if (row.eventType === 'SURFACING_DELIVERED') {
+        if (row.type && row.candidateId !== undefined) {
+          entries.set(row.candidateId, {
+            candidateId: row.candidateId,
+            type: row.type,
+            content: row.content ?? '',
+            sourceRefs: row.sourceRefs,
+            deliveredAt: row.occurredAt,
+          });
+        }
+      } else if (row.eventType === 'SURFACING_FEEDBACK_RECORDED' && row.candidateId !== undefined) {
+        entries.delete(row.candidateId);
+      }
+    }
+    return [...entries.values()];
+  }
+
   /** The owner explicitly restarts a stopped type: the only way out of a stop. */
   resume(input: ResumeSurfacingTypeInput): SurfacingResumeRecord {
     const projectId = requireText(input.projectId, 'project_id_required');
@@ -341,6 +398,7 @@ export class SurfacingFeedback {
     type: SurfacingSource | null;
     candidateId?: string;
     outcome?: SurfacingFeedbackOutcome;
+    content?: string;
     sourceRefs: MemorySourceRef[];
     occurredAt: number;
   }> {
@@ -350,6 +408,7 @@ export class SurfacingFeedback {
       type: SurfacingSource | null;
       candidateId?: string;
       outcome?: SurfacingFeedbackOutcome;
+      content?: string;
       sourceRefs: MemorySourceRef[];
       occurredAt: number;
     }> = [];
@@ -374,6 +433,7 @@ function rowOf(event: MemoryEvent): {
   type: SurfacingSource | null;
   candidateId?: string;
   outcome?: SurfacingFeedbackOutcome;
+  content?: string;
   sourceRefs: MemorySourceRef[];
   occurredAt: number;
 } {
@@ -388,6 +448,7 @@ function rowOf(event: MemoryEvent): {
     type,
     candidateId: typeof payload.candidateId === 'string' ? payload.candidateId : undefined,
     outcome,
+    content: typeof payload.content === 'string' ? payload.content : undefined,
     sourceRefs: Array.isArray(payload.sourceRefs) ? payload.sourceRefs as MemorySourceRef[] : [],
     occurredAt: event.occurredAt,
   };

@@ -19,11 +19,13 @@ import {
 } from '../session/index.js';
 import type { KernelEvent, KernelEventFilter, KernelEventSubscription } from '../events/index.js';
 import type {
+  DeliverSurfacingInput,
   RecordSurfacingFeedbackInput,
   ResumeSurfacingTypeInput,
   SurfacingCandidatesInput,
   SurfacingFeedbackRecord,
   SurfacingFeedbackState,
+  SurfacingPendingEntry,
   SurfacingResult,
   SurfacingResumeRecord,
 } from '../surfacing/index.js';
@@ -290,6 +292,14 @@ export class KernelAgentMemoryBackend {
    */
   recordSurfacingFeedback(input: RecordSurfacingFeedbackInput): SurfacingFeedbackRecord {
     return this.kernel.surfacingFeedback.record(input);
+  }
+
+  deliverSurfacing(input: DeliverSurfacingInput): SurfacingPendingEntry {
+    return this.kernel.surfacingFeedback.deliver(input);
+  }
+
+  surfacingPending(input: { projectId: string }): SurfacingPendingEntry[] {
+    return this.kernel.surfacingFeedback.pending(input);
   }
 
   /** Every type's modulation state, derived from the feedback ledger. */

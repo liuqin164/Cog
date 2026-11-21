@@ -65,6 +65,7 @@ export {
   surfacingModulationOutcome,
 } from './SurfacingFeedback.js';
 export type {
+  DeliverSurfacingInput,
   RecordSurfacingFeedbackInput,
   ResumeSurfacingTypeInput,
   SurfacingFeedbackAuditEntry,
@@ -75,6 +76,7 @@ export type {
   SurfacingFeedbackRecord,
   SurfacingFeedbackState,
   SurfacingModulationOutcome,
+  SurfacingPendingEntry,
   SurfacingResumeRecord,
   SurfacingTypeState,
 } from './SurfacingFeedback.js';

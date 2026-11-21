@@ -172,6 +172,31 @@ describe('a reaction is a ledger row', () => {
   });
 });
 
+describe('a delivery is a pending ledger row', () => {
+  test('it survives a second reader, is resolved by feedback, and snoozed is not ignored', () => {
+    const projectId = 'feedback-pending';
+    const candidateId = 'surfacing:commitment:bread-address';
+    backend.deliverSurfacing({ projectId, candidateId, content: '把面包店地址发你', now });
+
+    expect(backend.surfacingPending({ projectId })).toEqual([
+      { candidateId, type: 'commitment', content: '把面包店地址发你', sourceRefs: [], deliveredAt: now },
+    ]);
+    expect(new KernelAgentMemoryBackend(kernel).surfacingPending({ projectId })).toHaveLength(1);
+
+    backend.recordSurfacingFeedback({ projectId, candidateId, outcome: 'snoozed', now: now + 1 });
+    const commitment = backend.surfacingFeedbackState({ projectId, now: now + 1 })
+      .types.find((entry) => entry.type === 'commitment')!;
+    expect(commitment.ignoredCount).toBe(0);
+    expect(commitment.consecutiveIgnored).toBe(0);
+    expect(commitment.engagedCount).toBe(0);
+    expect(backend.surfacingPending({ projectId })).toHaveLength(0);
+    expect(kernel.surfacingFeedback.audit({ projectId }).map((row) => row.eventType)).toEqual([
+      'SURFACING_DELIVERED',
+      'SURFACING_FEEDBACK_RECORDED',
+    ]);
+  });
+});
+
 describe('three consecutive ignores reduce that type’s proactive frequency', () => {
   test('the measured appearance count drops to zero, and removing the feedback port restores it', () => {
     const projectId = 'feedback-throttle';

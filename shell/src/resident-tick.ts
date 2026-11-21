@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import type { DeliveryCandidateInput, KernelAgentMemoryBackend, SurfacingSource } from 'cogmem';
+import { SURFACING_FEEDBACK_RULES, type DeliveryCandidateInput, type KernelAgentMemoryBackend, type SurfacingFeedbackOutcome, type SurfacingSource } from 'cogmem';
 import type { CompanionShell } from './app.ts';
 import { rotateLogFile, SERVICE_LOG_MAX_BYTES } from './log-rotation.ts';
 import { formatBytes, memoryPressureAction, readMemoryUsage } from './memory.ts';
@@ -16,6 +16,32 @@ const SNAPSHOT_INTERVAL_MS = 24 * 60 * 60_000;
 
 const EMERGENCE_DAILY_LIMIT = 8;
 const MAX_EMERGENCE_CONSUMED = 500;
+
+const SURFACING_REPLY_STOP_UNITS = new Set([
+  '今天', '明天', '现在', '时候', '可以', '一下', '这个', '那个', '我们', '你们', '他们',
+  '什么', '怎么', '记得', '提醒', '告诉', '已经', '还是', '就是', '因为', '所以', '但是', '然后',
+]);
+
+function surfacingReplyUnits(text: string): Set<string> {
+  const normalized = text.toLowerCase();
+  const units = new Set<string>(normalized.match(/[a-z0-9]{3,}/gu) ?? []);
+  for (const run of normalized.match(/[\p{Script=Han}]+/gu) ?? []) {
+    if (run.length === 1) units.add(run);
+    for (let index = 0; index < run.length - 1; index += 1) {
+      const unit = run.slice(index, index + 2);
+      if (!SURFACING_REPLY_STOP_UNITS.has(unit)) units.add(unit);
+    }
+  }
+  return units;
+}
+
+function targetsSurfacing(reply: string, content: string): boolean {
+  const replyUnits = surfacingReplyUnits(reply);
+  for (const unit of surfacingReplyUnits(content)) {
+    if (replyUnits.has(unit)) return true;
+  }
+  return false;
+}
 
 interface DreamTriggerDecision {
   start: boolean;
@@ -46,6 +72,7 @@ export class ResidentTick {
 
   async tick(at = this.shell.now()): Promise<void> {
     this.rotateServiceLog();
+    this.sweepSurfacing(at);
     this.shell.upgradeAdmin.settleUpgradeReport(at);
     if (this.shell.machine.state === 'RUNNING' || this.shell.machine.state === 'WAKING' || this.shell.machine.state === 'SUSPENDED') return;
     this.reportHealth(at);
@@ -290,10 +317,16 @@ export class ResidentTick {
   }
 
   private async speakEmergence(candidate: { id: string; text: string; reason: string; source?: SurfacingSource; sourceRefs?: Array<{ eventId?: string; sourceId?: string; contentHash?: string }> }, at: number): Promise<void> {
-    if (candidate.source !== undefined && candidate.sourceRefs !== undefined) {
-      const prior = this.shell.surfacedByType.get(candidate.source);
-      if (prior && prior.candidateId !== candidate.id) this.writeSurfacingFeedback(prior, 'ignored');
-      this.shell.surfacedByType.set(candidate.source, { candidateId: candidate.id, sourceRefs: candidate.sourceRefs });
+    try {
+      this.shell.backend.deliverSurfacing({
+        projectId: this.shell.config.projectId,
+        candidateId: candidate.id,
+        content: candidate.text,
+        ...(candidate.sourceRefs === undefined ? {} : { sourceRefs: candidate.sourceRefs }),
+        now: this.shell.now(),
+      });
+    } catch (error) {
+      this.shell.trace.append('surfacing_delivery_failed', { candidateId: candidate.id, message: error instanceof Error ? error.message : String(error) });
     }
     void this.shell.host.bus.emit('companion_emergence', { id: candidate.id, reason: candidate.reason, text: candidate.text });
     let ok = false;
@@ -305,7 +338,7 @@ export class ResidentTick {
     }
   }
 
-  writeSurfacingFeedback(prior: { candidateId: string; sourceRefs: Array<{ eventId?: string; sourceId?: string; contentHash?: string }> }, outcome: 'engaged' | 'ignored' | 'stopped'): void {
+  writeSurfacingFeedback(prior: { candidateId: string; sourceRefs: Array<{ eventId?: string; sourceId?: string; contentHash?: string }> }, outcome: SurfacingFeedbackOutcome): void {
     try {
       this.shell.backend.recordSurfacingFeedback({
         projectId: this.shell.config.projectId,
@@ -320,10 +353,28 @@ export class ResidentTick {
     }
   }
 
-  acknowledgeSurfacing(): void {
-    for (const [source, prior] of [...this.shell.surfacedByType]) {
-      this.writeSurfacingFeedback(prior, 'engaged');
-      this.shell.surfacedByType.delete(source);
+  observeSurfacingReply(text: string): void {
+    const projectId = this.shell.config.projectId;
+    for (const entry of this.shell.backend.surfacingPending({ projectId })) {
+      if (targetsSurfacing(text, entry.content)) this.writeSurfacingFeedback(entry, 'engaged');
+    }
+    this.sweepSurfacing(this.shell.now());
+  }
+
+  sweepSurfacing(at = this.shell.now()): void {
+    const lastActiveAt = this.shell.machine.runtime.lastInteractionAt;
+    if (lastActiveAt === undefined) return;
+    const projectId = this.shell.config.projectId;
+    for (const entry of this.shell.backend.surfacingPending({ projectId })) {
+      if (lastActiveAt < entry.deliveredAt || at - entry.deliveredAt < SURFACING_FEEDBACK_RULES.ignoreAfterMs) continue;
+      this.shell.trace.append('surfacing_ignored', {
+        projectId,
+        candidateId: entry.candidateId,
+        deliveredAt: entry.deliveredAt,
+        lastActiveAt,
+        at,
+      });
+      this.writeSurfacingFeedback(entry, 'ignored');
     }
   }
 

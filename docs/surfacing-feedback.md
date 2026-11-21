@@ -1,9 +1,9 @@
 # Surfacing feedback contract (v1)
 
 Surfacing is only half a loop if the owner's reaction goes nowhere. This face makes the reaction a
-first-class ledger event — `engaged`, `ignored` or `stopped` — and applies fixed, deterministic
-modulation to the **proactive** channel. It calls no model, holds no timer and adds no table: the
-reaction rows are the state, the history and the audit.
+first-class ledger event — `engaged`, `ignored`, `stopped` or `snoozed` — and applies fixed,
+deterministic modulation to the **proactive** channel. It calls no model, holds no timer and adds no
+table: the reaction rows are the state, the history and the audit.
 
 The code is `src/surfacing/SurfacingFeedback.ts`, reached as `MemoryKernel.surfacingFeedback` and
 through `KernelAgentMemoryBackend.recordSurfacingFeedback` / `.surfacingFeedbackState` /
@@ -20,7 +20,7 @@ code and contract disagree. Version: `SURFACING_FEEDBACK_CONTRACT_VERSION = 1`.
 - **No write face on the observatory.** Reading the state is a kernel query. Recording a reaction
   and restarting a type are owner actions on the kernel host API, not HTTP routes; the observatory
   stays read-only.
-- **No new source of truth.** Every reaction and every resume is a `memory_events` row on
+- **No new source of truth.** Every delivery, reaction and resume is a `memory_events` row on
   `surfacing-feedback:<projectId>`. There is no table, no column and no migration, and the state is
   replayed from those rows, so two readers agree.
 - **No asked-channel modulation.** Only the proactive channel is a candidate the companion chose
@@ -51,13 +51,18 @@ A topic-level dimension is additive later; v1 does not add one.
 | `engaged` | The owner picked the candidate up: replied, adopted it, or acted on it. |
 | `ignored` | The candidate was passed over. |
 | `stopped` | The owner explicitly asked this type to stop surfacing. |
+| `snoozed` | The owner explicitly deferred the candidate; it is not an ignore. |
 
 ## Event types (frozen)
 
 | Event type | Written when |
 |---|---|
+| `SURFACING_DELIVERED` | A candidate is spoken on the proactive channel; its content is carried for reply matching. |
 | `SURFACING_FEEDBACK_RECORDED` | One owner reaction. |
 | `SURFACING_TYPE_RESUMED` | The owner explicitly restarts a stopped type. |
+
+`pending` replays these rows oldest first and returns every delivery that no later
+`SURFACING_FEEDBACK_RECORDED` row for the same candidate has resolved.
 
 ## Feedback event fields (frozen)
 
@@ -67,7 +72,7 @@ A topic-level dimension is additive later; v1 does not add one.
 | `projectId` | The project the candidate belonged to. |
 | `candidateId` | The F6 candidate id the owner reacted to. |
 | `type` | The candidate id's type, recorded explicitly. |
-| `outcome` | One of the three outcomes above. |
+| `outcome` | One of the four outcomes above. |
 | `sourceRefs` | The candidate's source refs, carried so the reaction is replayable. |
 | `occurredAt` | The injected instant of the reaction. |
 
@@ -82,13 +87,13 @@ A topic-level dimension is additive later; v1 does not add one.
 
 ## Audit entry fields (frozen)
 
-`audit` returns every row, oldest first, in this shape. `candidateId` and `outcome` are absent on a
-resume row.
+`audit` returns every delivery, feedback and resume row, oldest first, in this shape. `candidateId`
+is absent only on a resume row; `outcome` is absent on delivery and resume rows.
 
 | Field | Means |
 |---|---|
 | `eventId` | The ledger row's id. |
-| `eventType` | `SURFACING_FEEDBACK_RECORDED` or `SURFACING_TYPE_RESUMED`. |
+| `eventType` | `SURFACING_DELIVERED`, `SURFACING_FEEDBACK_RECORDED` or `SURFACING_TYPE_RESUMED`. |
 | `type` | The type the row names. |
 | `candidateId` | The candidate a reaction names. |
 | `outcome` | The reaction. |
@@ -105,6 +110,7 @@ hidden constant.
 | `ignoredThreshold` | `3` | Consecutive ignores that raise the level to 1. |
 | `maxLevel` | `3` | The highest level; the cooldown stops doubling here. |
 | `baseCooldownMs` | `21600000` | Six hours: the level-1 cooldown, doubled per level. |
+| `ignoreAfterMs` | `86400000` | One day: a delivered candidate with later owner activity becomes `ignored` after this window without a targeted reply. |
 
 For one type:
 
@@ -127,7 +133,14 @@ The counts change only on a reaction:
 - `engaged` increments `engagedCount`, resets `consecutiveIgnored` to zero and clears the cooldown,
   so frequency can recover — the loop is not a one-way ratchet;
 - `stopped` sets `stopped` and `stoppedAt`; the type stays stopped until a resume row;
+- `snoozed` is recorded for audit and resolves the pending candidate, but changes no count, level or
+  cooldown;
 - a resume clears the stop, `consecutiveIgnored`, `lastIgnoredAt` and the cooldown.
+
+`ignored` is only written when the delivery is followed by owner activity and then `ignoreAfterMs`
+passes with no reply that names the candidate's content. A reply names it when the reply and the
+delivered content share a non-filler word or a two-character CJK unit. An unrelated message never
+counts as engaged and never resets an ignore streak.
 
 Counts do not decay with time. Only an engaged reaction or a resume resets them, so a type that was
 ignored three times last month still starts at level 1.
@@ -185,7 +198,9 @@ disappears silently. On `proactive` the step's detail carries `type`, `channel`,
 | `record` | Record one reaction as a ledger row. |
 | `state` | Derive every type's counts, level, cooldown and stop from the ledger. |
 | `resume` | The owner restarts a stopped type; appends a resume row. |
-| `audit` | Every feedback and resume row for the project, oldest first. |
+| `audit` | Every delivery, feedback and resume row for the project, oldest first. |
+| `deliver` | Append a delivery row with the candidate's content and source refs. |
+| `pending` | Every delivered candidate with no later resolving feedback row. |
 
 Adding a method is additive. Removing or renaming one, or changing a field, type, outcome, rule or
 error meaning, is a breaking change and bumps `SURFACING_FEEDBACK_CONTRACT_VERSION`.
@@ -203,6 +218,6 @@ error meaning, is a breaking change and bumps `SURFACING_FEEDBACK_CONTRACT_VERSI
 
 ## Scope ceiling
 
-The state is computed on demand from the project's feedback rows; there is no timer, no queue and
-no cached level. One proactive query reads the ledger once, paged at 500 rows up to 4,000 — a
-project beyond that bound sees the newest 4,000 rows, not a silently widened read.
+The state is computed on demand from the project's delivery and feedback rows; there is no timer,
+no queue and no cached level. One proactive query reads the ledger once, paged at 500 rows up to
+4,000 — a project beyond that bound sees the newest 4,000 rows, not a silently widened read.
