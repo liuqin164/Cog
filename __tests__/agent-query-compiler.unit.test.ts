@@ -69,3 +69,24 @@ test('agent recall query compiler removes conversational remember-me filler from
   expect(compiled.temporalHints).toContain('past');
   expect(compiled.intent).toBe('historical_discussion');
 });
+
+test('CJK compound cue terms keep the compound instead of a stripped single character', () => {
+  const compiled = compileAgentRecallQuery({ query: '这个目的和过程你了解吗' });
+
+  expect(compiled.keywords).toContain('目的');
+  expect(compiled.keywords).toContain('过程');
+  expect(compiled.keywords).toContain('了解');
+  expect(compiled.keywords).not.toContain('目');
+  expect(compiled.keywords).not.toContain('程');
+  expect(compiled.keywords).not.toContain('解');
+});
+
+test('single content Han characters stay cue terms', () => {
+  expect(compileAgentRecallQuery({ query: '妈' }).keywords).toContain('妈');
+  expect(compileAgentRecallQuery({ query: '药' }).keywords).toContain('药');
+  expect(compileAgentRecallQuery({ query: '我妈的药' }).keywords).toContain('药');
+});
+
+test('a pure CJK filler query still strips to nothing', () => {
+  expect(compileAgentRecallQuery({ query: '我的了' }).keywords).toEqual([]);
+});
