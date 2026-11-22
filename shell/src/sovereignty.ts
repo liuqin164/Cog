@@ -50,11 +50,13 @@ export class SovereigntyCommands {
     const pending = this.pendingForget;
     if (!pending) return { text: '还没有预览：先 /forget <起> <止> 看范围和条数。', receipt: true };
     const projectId = this.shell.config.projectId;
+    const deletedTexts = new Set<string>();
     const result = this.shell.kernel.sovereignty.deleteRange({
       projectId,
       start: pending.start,
       end: pending.end,
       reason: 'owner_command',
+      collectText: (text) => deletedTexts.add(text),
     });
     this.pendingForget = undefined;
     this.shell.trace.append('forget_range_deleted', {
@@ -67,7 +69,7 @@ export class SovereigntyCommands {
     this.shell.stateLedger.forget();
     const scrubbed = forgetRuntimeText(this.shell.machine.runtime, this.shell.stateLedger);
     this.shell.machine.updateRuntime(scrubbed.runtime);
-    const promptsRemoved = this.shell.trace.forgetWindow('run_prompt', pending.start, pending.end);
+    const traceRecordsRemoved = this.shell.trace.forgetWindow(pending.start, pending.end, [...deletedTexts]);
     const deleted = Object.entries(result.deleted)
       .filter(([, value]) => value > 0)
       .map(([field, value]) => `${field} ${value}`)
@@ -79,7 +81,7 @@ export class SovereigntyCommands {
       `${result.artifacts.notCovered.join('、')}不在覆盖范围内`,
     ].join('；');
     return {
-      text: `已删除 ${new Date(pending.start).toISOString()} 至 ${new Date(pending.end).toISOString()}：${deleted || '没有记录'}。副本：${copies}。checkpoint：文本字段只存账本引用，${scrubbed.cleared} 个失去引用的字段已清空；trace：run_prompt 记录 ${promptsRemoved} 条已删除。审计 ${result.auditId}。`,
+      text: `已删除 ${new Date(pending.start).toISOString()} 至 ${new Date(pending.end).toISOString()}：${deleted || '没有记录'}。副本：${copies}。checkpoint：文本字段只存账本引用，${scrubbed.cleared} 个失去引用的字段已清空；trace：${traceRecordsRemoved} 条带文本记录已删除。审计 ${result.auditId}。`,
       receipt: true,
       data: { sovereignty_delete: result },
     };

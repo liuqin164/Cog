@@ -33,6 +33,26 @@ export interface TraceScan {
   bytes: number;
 }
 
+const TEXT_FIELDS = new Set([
+  'text', 'args', 'reason', 'value', 'detail', 'purpose', 'message', 'command',
+  'spec', 'question', 'findings', 'nextStep', 'stoppedStep', 'output', 'path',
+  'key', 'title', 'error', 'rejectedReason',
+]);
+
+function stringValues(value: unknown, out: string[] = []): string[] {
+  if (typeof value === 'string') out.push(value);
+  else if (Array.isArray(value)) for (const item of value) stringValues(item, out);
+  else if (value && typeof value === 'object') for (const item of Object.values(value)) stringValues(item, out);
+  return out;
+}
+
+function shouldForget(record: TraceRecord, start: number, end: number, needles: readonly string[]): boolean {
+  const values = stringValues(record);
+  if (needles.some((needle) => values.some((value) => value.includes(needle)))) return true;
+  if (typeof record.at !== 'number' || record.at < start || record.at >= end) return false;
+  return Object.entries(record).some(([key, value]) => TEXT_FIELDS.has(key) && typeof value === 'string' && value !== '');
+}
+
 /**
  * The trace is evidence, and evidence is allowed to age out (#226). One rotated generation keeps
  * the previous ~8 MiB; `read()`/`recover()` see the live file, and the `.1` file is what a forensics
@@ -97,11 +117,19 @@ export class TraceLog {
     return this.scan().records;
   }
 
-  forgetWindow(kind: string, start: number, end: number): number {
-    return this.rewrite(this.path, kind, start, end) + this.rewrite(`${this.path}.1`, kind, start, end);
+  forgetWindow(start: number, end: number, texts: readonly string[] = []): number {
+    const needles = new Set<string>();
+    for (const text of texts) {
+      const trimmed = text.trim();
+      if (trimmed.length >= 8) needles.add(trimmed);
+      for (const token of trimmed.split(/[^\p{L}\p{N}_-]+/u)) {
+        if (token.length >= 8) needles.add(token);
+      }
+    }
+    return this.rewrite(this.path, start, end, [...needles]) + this.rewrite(`${this.path}.1`, start, end, [...needles]);
   }
 
-  private rewrite(path: string, kind: string, start: number, end: number): number {
+  private rewrite(path: string, start: number, end: number, needles: readonly string[]): number {
     let raw: string;
     try {
       raw = readFileSync(path, 'utf8');
@@ -117,7 +145,7 @@ export class TraceLog {
       } catch {
         record = undefined;
       }
-      if (record?.kind === kind && typeof record.at === 'number' && record.at >= start && record.at < end) {
+      if (record && shouldForget(record, start, end, needles)) {
         removed += 1;
         continue;
       }

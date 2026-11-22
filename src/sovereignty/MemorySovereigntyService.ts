@@ -23,6 +23,7 @@ import { dirname, join, resolve } from 'node:path';
 
 import type { CommitmentBook } from '../commitment/CommitmentBook.js';
 import { eraseDerivedOf, gcInvalidatedAtlasRows } from '../governance/DerivedErasureRegistry.js';
+import type { IntentionBook } from '../intention/IntentionBook.js';
 import type { ProcedureCompiler } from '../procedure/ProcedureCompiler.js';
 import type { ProfileCompiler, ProfileEntry } from '../profile/ProfileCompiler.js';
 import { eventLifeSensitivityTier } from '../security/LifeSensitivity.js';
@@ -124,6 +125,7 @@ export interface SovereigntyDeleteInput {
   start: number;
   end: number;
   reason?: string;
+  collectText?: (text: string) => void;
 }
 
 export interface SovereigntyDeleteResult extends SovereigntyDeleteInput {
@@ -179,6 +181,7 @@ export interface MemorySovereigntyPorts {
   profile: ProfileCompiler;
   procedures: ProcedureCompiler;
   commitments: CommitmentBook;
+  intentions: IntentionBook;
   /** Nightly snapshots and weekly archives; unset means this kernel writes none. */
   snapshotsDir?: string;
   /** Markdown exports written by `/export`; unset means none are scanned. */
@@ -363,13 +366,19 @@ export class MemorySovereigntyService {
       if (event.occurredAt < input.start || event.occurredAt >= input.end) return;
       rangeIds.add(event.eventId);
       earliestRecordedAt = Math.min(earliestRecordedAt, event.createdAt ?? event.occurredAt);
+      const text = eventText(event);
+      if (text) input.collectText?.(text);
     }, { startTime: input.start, endTime: input.end });
     const derived: MemoryEvent[] = [];
     this.eachEvent(scope, (event) => {
       if (!rangeIds.has(event.eventId) && refsOf(event.payload).some((id) => rangeIds.has(id))) derived.push(event);
     });
     const entryStreams = new Set(derived.map((event) => event.streamId).filter((streamId) => (
-      streamId.startsWith('profile-entry:') || streamId.startsWith('procedure-entry:') || streamId.startsWith('commitment:')
+      streamId.startsWith('profile-entry:')
+        || streamId.startsWith('procedure-entry:')
+        || streamId.startsWith('commitment:')
+        || streamId.startsWith('intention:')
+        || streamId.startsWith('wake-intention:')
     )));
     const streamRows: MemoryEvent[] = [];
     if (entryStreams.size > 0) {
@@ -819,6 +828,7 @@ export class MemorySovereigntyService {
       this.ports.profile.compile({ projectId: scope, now: this.now() });
       this.ports.procedures.compile({ projectId: scope, now: this.now() });
       this.ports.commitments.compile({ projectId: scope, now: this.now() });
+      this.ports.intentions.compile({ projectId: scope, now: this.now() });
     }
     this.ports.rebuildAtlas?.(scope);
     gcInvalidatedAtlasRows(this.ports.db, scope);

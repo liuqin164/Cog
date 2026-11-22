@@ -114,6 +114,7 @@ export class RunLoop {
     dispatchTrigger: Trigger = trigger,
     grant?: { tokens: number; turns: number },
     channel?: string,
+    sourceRefs?: Array<{ eventId?: string; sourceId?: string; contentHash?: string }>,
   ): Promise<RunSummary> {
     const runId = `run-${this.shell.now().toString(36)}-${randomUUID().slice(0, 8)}`;
     const origin = trigger === 'emergence_due' ? 'emergence' : 'user';
@@ -145,6 +146,7 @@ export class RunLoop {
           sessionId: this.shell.config.sessionId,
           userText: text,
           origin,
+          ...(sourceRefs === undefined ? {} : { sourceRefs }),
         });
       } finally {
         this.shell.hideAssignmentContext = false;

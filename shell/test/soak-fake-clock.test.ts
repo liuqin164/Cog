@@ -94,7 +94,7 @@ describe('fake-clock soak (#235)', () => {
       const after = ledgerSize(shell);
       console.log(`[soak-clock] one-message after ticks ${afterSubmit}->${after}, calls ${provider.calls.length}`);
       expect(provider.calls).toHaveLength(1);
-      expect(afterSubmit - before, 'one user turn, one assistant turn, and the queued text row').toBeLessThanOrEqual(3);
+      expect(afterSubmit - before, 'one user turn, one assistant turn, the queued text row and the prompt reference').toBeLessThanOrEqual(4);
       expect(after).toBe(afterSubmit);
       expect(lanes(shell)).toMatchObject({ user: 1, assistant: 1, autonomous: 0 });
       expect(shell.machine.state).toBe('IDLE');
@@ -176,7 +176,7 @@ describe('fake-clock soak (#235)', () => {
       expect(lanes(shell).user).toBe(2);
       expect(lanes(shell)).toMatchObject({ user: 2, assistant: 2, system: 1, autonomous: 1 });
       expect(autonomousUserRows(shell)).toBe(0);
-      expect(ledgerSize(shell)).toBeLessThanOrEqual(10);
+      expect(ledgerSize(shell)).toBeLessThanOrEqual(13);
       expect(shell.machine.state).toBe('IDLE');
     } finally {
       await shell.stop();

@@ -482,13 +482,19 @@ export class ContextLanes {
   /**
    * The durable prompt log. A restart has to be able to reconstruct the run.
    */
-  recordPrompt(input: { runId: string; sessionId: string; text: string }): void {
+  recordPrompt(input: {
+    runId: string;
+    sessionId: string;
+    text: string;
+    sourceRefs?: Array<{ eventId?: string; sourceId?: string; contentHash?: string }>;
+  }): void {
     const marked = this.redactor.mark(input.text);
+    const textId = this.shell.stateLedger.record('prompt.text', marked.value, input.sourceRefs);
     this.shell.trace.append('run_prompt', {
       runId: input.runId,
       sessionId: input.sessionId,
       chars: input.text.length,
-      text: marked.value,
+      textId,
       ...marked.metadata,
     });
   }

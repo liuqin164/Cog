@@ -611,6 +611,7 @@ export abstract class KernelServices {
       profile: this.profile,
       procedures: this.procedures,
       commitments: this.commitments,
+      intentions: this.intentions,
       snapshotsDir: options.snapshotsDir,
       exportsDir: options.exportsDir ?? (this.dbPath === ':memory:' ? undefined : join(dirname(this.dbPath), 'exports')),
       rebuildAtlas: (projectId) => this.memoryAtlasIndexer.rebuild({ projectId }),

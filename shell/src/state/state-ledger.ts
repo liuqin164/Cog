@@ -11,12 +11,17 @@ export class ShellStateLedger implements RuntimeTextLedger {
     private readonly projectId: string,
   ) {}
 
-  record(kind: string, text: string): string {
+  record(kind: string, text: string, sourceRefs?: Array<{ eventId?: string; sourceId?: string; contentHash?: string }>): string {
     const key = `${kind}\0${text}`;
     const existing = this.byText.get(key);
     if (existing !== undefined) return existing;
     const stored = redactSecretText(text).text;
-    const eventId = this.backend.recordRuntimeText({ projectId: this.projectId, kind, text: stored });
+    const eventId = this.backend.recordRuntimeText({
+      projectId: this.projectId,
+      kind,
+      text: stored,
+      ...(sourceRefs === undefined ? {} : { sourceRefs }),
+    });
     this.remember(eventId, key, stored);
     return eventId;
   }

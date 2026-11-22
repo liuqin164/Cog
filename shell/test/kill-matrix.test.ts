@@ -79,7 +79,7 @@ describe('kill matrix: every kill point comes back to one IDLE state', () => {
     }
   }, 60_000);
 
-  test('killed mid-stream: the whole prompt is in the session log, so the interrupted turn rebuilds', async () => {
+  test('killed mid-stream: the whole prompt is behind a ledger reference, so the interrupted turn rebuilds', async () => {
     const dir = makeTempDir('companion-kill-');
     const first = spawnFixture('shell-kill-process.ts', [dir, 'stream']);
     try {
@@ -98,12 +98,13 @@ describe('kill matrix: every kill point comes back to one IDLE state', () => {
       const runtime = new CheckpointStore(dir).load()!.runtime;
       expect(JSON.stringify(runtime)).not.toContain('TAIL-MARKER');
 
-      // The session log holds the full prompt from before the model call, and recovery says so.
+      // The trace holds a reference; the ledger holds the full prompt from before the model call.
       const trace = new TraceLog(dir).read();
       const prompt = trace.find((record) => record.kind === 'run_prompt' && record.runId === atKill.activeRunId)!;
       expect(prompt, 'the prompt was persisted before the model call').toBeDefined();
       expect(prompt.chars).toBeGreaterThan(1200);
-      expect(String(prompt.text)).toContain('TAIL-MARKER-被打断的原话');
+      expect(prompt.text).toBeUndefined();
+      expect(typeof prompt.textId).toBe('string');
       expect(recovered.promptRecovered, 'recovery writes the fact down, not silently').toBe(1);
       // Rebuilt from the log: same run, whole text, tail included.
       expect(recovered.interrupted).toBeTruthy();
