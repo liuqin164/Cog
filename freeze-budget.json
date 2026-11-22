@@ -8,7 +8,7 @@
     "exportSymbols": "Named exports of the package public entry point src/public.ts as resolved by the TypeScript checker, including export * barrels and type-only exports."
   },
   "lines": {
-    "shell/src": 6754,
+    "shell/src": 6774,
     "shell/src/attach": 457,
     "shell/src/channels": 555,
     "shell/src/embedding": 836,
@@ -47,7 +47,7 @@
     "src/eval": 697,
     "src/events": 274,
     "src/factory": 1525,
-    "src/governance": 800,
+    "src/governance": 816,
     "src/graph": 59,
     "src/health": 396,
     "src/host": 19,
