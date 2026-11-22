@@ -16,13 +16,13 @@ import { ShellStateLedger } from './state/state-ledger.ts';
 import type { Trigger } from './state/table.ts';
 import { ProcessLock } from './process-lock.ts';
 import { TraceLog } from './trace.ts';
-import { PluginHost } from './plugins/host.ts';
+import { PluginHost, type NativePlugin } from './plugins/host.ts';
 import { clockPlugin, ClockService } from './plugins/clock.ts';
 import { providedModelPlugin } from './plugins/mg-provider.ts';
 import { ModelRouter, modelRouterPlugin, routeLine } from './model/router.ts';
 import { BUILTIN_ROUTE_NAME, RouteStore, redactUrl, type ModelRoute } from './model/routes.ts';
 import { cagePlugin, RunCage, type CageTier } from './plugins/cage.ts';
-import { builtinToolsPlugin } from './plugins/builtin-tools.ts';
+import { builtinToolsPlugin, type BuiltinToolsConfig } from './plugins/builtin-tools.ts';
 import { coreCommandFor, availableCoreCommand, unknownCommandReply, type CommandHost, type CommandReply } from './commands.ts';
 import { proposalPlugin } from './plugins/proposal.ts';
 import { credentialPlugin } from './plugins/credential.ts';
@@ -32,7 +32,7 @@ import { CredentialService, type CredentialSubmission } from './credentials.ts';
 import { capturePlugin } from './plugins/capture.ts';
 import { sessionContextPlugin } from './plugins/session-context.ts';
 import { assignmentPlugin } from './plugins/assignment.ts';
-import { memoryToolPlugin } from './plugins/memory-tool.ts';
+import { memoryToolPlugin, type MemoryToolConfig } from './plugins/memory-tool.ts';
 import { soulEditPlugin } from './plugins/soul-edit.ts';
 import { PluginProposals, pluginWorkspaceDir, selfInstallPlugin } from './plugins/self-install.ts';
 import { dreamPlugin } from './plugins/dream.ts';
@@ -90,6 +90,30 @@ export interface CompanionShellOptions {
   stageUpgrade?: (input: StageUpgradeInput) => StagedTree;
   /** Tests drive the plugin restart; production restarts through the service manager. */
   restartResident?: () => void | Promise<void>;
+}
+
+export interface DefaultPluginConfig {
+  builtin: BuiltinToolsConfig;
+  memory: MemoryToolConfig;
+  selfInstall: Parameters<typeof selfInstallPlugin>[0];
+}
+
+export interface DefaultPluginEntry {
+  plugin: NativePlugin;
+  hostConfig?: unknown;
+}
+
+export function defaultPlugins(config: DefaultPluginConfig): DefaultPluginEntry[] {
+  return [
+    { plugin: builtinToolsPlugin(), hostConfig: config.builtin },
+    { plugin: proposalPlugin() },
+    { plugin: credentialPlugin() },
+    { plugin: askPlugin() },
+    { plugin: assignmentPlugin() },
+    { plugin: memoryToolPlugin(config.memory) },
+    { plugin: soulEditPlugin() },
+    { plugin: selfInstallPlugin(config.selfInstall) },
+  ];
 }
 
 /**
@@ -707,14 +731,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     }
   }
 
-  /**
-   * The migration for a brain written before this process had vectors (#231 Route A). The pipeline
-   * is idempotent and checkpoints its cursor, so a second run is a no-op and a killed run resumes.
-   * Batches are yielded between passes so a recall never waits for a whole brain.
-   */
   private async startPlugins(): Promise<void> {
-    // An injected provider (tests, an embedding host) is used as-is and has no route table. The real
-    // resident gets a router: the mg route from env plus whatever named routes the user stored.
     let provider = this.options.modelProvider ? providedModelPlugin(this.options.modelProvider) : undefined;
     if (!provider) {
       this.modelRouter = new ModelRouter({
@@ -722,11 +739,8 @@ export class CompanionShell implements ShellControl, AttachShell {
         builtin: { name: 'mg', baseUrl: this.config.model.baseUrl, apiKey: this.config.model.apiKey, model: this.config.model.model, targetTokens: this.config.contextSweetSpot },
         builtinAvailable: process.env.MG_BASE_URL !== undefined,
         timeoutMs: this.config.model.timeoutMs,
-        // A 429 the gateway could not absorb is retried by the provider, not the run ladder (#282).
         onRetry: ({ attempt, status, delayMs }) => this.trace.append('provider_retry', { attempt, status, delayMs }),
       });
-      // A routes file that did not parse is a real problem the user must see, but it must not stop the
-      // resident: mg is available either way.
       if (this.modelRouter.storeError) this.trace.append('model_routes_load_failed', { message: this.modelRouter.storeError });
       provider = modelRouterPlugin(this.modelRouter);
     }
@@ -739,21 +753,28 @@ export class CompanionShell implements ShellControl, AttachShell {
     }));
     this.host.register(provider, this.config.model);
     this.host.register(cagePlugin(this.config.budgets, this.trace, { ...this.config.workBudget, toolWhitelist: this.config.budgets.toolWhitelist }));
-    this.host.register(builtinToolsPlugin(), {
-      workspaceRoot: this.config.workspaceRoot,
-      dataDir: this.config.dataDir,
-      cliConfigPath: this.cliConfigPath,
-      trace: this.trace,
-      kernel: this.kernel,
-      onMemoryRead: () => {
-        this.drillsSinceAssembly += 1;
+    for (const { plugin, hostConfig } of defaultPlugins({
+      builtin: {
+        workspaceRoot: this.config.workspaceRoot,
+        dataDir: this.config.dataDir,
+        cliConfigPath: this.cliConfigPath,
+        trace: this.trace,
+        kernel: this.kernel,
+        onMemoryRead: () => {
+          this.drillsSinceAssembly += 1;
+        },
+        credentials: this.credentials,
       },
-      credentials: this.credentials,
-    });
-    this.host.register(proposalPlugin());
-    this.host.register(credentialPlugin());
-    this.host.register(askPlugin());
-    this.host.register(assignmentPlugin());
+      memory: {
+        agentId: this.config.agentId,
+        projectId: this.config.projectId,
+        sessionId: this.config.sessionId,
+        onMemoryRead: () => {
+          this.drillsSinceAssembly += 1;
+        },
+      },
+      selfInstall: { proposals: this.pluginProposals, admin: this.pluginsAdmin, trace: this.trace },
+    })) this.host.register(plugin, hostConfig);
     this.host.register(capturePlugin({ agentId: this.config.agentId, projectId: this.config.projectId, sessionId: this.config.sessionId, channel: () => this.currentChannel, paused: () => this.capturePaused }));
     this.host.register(sessionContextPlugin({
       agentId: this.config.agentId,
@@ -787,16 +808,6 @@ export class CompanionShell implements ShellControl, AttachShell {
       },
       recallLimit: 3,
     }));
-    this.host.register(memoryToolPlugin({
-      agentId: this.config.agentId,
-      projectId: this.config.projectId,
-      sessionId: this.config.sessionId,
-      onMemoryRead: () => {
-        this.drillsSinceAssembly += 1;
-      },
-    }));
-    this.host.register(soulEditPlugin());
-    this.host.register(selfInstallPlugin({ proposals: this.pluginProposals, admin: this.pluginsAdmin, trace: this.trace }));
     this.host.register(dreamPlugin({
       agentId: this.config.agentId,
       projectId: this.config.projectId,

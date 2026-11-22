@@ -1,14 +1,14 @@
 {
   "method": {
     "lines": "wc -l semantics: count the \\n bytes in each file. Files are .ts/.tsx/.js/.mjs/.cjs/.html under src/ and shell/src/, plus install.sh and shell/bin/install; exclude directories named __tests__/ or test/ and the vendored src/observatory/web/three.bundle.js. Area is src/<first dir> or shell/src/<first dir>; files directly in src/ or shell/src/ form the areas src and shell/src; install.sh and shell/bin/install are their own areas. Dev tooling (scripts/, shell/scripts/), evals (eval/, evals/), docs and data files are not product code.",
-    "tools": "Distinct names registered by the seven default tool plugins wired in shell/src/app.ts: builtin-tools (read, write, edit, bash), proposal, ask, assignment, memory-tool, soul-edit, self-install (propose_plugin, plugin_proposal_status, installed_plugins). Native plugins loaded from the user registry and channel tools are not counted.",
+    "tools": "Distinct names registered by the eight default tool plugins returned by defaultPlugins() in shell/src/app.ts: builtin-tools (read, write, edit, bash), proposal, credential, ask, assignment, memory-tool, soul-edit, self-install (propose_plugin, plugin_proposal_status, installed_plugins). Native plugins loaded from the user registry and channel tools are not counted.",
     "commands": "Entries of CORE_COMMANDS in shell/src/commands.ts, counted as lines matching ^    name: '<name>',$ inside that array.",
     "states": "Entries of STATES in shell/src/state/table.ts.",
     "tables": "Entries with type \"table\" in FINAL_TABLES plus FINAL_AUXILIARY_OBJECTS of src/migrations/v3_7_4/FinalSchemaDefinition.ts. Indexes, triggers and views are not tables.",
     "exportSymbols": "Named exports of the package public entry point src/public.ts as resolved by the TypeScript checker, including export * barrels and type-only exports."
   },
   "lines": {
-    "shell/src": 7253,
+    "shell/src": 7270,
     "shell/src/attach": 457,
     "shell/src/channels": 1222,
     "shell/src/embedding": 836,
