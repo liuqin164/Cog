@@ -60,6 +60,7 @@ describe('one ruler for fitting and assembly (#439)', () => {
       sessionId: 's',
       targetTokens: () => 10_800,
       calibrationFactor: () => 1,
+      clock: () => ({ now: Date.now() }),
       tailTurns: 6,
       pinned: () => [],
       profile: () => [],
