@@ -98,7 +98,6 @@ describe('kill matrix: every kill point comes back to one IDLE state', () => {
       const runtime = new CheckpointStore(dir).load()!.runtime;
       expect(JSON.stringify(runtime)).not.toContain('TAIL-MARKER');
 
-      // The trace holds a reference; the ledger holds the full prompt from before the model call.
       const trace = new TraceLog(dir).read();
       const prompt = trace.find((record) => record.kind === 'run_prompt' && record.runId === atKill.activeRunId)!;
       expect(prompt, 'the prompt was persisted before the model call').toBeDefined();
