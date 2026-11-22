@@ -83,9 +83,9 @@ function post(base: string, path: string, body: unknown, token = OBSERVATORY_TOK
   });
 }
 
-async function channelCards(base: string): Promise<Array<{ id: string; state: string; pairingCode?: string; config: unknown[] }>> {
+async function channelCards(base: string): Promise<Array<{ id: string; state: string; pairingCode?: string; config: Array<{ name: string; label?: string; secret?: boolean }> }>> {
   const response = await fetch(`${base}/observatory/channels`, { headers: { 'x-observatory-token': OBSERVATORY_TOKEN } });
-  const body = await response.json() as { channels: Array<{ id: string; state: string; pairingCode?: string; config: unknown[] }> };
+  const body = await response.json() as { channels: Array<{ id: string; state: string; pairingCode?: string; config: Array<{ name: string; label?: string; secret?: boolean }> }> };
   return body.channels;
 }
 
