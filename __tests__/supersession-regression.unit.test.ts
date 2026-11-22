@@ -31,8 +31,9 @@ describe('Issue #72: supersession on the recall surface', () => {
   test('different hostIds do not supersede each other (#65)', async () => {
     const { kernel, backend } = fixture('cogmem-supersession-isolation-');
     try {
-      await backend.rememberTurn({ agentId: 'a', projectId: 'p', sessionId: 's-a', userText: 'The deployment window for atlas is on day 5. Ticket A-100.' });
-      await backend.rememberTurn({ agentId: 'a', projectId: 'p', sessionId: 's-a', userText: 'Correction: the deployment window for atlas is on day 6. Ticket A-101.' });
+      const occurredAt = Date.now();
+      await backend.rememberTurn({ agentId: 'a', projectId: 'p', sessionId: 's-a', userText: 'The deployment window for atlas is on day 5. Ticket A-100.', timestamp: occurredAt });
+      await backend.rememberTurn({ agentId: 'a', projectId: 'p', sessionId: 's-a', userText: 'Correction: the deployment window for atlas is on day 6. Ticket A-101.', timestamp: occurredAt });
       kernel.recordRawEvent({
         projectId: 'p',
         sessionId: 's-b',
@@ -41,6 +42,7 @@ describe('Issue #72: supersession on the recall surface', () => {
         eventOrdinal: 1,
         content: 'The deployment window for atlas is on day 10. Ticket B-200.',
         metadata: { tags: ['agent:b'] },
+        occurredAt,
       });
       kernel.recordRawEvent({
         projectId: 'p',
@@ -50,6 +52,7 @@ describe('Issue #72: supersession on the recall surface', () => {
         eventOrdinal: 2,
         content: 'Correction: the deployment window for atlas is on day 11. Ticket B-201.',
         metadata: { tags: ['agent:b'] },
+        occurredAt,
       });
       const result = texts(backend, 'p', 'When is the deployment window for atlas?');
       expect(result).toContain('A-101');

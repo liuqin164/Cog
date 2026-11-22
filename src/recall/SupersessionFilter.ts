@@ -25,9 +25,8 @@ export interface SupersessionView {
   id: string;
   /** The text the subject phrase and the correction marker are read from. */
   content: string;
-  /** Ordering key. Milliseconds where the caller has them, a monotonically
-   * increasing turn ordinal where it does not; only compared within one group. */
   createdAt?: number;
+  orderSeq?: number;
   topicPath?: string;
   tags?: string[];
   projectId?: string;
@@ -130,7 +129,8 @@ export function filterSuperseded<T>(items: readonly T[], toView: (item: T) => Su
   const removed = new Set<string>();
   for (const group of groups.values()) {
     if (group.length <= 1) continue;
-    group.sort((a, b) => (b.view.createdAt ?? 0) - (a.view.createdAt ?? 0));
+    group.sort((a, b) => ((b.view.createdAt ?? 0) - (a.view.createdAt ?? 0))
+      || ((b.view.orderSeq ?? 0) - (a.view.orderSeq ?? 0)));
     if (!looksLikeCorrection(group[0]!.view.content)) continue;
     for (const entry of group.slice(1)) removed.add(entry.view.id);
   }

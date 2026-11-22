@@ -1372,9 +1372,9 @@ export class AgentRecallEngine {
       merged.push(item);
     }
     const superseded = filterSuperseded(merged, (item) => ({
-      id: item.id,
-      content: item.text,
+      id: item.id, content: item.text,
       createdAt: item.sourceContext?.event?.occurredAt ?? item.sourceAnchor?.turnSeq ?? item.sourceAnchor?.eventOrdinal ?? 0,
+      orderSeq: item.sourceContext?.event?.globalSeq ?? item.sourceAnchor?.threadSeq ?? item.sourceAnchor?.eventOrdinal ?? 0,
       tags: item.tags,
       projectId: item.projectId,
     }));
