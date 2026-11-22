@@ -490,7 +490,7 @@ export class AgentRecallEngine {
     ));
     const suppressions = mergeSuppressions(
       mergeSuppressions(
-        mergeSuppressions(result.decisionTrace?.suppressed, core.suppressed.map(({ reason, count }) => ({ reason, count }))),
+        mergeSuppressions(result.decisionTrace?.suppressed, core.suppressed.map(({ reason, count }) => ({ reason: reason as RecallSuppressionReason, count }))),
         gated.suppressed,
       ),
       phased.suppressed,
