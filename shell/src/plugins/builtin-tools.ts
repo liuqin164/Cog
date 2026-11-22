@@ -8,7 +8,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
-import type { MemoryEvent, MemoryKernel } from 'cogmem';
+import { occasionMaterialOf, occasionVisibility, type MemoryEvent, type MemoryKernel, type Occasion } from 'cogmem';
 import { maskCredentialValues, type CredentialMask } from '../credentials.ts';
 import type { TraceLog } from '../trace.ts';
 import type { NativePlugin, ToolDefinition, ToolOutcome } from './host.ts';
@@ -35,6 +35,7 @@ export interface BuiltinToolsConfig {
   trace?: TraceLog;
   /** The kernel's read face: `mem:<eventId>` resolves through it, never through the SQLite file. */
   kernel?: MemoryKernel;
+  projectId?: string; occasion?: () => Occasion;
   /** One successful `mem:` read; the shell counts it for the context trace's drill metric (#268). */
   onMemoryRead?: (eventId: string) => void;
   credentials?: {
@@ -290,14 +291,23 @@ export function readMemoryEvent(
   kernel: MemoryKernel | undefined,
   trace?: TraceLog,
   onRead?: (eventId: string) => void,
+  scope?: { projectId?: string; occasion?: Occasion },
 ): string {
   if (!kernel) throw new Error('memory_unavailable: this shell has no kernel attached');
   const event = kernel.getEventContext(eventId, { before: 0, after: 0 })?.event;
   if (!event) {
     throw new Error(`memory_event_not_found: no ledger event ${eventId}; use a mem:<eventId> key from a recall anchor or session digest`);
   }
-  onRead?.(eventId);
+  if (scope?.projectId && event.projectId !== scope.projectId) {
+    throw new Error(`memory_event_out_of_scope: event ${eventId} belongs to project ${event.projectId}`);
+  }
   const text = memoryEventText(event);
+  if (scope?.occasion && scope.occasion !== 'private') {
+    const classification = kernel.surfacing.classify({ projectId: event.projectId ?? scope.projectId ?? '', eventIds: [event.eventId], text, ...(event.rawEventType ? { sourceType: event.rawEventType } : {}) });
+    const decision = occasionVisibility(scope.occasion, classification.tier, occasionMaterialOf([event]));
+    if (!decision.allowed) throw new Error(`memory_event_withheld: ${decision.reason ?? 'occasion_private_tier'}`);
+  }
+  onRead?.(eventId);
   const bytes = Buffer.byteLength(text, 'utf8');
   if (bytes <= MAX_READ_BYTES) return text;
   trace?.append('memory_read_truncated', { eventId, bytes, cap: MAX_READ_BYTES });
@@ -359,6 +369,7 @@ function definitions(
   ledger: { kernel?: MemoryKernel; trace?: TraceLog; onMemoryRead?: (eventId: string) => void },
   cliConfigPath?: string,
   credentials?: BuiltinToolsConfig['credentials'],
+  scope?: { projectId?: string; occasion?: () => Occasion },
 ): ToolDefinition[] {
   const sandbox = sandboxed && dataDir !== undefined ? { dataDir, trace: ledger.trace } : undefined;
   // The shell always has a data dir, so a bare test host without one is not a degradation to
@@ -375,7 +386,10 @@ function definitions(
       execute({ args }) {
         const requested = asString(args, 'path');
         const eventId = memoryEventId(requested);
-        if (eventId !== undefined) return readMemoryEvent(eventId, ledger.kernel, ledger.trace, ledger.onMemoryRead);
+        if (eventId !== undefined) {
+          const occasion = scope?.occasion?.();
+          return readMemoryEvent(eventId, ledger.kernel, ledger.trace, ledger.onMemoryRead, { projectId: scope?.projectId, ...(occasion ? { occasion } : {}) });
+        }
         const path = insideWorkspace(workspaceRoot, requested, dataDir);
         const size = statSync(path).size;
         if (size > MAX_READ_BYTES) throw new Error(`file_too_large: ${size} bytes (cap ${MAX_READ_BYTES})`);
@@ -537,11 +551,11 @@ export function builtinToolsPlugin(): NativePlugin {
     name: 'builtin-tools',
     provide: ['builtinTools'],
     apply(ctx, config) {
-      const { workspaceRoot, dataDir, cliConfigPath, trace, kernel, onMemoryRead, credentials } = config as BuiltinToolsConfig;
+      const { workspaceRoot, dataDir, cliConfigPath, trace, kernel, projectId, occasion, onMemoryRead, credentials } = config as BuiltinToolsConfig;
       const sandboxed = dataDir !== undefined && bwrapUsable();
       if (dataDir !== undefined && !sandboxed) trace?.append('bash_sandbox_unavailable', { dataDir, reason: 'bwrap_not_usable' });
       if (sandboxed) trace?.append('bash_sandbox_network', { network: 'unshared' });
-      for (const definition of definitions(workspaceRoot, dataDir, sandboxed, { kernel, trace, onMemoryRead }, cliConfigPath, credentials)) {
+      for (const definition of definitions(workspaceRoot, dataDir, sandboxed, { kernel, trace, onMemoryRead }, cliConfigPath, credentials, { projectId, occasion })) {
         ctx.registerTool(definition, { builtin: true });
       }
       ctx.on('afterToolCall', (event: { tool?: { toolCallId?: string; toolName?: string }; result?: { output?: string } }) => {
