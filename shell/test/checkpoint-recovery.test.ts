@@ -117,14 +117,14 @@ describe('checkpoint write atomicity', () => {
           state: string;
           activeRunId?: string;
           wakeIntents: Array<{ id: string }>;
-          runtime: { openAssignment: { text: string }; pendingSteering: string[] };
+          runtime: { openAssignment: { text: string }; pendingSteering: Array<{ text: string }> };
           history: Array<{ reason: string }>;
         };
         const where = `sample ${samples} (seq ${loaded.seq})`;
         expect(loaded.version, where).toBe(1);
         // One save writes every field, so every field must name the same seq.
         expect(loaded.runtime.openAssignment.text.startsWith(`${loaded.seq}:`), `${where}: runtime names its seq`).toBe(true);
-        expect(loaded.runtime.pendingSteering[0]!.startsWith(`${loaded.seq}:`), `${where}: the second runtime field agrees`).toBe(true);
+        expect(loaded.runtime.pendingSteering[0]!.text.startsWith(`${loaded.seq}:`), `${where}: the second runtime field agrees`).toBe(true);
         expect(loaded.history.every((record) => record.reason.startsWith(`kill-write:${loaded.seq}:`)), `${where}: history agrees`).toBe(true);
         expect(loaded.wakeIntents[0].id, where).toBe(`wake-${loaded.seq}`);
         expect(loaded.state, where).toBe(loaded.seq % 2 === 1 ? 'RUNNING' : 'IDLE');

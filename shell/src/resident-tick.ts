@@ -66,6 +66,7 @@ interface FreshnessReadings {
 export class ResidentTick {
   freshness?: FreshnessReadings;
   private backfillInFlight = false;
+  private inPlaceDream = false;
   private lastFreshnessPassAt?: number;
   private embeddingRowCursor = 0;
   private bindingSeqCursor?: number;
@@ -76,11 +77,30 @@ export class ResidentTick {
     this.rotateServiceLog();
     this.sweepSurfacing(at);
     this.shell.upgradeAdmin.settleUpgradeReport(at);
-    if (this.shell.machine.state === 'RUNNING' || this.shell.machine.state === 'WAKING' || this.shell.machine.state === 'SUSPENDED') return;
+    if (this.shell.machine.state === 'RUNNING' || this.shell.machine.state === 'WAKING') return;
     this.reportHealth(at);
     if (this.shell.machine.state === 'DORMANT') {
       await this.maybeSnapshot(at);
       await this.applyDueWakeIntent(at);
+      return;
+    }
+    if (this.shell.machine.state === 'SUSPENDED') {
+      if (this.inPlaceDream) return;
+      await this.backfillFreshness(at);
+      this.deferDueWakeIntent(at);
+      const dream = this.dreamDecision(at);
+      this.traceDreamDecision(dream, at);
+      if (dream.start) {
+        this.inPlaceDream = true;
+        try {
+          await this.runDream(at);
+          await this.maybeSnapshot(at);
+        } finally {
+          this.inPlaceDream = false;
+        }
+        return;
+      }
+      await this.maybeSnapshot(at);
       return;
     }
     if (this.shell.machine.state === 'DREAMING') return;
@@ -106,17 +126,7 @@ export class ResidentTick {
       }
     }
     const dream = this.dreamDecision(at);
-    this.shell.trace.append('dream_trigger', {
-      projectId: this.shell.config.projectId,
-      decision: dream.start ? 'start' : 'skip',
-      reason: dream.reason,
-      night: dream.night,
-      idleMs: dream.idleMs,
-      idleMinMs: dream.idleMinMs,
-      backlogMin: dream.backlogMin,
-      backlogEvents: dream.backlogEvents,
-      backlogEpisodes: dream.backlogEpisodes,
-    }, at);
+    this.traceDreamDecision(dream, at);
     if (dream.start) {
       await this.runDream(at);
       await this.maybeSnapshot(at);
@@ -192,6 +202,20 @@ export class ResidentTick {
     }
   }
 
+  private traceDreamDecision(dream: DreamTriggerDecision, at: number): void {
+    this.shell.trace.append('dream_trigger', {
+      projectId: this.shell.config.projectId,
+      decision: dream.start ? 'start' : 'skip',
+      reason: dream.reason,
+      night: dream.night,
+      idleMs: dream.idleMs,
+      idleMinMs: dream.idleMinMs,
+      backlogMin: dream.backlogMin,
+      backlogEvents: dream.backlogEvents,
+      backlogEpisodes: dream.backlogEpisodes,
+    }, at);
+  }
+
   private compileProactiveBooks(at: number): void {
     const projectId = this.shell.config.projectId;
     try {
@@ -227,7 +251,7 @@ export class ResidentTick {
       });
       this.embeddingRowCursor = embeddings.hasMore ? embeddings.nextRowId : 0;
       const state = this.shell.machine.state;
-      if (state === 'RUNNING' || state === 'WAKING' || state === 'SUSPENDED') return;
+      if (state === 'RUNNING' || state === 'WAKING') return;
       const binding = this.shell.kernel.bindRawEvents({
         projectId,
         sinceGlobalSeq: this.bindingSeqCursor,
@@ -461,6 +485,22 @@ export class ResidentTick {
     await this.shell.machine.dispatch('context_injected', { reason: 'wake_intent' });
   }
 
+  private deferDueWakeIntent(at: number): void {
+    const due = this.shell.clock!.dueWakeIntent(at);
+    if (!due) return;
+    this.shell.clock!.consumeWakeIntent(due.id);
+    this.shell.machine.updateRuntime({
+      awayQueue: enqueueAway(this.shell.machine.runtime, {
+        id: `wake:${due.id}`,
+        text: due.reason,
+        reason: `wake_intent:${due.reason}`,
+        at,
+        deferred: 'absence',
+      }),
+    });
+    this.shell.trace.append('wake_intent_deferred', { id: due.id, reason: due.reason, at });
+  }
+
   private async maybeSnapshot(at: number): Promise<void> {
     const last = this.shell.machine.runtime.lastSnapshotAt;
     if (last !== undefined && at - last < SNAPSHOT_INTERVAL_MS) return;
@@ -552,12 +592,13 @@ export class ResidentTick {
   }
 
   async runDream(at = this.shell.now()): Promise<void> {
+    const suspended = this.shell.machine.state === 'SUSPENDED';
     const localDate = this.shell.clock!.dreamTargetDate(at);
     const night = this.shell.clock!.dreamNightDate(at);
     const catchup = !this.shell.clock!.dreamWindowOpen(at);
     const skippedDays = this.dreamSkippedDays(localDate);
     if (catchup) this.shell.trace.append('dream_catchup', { dream_catchup: true, localDate, skippedDays });
-    await this.shell.machine.dispatch('dream_window_open', { reason: 'dream_window' });
+    if (!suspended) await this.shell.machine.dispatch('dream_window_open', { reason: 'dream_window' });
     try {
       const result = await this.shell.dream!.integrate(localDate, `companion-day:${localDate}`, at);
       if (result.memoryModelDegraded === 'semantic_processor_failed') this.shell.memoryModelFailed = true;

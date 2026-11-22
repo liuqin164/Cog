@@ -25,6 +25,7 @@ describe('/forget covers the shell checkpoint and trace', () => {
       wakeIntents: [],
       runtime: {
         lastInteractionText: 'legacy display copy',
+        pendingSteering: ['legacy steering text'],
         openAssignment: { id: 'assignment-legacy', origin: 'user_message', text: 'legacy assignment text', startedAt: 1 },
         awayQueue: [{ id: 'away-legacy', text: 'legacy away text', reason: 'legacy', at: 1 }],
       },
@@ -35,11 +36,46 @@ describe('/forget covers the shell checkpoint and trace', () => {
     const shell = makeShell(dir, new ScriptedProvider([{ text: '在。', toolCalls: [] }]));
     await shell.start();
     try {
+      expect(shell.machine.runtime.pendingSteering?.[0]?.text).toBe('legacy steering text');
       expect(shell.machine.runtime.openAssignment?.text).toBe('legacy assignment text');
       expect(shell.machine.runtime.awayQueue?.[0]?.text).toBe('legacy away text');
       const saved = readFileSync(checkpoint, 'utf8');
+      expect(saved).not.toContain('legacy steering text');
       expect(saved).not.toContain('legacy assignment text');
       expect(saved).not.toContain('lastInteractionText');
+    } finally {
+      await shell.stop();
+    }
+  }, 30_000);
+
+  test('the steering and follow-up queues store ledger references, and /forget empties both files', async () => {
+    const dir = makeTempDir('forget-shell-queue-');
+    const data = join(dir, 'data');
+    const marker = 'zz-queued-steering-8d2e';
+    const steering = `${marker} 先看西边`;
+    const followUp = `${marker} 再看东边`;
+    const shell = makeShell(dir, new ScriptedProvider([{ text: '记下了。', toolCalls: [] }]));
+    await shell.start();
+    try {
+      const steeringId = shell.stateLedger.record('steering.text', steering);
+      const followUpId = shell.stateLedger.record('followup.text', followUp);
+      shell.machine.updateRuntime({
+        pendingSteering: [{ text: steering, textId: steeringId }],
+        pendingFollowUps: [{ text: followUp, textId: followUpId }],
+      });
+      expect(shell.machine.runtime.pendingSteering?.[0]?.text).toBe(steering);
+      expect(scan(join(data, 'checkpoint.json'), marker)).toBe(false);
+      expect(scan(join(data, 'checkpoint.json.prev'), marker)).toBe(false);
+
+      const now = Date.now();
+      await shell.runCommand('forget', `${new Date(now - DAY).toISOString()} ${new Date(now + DAY).toISOString()}`);
+      const receipt = await shell.runCommand('forget', 'confirm');
+      expect(receipt.text).toContain('checkpoint');
+      expect(shell.machine.runtime.pendingSteering ?? []).toHaveLength(0);
+      expect(shell.machine.runtime.pendingFollowUps ?? []).toHaveLength(0);
+      for (const file of ['checkpoint.json', 'checkpoint.json.prev']) {
+        expect(scan(join(data, file), marker), file).toBe(false);
+      }
     } finally {
       await shell.stop();
     }
