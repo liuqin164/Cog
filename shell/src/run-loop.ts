@@ -28,6 +28,8 @@ export class RunLoop {
   private readonly inboundWaiters = new Set<string>();
   private inDrain = false;
   private drainPromise?: Promise<void>;
+  private activeRun?: Promise<RunSummary>;
+  private stopping = false;
 
   constructor(private readonly shell: CompanionShell) {}
 
@@ -107,11 +109,47 @@ export class RunLoop {
     }
   }
 
-  async executeRun(
+  async settleInFlight(timeoutMs: number): Promise<boolean> {
+    this.stopping = true;
+    const run = this.activeRun;
+    if (!run) return true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<false>((resolve) => {
+      timer = setTimeout(() => resolve(false), timeoutMs);
+    });
+    const done = run.then(() => true as const, () => true as const);
+    try {
+      return await Promise.race([done, timeout]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  executeRun(
     text: string,
     trigger: 'message_received' | 'emergence_due',
     reason: string,
     dispatchTrigger: Trigger = trigger,
+    grant?: { tokens: number; turns: number },
+    channel?: string,
+  ): Promise<RunSummary> {
+    if (this.stopping) return Promise.reject(new Error('run_loop_stopping'));
+    const run = this.runOnce(text, trigger, reason, dispatchTrigger, grant, channel);
+    if (!this.activeRun) {
+      this.activeRun = run;
+      const clear = () => {
+        if (this.activeRun === run) this.activeRun = undefined;
+      };
+      void run.then(clear, clear);
+    }
+    return run;
+  }
+
+  private async runOnce(
+    text: string,
+    trigger: 'message_received' | 'emergence_due',
+    reason: string,
+    dispatchTrigger: Trigger,
     grant?: { tokens: number; turns: number },
     channel?: string,
   ): Promise<RunSummary> {
@@ -164,7 +202,7 @@ export class RunLoop {
       }
       this.recoverStrandedSteering(this.shell.currentChannel);
       await this.drainInbound();
-      if (!this.shell.clock!.nextPendingIntent()) this.shell.clock!.scheduleIdleWake();
+      if (!this.stopping && !this.shell.clock!.nextPendingIntent()) this.shell.clock!.scheduleIdleWake();
       return summary;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -255,6 +293,7 @@ export class RunLoop {
   }
 
   private async runInboundQueue(): Promise<void> {
+    if (this.stopping) return;
     for (;;) {
       const entry = (this.shell.machine.runtime.inboundQueue ?? []).find((item) => item.status === 'queued');
       if (!entry) return;
