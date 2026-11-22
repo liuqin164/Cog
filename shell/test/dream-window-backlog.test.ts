@@ -48,7 +48,7 @@ function seedEpisode(shell: CompanionShell, date: string, index: number, when: n
     eventId: `evt-backlog-${index}`,
     streamId: sessionId,
     streamType: 'thread',
-    eventType: 'MESSAGE',
+    eventType: 'RAW_EVENT_RECORDED',
     rawEventType: 'message',
     projectId: shell.config.projectId,
     sessionId,
