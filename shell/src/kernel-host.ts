@@ -21,6 +21,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { redactSecretText } from 'cogmem';
 import { readMemoryUsage } from './memory.ts';
+import type { UiCard } from './plugins/ui.ts';
 
 // Source: the kernel's TypeScript beside the checkout. Published: the compiled copy under dist/.
 const SOURCE_LAYOUT = import.meta.url.endsWith('.ts');
@@ -55,6 +56,7 @@ export interface HttpFaceOptions {
   tracePath?: string;
   credentials?: HttpCredentialFace;
   channels?: HttpChannelFace;
+  ui?: { list(): UiCard[] };
   webChannel?: () => { handle(request: Request, remoteAddress?: string): Promise<Response | null> } | undefined;
 }
 
@@ -103,6 +105,7 @@ async function openObservatory(
   tracePath?: string,
   credentials?: HttpCredentialFace,
   channels?: HttpChannelFace,
+  ui?: { list(): UiCard[] },
 ): Promise<{ db: Database; handle: (request: Request, remoteAddress?: string) => Promise<Response | null> } | undefined> {
   if (!dbPath || dbPath === ':memory:' || dbPath.startsWith('file:')) return undefined;
   try {
@@ -131,6 +134,7 @@ async function openObservatory(
         token: tokenModule.readObservatoryToken(dirname(dbPath)),
         credentials,
         channels,
+        ui,
       }),
     };
   } catch {
@@ -150,7 +154,7 @@ export async function startKernelHttpFace(kernel: unknown, options: HttpFaceOpti
     }
   };
 
-  const observatory = await openObservatory(kernel, kernelHealth().dbPath as string | undefined, options.connectedAgents, options.tracePath, options.credentials, options.channels);
+  const observatory = await openObservatory(kernel, kernelHealth().dbPath as string | undefined, options.connectedAgents, options.tracePath, options.credentials, options.channels, options.ui);
 
   const httpServer = Bun.serve({
     port: options.port,

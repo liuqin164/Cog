@@ -51,6 +51,10 @@ const state = {
   channelsLoading: false,
   channelsError: null,
   channelForm: null,
+  ui: null,
+  uiLoading: false,
+  uiError: null,
+  pluginPageId: null,
   health: null,
   healthLoading: false,
   healthError: null,
@@ -1244,11 +1248,19 @@ function panelHeader(title, sub) {
 function renderPanel(options = {}) {
   const panel = $('panel');
   panel.innerHTML = '';
+  renderPanelBody(panel, options);
+  for (const contribution of (state.ui ?? []).filter((entry) => entry.slot === 'inspector')) {
+    panel.append(renderUiContribution(contribution));
+  }
+}
+
+function renderPanelBody(panel, options = {}) {
   if (state.view === 'recalls') { renderRecallsPanel(panel); return; }
   if (state.view === 'timeline') { renderTimelinePanel(panel); return; }
   if (state.view === 'soul') { renderSoulPanel(panel); return; }
   if (state.view === 'credentials') { renderCredentialsPanel(panel); return; }
   if (state.view === 'channels') { renderChannelsPanel(panel); return; }
+  if (state.view === 'plugin') { renderPluginPanel(panel); return; }
   if (state.view === 'health') { renderHealthPanel(panel); return; }
   if (state.selectedNode) { renderNodePanel(panel, options); return; }
   renderOverviewPanel(panel);
@@ -1409,7 +1421,9 @@ function credentialTokenInput() {
     else sessionStorage.removeItem(WRITE_TOKEN_KEY);
   });
   input.addEventListener('change', () => {
-    if (state.view === 'channels' && writeToken) void loadChannels();
+    if (!writeToken) return;
+    void loadUi();
+    if (state.view === 'channels') void loadChannels();
   });
   return input;
 }
@@ -1536,7 +1550,12 @@ let channelPollTimer = null;
 function startChannelPolling() {
   if (channelPollTimer) return;
   channelPollTimer = setInterval(() => {
-    if (state.view === 'channels' && !state.channelsLoading && !state.channelForm && writeToken) void loadChannels();
+    if (!writeToken) return;
+    if (state.view === 'channels' && !state.channelsLoading && !state.channelForm) {
+      void loadUi();
+      void loadChannels();
+    }
+    if (state.view === 'plugin') void loadUi();
   }, 2_000);
 }
 
@@ -1551,6 +1570,204 @@ function channelStateText(value) {
   if (value === 'pairing') return '待配对';
   if (value === 'error') return '异常';
   return '未连接';
+}
+
+function uiToneClass(tone) {
+  if (tone === 'ok') return 'connected';
+  if (tone === 'warn') return 'pairing';
+  if (tone === 'error') return 'error';
+  return '';
+}
+
+async function runUiAction(action) {
+  state.channelsError = null;
+  try {
+    await postJson(action.path.replace(/^\/observatory\//u, ''), action.body ?? {});
+    await loadUi();
+    await loadChannels();
+  } catch (error) {
+    state.channelsError = error.message;
+    renderPluginPage();
+    renderChannels();
+    renderPanel();
+  }
+}
+
+function renderCredentialNode(node) {
+  const form = el('div', { class: 'channel-form' });
+  const inputs = [];
+  const error = el('p', { class: 'channel-error' });
+  form.append(el('p', { class: 'channel-hint', text: `${node.service} · ${node.purpose}` }));
+  for (const field of node.fields) {
+    const input = el('input', {
+      type: field.secret ? 'password' : 'text',
+      placeholder: field.label || field.name,
+      autocomplete: 'off',
+      spellcheck: 'false',
+    });
+    inputs.push({ name: field.name, label: field.label || field.name, input });
+    form.append(el('label', { class: 'channel-hint', text: `${field.label || field.name}（宿主保密输入面）` }));
+    form.append(input);
+  }
+  const save = el('button', { type: 'button', class: 'primary', text: node.submitLabel || '保存' });
+  const cancel = el('button', { type: 'button', text: '取消' });
+  save.addEventListener('click', () => {
+    void (async () => {
+      const values = {};
+      for (const entry of inputs) {
+        const value = entry.input.value.trim();
+        if (!value) {
+          error.textContent = `${entry.label} 不能为空。`;
+          return;
+        }
+        values[entry.name] = value;
+        entry.input.value = '';
+      }
+      try {
+        const saved = await postJson('credentials/submit', { id: node.requestId, values });
+        await postJson(node.onSaved.path, { ref: saved.ref });
+        await loadUi();
+        await loadChannels();
+      } catch (cause) {
+        error.textContent = cause.message;
+      }
+    })();
+  });
+  cancel.addEventListener('click', () => {
+    void (async () => {
+      try {
+        await postJson('credentials/cancel', { id: node.requestId });
+        await loadUi();
+        await loadChannels();
+      } catch (cause) {
+        error.textContent = cause.message;
+      }
+    })();
+  });
+  form.append(error);
+  form.append(el('div', { class: 'channel-actions' }, [save, cancel]));
+  return form;
+}
+
+function renderApprovalNode(node) {
+  const wrap = el('div', { class: 'ui-node-section' });
+  if (node.title) wrap.append(el('h3', { text: node.title }));
+  if (node.detail) wrap.append(el('p', { class: 'channel-hint', text: node.detail }));
+  const approve = el('button', { type: 'button', class: 'primary', text: '批准' });
+  const discard = el('button', { type: 'button', text: '作废' });
+  approve.addEventListener('click', () => { void runUiAction({ method: 'POST', path: '../channel/web/proposal', body: { id: node.proposalId, action: 'confirm' } }); });
+  discard.addEventListener('click', () => { void runUiAction({ method: 'POST', path: '../channel/web/proposal', body: { id: node.proposalId, action: 'discard' } }); });
+  wrap.append(el('div', { class: 'ui-node-actions' }, [approve, discard]));
+  return wrap;
+}
+
+function renderUiNode(node) {
+  if (node.type === 'heading') return el(node.level === 2 ? 'h2' : 'h3', { text: node.text });
+  if (node.type === 'text') return el('p', { class: 'channel-hint', text: node.text });
+  if (node.type === 'badge') return el('span', { class: `channel-state ${uiToneClass(node.tone)}`, text: node.text });
+  if (node.type === 'kv') {
+    const dl = el('dl', { class: 'ui-node-kv' });
+    for (const item of node.items) dl.append(el('dt', { text: item.label }), el('dd', { text: item.value }));
+    return dl;
+  }
+  if (node.type === 'code') return el('div', { class: 'channel-code', text: node.text });
+  if (node.type === 'button') {
+    const button = el('button', { type: 'button', class: node.primary ? 'primary' : undefined, text: node.label });
+    button.disabled = node.disabled === true;
+    button.addEventListener('click', () => { void runUiAction(node.action); });
+    return el('div', { class: 'ui-node-actions' }, [button]);
+  }
+  if (node.type === 'section') {
+    const section = el('div', { class: 'ui-node-section' });
+    if (node.title) section.append(el('h3', { text: node.title }));
+    section.append(renderUiNodes(node.nodes));
+    return section;
+  }
+  if (node.type === 'grid') return el('div', { class: 'ui-node-grid' }, [renderUiNodes(node.nodes)]);
+  if (node.type === 'credential-form') return renderCredentialNode(node);
+  if (node.type === 'approval') return renderApprovalNode(node);
+  return el('span');
+}
+
+function renderUiNodes(nodes) {
+  const wrap = el('div');
+  for (const node of nodes ?? []) wrap.append(renderUiNode(node));
+  return wrap;
+}
+
+function renderUiContribution(contribution) {
+  const section = el('div', { class: 'section' });
+  if (contribution.title) section.append(el('h2', { text: contribution.title }));
+  section.append(renderUiNodes(contribution.nodes));
+  return section;
+}
+
+function renderUiNav() {
+  const host = $('ui-tabs');
+  if (!host) return;
+  host.innerHTML = '';
+  const pages = (state.ui ?? []).filter((contribution) => contribution.slot === 'page' || contribution.slot === 'sidebar');
+  for (const page of pages) {
+    const button = el('button', {
+      role: 'tab',
+      id: `tab-ui-${page.id}`,
+      'aria-selected': String(state.pluginPageId === page.id),
+      text: page.label || page.title || page.id,
+    });
+    button.addEventListener('click', () => showPluginPage(page.id));
+    host.append(button);
+  }
+  if (state.pluginPageId && !pages.some((page) => page.id === state.pluginPageId)) {
+    state.pluginPageId = null;
+    state.view = 'starmap';
+    $('view-plugin').classList.remove('on');
+    $('view-starmap').classList.add('on');
+    $('tab-starmap').setAttribute('aria-selected', 'true');
+  }
+}
+
+function renderPluginPage() {
+  const root = $('view-plugin');
+  root.innerHTML = '';
+  const page = (state.ui ?? []).find((contribution) => (contribution.slot === 'page' || contribution.slot === 'sidebar') && contribution.id === state.pluginPageId);
+  if (!page) {
+    root.append(emptyState('插件页不存在', state.uiError || '这个插件没有可显示的页面。'));
+    return;
+  }
+  root.append(renderUiContribution(page));
+}
+
+function showPluginPage(id) {
+  state.view = 'plugin';
+  state.pluginPageId = id;
+  for (const name of ['starmap', 'timeline', 'recalls', 'soul', 'credentials', 'channels', 'health']) {
+    $(`tab-${name}`).setAttribute('aria-selected', 'false');
+    $(`view-${name}`).classList.remove('on');
+  }
+  $('view-plugin').classList.add('on');
+  for (const button of $('ui-tabs').querySelectorAll('button')) {
+    button.setAttribute('aria-selected', String(button.id === `tab-ui-${id}`));
+  }
+  renderPluginPage();
+  renderPanel();
+  startChannelPolling();
+  void loadUi();
+}
+
+async function loadUi() {
+  state.uiLoading = true;
+  state.uiError = null;
+  try {
+    state.ui = (await api('ui', {}, true)).contributions ?? [];
+  } catch (error) {
+    state.uiError = error.message;
+  } finally {
+    state.uiLoading = false;
+    renderUiNav();
+    if (state.pluginPageId) renderPluginPage();
+    renderChannels();
+    renderPanel();
+  }
 }
 
 function renderChannelsPanel(panel) {
@@ -1568,6 +1785,12 @@ function renderChannelsPanel(panel) {
       el('dd', { text: card.detail || '—' }),
     ]));
   }
+}
+
+function renderPluginPanel(panel) {
+  const page = (state.ui ?? []).find((contribution) => (contribution.slot === 'page' || contribution.slot === 'sidebar') && contribution.id === state.pluginPageId);
+  panel.append(panelHeader(page?.title || '插件', '插件贡献的界面；保密输入与批准由宿主渲染。'));
+  if (state.uiError) panel.append(el('p', { class: 'dim', text: state.uiError }));
 }
 
 function channelForm(card) {
@@ -1642,8 +1865,20 @@ function renderChannels() {
     root.append(el('div', { class: 'section' }, [el('div', { class: 'skeleton w60' }), el('div', { class: 'skeleton' })]));
     return;
   }
+  for (const contribution of (state.ui ?? []).filter((entry) => entry.slot === 'settings' && !entry.channelId)) {
+    root.append(renderUiContribution(contribution));
+  }
   const grid = el('div', { class: 'channel-grid' });
-  for (const card of state.channels ?? []) grid.append(renderChannelCard(card));
+  for (const card of state.channels ?? []) {
+    const contribution = (state.ui ?? []).find((entry) => entry.slot === 'settings' && entry.channelId === card.id);
+    if (contribution) {
+      const wrapEl = el('div', { class: 'channel-card' });
+      wrapEl.append(renderUiContribution(contribution));
+      grid.append(wrapEl);
+    } else {
+      grid.append(renderChannelCard(card));
+    }
+  }
   root.append(grid);
 }
 
@@ -2215,6 +2450,9 @@ function renderLegend() {
 
 function showView(view) {
   state.view = view;
+  state.pluginPageId = null;
+  $('view-plugin').classList.remove('on');
+  for (const button of $('ui-tabs').querySelectorAll('button')) button.setAttribute('aria-selected', 'false');
   for (const name of ['starmap', 'timeline', 'recalls', 'soul', 'credentials', 'channels', 'health']) {
     $(`tab-${name}`).setAttribute('aria-selected', String(name === view));
     $(`view-${name}`).classList.toggle('on', name === view);
@@ -2224,6 +2462,7 @@ function showView(view) {
   if (view === 'soul') void loadSoul();
   if (view === 'credentials') void loadCredentials();
   if (view === 'channels') {
+    void loadUi();
     void loadChannels();
     startChannelPolling();
   } else {
@@ -2266,6 +2505,7 @@ function applyLoaded() {
   buildMap(state.snapshot);
   renderTimeline();
   renderRecalls();
+  void loadUi();
   if (state.view === 'soul') void loadSoul();
   if (state.view === 'credentials') void loadCredentials();
   if (state.view === 'channels') void loadChannels();
@@ -2304,6 +2544,7 @@ async function boot() {
     try { await loadDemo(); return; } catch (error) { /* fall through to the live path */ }
   }
   try {
+    void loadUi();
     await reload();
   } catch (error) {
     $('panel').innerHTML = '';

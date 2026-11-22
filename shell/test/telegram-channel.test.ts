@@ -93,6 +93,11 @@ async function channelState(base: string): Promise<{ state: string; pairingCode?
   return (await channelCards(base)).find((entry) => entry.id === 'telegram')!;
 }
 
+async function uiContributions(base: string): Promise<Array<{ id: string; slot: string; channelId?: string; nodes: any[] }>> {
+  const response = await fetch(`${base}/observatory/ui`, { headers: { 'x-observatory-token': OBSERVATORY_TOKEN } });
+  return (await response.json() as { contributions: Array<{ id: string; slot: string; channelId?: string; nodes: any[] }> }).contributions;
+}
+
 async function waitChannelState(base: string, wanted: string): Promise<{ state: string; pairingCode?: string }> {
   const deadline = Date.now() + 5_000;
   for (;;) {
@@ -107,6 +112,8 @@ async function connectTelegram(base: string, fake: ReturnType<typeof startFakeTe
   const begun = await post(base, '/observatory/channels/telegram/begin', {});
   expect(begun.status).toBe(200);
   const { requestId } = await begun.json() as { requestId: string };
+  const form = (await uiContributions(base)).find((entry) => entry.id === 'telegram-channel-settings')?.nodes.find((node) => node.type === 'credential-form');
+  expect(form).toMatchObject({ requestId, fields: [{ name: 'token', label: 'Bot Token', secret: true }] });
   const submitted = await post(base, '/observatory/credentials/submit', { id: requestId, values: { token: TOKEN } });
   expect(submitted.status).toBe(200);
   const saved = await submitted.json() as { ok: boolean; ref: string };
@@ -115,7 +122,9 @@ async function connectTelegram(base: string, fake: ReturnType<typeof startFakeTe
   expect(started.status).toBe(200);
   const startedBody = await started.json() as { ok: boolean };
   expect(startedBody.ok).toBe(true);
-  const code = (await waitChannelState(base, 'pairing')).pairingCode!;
+  const pairing = await waitChannelState(base, 'pairing');
+  const code = pairing.pairingCode!;
+  expect((await uiContributions(base)).find((entry) => entry.id === 'telegram-channel-settings')?.nodes.some((node) => node.type === 'code' && node.text === code)).toBe(true);
   fake.push({ update_id: updateId, message: { text: code, chat: { id: OWNER }, from: { id: OWNER } } });
   await waitChannelState(base, 'connected');
 }
@@ -192,6 +201,7 @@ describe('telegram channel plugin (F12)', () => {
       await shell.pluginsAdmin.removePlugin('builtin:telegram-channel');
       await waitUntil(() => shell.trace.read().some((record) => record.kind === 'plugin_removed'));
       expect((await channelCards(base)).some((card) => card.id === 'telegram')).toBe(false);
+      expect((await uiContributions(base)).some((entry) => entry.id === 'telegram-channel-settings')).toBe(false);
     } finally {
       await shell.stop();
     }
@@ -203,6 +213,7 @@ describe('telegram channel plugin (F12)', () => {
     try {
       expect((await channelCards(reinstalled.httpUrl!)).some((card) => card.id === 'telegram')).toBe(true);
       expect((await channelState(reinstalled.httpUrl!)).state).toBe('connected');
+      expect((await uiContributions(reinstalled.httpUrl!)).some((entry) => entry.id === 'telegram-channel-settings')).toBe(true);
     } finally {
       await reinstalled.stop();
       fake.stop();

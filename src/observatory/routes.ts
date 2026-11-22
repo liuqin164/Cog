@@ -43,6 +43,7 @@ export interface ObservatoryRouteOptions {
   token?: string;
   credentials?: ObservatoryCredentialFace;
   channels?: ObservatoryChannelFace;
+  ui?: ObservatoryUiFace;
 }
 
 export interface ObservatoryCredentialField {
@@ -74,6 +75,20 @@ export interface ObservatoryChannelFace {
   begin(id: string): { ok: boolean; requestId?: string; error?: string };
   start(id: string, ref: string): { ok: boolean; channel?: ObservatoryChannelCard; error?: string };
   disconnect(id: string): { ok: boolean; channel?: ObservatoryChannelCard; error?: string };
+}
+
+export interface ObservatoryUiCard {
+  id: string;
+  slot: string;
+  title?: string;
+  label?: string;
+  order?: number;
+  channelId?: string;
+  nodes: unknown[];
+}
+
+export interface ObservatoryUiFace {
+  list(): ObservatoryUiCard[];
 }
 
 /** Everything the page loads, by exact path: no directory walk, so no traversal to defend against. */
@@ -415,6 +430,18 @@ export function createObservatoryRoutes(
       } catch (error) {
         return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 500, acceptEncoding);
       }
+    }
+
+    if (url.pathname === '/observatory/ui') {
+      if (request.method !== 'GET' && request.method !== 'HEAD') {
+        return new Response('method_not_allowed', { status: 405, headers: { allow: 'GET, HEAD' } });
+      }
+      if (!options.ui) return jsonResponse({ error: 'ui_unavailable' }, 404, acceptEncoding);
+      if (!options.token) return jsonResponse({ error: 'observatory_write_token_unavailable' }, 403, acceptEncoding);
+      if (!observatoryTokensMatch(options.token, request.headers.get(OBSERVATORY_TOKEN_HEADER))) {
+        return jsonResponse({ error: 'invalid_observatory_token' }, 403, acceptEncoding);
+      }
+      return jsonResponse({ contributions: options.ui.list() }, 200, acceptEncoding);
     }
 
     if (request.method !== 'GET' && request.method !== 'HEAD') {

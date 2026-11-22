@@ -39,10 +39,14 @@ const face = {
   },
 };
 
+const ui = {
+  list: () => [{ id: 'fake-chat-card', slot: 'chat-card', title: 'Fake', nodes: [{ type: 'text', text: 'hello' }] }],
+};
+
 beforeAll(async () => {
   token = ensureObservatoryToken(scratch);
   kernel = createMemoryKernel({ dbPath: join(scratch, 'memory.db'), projectTimeZone: 'UTC' });
-  handle = await startObservatoryServer({ kernel, port: 0, channels: face });
+  handle = await startObservatoryServer({ kernel, port: 0, channels: face, ui });
 });
 
 afterAll(() => {
@@ -69,6 +73,15 @@ describe('the observatory channel face (#416)', () => {
     const response = await fetch(`${base()}/channels`, { headers: { [OBSERVATORY_TOKEN_HEADER]: token } });
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ channels: [card('disconnected')] });
+  });
+
+  test('UI contributions are listed by slot with the write token', async () => {
+    expect((await fetch(`${base()}/ui`)).status).toBe(403);
+    const response = await fetch(`${base()}/ui`, { headers: { [OBSERVATORY_TOKEN_HEADER]: token } });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      contributions: [{ id: 'fake-chat-card', slot: 'chat-card', title: 'Fake', nodes: [{ type: 'text', text: 'hello' }] }],
+    });
   });
 
   test('begin, start and disconnect reach the host only with the write token', async () => {

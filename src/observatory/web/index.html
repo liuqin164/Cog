@@ -327,6 +327,13 @@
   .channel-form input:focus-visible { border-color: var(--ch-accent); }
   .channel-hint { color: var(--ink-faint); font-size: var(--step-2); }
   .channel-error { color: #e5857e; font-size: var(--step-2); }
+  #ui-tabs { display: contents; }
+  .ui-node-grid { display: grid; gap: 0.75rem; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); }
+  .ui-node-section { border: 1px solid var(--line); border-radius: var(--ch-radius); padding: 0.875rem; }
+  .ui-node-kv { margin: 0.5rem 0; display: grid; grid-template-columns: auto 1fr; gap: 0.25rem 0.75rem; font-size: var(--step-2); }
+  .ui-node-kv dt { color: var(--ink-faint); }
+  .ui-node-kv dd { margin: 0; color: var(--ink-dim); }
+  .ui-node-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.5rem; }
 </style>
 </head>
 <body>
@@ -359,6 +366,7 @@
   <button role="tab" id="tab-credentials" aria-controls="view-credentials" aria-selected="false">凭据</button>
   <button role="tab" id="tab-channels" aria-controls="view-channels" aria-selected="false">渠道</button>
   <button role="tab" id="tab-health" aria-controls="view-health" aria-selected="false">健康</button>
+  <span id="ui-tabs"></span>
 </nav>
 
 <main>
@@ -388,6 +396,7 @@
     <div class="view" id="view-soul" role="tabpanel" aria-labelledby="tab-soul"></div>
     <div class="view" id="view-credentials" role="tabpanel" aria-labelledby="tab-credentials"></div>
     <div class="view channel-view" id="view-channels" role="tabpanel" aria-labelledby="tab-channels"></div>
+    <div class="view channel-view" id="view-plugin" role="tabpanel"></div>
     <div class="view" id="view-health" role="tabpanel" aria-labelledby="tab-health"></div>
   </section>
   <aside class="panel" id="panel" aria-live="polite"></aside>

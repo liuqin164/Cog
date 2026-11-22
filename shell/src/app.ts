@@ -41,6 +41,7 @@ import { terminalPlugin, TerminalChannel, type ShellControl } from './channels/t
 import { webChannelPlugin } from './channels/web.ts';
 import { telegramChannelPlugin } from './channels/telegram.ts';
 import { ChannelRegistry } from './channels/registry.ts';
+import { UiRegistry } from './plugins/ui.ts';
 import { isOfficialPluginSpec } from './plugins/registry.ts';
 import { AgentRuntime, type ModelProvider, type RunSummary } from './state/agent-loop.ts';
 import type { ToolOutputAccount } from './state/context-budget.ts';
@@ -124,6 +125,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   readonly proposals: CommandProposals;
   readonly credentials: CredentialService;
   readonly channelRegistry: ChannelRegistry;
+  readonly uiRegistry: UiRegistry;
   readonly sovereignty: SovereigntyCommands;
   readonly proposalsHandlers: ProposalsHandlers;
   readonly pluginsAdmin: PluginsAdmin;
@@ -342,6 +344,8 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.host.seedService('credentials', this.credentials);
     this.channelRegistry = new ChannelRegistry();
     this.host.seedService('channelRegistry', this.channelRegistry);
+    this.uiRegistry = new UiRegistry();
+    this.host.seedService('ui', this.uiRegistry);
     // Every transition is also a bus event, so a plugin can observe the lifecycle without reading the
     // checkpoint file. This one carries the companion prefix.
     this.machine.onTransition((record) => {
@@ -563,6 +567,7 @@ export class CompanionShell implements ShellControl, AttachShell {
         tracePath: join(this.config.dataDir, 'shell-events.jsonl'),
         credentials: this.credentials,
         channels: this.channelRegistry,
+        ui: this.uiRegistry,
         webChannel: () => (this.host.hasService('webChannel') ? this.host.getService<{ handle(request: Request, remoteAddress?: string): Promise<Response | null> }>('webChannel') : undefined),
       });
       this.trace.append('http_face_started', { url: this.http.baseUrl, port: this.http.port });

@@ -285,3 +285,10 @@ returns to the same chat. Plugin proposals carry inline confirm/discard buttons;
 id confirms, while any other callback is refused and traced. F18-delivered emergence is sent through
 this channel and the quiet window still silences it. Disconnecting stops polling, takes the channel
 offline and revokes the vault entry without touching the ledger; reconnecting keeps the history.
+
+The host also exposes a `ui` contribution registry with the slots `sidebar`, `page`, `chat-card`,
+`inspector` and `settings`. Plugins contribute declarative nodes; the Web surface assembles them
+generically. Telegram's channel panel is a `settings` contribution tied to its channel id, so
+removing the plugin removes both the registry row and the contributed UI. Contributions cannot draw
+credential inputs or approval controls: those are host-rendered node types over the credential and
+approval services, so the trusted-surface boundary is not delegated to a plugin.
