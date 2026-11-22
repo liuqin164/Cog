@@ -54,6 +54,7 @@ export interface HttpFaceOptions {
   /** The shell's trace file; the observatory reads its surfacing counts from it. */
   tracePath?: string;
   credentials?: HttpCredentialFace;
+  channels?: HttpChannelFace;
   webChannel?: () => { handle(request: Request, remoteAddress?: string): Promise<Response | null> } | undefined;
 }
 
@@ -63,6 +64,22 @@ export interface HttpCredentialFace {
   submit(id: string, values: Record<string, string>, surface: string): { ok: true; ref: string } | { ok: false; reason: string };
   cancel(id: string, surface: string): boolean;
   revoke(ref: string): boolean;
+}
+
+export interface HttpChannelCard {
+  id: string;
+  name: string;
+  state: 'disconnected' | 'pairing' | 'connected' | 'error';
+  detail?: string;
+  pairingCode?: string;
+  connectable: boolean;
+}
+
+export interface HttpChannelFace {
+  list(): HttpChannelCard[];
+  begin(id: string): { ok: boolean; requestId?: string; error?: string };
+  start(id: string, ref: string): { ok: boolean; channel?: HttpChannelCard; error?: string };
+  disconnect(id: string): { ok: boolean; channel?: HttpChannelCard; error?: string };
 }
 
 export interface HttpFaceHandle {
@@ -84,6 +101,7 @@ async function openObservatory(
   connectedAgents?: () => string[],
   tracePath?: string,
   credentials?: HttpCredentialFace,
+  channels?: HttpChannelFace,
 ): Promise<{ db: Database; handle: (request: Request, remoteAddress?: string) => Promise<Response | null> } | undefined> {
   if (!dbPath || dbPath === ':memory:' || dbPath.startsWith('file:')) return undefined;
   try {
@@ -111,6 +129,7 @@ async function openObservatory(
       handle: routesModule.createObservatoryRoutes(observatory, events, soul, {
         token: tokenModule.readObservatoryToken(dirname(dbPath)),
         credentials,
+        channels,
       }),
     };
   } catch {
@@ -130,7 +149,7 @@ export async function startKernelHttpFace(kernel: unknown, options: HttpFaceOpti
     }
   };
 
-  const observatory = await openObservatory(kernel, kernelHealth().dbPath as string | undefined, options.connectedAgents, options.tracePath, options.credentials);
+  const observatory = await openObservatory(kernel, kernelHealth().dbPath as string | undefined, options.connectedAgents, options.tracePath, options.credentials, options.channels);
 
   const httpServer = Bun.serve({
     port: options.port,

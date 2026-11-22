@@ -39,12 +39,12 @@ import { dreamPlugin } from './plugins/dream.ts';
 import { emergencePlugin } from './plugins/emergence.ts';
 import { terminalPlugin, TerminalChannel, type ShellControl } from './channels/terminal.ts';
 import { webChannelPlugin } from './channels/web.ts';
-import { telegramChannelPlugin } from './channels/telegram.ts';
+import { telegramChannelPlugin, type TelegramChannel } from './channels/telegram.ts';
 import { isOfficialPluginSpec } from './plugins/registry.ts';
 import { AgentRuntime, type ModelProvider, type RunSummary } from './state/agent-loop.ts';
 import type { ToolOutputAccount } from './state/context-budget.ts';
 import { laneAssemblyView, type ContextMetrics } from './state/session-lanes.ts';
-import { startKernelHttpFace, type HttpFaceHandle } from './kernel-host.ts';
+import { startKernelHttpFace, type HttpChannelCard, type HttpFaceHandle } from './kernel-host.ts';
 import { AttachServer, defaultSocketPath, type AttachShell } from './attach/server.ts';
 import { loadNativePlugins, type PluginLoadResult } from './plugins/load.ts';
 import { UpgradeAdmin } from './upgrade/admin.ts';
@@ -558,6 +558,12 @@ export class CompanionShell implements ShellControl, AttachShell {
         connectedAgents: () => [this.config.agentId],
         tracePath: join(this.config.dataDir, 'shell-events.jsonl'),
         credentials: this.credentials,
+        channels: {
+          list: () => this.channelCards(),
+          begin: (id: string) => this.beginChannelConnect(id),
+          start: (id: string, ref: string) => this.startChannel(id, ref),
+          disconnect: (id: string) => this.disconnectChannel(id),
+        },
         webChannel: () => (this.host.hasService('webChannel') ? this.host.getService<{ handle(request: Request, remoteAddress?: string): Promise<Response | null> }>('webChannel') : undefined),
       });
       this.trace.append('http_face_started', { url: this.http.baseUrl, port: this.http.port });
@@ -1190,6 +1196,45 @@ export class CompanionShell implements ShellControl, AttachShell {
 
   snapshotNote(): string | undefined {
     return `checkpoint seq ${this.machine.seq}`;
+  }
+
+  private channelCards(): HttpChannelCard[] {
+    const cards: HttpChannelCard[] = [];
+    if (this.host.hasService('webChannel')) {
+      cards.push({ id: 'web', name: 'Web', state: 'connected', detail: '本页由 Web 渠道提供', connectable: false });
+    }
+    if (this.host.hasService('telegramChannel')) cards.push(this.host.getService<TelegramChannel>('telegramChannel').card());
+    return cards;
+  }
+
+  private beginChannelConnect(id: string): { ok: boolean; requestId?: string; error?: string } {
+    if (id !== 'telegram') return { ok: false, error: 'unknown_channel' };
+    if (!this.host.hasService('telegramChannel')) return { ok: false, error: 'channel_plugin_not_loaded' };
+    const before = new Set(this.credentials.pending().map((entry) => entry.id));
+    void this.credentials.requestForOwner({
+      service: 'telegram-bot',
+      purpose: '连接 Telegram 渠道',
+      requestedBy: 'web:channels',
+      fields: [{ name: 'token', label: 'Bot Token', secret: true }],
+    });
+    const request = this.credentials.pending().find((entry) => !before.has(entry.id));
+    return request ? { ok: true, requestId: request.id } : { ok: false, error: 'credential_request_failed' };
+  }
+
+  private startChannel(id: string, rawRef: string): { ok: boolean; channel?: HttpChannelCard; error?: string } {
+    if (id !== 'telegram') return { ok: false, error: 'unknown_channel' };
+    if (!this.host.hasService('telegramChannel')) return { ok: false, error: 'channel_plugin_not_loaded' };
+    const ref = rawRef.trim();
+    if (!ref || !this.credentials.refs().some((entry) => entry.ref === ref && entry.service === 'telegram-bot')) {
+      return { ok: false, error: 'credential_not_found' };
+    }
+    return { ok: true, channel: this.host.getService<TelegramChannel>('telegramChannel').beginConnect(ref) };
+  }
+
+  private disconnectChannel(id: string): { ok: boolean; channel?: HttpChannelCard; error?: string } {
+    if (id !== 'telegram') return { ok: false, error: 'unknown_channel' };
+    if (!this.host.hasService('telegramChannel')) return { ok: false, error: 'channel_plugin_not_loaded' };
+    return { ok: true, channel: this.host.getService<TelegramChannel>('telegramChannel').disconnect() };
   }
 
   /**

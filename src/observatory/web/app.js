@@ -47,6 +47,10 @@ const state = {
   credentials: null,
   credentialsLoading: false,
   credentialsError: null,
+  channels: null,
+  channelsLoading: false,
+  channelsError: null,
+  channelForm: null,
   health: null,
   healthLoading: false,
   healthError: null,
@@ -80,12 +84,14 @@ function soulTokens(text) {
 }
 const stamp = (ms) => (ms ? new Date(ms).toLocaleString('zh-CN', { hour12: false }) : '—');
 
-function api(path, params = {}) {
+function api(path, params = {}, authed = false) {
   const url = new URL(`./${path.replace(/^\//, '')}`, location.href);
   for (const [key, value] of Object.entries(params)) {
     if (value !== null && value !== undefined && value !== '') url.searchParams.set(key, value);
   }
-  return fetch(url, { headers: { accept: 'application/json' } }).then(async (response) => {
+  const headers = { accept: 'application/json' };
+  if (authed && writeToken) headers['x-observatory-token'] = writeToken;
+  return fetch(url, { headers }).then(async (response) => {
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(body.message || body.error || `HTTP ${response.status}`);
     return body;
@@ -1242,6 +1248,7 @@ function renderPanel(options = {}) {
   if (state.view === 'timeline') { renderTimelinePanel(panel); return; }
   if (state.view === 'soul') { renderSoulPanel(panel); return; }
   if (state.view === 'credentials') { renderCredentialsPanel(panel); return; }
+  if (state.view === 'channels') { renderChannelsPanel(panel); return; }
   if (state.view === 'health') { renderHealthPanel(panel); return; }
   if (state.selectedNode) { renderNodePanel(panel, options); return; }
   renderOverviewPanel(panel);
@@ -1401,6 +1408,9 @@ function credentialTokenInput() {
     if (writeToken) sessionStorage.setItem(WRITE_TOKEN_KEY, writeToken);
     else sessionStorage.removeItem(WRITE_TOKEN_KEY);
   });
+  input.addEventListener('change', () => {
+    if (state.view === 'channels' && writeToken) void loadChannels();
+  });
   return input;
 }
 
@@ -1517,6 +1527,200 @@ async function revokeCredential(ref) {
   } catch (error) {
     state.credentialsError = error.message;
     renderCredentials();
+    renderPanel();
+  }
+}
+
+let channelPollTimer = null;
+
+function startChannelPolling() {
+  if (channelPollTimer) return;
+  channelPollTimer = setInterval(() => {
+    if (state.view === 'channels' && !state.channelsLoading && !state.channelForm && writeToken) void loadChannels();
+  }, 2_000);
+}
+
+function stopChannelPolling() {
+  if (!channelPollTimer) return;
+  clearInterval(channelPollTimer);
+  channelPollTimer = null;
+}
+
+function channelStateText(value) {
+  if (value === 'connected') return '已连接';
+  if (value === 'pairing') return '待配对';
+  if (value === 'error') return '异常';
+  return '未连接';
+}
+
+function renderChannelsPanel(panel) {
+  panel.append(panelHeader('渠道', '渠道插件在 Web 上连接；Bot Token 直达保险库。'));
+  const cards = state.channels ?? [];
+  if (cards.length === 0) {
+    panel.append(el('p', { class: 'dim', text: state.channelsLoading ? '读取中…' : (state.channelsError || '没有渠道插件。') }));
+    return;
+  }
+  for (const card of cards) {
+    panel.append(el('dl', { class: 'kv' }, [
+      el('dt', { text: card.name }),
+      el('dd', { text: channelStateText(card.state) }),
+      el('dt', { text: '说明' }),
+      el('dd', { text: card.detail || '—' }),
+    ]));
+  }
+}
+
+function channelForm() {
+  const form = el('div', { class: 'channel-form' });
+  const input = el('input', {
+    type: 'password',
+    placeholder: 'Bot Token',
+    autocomplete: 'off',
+    spellcheck: 'false',
+  });
+  const error = el('p', { class: 'channel-error' });
+  const save = el('button', { type: 'button', class: 'primary', text: '保存并连接' });
+  const cancel = el('button', { type: 'button', text: '取消' });
+  save.addEventListener('click', () => { void saveChannelToken(input, error); });
+  cancel.addEventListener('click', () => { void cancelChannelConnect(); });
+  form.append(el('label', { class: 'channel-hint', text: 'Bot Token（遮罩输入，只写入 0600 保险库）' }));
+  form.append(input);
+  form.append(error);
+  form.append(el('div', { class: 'channel-actions' }, [save, cancel]));
+  return form;
+}
+
+function renderChannelCard(card) {
+  const wrap = el('div', { class: 'channel-card' });
+  wrap.append(el('div', { class: 'channel-card-head' }, [
+    el('h3', { text: card.name }),
+    el('span', { class: `channel-state ${card.state}`, text: channelStateText(card.state) }),
+  ]));
+  if (card.detail) wrap.append(el('p', { class: 'channel-hint', text: card.detail }));
+  if (card.pairingCode) {
+    wrap.append(el('div', { class: 'channel-code', text: card.pairingCode }));
+    wrap.append(el('p', { class: 'channel-hint', text: '在 Telegram 里把上述配对码发给 bot，绑定成功后会显示已连接。' }));
+  }
+  if (card.connectable) {
+    const actions = el('div', { class: 'channel-actions' });
+    if (card.state !== 'connected') {
+      const connect = el('button', { type: 'button', class: 'primary', text: '连接 ' + card.name });
+      connect.disabled = Boolean(state.channelForm);
+      connect.addEventListener('click', () => { void beginChannelConnect(card.id); });
+      actions.append(connect);
+    }
+    if (card.state !== 'disconnected') {
+      const disconnect = el('button', { type: 'button', text: card.state === 'pairing' ? '取消连接' : '断开' });
+      disconnect.disabled = Boolean(state.channelForm);
+      disconnect.addEventListener('click', () => { void disconnectChannel(card.id); });
+      actions.append(disconnect);
+    }
+    wrap.append(actions);
+    if (state.channelForm?.id === card.id) wrap.append(channelForm());
+  }
+  return wrap;
+}
+
+function renderChannels() {
+  const root = $('view-channels');
+  root.innerHTML = '';
+  if (state.demo) {
+    root.append(emptyState('演示模式没有渠道', '渠道连接只对真实数据目录开放。'));
+    return;
+  }
+  const head = el('div', { class: 'section' });
+  head.append(el('h2', { text: '渠道' }));
+  head.append(el('p', { class: 'channel-hint', text: '渠道以插件提供，在这里连接与断开。Bot Token 只进保险库，页面、日志与账本不保留明文。' }));
+  head.append(credentialTokenInput());
+  if (state.channelsError) head.append(el('p', { class: 'channel-error', text: state.channelsError }));
+  root.append(head);
+  if (state.channelsLoading && !state.channels) {
+    root.append(el('div', { class: 'section' }, [el('div', { class: 'skeleton w60' }), el('div', { class: 'skeleton' })]));
+    return;
+  }
+  const grid = el('div', { class: 'channel-grid' });
+  for (const card of state.channels ?? []) grid.append(renderChannelCard(card));
+  root.append(grid);
+}
+
+async function loadChannels() {
+  state.channelsLoading = true;
+  state.channelsError = null;
+  renderChannels();
+  try {
+    state.channels = (await api('channels', {}, true)).channels ?? [];
+  } catch (error) {
+    state.channelsError = error.message;
+  } finally {
+    state.channelsLoading = false;
+    renderChannels();
+    renderPanel();
+  }
+}
+
+async function beginChannelConnect(id) {
+  state.channelsError = null;
+  try {
+    const result = await postJson(`channels/${id}/begin`, {});
+    if (!result.ok) throw new Error(result.error || 'credential_request_failed');
+    state.channelForm = { id, requestId: result.requestId };
+    renderChannels();
+    renderPanel();
+  } catch (error) {
+    state.channelsError = error.message;
+    renderChannels();
+  }
+}
+
+async function saveChannelToken(input, errorHost) {
+  const form = state.channelForm;
+  if (!form) return;
+  const token = input.value.trim();
+  if (!token) {
+    errorHost.textContent = 'Bot Token 不能为空。';
+    return;
+  }
+  input.value = '';
+  state.channelsError = null;
+  let ref = null;
+  try {
+    const saved = await postJson('credentials/submit', { id: form.requestId, values: { token } });
+    ref = saved.ref;
+    const started = await postJson(`channels/${form.id}/start`, { ref });
+    if (!started.ok) throw new Error(started.error || 'channel_start_failed');
+    state.channelForm = null;
+    await loadChannels();
+  } catch (error) {
+    if (ref) void postJson('credentials/revoke', { ref }).catch(() => {});
+    state.channelForm = null;
+    state.channelsError = error.message;
+    renderChannels();
+    renderPanel();
+  }
+}
+
+async function cancelChannelConnect() {
+  const form = state.channelForm;
+  if (!form) return;
+  state.channelForm = null;
+  try {
+    await postJson('credentials/cancel', { id: form.requestId });
+  } catch {}
+  renderChannels();
+  renderPanel();
+}
+
+async function disconnectChannel(id) {
+  if (!confirm(`断开 ${id}？token 会从保险库删除，账本不变。`)) return;
+  state.channelsError = null;
+  try {
+    const result = await postJson(`channels/${id}/disconnect`, {});
+    if (!result.ok) throw new Error(result.error || 'channel_disconnect_failed');
+    state.channelForm = null;
+    await loadChannels();
+  } catch (error) {
+    state.channelsError = error.message;
+    renderChannels();
     renderPanel();
   }
 }
@@ -2003,7 +2207,7 @@ function renderLegend() {
 
 function showView(view) {
   state.view = view;
-  for (const name of ['starmap', 'timeline', 'recalls', 'soul', 'credentials', 'health']) {
+  for (const name of ['starmap', 'timeline', 'recalls', 'soul', 'credentials', 'channels', 'health']) {
     $(`tab-${name}`).setAttribute('aria-selected', String(name === view));
     $(`view-${name}`).classList.toggle('on', name === view);
   }
@@ -2011,6 +2215,12 @@ function showView(view) {
   if (view === 'timeline') renderTimeline();
   if (view === 'soul') void loadSoul();
   if (view === 'credentials') void loadCredentials();
+  if (view === 'channels') {
+    void loadChannels();
+    startChannelPolling();
+  } else {
+    stopChannelPolling();
+  }
   if (view === 'health') void loadHealth();
   if (view === 'starmap') map.needsFrame = true;
   renderPanel();
@@ -2050,6 +2260,7 @@ function applyLoaded() {
   renderRecalls();
   if (state.view === 'soul') void loadSoul();
   if (state.view === 'credentials') void loadCredentials();
+  if (state.view === 'channels') void loadChannels();
   if (state.view === 'health') void loadHealth();
   renderPanel();
   applyHashTarget();
@@ -2058,6 +2269,7 @@ function applyLoaded() {
 function applyHashTarget() {
   const hash = decodeURIComponent(location.hash.replace(/^#/u, ''));
   if (hash === 'credentials') { showView('credentials'); return; }
+  if (hash === 'channels') { showView('channels'); return; }
   if (!hash.startsWith('node=')) return;
   const node = state.nodeIndex.get(hash.slice('node='.length));
   if (node) selectNode(node, { fromSnapshot: true });
@@ -2096,6 +2308,7 @@ $('tab-timeline').addEventListener('click', () => showView('timeline'));
 $('tab-recalls').addEventListener('click', () => showView('recalls'));
 $('tab-soul').addEventListener('click', () => showView('soul'));
 $('tab-credentials').addEventListener('click', () => showView('credentials'));
+$('tab-channels').addEventListener('click', () => showView('channels'));
 $('tab-health').addEventListener('click', () => showView('health'));
 $('scope-all').addEventListener('click', () => { state.agent = null; reload(); });
 $('project-select').addEventListener('change', (event) => { state.projectId = event.target.value; reload(); });

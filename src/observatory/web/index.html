@@ -280,6 +280,53 @@
   }
   .soul-version button:disabled { opacity: 0.4; cursor: not-allowed; }
   .soul-error { color: #e5857e; font-size: var(--step-2); margin: 0 0 0.75rem; }
+
+  .channel-view {
+    --ch-accent: #e6c26e;
+    --ch-radius: 14px;
+    --ch-serif: "Noto Serif SC", "Songti SC", "STSong", serif;
+    --ch-sans: "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    padding: 1rem;
+    font-family: var(--ch-sans);
+  }
+  .channel-view h2, .channel-view h3 { font-family: var(--ch-serif); font-weight: 600; }
+  .channel-grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr)); max-width: 64rem; }
+  .channel-card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--ch-radius);
+    padding: 1rem; min-width: 0;
+  }
+  .channel-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem; }
+  .channel-card h3 { margin: 0; font-size: var(--step-5); }
+  .channel-state {
+    font-size: var(--step-1); letter-spacing: 0.04em; text-transform: uppercase;
+    padding: 0.1875rem 0.5rem; border-radius: 999px; border: 1px solid var(--line);
+    color: var(--ink-dim);
+  }
+  .channel-state.connected { color: #bfe6cd; border-color: #23533a; background: #14301f; }
+  .channel-state.pairing { color: #f6dfb4; border-color: #6a4d15; background: #37280c; }
+  .channel-state.error { color: #ffd0cb; border-color: #6f2f2a; background: #351614; }
+  .channel-code {
+    margin: 0.75rem 0 0; padding: 0.5rem 0.75rem; display: inline-block;
+    font-family: var(--mono); font-size: var(--step-5); letter-spacing: 0.18em;
+    color: var(--ch-accent); border: 1px dashed #6a4d15; border-radius: var(--ch-radius);
+  }
+  .channel-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.75rem; }
+  .channel-actions button {
+    font: inherit; font-size: var(--step-2); color: var(--ink-dim); background: var(--panel-2);
+    border: 1px solid var(--line); border-radius: var(--ch-radius); padding: 0.3125rem 0.75rem; cursor: pointer;
+  }
+  .channel-actions button.primary {
+    color: var(--accent-ink); background: var(--ch-accent); border-color: var(--ch-accent);
+  }
+  .channel-actions button:disabled { opacity: 0.45; cursor: not-allowed; }
+  .channel-form { margin-top: 0.75rem; display: grid; gap: 0.5rem; }
+  .channel-form input {
+    width: 100%; background: var(--panel); color: var(--ink); border: 1px solid var(--line);
+    border-radius: var(--ch-radius); padding: 0.5rem 0.75rem; font: 400 var(--step-2)/1.6 var(--mono);
+  }
+  .channel-form input:focus-visible { border-color: var(--ch-accent); }
+  .channel-hint { color: var(--ink-faint); font-size: var(--step-2); }
+  .channel-error { color: #e5857e; font-size: var(--step-2); }
 </style>
 </head>
 <body>
@@ -310,6 +357,7 @@
   <button role="tab" id="tab-recalls" aria-controls="view-recalls" aria-selected="false">召回检查</button>
   <button role="tab" id="tab-soul" aria-controls="view-soul" aria-selected="false">Soul</button>
   <button role="tab" id="tab-credentials" aria-controls="view-credentials" aria-selected="false">凭据</button>
+  <button role="tab" id="tab-channels" aria-controls="view-channels" aria-selected="false">渠道</button>
   <button role="tab" id="tab-health" aria-controls="view-health" aria-selected="false">健康</button>
 </nav>
 
@@ -339,6 +387,7 @@
     <div class="view" id="view-recalls" role="tabpanel" aria-labelledby="tab-recalls"></div>
     <div class="view" id="view-soul" role="tabpanel" aria-labelledby="tab-soul"></div>
     <div class="view" id="view-credentials" role="tabpanel" aria-labelledby="tab-credentials"></div>
+    <div class="view channel-view" id="view-channels" role="tabpanel" aria-labelledby="tab-channels"></div>
     <div class="view" id="view-health" role="tabpanel" aria-labelledby="tab-health"></div>
   </section>
   <aside class="panel" id="panel" aria-live="polite"></aside>

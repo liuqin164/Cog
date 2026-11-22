@@ -272,12 +272,14 @@ card opens the observatory's `#credentials` form instead of collecting values it
 
 ## Fourth implementation: the Telegram channel (#416)
 
-`shell/src/channels/telegram.ts` is an official plugin (`builtin:telegram-channel`). Its
-`<dataDir>/telegram-channel.json` names the credential reference, the owner's Telegram id and an
-optional chat id; the bot token is read through the credential service at the call site, never
-collected or stored by the plugin. `getUpdates` long polling feeds every text through `ingest`
-before `shell.submit`, and the assistant reply is sent back to the same chat. Plugin proposals carry
-inline confirm/discard buttons; only a callback from the configured owner id confirms, while any
-other callback is refused and traced. F18-delivered emergence is sent through this channel and the
-quiet window still silences it. Removing the plugin aborts polling and stops sends without touching
-the ledger.
+`shell/src/channels/telegram.ts` is an official plugin (`builtin:telegram-channel`). The
+observatory's `#channels` page lists channel plugins and drives the connection: the owner enters the
+bot token in a masked field, the credential service writes it to the 0600 vault, and the host starts
+`getUpdates` long polling. The page then shows a one-time pairing code; sending it to the bot binds
+the owner's Telegram id. The config file keeps only the credential reference and the bound ids, and
+the token is read through the credential service at the call site. Every text goes through `ingest`
+before `shell.submit`, and the assistant reply returns to the same chat. Plugin proposals carry
+inline confirm/discard buttons; only the bound owner id confirms, while any other callback is refused
+and traced. F18-delivered emergence is sent through this channel and the quiet window still silences
+it. Disconnecting stops polling, takes the channel offline and revokes the vault entry without
+touching the ledger; reconnecting keeps the history.

@@ -169,10 +169,18 @@ export class CredentialService {
   }
 
   request(input: CredentialRequestInput, signal?: AbortSignal): Promise<CredentialOutcome> {
+    return this.open(input, signal, this.canAsk());
+  }
+
+  requestForOwner(input: CredentialRequestInput): Promise<CredentialOutcome> {
+    return this.open(input, undefined, true);
+  }
+
+  private open(input: CredentialRequestInput, signal: AbortSignal | undefined, allowed: boolean): Promise<CredentialOutcome> {
     const service = text(input.service, 'service');
     const purpose = text(input.purpose, 'purpose');
     const fields = normalizeFields(input.fields);
-    if (!this.canAsk()) {
+    if (!allowed) {
       this.trace.append('credential_request_refused', { service, reason: 'no_owner' }, this.now());
       throw new Error('credential_request_unavailable: only a user-present work run can ask for a credential');
     }

@@ -42,6 +42,7 @@ export interface ObservatoryRouteOptions {
    */
   token?: string;
   credentials?: ObservatoryCredentialFace;
+  channels?: ObservatoryChannelFace;
 }
 
 export interface ObservatoryCredentialField {
@@ -56,6 +57,22 @@ export interface ObservatoryCredentialFace {
   submit(id: string, values: Record<string, string>, surface: string): { ok: true; ref: string } | { ok: false; reason: string };
   cancel(id: string, surface: string): boolean;
   revoke(ref: string): boolean;
+}
+
+export interface ObservatoryChannelCard {
+  id: string;
+  name: string;
+  state: 'disconnected' | 'pairing' | 'connected' | 'error';
+  detail?: string;
+  pairingCode?: string;
+  connectable: boolean;
+}
+
+export interface ObservatoryChannelFace {
+  list(): ObservatoryChannelCard[];
+  begin(id: string): { ok: boolean; requestId?: string; error?: string };
+  start(id: string, ref: string): { ok: boolean; channel?: ObservatoryChannelCard; error?: string };
+  disconnect(id: string): { ok: boolean; channel?: ObservatoryChannelCard; error?: string };
 }
 
 /** Everything the page loads, by exact path: no directory walk, so no traversal to defend against. */
@@ -363,6 +380,37 @@ export function createObservatoryRoutes(
           return jsonResponse({ ok: options.credentials.cancel(typeof body.id === 'string' ? body.id : '', 'web') }, 200, acceptEncoding);
         }
         return jsonResponse({ ok: options.credentials.revoke(typeof body.ref === 'string' ? body.ref : '') }, 200, acceptEncoding);
+      } catch (error) {
+        return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 500, acceptEncoding);
+      }
+    }
+
+    const channelRead = url.pathname === '/observatory/channels';
+    const channelAction = url.pathname.match(/^\/observatory\/channels\/([a-z0-9-]+)\/(begin|start|disconnect)$/u);
+    if (channelRead || channelAction) {
+      if (channelRead && request.method !== 'GET' && request.method !== 'HEAD') {
+        return new Response('method_not_allowed', { status: 405, headers: { allow: 'GET, HEAD' } });
+      }
+      if (!channelRead && request.method !== 'POST') {
+        return new Response('method_not_allowed', { status: 405, headers: { allow: 'POST' } });
+      }
+      if (!options.channels) return jsonResponse({ error: 'channels_unavailable' }, 404, acceptEncoding);
+      if (channelRead) {
+        if (!options.token) return jsonResponse({ error: 'observatory_write_token_unavailable' }, 403, acceptEncoding);
+        if (!observatoryTokensMatch(options.token, request.headers.get(OBSERVATORY_TOKEN_HEADER))) {
+          return jsonResponse({ error: 'invalid_observatory_token' }, 403, acceptEncoding);
+        }
+        return jsonResponse({ channels: options.channels.list() }, 200, acceptEncoding);
+      }
+      const refused = refuseWrite(request, options.token, acceptEncoding);
+      if (refused) return refused;
+      const body = await readJsonBody(request);
+      if (!body) return jsonResponse({ error: 'invalid_json' }, 400, acceptEncoding);
+      const [, id, action] = channelAction!;
+      try {
+        if (action === 'begin') return jsonResponse(options.channels.begin(id), 200, acceptEncoding);
+        if (action === 'start') return jsonResponse(options.channels.start(id, typeof body.ref === 'string' ? body.ref : ''), 200, acceptEncoding);
+        return jsonResponse(options.channels.disconnect(id), 200, acceptEncoding);
       } catch (error) {
         return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 500, acceptEncoding);
       }

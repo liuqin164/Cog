@@ -1,14 +1,13 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { CredentialVault } from '../src/credentials.ts';
 import { pluginWorkspaceDir } from '../src/plugins/self-install.ts';
 import { readPluginRegistry, writePluginRegistry } from '../src/plugins/registry.ts';
-import { TraceLog } from '../src/trace.ts';
 import { ScriptedProvider, makeShell, makeTempDir, waitUntil } from './helpers.ts';
 
 const NO_DREAM = { runKernelNight: false, maxEpisodes: 5, windowStartHour: 0, windowEndHour: 1 };
 const TOKEN = '123456:fake-token';
+const OBSERVATORY_TOKEN = 'telegram-observatory-token';
 const OWNER = 9001;
 const STRANGER = 9002;
 
@@ -55,11 +54,10 @@ function writeConfig(dataDir: string, apiBase: string): void {
   mkdirSync(dataDir, { recursive: true });
   writeFileSync(
     join(dataDir, 'telegram-channel.json'),
-    JSON.stringify({ credential: 'telegram-bot', ownerId: OWNER, apiBase }),
+    JSON.stringify({ apiBase }),
     { mode: 0o600 },
   );
-  const vault = new CredentialVault(dataDir, new TraceLog(dataDir), () => Date.now());
-  vault.save('telegram-bot', [{ name: 'token', label: 'Bot token', secret: true }], { token: TOKEN });
+  writeFileSync(join(dataDir, 'observatory-token'), `${OBSERVATORY_TOKEN}\n`, { mode: 0o600 });
 }
 
 function makeTelegramShell(dir: string, provider: ScriptedProvider, dataDir: string, extra: Record<string, unknown> = {}, options: any = {}) {
@@ -68,54 +66,108 @@ function makeTelegramShell(dir: string, provider: ScriptedProvider, dataDir: str
     dbPath: join(dataDir, 'memory.sqlite'),
     plugins: ['builtin:telegram-channel'],
     dream: NO_DREAM,
+    http: { enabled: true, port: 0, hostname: '127.0.0.1' },
     ...extra,
   }, options);
 }
 
+function post(base: string, path: string, body: unknown, token = OBSERVATORY_TOKEN): Promise<Response> {
+  return fetch(`${base}${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-observatory-token': token },
+    body: JSON.stringify(body),
+  });
+}
+
+async function channelState(base: string): Promise<{ state: string; pairingCode?: string }> {
+  const response = await fetch(`${base}/observatory/channels`, { headers: { 'x-observatory-token': OBSERVATORY_TOKEN } });
+  const body = await response.json() as { channels: Array<{ id: string; state: string; pairingCode?: string }> };
+  return body.channels.find((entry) => entry.id === 'telegram')!;
+}
+
+async function waitChannelState(base: string, wanted: string): Promise<{ state: string; pairingCode?: string }> {
+  const deadline = Date.now() + 5_000;
+  for (;;) {
+    const card = await channelState(base);
+    if (card.state === wanted) return card;
+    if (Date.now() > deadline) throw new Error(`timeout waiting for channel state ${wanted}; saw ${card.state}`);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+async function connectTelegram(base: string, fake: ReturnType<typeof startFakeTelegram>, updateId = 1): Promise<void> {
+  const begun = await post(base, '/observatory/channels/telegram/begin', {});
+  expect(begun.status).toBe(200);
+  const { requestId } = await begun.json() as { requestId: string };
+  const submitted = await post(base, '/observatory/credentials/submit', { id: requestId, values: { token: TOKEN } });
+  expect(submitted.status).toBe(200);
+  const saved = await submitted.json() as { ok: boolean; ref: string };
+  expect(saved.ok).toBe(true);
+  const started = await post(base, '/observatory/channels/telegram/start', { ref: saved.ref });
+  expect(started.status).toBe(200);
+  const startedBody = await started.json() as { ok: boolean; channel: { state: string; pairingCode: string } };
+  expect(startedBody.ok).toBe(true);
+  expect(startedBody.channel.state).toBe('pairing');
+  const code = startedBody.channel.pairingCode;
+  fake.push({ update_id: updateId, message: { text: code, chat: { id: OWNER }, from: { id: OWNER } } });
+  await waitChannelState(base, 'connected');
+}
+
 describe('telegram channel plugin (F12)', () => {
-  test('owner message goes through ingest and submit to a Telegram reply, and removal stops polling and sending', async () => {
+  test('connect through the Web channel page, pair the owner, talk, disconnect, and reconnect', async () => {
     const fake = startFakeTelegram();
     const dir = makeTempDir('telegram-channel-');
     const dataDir = join(dir, 'data');
     writeConfig(dataDir, fake.base);
     writePluginRegistry(dataDir, ['builtin:telegram-channel']);
-    const provider = new ScriptedProvider([{ text: '你好', toolCalls: [] }]);
+    const provider = new ScriptedProvider([{ text: '你好', toolCalls: [] }, { text: '又见面了', toolCalls: [] }]);
     const shell = makeTelegramShell(dir, provider, dataDir);
     await shell.start();
+    const base = shell.httpUrl!;
     try {
-      fake.push({ update_id: 1, message: { text: '你好', chat: { id: OWNER }, from: { id: OWNER } } });
+      expect((await channelState(base)).state).toBe('disconnected');
+      expect((await fetch(`${base}/observatory/channels`)).status).toBe(403);
+      expect(await (await fetch(`${base}/observatory/`)).text()).toContain('id="tab-channels"');
+      expect((await post(base, '/observatory/channels/telegram/begin', {}, '')).status).toBe(403);
+
+      await connectTelegram(base, fake);
+      fake.push({ update_id: 2, message: { text: '你好', chat: { id: OWNER }, from: { id: OWNER } } });
       await waitUntil(() => fake.sent.some((entry) => entry.method === 'sendMessage' && entry.body.text === '你好'));
       expect(shell.trace.read().some((record) => record.kind === 'telegram_ingress_failed')).toBe(false);
 
+      const storage = join(dataDir, 'credentials.json');
+      expect(readFileSync(storage, 'utf8')).toContain(TOKEN);
+      expect(statSync(storage).mode & 0o777).toBe(0o600);
+      expect(readFileSync(join(dataDir, 'telegram-channel.json'), 'utf8')).not.toContain(TOKEN);
+      expect(JSON.stringify(shell.trace.read())).not.toContain(TOKEN);
+      expect(JSON.stringify(provider.calls)).not.toContain(TOKEN);
+      const ledgerText = (shell.kernel as any).eventStore.queryEvents(1, 1000, { projectId: [shell.config.projectId] })
+        .records.map((record: any) => JSON.stringify(record.payload ?? {})).join('\n');
+      expect(ledgerText).not.toContain(TOKEN);
+      expect(await (await fetch(`${base}/observatory/channels`)).text()).not.toContain(TOKEN);
+      expect(await (await fetch(`${base}/observatory/app.js`)).text()).not.toContain(TOKEN);
+
       const ledgerBefore = (shell.kernel as any).eventStore.queryEvents(1, 1, { projectId: [shell.config.projectId] }).total;
-      await shell.pluginsAdmin.removePlugin('builtin:telegram-channel');
-      await waitUntil(() => shell.trace.read().some((record) => record.kind === 'plugin_removed'));
+      expect((await post(base, '/observatory/channels/telegram/disconnect', {})).status).toBe(200);
+      expect((await channelState(base)).state).toBe('disconnected');
+      expect(readFileSync(storage, 'utf8')).not.toContain(TOKEN);
       await new Promise((resolve) => setTimeout(resolve, 50));
       const callsAfterStop = fake.calls();
       const sentAfterStop = fake.sent.length;
-      fake.push({ update_id: 2, message: { text: '还在吗', chat: { id: OWNER }, from: { id: OWNER } } });
+      fake.push({ update_id: 3, message: { text: '还在吗', chat: { id: OWNER }, from: { id: OWNER } } });
       await new Promise((resolve) => setTimeout(resolve, 150));
       expect(fake.calls()).toBe(callsAfterStop);
       expect(fake.sent.length).toBe(sentAfterStop);
       const ledgerAfter = (shell.kernel as any).eventStore.queryEvents(1, 1, { projectId: [shell.config.projectId] }).total;
       expect(ledgerAfter).toBe(ledgerBefore);
+
+      await connectTelegram(base, fake, 100);
+      fake.push({ update_id: 101, message: { text: '重连了吗', chat: { id: OWNER }, from: { id: OWNER } } });
+      await waitUntil(() => fake.sent.some((entry) => entry.method === 'sendMessage' && entry.body.text === '又见面了'));
+      expect(readPluginRegistry(dataDir)).toContain('builtin:telegram-channel');
     } finally {
       await shell.stop();
       fake.stop();
-    }
-
-    const reinstallFake = startFakeTelegram();
-    writeConfig(dataDir, reinstallFake.base);
-    writePluginRegistry(dataDir, ['builtin:telegram-channel']);
-    const reinstalled = makeTelegramShell(dir, new ScriptedProvider([{ text: '又见面了', toolCalls: [] }]), dataDir);
-    await reinstalled.start();
-    try {
-      reinstallFake.push({ update_id: 1, message: { text: '重装了吗', chat: { id: OWNER }, from: { id: OWNER } } });
-      await waitUntil(() => reinstallFake.sent.some((entry) => entry.method === 'sendMessage' && entry.body.text === '又见面了'));
-      expect(readPluginRegistry(dataDir)).toContain('builtin:telegram-channel');
-    } finally {
-      await reinstalled.stop();
-      reinstallFake.stop();
     }
   }, 60_000);
 
@@ -127,7 +179,9 @@ describe('telegram channel plugin (F12)', () => {
     writePluginRegistry(dataDir, ['builtin:telegram-channel']);
     const shell = makeTelegramShell(dir, new ScriptedProvider([{ text: 'ok', toolCalls: [] }]), dataDir);
     await shell.start();
+    const base = shell.httpUrl!;
     try {
+      await connectTelegram(base, fake);
       const sourcePath = join(pluginWorkspaceDir(dataDir), 'echo', 'index.ts');
       mkdirSync(dirname(sourcePath), { recursive: true });
       writeFileSync(sourcePath, "export default { name: 'echo-plugin', apply() {} };\n");
@@ -167,7 +221,9 @@ describe('telegram channel plugin (F12)', () => {
       quiet: { startHour: 23, endHour: 7 },
     }, { now: () => now });
     await shell.start();
+    const base = shell.httpUrl!;
     try {
+      await connectTelegram(base, fake);
       await shell.host.bus.emit('companion_emergence', { id: 'surfacing:commitment:day', text: '该交周报了', reason: '承诺到期' });
       await waitUntil(() => fake.sent.some((entry) => entry.method === 'sendMessage' && entry.body.text === '该交周报了'));
 
