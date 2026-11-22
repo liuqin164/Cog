@@ -1,11 +1,4 @@
-/**
- * One resident host process per data directory: the "no two RUNNING" rule at process scope.
- *
- * A lock whose pid is gone is stale (the kill test exists precisely because SIGKILL leaves one), so
- * taking it over is recovery, not a second host. A lock whose pid is alive refuses to start, which
- * is the property a checkpoint alone cannot give.
- */
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 
 export class RuntimeLockHeldError extends Error {
@@ -38,33 +31,50 @@ export class ProcessLock {
   }
 
   acquire(pid = process.pid, now = Date.now()): { recoveredStalePid?: number } {
-    // The data directory is private: it holds the ledger, the observatory token and the attach
-    // socket. A hand-run shell must not create it 0755 (#292); the installer already uses 0700.
     mkdirSync(this.dir, { recursive: true, mode: 0o700 });
     try {
       chmodSync(this.dir, 0o700);
-    } catch {
-      // A directory we cannot tighten is still usable by this user; the attach socket's own 0600
-      // remains the connect gate.
-    }
-    if (existsSync(this.path)) {
-      let holder: RuntimeLock | undefined;
+    } catch {}
+    let recoveredStalePid: number | undefined;
+    for (let attempt = 0; attempt < 64; attempt += 1) {
+      let fd: number;
       try {
-        holder = JSON.parse(readFileSync(this.path, 'utf8')) as RuntimeLock;
-      } catch {
-        holder = undefined;
+        fd = openSync(this.path, 'wx', 0o600);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        const holder = this.read();
+        if (holder?.pid === pid) {
+          writeFileSync(this.path, JSON.stringify({ pid, at: now }), 'utf8');
+          return recoveredStalePid === undefined ? {} : { recoveredStalePid };
+        }
+        if (holder && isAlive(holder.pid)) throw new RuntimeLockHeldError(holder.pid);
+        if (holder?.pid !== undefined) recoveredStalePid = holder.pid;
+        const stalePath = `${this.path}.${pid}.${attempt}.stale`;
+        try {
+          renameSync(this.path, stalePath);
+        } catch (renameError) {
+          if ((renameError as NodeJS.ErrnoException).code !== 'ENOENT') throw renameError;
+        }
+        rmSync(stalePath, { force: true });
+        continue;
       }
-      if (holder && holder.pid !== pid && isAlive(holder.pid)) throw new RuntimeLockHeldError(holder.pid);
-      const stale = holder?.pid;
-      this.write(pid, now);
-      return stale === undefined ? {} : { recoveredStalePid: stale };
+      try {
+        writeSync(fd, JSON.stringify({ pid, at: now }));
+      } finally {
+        closeSync(fd);
+      }
+      const holder = this.read();
+      if (holder?.pid === pid) return recoveredStalePid === undefined ? {} : { recoveredStalePid };
     }
-    this.write(pid, now);
-    return {};
+    throw new RuntimeLockHeldError(this.read()?.pid ?? pid);
   }
 
-  private write(pid: number, at: number): void {
-    writeFileSync(this.path, JSON.stringify({ pid, at }), 'utf8');
+  private read(): RuntimeLock | undefined {
+    try {
+      return JSON.parse(readFileSync(this.path, 'utf8')) as RuntimeLock;
+    } catch {
+      return undefined;
+    }
   }
 
   release(pid = process.pid): void {
@@ -72,8 +82,6 @@ export class ProcessLock {
     try {
       const holder = JSON.parse(readFileSync(this.path, 'utf8')) as RuntimeLock;
       if (holder.pid === pid) rmSync(this.path, { force: true });
-    } catch {
-      // An unreadable lock is the next process's stale-lock problem; releasing ours is best effort.
-    }
+    } catch {}
   }
 }
