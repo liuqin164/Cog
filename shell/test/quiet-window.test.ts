@@ -29,8 +29,21 @@ describe('the quiet window gates proactive speech (#328)', () => {
       });
       shell.kernel.commitments.compile({ projectId: shell.config.projectId, now: QUIET_AT + 1_000 });
 
+      const contract = (shell as any).channelContract;
+      const telegram = contract.register({
+        channelId: 'telegram:1',
+        occasion: 'private',
+        accounts: [{ accountId: 'owner', role: 'owner' }],
+        reachability: 'online',
+        interruptibility: 'normal',
+      });
+      contract.presence(telegram, { reachability: 'online', ownerActivity: 'idle', at: QUIET_AT });
       const events: unknown[] = [];
+      const pushes: unknown[] = [];
       shell.host.bus.on('companion_emergence', (event: unknown) => events.push(event));
+      shell.host.bus.on('companion_emergence', (event: any) => {
+        if (event.channelId === telegram.channelId && event.strength === 'proactive') pushes.push(event);
+      });
 
       await shell.tick(QUIET_AT);
       expect(events).toHaveLength(0);
@@ -46,6 +59,8 @@ describe('the quiet window gates proactive speech (#328)', () => {
       now = AFTER_QUIET;
       await shell.tick(AFTER_QUIET);
       expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ channelId: 'telegram:1', strength: 'incidental' });
+      expect(pushes).toHaveLength(0);
       expect(provider.calls).toHaveLength(2);
       expect(shell.machine.runtime.awayQueue).toHaveLength(0);
     } finally {
