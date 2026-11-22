@@ -24,22 +24,42 @@ function truncate(text: string, limit: number): string {
 }
 
 export class RunLoop {
+  private readonly inboundResults = new Map<string, RunSummary | Error>();
+  private readonly inboundWaiters = new Set<string>();
+  private inDrain = false;
+  private drainPromise?: Promise<void>;
+
   constructor(private readonly shell: CompanionShell) {}
 
   async submit(text: string, channel = 'terminal'): Promise<RunSummary | undefined> {
+    if (!text.trim()) throw new Error('submit_empty_text');
     if (this.shell.machine.state === 'RUNNING') {
-      this.shell.runtime!.steer(text);
-      this.shell.statusFace.emitSteering();
+      if (this.shell.runtime?.isRunning && channel === this.shell.currentChannel) {
+        this.shell.runtime.steer(text);
+        this.shell.statusFace.emitSteering();
+        return undefined;
+      }
+      this.shell.clock!.markInteraction(this.shell.now());
+      this.shell.residentTick.observeSurfacingReply(text);
+      this.enqueueInbound(text, channel, 'queued');
       return undefined;
     }
     if (this.shell.statusFace.dailyBudgetExceeded()) this.shell.statusFace.announceDailyBudget('user_message');
     if (this.shell.machine.state === 'SUSPENDED') return this.submitWhileSuspended(text, channel);
-    this.beginUserAssignment(text);
     this.shell.clock!.markInteraction(this.shell.now());
     this.shell.residentTick.observeSurfacingReply(text);
-    await this.wakeIfNeeded('message_received');
-    if (this.shell.machine.state !== 'IDLE') throw new Error(`submit_requires_idle: state is ${this.shell.machine.state}`);
-    return this.executeRun(text, 'message_received', 'user_message', 'message_received', undefined, channel);
+    const id = this.enqueueInbound(text, channel, 'queued');
+    this.inboundWaiters.add(id);
+    let result: RunSummary | Error | undefined;
+    try {
+      await this.drainInbound();
+    } finally {
+      result = this.inboundResults.get(id);
+      this.inboundResults.delete(id);
+      this.inboundWaiters.delete(id);
+    }
+    if (result instanceof Error) throw result;
+    return result;
   }
 
   /**
@@ -56,11 +76,26 @@ export class RunLoop {
     if (suspension?.kind === 'question') {
       this.shell.machine.updateRuntime({ suspension: { ...suspension, answeredAt: this.shell.now() } });
       this.shell.trace.append('suspension_answered', { id: suspension.id, assignmentId: suspension.assignmentId, chars: text.trim().length });
-      return this.executeRun(text, 'message_received', 'question_answered', 'answer_received', undefined, channel);
+      try {
+        return await this.executeRun(text, 'message_received', 'question_answered', 'answer_received', undefined, channel);
+      } catch (error) {
+        this.retainFailed(text, channel, error);
+        throw error;
+      }
     }
     if (suspension) this.shell.proposalsHandlers.supersedeSuspension('new_input');
     this.beginUserAssignment(text);
-    return this.executeRun(text, 'message_received', 'user_message', 'message_received', undefined, channel);
+    try {
+      return await this.executeRun(text, 'message_received', 'user_message', 'message_received', undefined, channel);
+    } catch (error) {
+      this.retainFailed(text, channel, error);
+      throw error;
+    }
+  }
+
+  async wake(): Promise<void> {
+    if (this.shell.machine.state !== 'DREAMING' && this.shell.machine.state !== 'DORMANT') return;
+    await this.wakeIfNeeded('message_received');
   }
 
   async wakeIfNeeded(trigger: 'message_received' | 'wake_intent_due' | 'emergence_due'): Promise<void> {
@@ -127,6 +162,8 @@ export class RunLoop {
       if (this.shell.machine.state === 'SUSPENDED' && this.shell.machine.runtime.suspension?.kind === 'budget') {
         this.shell.proposalsHandlers.offerResume(this.shell.machine.runtime.suspension.id);
       }
+      this.recoverStrandedSteering(this.shell.currentChannel);
+      await this.drainInbound();
       if (!this.shell.clock!.nextPendingIntent()) this.shell.clock!.scheduleIdleWake();
       return summary;
     } catch (error) {
@@ -142,9 +179,105 @@ export class RunLoop {
           });
         }
       }
+      try {
+        this.recoverStrandedSteering(this.shell.currentChannel);
+        await this.drainInbound();
+      } catch (drainError) {
+        this.shell.trace.append('inbound_drain_failed', {
+          runId,
+          message: drainError instanceof Error ? drainError.message : String(drainError),
+        });
+      }
       throw error;
     } finally {
       this.shell.hideAssignmentContext = false;
+    }
+  }
+
+  private enqueueInbound(text: string, channel: string, status: 'queued' | 'failed', error?: string): string {
+    const entry = {
+      id: `inbound-${this.shell.now().toString(36)}-${randomUUID().slice(0, 8)}`,
+      text,
+      channel,
+      at: this.shell.now(),
+      status,
+      ...(error ? { error } : {}),
+    };
+    this.shell.machine.updateRuntime({ inboundQueue: [...(this.shell.machine.runtime.inboundQueue ?? []), entry] });
+    this.shell.trace.append(status === 'failed' ? 'inbound_failed_retained' : 'inbound_queued', {
+      id: entry.id,
+      channel,
+      chars: text.trim().length,
+      ...(error ? { message: error } : {}),
+    });
+    return entry.id;
+  }
+
+  private dropInbound(id: string): void {
+    const kept = (this.shell.machine.runtime.inboundQueue ?? []).filter((entry) => entry.id !== id);
+    this.shell.machine.updateRuntime({ inboundQueue: kept.length > 0 ? kept : undefined });
+  }
+
+  private retainFailed(text: string, channel: string, error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error);
+    try {
+      this.enqueueInbound(text, channel, 'failed', message);
+    } catch (nested) {
+      this.shell.trace.append('inbound_retention_failed', {
+        channel,
+        message: nested instanceof Error ? nested.message : String(nested),
+      });
+    }
+  }
+
+  private recoverStrandedSteering(channel: string): void {
+    const runtime = this.shell.runtime;
+    if (!runtime) return;
+    const lines = [...runtime.steeringMessages];
+    if (lines.length === 0) return;
+    for (let index = 0; index < lines.length; index += 1) runtime.withdrawSteering();
+    this.shell.trace.append('steering_recovered_to_inbound', { count: lines.length, channel });
+    for (const line of lines) this.enqueueInbound(line, channel, 'queued');
+  }
+
+  private async drainInbound(): Promise<void> {
+    if (this.inDrain) return;
+    if (this.drainPromise) {
+      await this.drainPromise;
+      return;
+    }
+    this.inDrain = true;
+    this.drainPromise = this.runInboundQueue().finally(() => {
+      this.inDrain = false;
+      this.drainPromise = undefined;
+    });
+    await this.drainPromise;
+  }
+
+  private async runInboundQueue(): Promise<void> {
+    for (;;) {
+      const entry = (this.shell.machine.runtime.inboundQueue ?? []).find((item) => item.status === 'queued');
+      if (!entry) return;
+      const state = this.shell.machine.state;
+      if (state === 'RUNNING') return;
+      if (state === 'DORMANT' || state === 'WAKING' || state === 'DREAMING') {
+        await this.wakeIfNeeded('message_received');
+        if (this.shell.machine.state !== 'IDLE') return;
+      }
+      if (this.shell.machine.state === 'SUSPENDED') this.shell.proposalsHandlers.supersedeSuspension('new_input');
+      this.dropInbound(entry.id);
+      this.beginUserAssignment(entry.text);
+      try {
+        const summary = await this.executeRun(entry.text, 'message_received', 'inbound_queue', 'message_received', undefined, entry.channel);
+        if (this.inboundWaiters.has(entry.id)) this.inboundResults.set(entry.id, summary);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const failure = error instanceof Error ? error : new Error(message);
+        this.shell.trace.append('inbound_failed', { id: entry.id, channel: entry.channel, message });
+        this.retainFailed(entry.text, entry.channel, error);
+        if (this.inboundWaiters.has(entry.id)) this.inboundResults.set(entry.id, failure);
+        return;
+      }
     }
   }
 
