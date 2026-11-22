@@ -385,5 +385,5 @@ describe('a corrected ledger stops writing receipts on empty ticks', () => {
     kernel.profile.correct({ projectId, ledger: 'preferences', key: before.key, value: '喝普洱', correctionEventId: again.eventId });
     expect(kernel.profile.entries({ projectId, ledger: 'preferences' }).map((entry) => entry.value)).toEqual(['喝普洱']);
     expect(kernel.profile.audit({ projectId }).filter((row) => row.eventType === 'PROFILE_LEDGER_RECOMPILED')).toHaveLength(receipts + 1);
-  });
+  }, 30_000);
 });

@@ -661,7 +661,7 @@ export class IntentionBook {
           };
         }
       }
-      const signals = recognizeIntentions({ text, role: event.role ?? 'user', occurredAt: event.occurredAt });
+      const signals = recognizeIntentions({ text, role: event.role ?? 'user', occurredAt: event.occurredAt, timeZone: this.events.getProjectTimeZone() });
       signals.forEach((signal, index) => {
         const intentionId = intentionIdOfConversation(projectId, event.eventId, index);
         if (byId.has(intentionId)) return;

@@ -73,7 +73,7 @@ export function assertLocalDate(value: string, timeZone?: string): string {
   const check = new Date(Date.UTC(year, month - 1, day));
   if (check.getUTCFullYear() !== year || check.getUTCMonth() + 1 !== month || check.getUTCDate() !== day) throw new Error(`invalid_local_date:${value}`);
   const zone = resolveTimeZone(timeZone);
-  const midnight = zonedMidnight(year, month, day, zone);
+  const midnight = zonedTime(year, month, day, 0, 0, zone);
   if (localDateFor(midnight, zone) !== value) throw new Error(`invalid_civil_date:${value}:${zone}`);
   return value;
 }
@@ -88,7 +88,7 @@ export function localDateRange(year: number, month: number, day: number, endYear
   const zone = resolveTimeZone(timeZone);
   assertLocalDate(formatCivilDate(year, month, day), zone);
   assertLocalDate(formatCivilDate(endYear, endMonth, endDay), zone);
-  return { from: zonedMidnight(year, month, day, timeZone), to: zonedMidnight(endYear, endMonth, endDay, timeZone) };
+  return { from: zonedTime(year, month, day, 0, 0, timeZone), to: zonedTime(endYear, endMonth, endDay, 0, 0, timeZone) };
 }
 
 /** Advance an already-valid civil date without treating the result as user input. */
@@ -114,15 +114,15 @@ function formatCivilDate(year: number, month: number, day: number): string {
   return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
-function zonedMidnight(year: number, month: number, day: number, timeZone?: string): number {
-  const zone = resolveTimeZone(timeZone);
-  const formatter = civilFormatter(zone);
-  let guess = Date.UTC(year, month - 1, day);
+export function zonedTime(year: number, month: number, day: number, hour: number, minute: number, timeZone?: string): number {
+  const formatter = civilFormatter(resolveTimeZone(timeZone));
+  const wall = Date.UTC(year, month - 1, day, hour, minute);
+  let guess = wall;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const parts = formatter.formatToParts(new Date(guess));
     const value = (type: string) => Number(parts.find((part) => part.type === type)?.value ?? 0);
     const displayed = Date.UTC(value('year'), value('month') - 1, value('day'), value('hour'), value('minute'), value('second'));
-    guess += Date.UTC(year, month - 1, day) - displayed;
+    guess += wall - displayed;
   }
   return guess;
 }

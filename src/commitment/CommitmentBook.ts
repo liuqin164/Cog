@@ -606,7 +606,7 @@ export class CommitmentBook {
           };
         }
       }
-      const signals = recognizeCommitments({ text, role: event.role ?? 'user', occurredAt: event.occurredAt });
+      const signals = recognizeCommitments({ text, role: event.role ?? 'user', occurredAt: event.occurredAt, timeZone: this.events.getProjectTimeZone() });
       signals.forEach((signal, index) => {
         const commitmentId = commitmentIdOf(projectId, event.eventId, index);
         if (byId.has(commitmentId)) return;

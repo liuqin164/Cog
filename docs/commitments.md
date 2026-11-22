@@ -62,6 +62,10 @@ A conditional promise (`收到货以后我马上处理退款`, `等发货后我�
 `dueCondition` and no `dueAt`: only the event can start its clock. The soft markers (`稍后`, `尽快`)
 get the frozen 24-hour horizon.
 
+Day boundaries and the `18:00` / `22:00` instants are the project's time zone, not UTC. The book
+passes the `EventStore` project zone into `recognizeCommitments`, which passes it to
+`parseCommitmentDue`; a project with no configured zone uses the host zone, then UTC.
+
 ## Completion and cancellation
 
 Completion evidence is the owner's own word, in a later turn from the same side: explicit

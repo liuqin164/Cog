@@ -80,17 +80,17 @@ export function recognizeIntentions(input: {
   text: string;
   role: MemoryEventRole;
   occurredAt: number;
+  timeZone?: string;
 }): IntentionSignal[] {
   if (input.role !== 'assistant' && input.role !== 'agent') return [];
   const out: IntentionSignal[] = [];
   for (const clause of clausesOf(input.text)) {
     if (isRefused(clause)) continue;
     if (!FIRST_PERSON.test(clause) || !PLAN.test(clause) || !ACTION.test(clause)) continue;
-    // A plan marker alone is not a plan; the clause needs something it is about.
     if (clause.replace(PLAN, '').replace(/[我，,、\s]/gu, '').length < 4) continue;
     // F16 owns promise shape. A clause it claims is a commitment, not an intention.
-    if (recognizeCommitments({ text: clause, role: input.role, occurredAt: input.occurredAt }).length > 0) continue;
-    const due = parseCommitmentDue(clause, input.occurredAt);
+    if (recognizeCommitments({ text: clause, role: input.role, occurredAt: input.occurredAt, timeZone: input.timeZone }).length > 0) continue;
+    const due = parseCommitmentDue(clause, input.occurredAt, input.timeZone);
     out.push({ content: contentOf(clause), dueAt: due.dueAt });
   }
   return out;
