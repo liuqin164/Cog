@@ -24,6 +24,8 @@ import {
 } from './AgentRecallQueryCompiler.js';
 import { cliArg } from '../utils/CliArgument.js';
 import { projectPhaseItems } from '../recall/PhaseProjection.js';
+import { localDateRange, nextCivilDate } from '../utils/LocalDateContext.js';
+import { relativeDateRange } from '../temporal/RelativeDateRange.js';
 import { eventHoldsSecretMark } from '../security/SecretMarks.js';
 import { eventHoldsLifeSensitivityMark } from '../security/LifeSensitivity.js';
 import { RecallDecisionTrace, type RecallTraceSuppression } from '../observability/RecallDecisionTrace.js';
@@ -735,9 +737,14 @@ export class AgentRecallEngine {
     return { frequent, rare };
   }
 
-  // Everything but the semantic-index answer: that is a property of the kernel, not of
-  // which lane answered, so it is added once at the single exit above.
   private recallCore(query: AgentRecallQuery): RecallCoreResult {
+    const timeZone = query.timeZone ?? this.kernel.eventStore.getProjectTimeZone();
+    const relative = relativeDateRange(query.query, { now: query.now, localDateNow: query.localDateNow, timeZone });
+    query = {
+      ...query,
+      ...(timeZone === undefined ? {} : { timeZone }),
+      ...(relative ? { startTime: query.startTime ?? relative.from, endTime: query.endTime ?? relative.to } : {}),
+    };
     const queryPlan = compileAgentRecallQuery({
       query: query.query,
       intent: query.intent,
@@ -748,9 +755,6 @@ export class AgentRecallEngine {
     const forensic = FORENSIC_SOCIAL_EXEMPT_INTENTS.has(String(query.intent ?? ''));
     const allowsGraph = laneAllowed(query.retrievalPolicy, 'graph');
     const allowsRawSource = laneAllowed(query.retrievalPolicy, 'raw_source');
-    // Only the three intents below merge atlas items into their result. The
-    // ordinary recall path reads the atlas itself, so computing these up front
-    // made every recall pay for a second atlas read and throw the result away.
     const withEarlyAtlasItems = (result: RecallCoreResult): RecallCoreResult =>
       query.projectId === undefined || !allowsGraph
         ? result
@@ -1108,27 +1112,23 @@ export class AgentRecallEngine {
   }
 
   private rawEventsForLocalDateCue(query: AgentRecallQuery, limit: number): MemoryEvent[] {
-    const localDate = localDateCue(query.query, query);
+    const timeZone = query.timeZone ?? this.kernel.eventStore.getProjectTimeZone();
+    const localDate = localDateCue(query.query, { now: query.now, localDateNow: query.localDateNow, timeZone });
     if (!localDate) return [];
     const [year, month, day] = localDate.split('-').map(Number);
-    const byLocalDate = this.kernel.eventStore.queryEvents(1, 1000, {
+    const scope = {
       projectId: query.projectId !== undefined ? [query.projectId] : undefined,
       workspaceId: query.workspaceId ? [query.workspaceId] : undefined,
-    }).records.filter((event) => event.localDate === localDate).slice(0, limit);
+    };
+    const byLocalDate = this.kernel.eventStore.queryEvents(1, Math.max(1, limit), { ...scope, localDate }).records;
     if (byLocalDate.length) return byLocalDate;
-    const startTime = Date.UTC(year!, month! - 1, day!);
-    const endTime = Date.UTC(year!, month! - 1, day! + 1);
-    const byTime = this.kernel.eventStore.queryEvents(1, Math.max(1, Math.min(limit, 200)), {
-      projectId: query.projectId !== undefined ? [query.projectId] : undefined,
-      workspaceId: query.workspaceId ? [query.workspaceId] : undefined,
-      startTime,
-      endTime,
+    const next = nextCivilDate(year!, month!, day!, 1, timeZone);
+    const range = localDateRange(year!, month!, day!, next[0], next[1], next[2], timeZone);
+    return this.kernel.eventStore.queryEvents(1, Math.max(1, Math.min(limit, 200)), {
+      ...scope,
+      startTime: range.from,
+      endTime: range.to,
     }).records;
-    if (byTime.length) return byTime;
-    return this.kernel.eventStore.queryEvents(1, 1000, {
-      projectId: query.projectId !== undefined ? [query.projectId] : undefined,
-      workspaceId: query.workspaceId ? [query.workspaceId] : undefined,
-    }).records.filter((event) => event.localDate === localDate).slice(0, limit);
   }
 
   private rawLedgerFallbackItemsForQuery(
@@ -1546,6 +1546,8 @@ export class AgentRecallEngine {
 
   private isRawEventInRecallScope(event: MemoryEvent, query: AgentRecallQuery, effectiveIntent?: AgentRecallIntent): boolean {
     if (event.eventType === 'SHELL_STATE_RECORDED') return false;
+    if (query.startTime !== undefined && event.occurredAt < query.startTime) return false;
+    if (query.endTime !== undefined && event.occurredAt >= query.endTime) return false;
     if (isToolObservationEvent(event) && !isPromotedToolObservation(event)) return false;
     if (eventHoldsSecretMark(event) && !FORENSIC_SOCIAL_EXEMPT_INTENTS.has(String(effectiveIntent ?? ''))) {
       SECRET_WITHHELD_EVENT_IDS.set(this, (SECRET_WITHHELD_EVENT_IDS.get(this) ?? new Set()).add(event.eventId));

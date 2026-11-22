@@ -4,7 +4,7 @@
 
 import type { QueryIR, IntentType, QuerySemanticHints, TemporalConstraint, SpatialConstraint } from '../types/query-ir.js';
 
-const TEMPORAL_KEYWORDS: Record<string, TemporalConstraint> = {
+export const TEMPORAL_KEYWORDS: Record<string, TemporalConstraint> = {
   '今天': { relative: 'today' },
   '昨天': { relative: 'yesterday' },
   '本周': { relative: 'this_week' },

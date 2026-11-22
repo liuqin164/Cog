@@ -944,6 +944,7 @@ export interface EventAuditPage {
     workspaceId?: string[];
     threadId?: string[];
     sessionId?: string[];
+    localDate?: string;
     startTime?: number;
     endTime?: number;
     sinceGlobalSeq?: number;

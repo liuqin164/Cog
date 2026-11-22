@@ -766,7 +766,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       agentId: this.config.agentId,
       projectId: this.config.projectId,
       sessionId: this.config.sessionId,
-      targetTokens: () => this.targetTokens(),
+      targetTokens: () => this.targetTokens(), clock: () => ({ now: this.now(), timeZone: this.kernel.eventStore.getProjectTimeZone() }),
       tailTurns: this.config.tailTurns,
       pinned: () => this.contextLanes.lanePinned(),
       profile: () => this.contextLanes.laneProfile(),

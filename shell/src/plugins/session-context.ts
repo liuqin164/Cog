@@ -23,6 +23,7 @@ export interface SessionContextPluginConfig {
   sessionId: string;
   /** The model route's sweet spot, read at request time so a route switch takes effect. */
   targetTokens: () => number;
+  clock: () => { now: number; timeZone?: string };
   /** How many recent turns stay verbatim; the kernel splits the rest into the digest. */
   tailTurns: number;
   pinned: () => string[];
@@ -112,7 +113,7 @@ export function sessionContextPlugin(config: SessionContextPluginConfig): Native
                 query,
                 excludeSessionId: config.sessionId,
                 excludeSessionTailTurns: config.tailTurns,
-                limit: config.recallLimit ?? 3,
+                limit: config.recallLimit ?? 3, ...config.clock(),
               }).items.map(toContextItem)
             : [];
           const assembly = assemble(recall, recent, busCtx?.runId, undefined, query, toolNames);
