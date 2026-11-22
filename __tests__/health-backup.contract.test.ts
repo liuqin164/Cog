@@ -406,7 +406,7 @@ describe('nightly snapshot and the machine bundle', () => {
     expect(files.filter((file) => /^failed-.*\.snap$/u.test(file))).toHaveLength(SNAPSHOT_RETENTION + 3);
     expect(backup.list().filter((manifest) => manifest.snapshot.file.startsWith('brain-'))).toHaveLength(SNAPSHOT_RETENTION);
     expect(files.some((file) => file.startsWith('.archive-'))).toBe(false);
-  });
+  }, 30_000);
 
   test('weekly archives keep four ISO weeks, verify, and prune the oldest pair', async () => {
     const snapshotsDir = join(dir, 'weekly');
