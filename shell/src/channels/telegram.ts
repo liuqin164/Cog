@@ -9,6 +9,7 @@ import type { ChannelRegistry } from './registry.ts';
 
 export interface TelegramShell {
   submit(text: string, channel?: string): Promise<unknown>;
+  currentChannel: string;
   confirmProposal(id: string): Promise<{ ok: boolean; reason?: string; proposal?: { resultText?: string } }>;
   discardProposal(id: string): unknown;
 }
@@ -137,7 +138,7 @@ export class TelegramChannel {
   private disposed = false;
   private offset = 0;
   private chatId?: string;
-  private pendingReplies = 0;
+  private replyRuns = new Set<string>();
   private failures = 0;
   private lastError?: string;
 
@@ -197,7 +198,7 @@ export class TelegramChannel {
     if (previous && previous !== credential) this.options.credentials.revoke(previous);
     this.session = undefined;
     this.chatId = undefined;
-    this.pendingReplies = 0;
+    this.replyRuns.clear();
     this.config = { apiBase: this.config.apiBase, credential };
     this.persist();
     this.state = 'pairing';
@@ -215,7 +216,7 @@ export class TelegramChannel {
     if (this.config.credential) this.options.credentials.revoke(this.config.credential);
     this.session = undefined;
     this.chatId = undefined;
-    this.pendingReplies = 0;
+    this.replyRuns.clear();
     this.pairingCode = undefined;
     this.pairingExpiresAt = 0;
     this.state = 'disconnected';
@@ -227,12 +228,18 @@ export class TelegramChannel {
     return this.card();
   }
 
-  onBusEvent(name: string, payload: any): void {
-    if (name === 'message_end') {
-      if (this.state === 'connected' && this.pendingReplies > 0 && payload?.message?.role === 'assistant' && typeof payload.message.content === 'string' && payload.message.content !== '') {
-        this.pendingReplies -= 1;
-        void this.send(payload.message.content);
+  onBusEvent(name: string, payload: any, ctx?: { runId?: string }): void {
+    if (name === 'agent_start') {
+      if (this.state === 'connected' && this.session && this.options.shell.currentChannel === this.session.channelId && typeof ctx?.runId === 'string') {
+        this.replyRuns.add(ctx.runId);
       }
+      return;
+    }
+    if (name === 'agent_end') {
+      const runId = ctx?.runId;
+      if (typeof runId !== 'string' || !this.replyRuns.delete(runId)) return;
+      const text = payload?.summary?.lastAssistantText;
+      if (typeof text === 'string' && text !== '') void this.send(text);
       return;
     }
     if (name === 'companion_command_proposal') {
@@ -368,9 +375,7 @@ export class TelegramChannel {
     }
     this.chatId = String(message.chat.id);
     this.options.contract.presence(this.session, { reachability: 'online', ownerActivity: 'active' });
-    this.pendingReplies += 1;
     void this.options.shell.submit(ingress.text, this.session.channelId).catch((error) => {
-      this.pendingReplies = Math.max(0, this.pendingReplies - 1);
       this.options.trace.append('telegram_submit_failed', { message: error instanceof Error ? error.message : String(error) });
     });
   }
@@ -538,8 +543,8 @@ export function telegramChannelPlugin(options: TelegramChannelPluginOptions): Na
           return { ok: true };
         },
       });
-      for (const name of ['message_end', 'companion_command_proposal', 'companion_emergence']) {
-        ctx.on(name, (payload: any) => channel.onBusEvent(name, payload));
+      for (const name of ['agent_start', 'agent_end', 'companion_command_proposal', 'companion_emergence']) {
+        ctx.on(name, (payload: any, busCtx?: { runId?: string }) => channel.onBusEvent(name, payload, busCtx));
       }
       channel.start();
       ctx.dispose(() => {

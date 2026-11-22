@@ -251,6 +251,39 @@ describe('telegram channel plugin (F12)', () => {
     }
   }, 60_000);
 
+  test('a tool round sends only the final answer, and a Web run sends nothing to Telegram', async () => {
+    const fake = startFakeTelegram();
+    const dir = makeTempDir('telegram-tool-round-');
+    const dataDir = join(dir, 'data');
+    writeConfig(dataDir, fake.base);
+    writePluginRegistry(dataDir, ['builtin:telegram-channel']);
+    mkdirSync(join(dir, 'ws'), { recursive: true });
+    writeFileSync(join(dir, 'ws', 'notes.txt'), '部署窗口：周二。\n');
+    const provider = new ScriptedProvider([
+      { text: '我先查一下文件。', toolCalls: [{ toolCallId: 'c1', toolName: 'read', input: { path: 'notes.txt' } }] },
+      { text: '结论：周二。', toolCalls: [] },
+      { text: 'Web 答案。', toolCalls: [] },
+    ]);
+    const shell = makeTelegramShell(dir, provider, dataDir);
+    await shell.start();
+    const base = shell.httpUrl!;
+    try {
+      await connectTelegram(base, fake);
+      fake.push({ update_id: 2, message: { text: '帮我查一下部署窗口', chat: { id: OWNER }, from: { id: OWNER } } });
+      await waitUntil(() => fake.sent.some((entry) => entry.method === 'sendMessage' && entry.body.text === '结论：周二。'));
+      expect(fake.sent.some((entry) => entry.method === 'sendMessage' && entry.body.text === '我先查一下文件。')).toBe(false);
+
+      const sentBeforeWeb = fake.sent.length;
+      const answer = await shell.submit('Web 问一句。', 'web');
+      expect(answer?.lastAssistantText).toBe('Web 答案。');
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(fake.sent.length).toBe(sentBeforeWeb);
+    } finally {
+      await shell.stop();
+      fake.stop();
+    }
+  }, 60_000);
+
   test('surfacing is delivered through the channel and stays silent inside the quiet window', async () => {
     const fake = startFakeTelegram();
     const dir = makeTempDir('telegram-surfacing-');
