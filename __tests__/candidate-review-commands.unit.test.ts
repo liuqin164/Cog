@@ -32,8 +32,16 @@ function seed(dbPath: string, actions: string[], suffix = ''): void {
   const kernel = createMemoryKernel({ dbPath });
   try {
     kernel.eventStore.append({
+      eventId: 'evt-evidence', streamId: 'session-1', streamType: 'thread', eventType: 'MESSAGE',
+      rawEventType: 'message', projectId: PROJECT, role: 'user', payload: { text: '这条结论值得记住。' },
+    });
+    kernel.eventStore.append({
       eventId: 'evt-confirm', streamId: 'session-1', streamType: 'thread', eventType: 'MESSAGE',
       rawEventType: 'message', projectId: PROJECT, role: 'user', payload: { text: '我确认这条结论有效。' },
+    });
+    kernel.eventStore.append({
+      eventId: 'evt-confirm-relink', streamId: 'session-1', streamType: 'thread', eventType: 'MESSAGE',
+      rawEventType: 'message', projectId: PROJECT, role: 'user', payload: { text: '我确认这条修正的归属。' },
     });
     const db = kernel.factStore.getDatabase();
     db.prepare(`INSERT OR IGNORE INTO beliefs (id, project_id, scope, subject, predicate, object_value, canonical_key, confidence, trust_score, source_type, validity_kind, valid_from, status, created_at, updated_at)
@@ -42,28 +50,28 @@ function seed(dbPath: string, actions: string[], suffix = ''): void {
     const store = new DeepWriteCandidateStore(db);
     for (const action of actions) {
       const candidateId = seededCandidateId(action, suffix);
-      store.insertRun({ runId: `run-${action}${suffix}`, projectId: PROJECT, sourceNeuronIds: ['evt-confirm'], mode: 'episode', promptHash: 'p', outputHash: 'o', status: 'succeeded' });
+      store.insertRun({ runId: `run-${action}${suffix}`, projectId: PROJECT, sourceNeuronIds: ['evt-evidence'], mode: 'episode', promptHash: 'p', outputHash: 'o', status: 'succeeded' });
       store.insertCandidates([{
         candidateId, runId: `run-${action}${suffix}`,
         candidateType: action === 'relink' ? 'correction' : 'semantic_tags',
         status: 'needs_confirmation', confidence: 0.8,
         content: { topicPath: 'review/shape' },
-        evidence: [{ eventId: 'evt-confirm', role: 'user' }],
+        evidence: [{ eventId: 'evt-evidence', role: 'user' }],
       }]);
     }
     // supersede names a candidate other than the one being closed; the shape needs one to point at.
-    store.insertRun({ runId: 'run-replacement', projectId: PROJECT, sourceNeuronIds: ['evt-confirm'], mode: 'episode', promptHash: 'p', outputHash: 'o', status: 'succeeded' });
+    store.insertRun({ runId: 'run-replacement', projectId: PROJECT, sourceNeuronIds: ['evt-evidence'], mode: 'episode', promptHash: 'p', outputHash: 'o', status: 'succeeded' });
     store.insertCandidates([{
       candidateId: REPLACEMENT_CANDIDATE_ID, runId: 'run-replacement', candidateType: 'semantic_tags',
       status: 'needs_confirmation', confidence: 0.8,
-      content: { topicPath: 'review/shape' }, evidence: [{ eventId: 'evt-confirm', role: 'user' }],
+      content: { topicPath: 'review/shape' }, evidence: [{ eventId: 'evt-evidence', role: 'user' }],
     }]);
     // A same-shaped candidate in another project, for the project-scope rejection.
-    store.insertRun({ runId: 'run-foreign', projectId: 'review-shapes-other', sourceNeuronIds: ['evt-confirm'], mode: 'episode', promptHash: 'p', outputHash: 'o', status: 'succeeded' });
+    store.insertRun({ runId: 'run-foreign', projectId: 'review-shapes-other', sourceNeuronIds: ['evt-evidence'], mode: 'episode', promptHash: 'p', outputHash: 'o', status: 'succeeded' });
     store.insertCandidates([{
       candidateId: 'cand-foreign', runId: 'run-foreign', candidateType: 'semantic_tags',
       status: 'needs_confirmation', confidence: 0.8,
-      content: { topicPath: 'review/shape' }, evidence: [{ eventId: 'evt-confirm', role: 'user' }],
+      content: { topicPath: 'review/shape' }, evidence: [{ eventId: 'evt-evidence', role: 'user' }],
     }]);
   } finally {
     kernel.close();
@@ -113,7 +121,7 @@ async function governShapes(dbPath: string): Promise<Shape[]> {
 const PLACEHOLDERS: Record<string, (candidateId: string) => string> = {
   '<candidate-id>': (candidateId) => candidateId,
   '<replacement-candidate-id>': () => REPLACEMENT_CANDIDATE_ID,
-  '<user-event-id>': () => 'evt-confirm',
+  '<user-event-id>': (candidateId) => candidateId.includes('relink') ? 'evt-confirm-relink' : 'evt-confirm',
   '<belief-id>': () => 'belief-active',
   '<epoch-ms>': () => String(FUTURE_EPOCH_MS),
   '<operator>': () => 'operator',

@@ -126,13 +126,17 @@ test('model candidates are not promoted by govern; review keeps llm_inference pr
     expect(kernel.listDreamCandidates({ projectId: 'demo', candidateTypes: ['user_preference'], limit: 10 })[0]!.status)
       .toBe('needs_confirmation');
 
+    const confirmation = kernel.eventStore.append({
+      eventId: 'evt-owner-confirm', streamId: 'session-a', streamType: 'thread', eventType: 'MESSAGE',
+      rawEventType: 'message', projectId: 'demo', role: 'user', payload: { text: '我确认这个偏好。' },
+    });
     const reviewed = kernel.reviewDreamCandidate({
       candidateId: candidate.candidateId,
       projectId: 'demo',
       action: 'approve',
       actor: 'owner',
       reason: 'user confirmed this preference',
-      confirmationEventId: eventId,
+      confirmationEventId: confirmation.eventId,
     });
     const belief = kernel.factStore.getDatabase()
       .prepare(`SELECT source_type FROM beliefs WHERE id=?`)
