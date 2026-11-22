@@ -26,7 +26,8 @@ export interface MemoryKernelOptions {
   phaseProjectionEnabled?: boolean;
   dbPath?: string;
   vectorBackend?: string;
-  vectorDimension?: number; semanticMinSimilarity?: number;
+  vectorDimension?: number;
+  semanticMinSimilarity?: number;
   embeddingProvider?: EmbeddingProvider;
   modelRegistry?: ModelRegistry;
   encryptionProvider?: EncryptionProvider;
