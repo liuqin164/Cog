@@ -2,6 +2,15 @@ import { randomUUID } from 'crypto';
 import type Database from 'bun:sqlite';
 import { projectQueryValue, projectScope } from '../topology/ProjectScope.js';
 
+const PROMOTION_PRIORITY = `
+  CASE
+    WHEN candidate_type = 'correction' THEN 0
+    WHEN candidate_type IN ('preferences', 'user_preference', 'boundary', 'long_term_goal') THEN 1
+    WHEN candidate_type IN ('semantic_tags', 'indexing_decision', 'semantic_relation', 'edge_adjustment') THEN 3
+    ELSE 2
+  END
+`;
+
 export type DeepWriteRunStatus = 'running' | 'staged' | 'succeeded' | 'failed' | 'skipped' | 'abandoned';
 export type DeepWriteCandidateStatus = 'staged' | 'shadow' | 'candidate' | 'promoting' | 'promoted' | 'rejected' | 'needs_confirmation' | 'superseded';
 
@@ -59,6 +68,7 @@ export interface DeepWriteCandidateListOptions {
   runId?: string;
   limit?: number;
   after?: { createdAt: number; candidateId: string };
+  priority?: boolean;
 }
 
 type RunRow = {
@@ -307,7 +317,7 @@ export class DeepWriteCandidateStore {
 
   listCandidatesByStatus(
     statuses: DeepWriteCandidateStatus[],
-    options?: { candidateTypes?: string[]; limit?: number }
+    options?: { candidateTypes?: string[]; limit?: number; priority?: boolean }
   ): DeepWriteCandidateRecord[] {
     if (statuses.length === 0) return [];
     const params: Array<string | number> = [...statuses];
@@ -322,7 +332,9 @@ export class DeepWriteCandidateStore {
       params.push(...options.candidateTypes);
     }
 
-    sql += ` ORDER BY created_at ASC, candidate_id ASC LIMIT ?`;
+    sql += options?.priority
+      ? ` ORDER BY ${PROMOTION_PRIORITY}, created_at ASC, candidate_id ASC LIMIT ?`
+      : ` ORDER BY created_at ASC, candidate_id ASC LIMIT ?`;
     params.push(options?.limit ?? 100);
     const rows = this.db.prepare(sql).all(...params) as CandidateRow[];
     return rows.map((row) => this.mapCandidate(row));
@@ -358,7 +370,9 @@ export class DeepWriteCandidateStore {
       params.push(options.after.createdAt, options.after.createdAt, options.after.candidateId);
     }
     if (conditions.length) sql += ` WHERE ${conditions.join(' AND ')}`;
-    sql += ` ORDER BY c.created_at ASC, c.candidate_id ASC LIMIT ?`;
+    sql += options.priority
+      ? ` ORDER BY ${PROMOTION_PRIORITY}, c.created_at ASC, c.candidate_id ASC LIMIT ?`
+      : ` ORDER BY c.created_at ASC, c.candidate_id ASC LIMIT ?`;
     params.push(options.limit ?? 100);
 
     const rows = this.db.prepare(sql).all(...params) as CandidateRow[];
@@ -521,12 +535,30 @@ export class DeepWriteCandidateStore {
     now?: number;
     limit?: number;
   }): { expired: number; candidateIds: string[]; cutoff: number } {
-    const params: Array<string | number> = [input.before];
+    return this.expireQueue('needs_confirmation', input, 'review_queue_expiry', 'needs_confirmation_ttl_expired');
+  }
+
+  expireCandidates(input: {
+    projectId?: string;
+    before: number;
+    now?: number;
+    limit?: number;
+  }): { expired: number; candidateIds: string[]; cutoff: number } {
+    return this.expireQueue('candidate', input, 'candidate_queue_expiry', 'candidate_ttl_expired');
+  }
+
+  private expireQueue(
+    status: 'candidate' | 'needs_confirmation',
+    input: { projectId?: string; before: number; now?: number; limit?: number },
+    targetType: string,
+    reason: string
+  ): { expired: number; candidateIds: string[]; cutoff: number } {
+    const params: Array<string | number> = [status, input.before];
     let sql = `
       SELECT c.candidate_id
       FROM deep_write_candidates c
       JOIN deep_write_runs r ON r.run_id = c.run_id
-      WHERE c.status = 'needs_confirmation'
+      WHERE c.status = ?
         AND COALESCE(c.updated_at, c.created_at) < ?
     `;
     if (input.projectId !== undefined) {
@@ -539,12 +571,9 @@ export class DeepWriteCandidateStore {
     const now = input.now ?? Date.now();
     this.db.transaction(() => {
       for (const row of rows) {
-        // A candidate that aged out of the review queue was not replaced by anything, so it names
-        // no promotion target: `type` carries the reason class, and `id` stays NULL. Writing its own
-        // id here would answer "what replaced this?" with the row that just closed.
         this.updateCandidateStatus(row.candidate_id, 'superseded', {
-          type: 'review_queue_expiry',
-          reason: 'needs_confirmation_ttl_expired',
+          type: targetType,
+          reason,
           updatedAt: now,
         });
       }
@@ -554,6 +583,22 @@ export class DeepWriteCandidateStore {
       candidateIds: rows.map((row) => row.candidate_id),
       cutoff: input.before,
     };
+  }
+
+  oldestCandidateCreatedAt(projectId?: string): number | null {
+    const params: Array<string | number> = [];
+    let sql = `
+      SELECT MIN(c.created_at) AS oldest
+      FROM deep_write_candidates c
+      JOIN deep_write_runs r ON r.run_id = c.run_id
+      WHERE c.status = 'candidate'
+    `;
+    if (projectId !== undefined) {
+      sql += " AND COALESCE(r.project_id, '') = ?";
+      params.push(projectScope(projectId));
+    }
+    const row = this.db.prepare(sql).get(...params) as { oldest: number | null } | null;
+    return row?.oldest ?? null;
   }
 
   countNeedsConfirmationAging(input: {

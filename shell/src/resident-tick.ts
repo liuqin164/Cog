@@ -564,8 +564,12 @@ export class ResidentTick {
       else if (result.memoryModelUsed) this.shell.memoryModelFailed = false;
       this.shell.clock!.markDreamed(at);
       try {
-        const promotion = this.shell.kernel.promoteDreamCandidates({ projectId: this.shell.config.projectId, limit: 100 });
-        this.shell.trace.append('dream_promotion', { promoted: promotion.promotedCandidates, decisions: promotion.decisions.length });
+        const limit = Math.max(100, result.candidateCount ?? 0);
+        const promotion = this.shell.kernel.promoteDreamCandidates({ projectId: this.shell.config.projectId, limit, now: at });
+        this.shell.trace.append('dream_promotion', {
+          promoted: promotion.promotedCandidates, decisions: promotion.decisions.length,
+          limit, expired: promotion.expiredCandidates,
+        });
       } catch (error) {
         this.shell.trace.append('dream_promotion_failed', { message: error instanceof Error ? error.message : String(error) });
       }

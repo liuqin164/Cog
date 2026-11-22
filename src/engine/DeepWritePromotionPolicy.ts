@@ -172,8 +172,8 @@ export class DeepWritePromotionPolicy {
 
   promotePending(limit: number = 100, options: DeepWritePromotionOptions = {}): DeepWritePromotionDecision[] {
     const candidates = options.projectId !== undefined
-      ? this.deps.candidateStore.listCandidates({ statuses: ['candidate'], projectId: options.projectId, limit })
-      : this.deps.candidateStore.listCandidatesByStatus(['candidate'], { limit });
+      ? this.deps.candidateStore.listCandidates({ statuses: ['candidate'], projectId: options.projectId, limit, priority: true })
+      : this.deps.candidateStore.listCandidatesByStatus(['candidate'], { limit, priority: true });
     return candidates.map((candidate) => this.atomicEvaluate(candidate));
   }
 

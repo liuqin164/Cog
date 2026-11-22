@@ -137,7 +137,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   runtime?: AgentRuntime;
   cage?: RunCage;
   clock?: ClockService;
-  dream?: { integrate(...args: [string, string, number?]): Promise<{ localDate: string; eventCount: number; sourceRefs: unknown[]; summary: string; memoryModelUsed?: boolean; memoryModelDegraded?: string; kernelNightRan?: boolean }> };
+  dream?: { integrate(...args: [string, string, number?]): Promise<{ localDate: string; eventCount: number; candidateCount: number; sourceRefs: unknown[]; summary: string; memoryModelUsed?: boolean; memoryModelDegraded?: string; kernelNightRan?: boolean }> };
   emergence?: {
     hasDue?(now?: number): boolean;
     decide(now?: number): {

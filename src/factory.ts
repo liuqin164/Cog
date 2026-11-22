@@ -209,6 +209,7 @@ export type { EpisodeClosureReceipt, EpisodeDreamStatus, EpisodeListOptions, Mem
 const ATLAS_RECALL_REFRESH_MS = 24 * 60 * 60 * 1000;
 const CONFIRMATION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const CONFIRMATION_WARNING_MS = 7 * 24 * 60 * 60 * 1000;
+const CANDIDATE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const HIGH_PRIVILEGE_CANDIDATE_TYPES = ['preferences', 'user_preference', 'long_term_goal', 'boundary', 'failure_lesson'];
 export type * from './factory/KernelOptions.js';
 
@@ -1773,12 +1774,16 @@ export class MemoryKernel extends KernelServices {
   }
 
   promoteDreamCandidates(options: DreamGovernanceRunOptions = {}): DreamGovernanceRunResult {
-    this.deepWriteCandidateStore.recoverStalePromoting(Date.now() - 5 * 60_000, Date.now());
+    const now = options.now ?? Date.now();
+    this.deepWriteCandidateStore.recoverStalePromoting(now - 5 * 60_000, now);
+    const expired = this.deepWriteCandidateStore.expireCandidates({
+      projectId: options.projectId,
+      before: now - (options.candidateTtlMs ?? CANDIDATE_TTL_MS),
+      now,
+    });
     const decisions = this.deepWritePromotionPolicy.promotePending(options.limit ?? 100, {
       projectId: options.projectId,
     });
-    // Named explicitly: a prefix match would silently start counting a future
-    // outcome called `promote_*` that is not a promotion.
     const promoting = new Set<DeepWritePromotionDecision['outcome']>(['promote_verified', 'promote_provisional']);
     const promotedCandidates = decisions.filter((decision) => promoting.has(decision.outcome)).length;
     return {
@@ -1786,6 +1791,7 @@ export class MemoryKernel extends KernelServices {
       decisions,
       promotedCandidates,
       neuronsWritten: 0,
+      expiredCandidates: expired.expired,
       queue: this.getDreamCandidateQueue(options.projectId),
     };
   }
@@ -1808,6 +1814,7 @@ export class MemoryKernel extends KernelServices {
     const highPrivilegeAging = this.deepWriteCandidateStore.countNeedsConfirmationAging({
       projectId, expiredBefore, warningBefore, candidateTypes: HIGH_PRIVILEGE_CANDIDATE_TYPES,
     });
+    const oldestCandidateAt = this.deepWriteCandidateStore.oldestCandidateCreatedAt(projectId);
     return {
       measuredAt: now,
       unboundEvents: this.countUnboundBindableRawEvents(projectId),
@@ -1815,6 +1822,8 @@ export class MemoryKernel extends KernelServices {
       aliasConflicts: this.countEntityAliasConflicts(projectId),
       candidateQueue: {
         ...this.getDreamCandidateQueue(projectId),
+        oldestCandidateAt,
+        oldestCandidateAgeMs: oldestCandidateAt === null ? null : Math.max(0, now - oldestCandidateAt),
         needsConfirmationExpiringSoon: aging.expiringSoon,
         needsConfirmationOverdue: aging.overdue,
         highPrivilege: {

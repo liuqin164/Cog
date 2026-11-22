@@ -31,6 +31,7 @@ export interface DreamPluginConfig extends Omit<DreamServiceOptions, 'kernel' | 
 export interface DreamResult {
   localDate: string;
   eventCount: number;
+  candidateCount: number;
   sourceRefs: MemorySourceRef[];
   summary: string;
   dreamEventId?: string;
@@ -50,6 +51,7 @@ export class DreamService {
       .filter((event) => !isDreamProduct(event));
     const refs = dedupeRefs(events);
     let kernelNightRan = false;
+    let candidateCount = 0;
     let kernelNightSkippedReason: string | undefined;
     let memoryModelUsed = false;
     let memoryModelDegraded: string | undefined;
@@ -58,6 +60,7 @@ export class DreamService {
       try {
         const night = await kernel.runNight({ projectId, maxEpisodes: this.options.maxEpisodes, now });
         kernelNightRan = true;
+        candidateCount = night.dream.candidateCount;
         kernelNightSkippedReason = night.dream.skipped ? night.dream.reason : undefined;
         if (night.dream.semanticProcessorReason) {
           memoryModelDegraded = night.dream.semanticProcessorReason;
@@ -115,6 +118,7 @@ export class DreamService {
     return {
       localDate,
       eventCount: events.length,
+      candidateCount,
       sourceRefs: refs,
       summary,
       dreamEventId: dreamEvent.eventId,
