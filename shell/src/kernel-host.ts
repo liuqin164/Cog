@@ -54,6 +54,7 @@ export interface HttpFaceOptions {
   /** The shell's trace file; the observatory reads its surfacing counts from it. */
   tracePath?: string;
   credentials?: HttpCredentialFace;
+  channels?: HttpChannelFace;
   companionName?: () => string;
   companionAvatar?: () => string;
   webChannel?: () => {
@@ -68,6 +69,23 @@ export interface HttpCredentialFace {
   submit(id: string, values: Record<string, string>, surface: string): { ok: true; ref: string } | { ok: false; reason: string };
   cancel(id: string, surface: string): boolean;
   revoke(ref: string): boolean;
+}
+
+export interface HttpChannelCard {
+  id: string;
+  name: string;
+  state: 'disconnected' | 'pairing' | 'connected' | 'error';
+  detail?: string;
+  pairingCode?: string;
+  config: Array<{ name: string; label?: string; secret?: boolean }>;
+  connectable: boolean;
+}
+
+export interface HttpChannelFace {
+  list(): HttpChannelCard[];
+  begin(id: string): { ok: boolean; requestId?: string; error?: string };
+  start(id: string, ref: string): { ok: boolean; channel?: HttpChannelCard; error?: string };
+  disconnect(id: string): { ok: boolean; channel?: HttpChannelCard; error?: string };
 }
 
 export interface HttpFaceHandle {
@@ -89,6 +107,7 @@ async function openObservatory(
   connectedAgents?: () => string[],
   tracePath?: string,
   credentials?: HttpCredentialFace,
+  channels?: HttpChannelFace,
   ui?: { slots: () => Array<{ id: string; label: string; script: string; style?: string }>; name: () => string; avatar: () => string },
 ): Promise<{ db: Database; handle: (request: Request, remoteAddress?: string) => Promise<Response | null> } | undefined> {
   if (!dbPath || dbPath === ':memory:' || dbPath.startsWith('file:')) return undefined;
@@ -117,6 +136,7 @@ async function openObservatory(
       handle: routesModule.createObservatoryRoutes(observatory, events, soul, {
         token: tokenModule.readObservatoryToken(dirname(dbPath)),
         credentials,
+        channels,
         uiSlots: ui?.slots,
         companionName: ui?.name,
         companionAvatar: ui?.avatar,
@@ -139,10 +159,13 @@ export async function startKernelHttpFace(kernel: unknown, options: HttpFaceOpti
     }
   };
 
-  const observatory = await openObservatory(kernel, kernelHealth().dbPath as string | undefined, options.connectedAgents, options.tracePath, options.credentials, {
+  const observatory = await openObservatory(kernel, kernelHealth().dbPath as string | undefined, options.connectedAgents, options.tracePath, options.credentials, options.channels, {
     slots: () => {
-      const slot = options.webChannel?.()?.uiContribution?.();
-      return slot ? [slot] : [];
+      const slots = [];
+      const web = options.webChannel?.()?.uiContribution?.();
+      if (web) slots.push(web);
+      if (options.channels) slots.push({ id: 'channels', label: '渠道', script: '/observatory/channels.js', style: '/observatory/channels.css' });
+      return slots;
     },
     name: () => options.companionName?.() ?? 'Cog',
     avatar: () => options.companionAvatar?.() ?? 'C',

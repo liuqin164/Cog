@@ -2154,6 +2154,7 @@ const VIEW_META = {
   recalls: ['召回检查', '每一次召回的决策链与证据'],
   round: ['本轮记忆', '按时间倒序的最近写入，来自当前只读快照'],
   credentials: ['凭据', '待处理的保密输入请求与引用'],
+  channels: ['渠道', '连接、配对与断开同伴的对话渠道'],
   health: ['健康', '自检、最近做梦、预算与异常'],
 };
 
@@ -2322,13 +2323,13 @@ function renderLegend() {
 function showView(view) {
   state.view = view;
   $('legend').classList.toggle('hidden', view !== 'starmap');
-  const mainViews = ['chat', 'starmap', 'classification', 'soul'];
+  const mainViews = ['chat', 'starmap', 'classification', 'soul', 'channels'];
   if (view !== 'chat') $('inspector').classList.remove('open');
-  for (const name of ['chat', 'starmap', 'timeline', 'recalls', 'classification', 'round', 'soul', 'credentials', 'health']) {
-    const tab = $(`tab-${name}`);
-    if (tab) tab.setAttribute('aria-selected', String(name === view));
-    const panel = $(`view-${name}`);
-    if (panel) panel.classList.toggle('on', name === view);
+  for (const tab of document.querySelectorAll('.nav-item[id^="tab-"]')) {
+    tab.setAttribute('aria-selected', String(tab.id === `tab-${view}`));
+  }
+  for (const panel of document.querySelectorAll('.view')) {
+    panel.classList.toggle('on', panel.id === `view-${view}`);
   }
   for (const button of document.querySelectorAll('.tabbar button[data-view]')) {
     button.setAttribute('aria-selected', String(mainViews.includes(button.dataset.view) && button.dataset.view === view));
@@ -2428,15 +2429,9 @@ async function boot() {
   }
 }
 
-$('tab-starmap').addEventListener('click', () => showView('starmap'));
-$('tab-chat')?.addEventListener('click', () => showView('chat'));
-$('tab-timeline').addEventListener('click', () => showView('timeline'));
-$('tab-recalls').addEventListener('click', () => showView('recalls'));
-$('tab-classification').addEventListener('click', () => showView('classification'));
-$('tab-round').addEventListener('click', () => showView('round'));
-$('tab-soul').addEventListener('click', () => showView('soul'));
-$('tab-credentials').addEventListener('click', () => showView('credentials'));
-$('tab-health').addEventListener('click', () => showView('health'));
+for (const button of document.querySelectorAll('.nav-item[id^="tab-"]')) {
+  button.addEventListener('click', () => showView(button.id.slice('tab-'.length)));
+}
 for (const button of document.querySelectorAll('.tabbar button[data-view]')) {
   button.addEventListener('click', () => showView(button.dataset.view));
 }

@@ -1,0 +1,19 @@
+.channel-header { padding: 22px 26px 6px; }
+.channel-header h2 { margin: 0 0 4px; font-family: var(--serif); font-size: 20px; }
+.channel-header p { margin: 0; color: var(--ink-3); font-size: 13px; }
+.channel-card { margin: 14px 26px; padding: 16px 18px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius); }
+.channel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.channel-state { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--panel-2); color: var(--ink-3); }
+.channel-state.connected { color: var(--teal); }
+.channel-state.pairing { color: var(--gold); }
+.channel-state.error { color: var(--coral); }
+.channel-detail { margin: 8px 0 0; color: var(--ink-2); font-size: 13px; }
+.channel-code { display: inline-block; margin-top: 10px; padding: 6px 10px; border-radius: 8px; background: var(--panel-2); font-size: 16px; letter-spacing: 2px; }
+.channel-actions { display: flex; gap: 8px; margin-top: 14px; }
+.channel-actions button, .channel-token button { padding: 7px 12px; border: 1px solid var(--line-soft); border-radius: 9px; background: var(--panel-2); color: var(--ink); font: inherit; cursor: pointer; }
+.channel-actions .primary { background: var(--gold); border-color: var(--gold); color: var(--gold-ink); }
+.channel-form { display: flex; flex-direction: column; gap: 6px; margin-top: 14px; }
+.channel-form input, .channel-token input { padding: 8px 10px; border: 1px solid var(--line-soft); border-radius: 9px; background: var(--bg-soft); color: var(--ink); font: inherit; }
+.channel-token { display: flex; gap: 8px; margin: 14px 26px; }
+.channel-token input { flex: 1; }
+.channel-error { margin: 14px 26px; color: var(--coral); }

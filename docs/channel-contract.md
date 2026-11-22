@@ -271,3 +271,25 @@ stream over SSE from the shell's bus; history is read from the session's convers
 window plus a `before` cursor), not kept in the plugin. It reuses the observatory's write token and
 loopback/Host checks, and the credential card opens the observatory's `#credentials` form instead of
 collecting values itself.
+
+## Fourth implementation: the Telegram channel (#416)
+
+`shell/src/channels/telegram.ts` is an official plugin (`builtin:telegram-channel`). Channel plugins
+register with the host's `channelRegistry` service, declaring their name, state, config fields and
+connect/disconnect actions. The observatory's single shell keeps the page and its trusted surfaces
+host-rendered: when the shell exposes the channel face, the host adds a `渠道` UI slot whose script
+lists only the registry's entries. Removing a channel plugin removes its card, and adding one needs
+no Web change.
+
+For Telegram the card's connect action asks the plugin to begin; the owner enters the bot token in
+the host's masked credential form, the credential service writes it to the 0600 vault, and the
+plugin starts `getUpdates` long polling. The card then shows a one-time pairing code; sending it to
+the bot binds the owner's Telegram id. The config file keeps only the credential reference and the
+bound ids, and the token is read through the credential service at the call site. Every text goes
+through `ingest` before `shell.submit`, and the assistant reply returns to the same chat. Plugin
+proposals carry inline confirm/discard buttons; only the bound owner id confirms, while any other
+callback is refused and traced. Disconnecting stops polling, takes the channel offline and revokes
+the vault entry without touching the ledger; reconnecting keeps the history.
+
+A delivered emergence is pushed only by the channel the router selected: a payload with another
+`channelId` is ignored, and an `incidental` strength is traced and never pushed.

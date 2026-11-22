@@ -39,6 +39,8 @@ import { dreamPlugin } from './plugins/dream.ts';
 import { emergencePlugin } from './plugins/emergence.ts';
 import { terminalPlugin, TerminalChannel, type ShellControl } from './channels/terminal.ts';
 import { webChannelPlugin } from './channels/web.ts';
+import { telegramChannelPlugin } from './channels/telegram.ts';
+import { ChannelRegistry } from './channels/registry.ts';
 import { isOfficialPluginSpec } from './plugins/registry.ts';
 import { AgentRuntime, type ModelProvider, type RunSummary } from './state/agent-loop.ts';
 import type { ToolOutputAccount } from './state/context-budget.ts';
@@ -122,6 +124,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   /** The agent's command offers and the user's answers; the transcript element's source of truth. */
   readonly proposals: CommandProposals;
   readonly credentials: CredentialService;
+  readonly channelRegistry: ChannelRegistry;
   readonly sovereignty: SovereigntyCommands;
   readonly proposalsHandlers: ProposalsHandlers;
   readonly pluginsAdmin: PluginsAdmin;
@@ -339,6 +342,8 @@ export class CompanionShell implements ShellControl, AttachShell {
       (proposal) => void this.host.bus.emit('companion_command_proposal', { proposal }),
     );
     this.host.seedService('credentials', this.credentials);
+    this.channelRegistry = new ChannelRegistry();
+    this.host.seedService('channelRegistry', this.channelRegistry);
     // Every transition is also a bus event, so a plugin can observe the lifecycle without reading the
     // checkpoint file. This one carries the companion prefix.
     this.machine.onTransition((record) => {
@@ -565,6 +570,7 @@ export class CompanionShell implements ShellControl, AttachShell {
         credentials: this.credentials,
         companionName: () => readCompanionName(this.config.dataDir) ?? this.config.companionName,
         companionAvatar: () => companionAvatar(readCompanionName(this.config.dataDir) ?? this.config.companionName),
+        channels: this.channelRegistry,
         webChannel: () => (this.host.hasService('webChannel') ? this.host.getService<{ handle(request: Request, remoteAddress?: string): Promise<Response | null> }>('webChannel') : undefined),
       });
       this.trace.append('http_face_started', { url: this.http.baseUrl, port: this.http.port });
@@ -819,6 +825,13 @@ export class CompanionShell implements ShellControl, AttachShell {
           dataDir: this.config.dataDir,
         }));
         this.pluginResults.push({ spec, status: 'loaded', name: 'web-channel', tools: [], commands: [] });
+      }
+      if (spec === 'builtin:telegram-channel') {
+        this.host.register(telegramChannelPlugin({
+          contract: this.channelContract,
+          dataDir: this.config.dataDir,
+        }));
+        this.pluginResults.push({ spec, status: 'loaded', name: 'telegram-channel', tools: [], commands: [] });
       }
     }
     if (this.config.terminalEnabled) {
