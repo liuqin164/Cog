@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import Database from 'bun:sqlite';
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 import type { SnapshotHeader } from './SnapshotHeader.js';
 import { ChecksumError, DimensionMismatchError, SnapshotTargetExistsError, SnapshotVersionError } from './errors.js';
@@ -53,8 +54,31 @@ export class SnapshotImporter {
       throw new SnapshotTargetExistsError(targetDbPath);
     }
     mkdirSync(dirname(targetDbPath), { recursive: true });
-    writeFileSync(targetDbPath, dbBytes);
-    return { header, targetPath: targetDbPath, skipped: false };
+    const stagedPath = join(dirname(targetDbPath), `.restore-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
+    try {
+      writeFileSync(stagedPath, dbBytes);
+      const fd = openSync(stagedPath, 'r');
+      try {
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+      const db = new Database(stagedPath, { readonly: true });
+      try {
+        const row = db.prepare(`SELECT COUNT(*) AS c FROM memory_events WHERE event_type = 'RAW_EVENT_RECORDED'`).get() as { c?: number } | undefined;
+        const count = Number(row?.c ?? 0);
+        if (count !== header.neuronCount) {
+          throw new Error(`staged database holds ${count} neurons, the snapshot header says ${header.neuronCount}`);
+        }
+      } finally {
+        db.close();
+      }
+      renameSync(stagedPath, targetDbPath);
+      for (const suffix of ['-wal', '-shm']) rmSync(`${targetDbPath}${suffix}`, { force: true });
+      return { header, targetPath: targetDbPath, skipped: false };
+    } finally {
+      rmSync(stagedPath, { force: true });
+    }
   }
 
   private readSnapshot(snapshotPath: string): { header: SnapshotHeader; dbBytes: Buffer } {

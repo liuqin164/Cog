@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -165,6 +166,40 @@ describe('MemorySnapshot v1.9.7', () => {
 
     await expect(new SnapshotImporter({ expectedEmbeddingDimension: meta.header.embeddingDimension })
       .import(snapshotPath, targetDb)).rejects.toThrow(ChecksumError);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('a failed overwrite import leaves the existing database intact (#400)', async () => {
+    const dir = tempDir();
+    const sourceDb = join(dir, 'source.db');
+    const snapshotPath = join(dir, 'memory.snap');
+    const targetDb = join(dir, 'target.db');
+    const source = createMemoryKernel({ dbPath: sourceDb });
+    const target = createMemoryKernel({ dbPath: targetDb });
+    await source.ingest({ projectId: 'p', content: 'snapshot with a payload we will cut' });
+    await target.ingest({ projectId: 'p', content: 'the old brain must survive' });
+    const meta = await source.exportSnapshot(snapshotPath);
+    source.close();
+    target.close();
+    const before = readFileSync(targetDb);
+
+    const { header, dbBytes } = readSnapshotHeader(snapshotPath);
+    const broken = dbBytes.subarray(0, Math.floor(dbBytes.byteLength / 2));
+    const nextHeader = Buffer.from(JSON.stringify({
+      ...header,
+      neuronCount: 0,
+      checksum: createHash('sha256').update(broken).digest('hex'),
+    }), 'utf8');
+    const prefix = Buffer.alloc(4);
+    prefix.writeUInt32LE(nextHeader.length, 0);
+    writeFileSync(snapshotPath, Buffer.concat([prefix, nextHeader, broken]));
+
+    await expect(new SnapshotImporter({ expectedEmbeddingDimension: meta.header.embeddingDimension })
+      .import(snapshotPath, targetDb, { overwrite: true })).rejects.toThrow();
+    expect(readFileSync(targetDb)).toEqual(before);
+    const reopened = createMemoryKernel({ dbPath: targetDb });
+    expect(reopened.getHealthStatus().storage?.rawEvents).toBeGreaterThan(0);
+    reopened.close();
     rmSync(dir, { recursive: true, force: true });
   });
 

@@ -320,9 +320,6 @@ export function defaultUpgradeOps(options: DefaultOpsOptions): UpgradeOps {
       if (!existsSync(snapPath)) return { ok: false, detail: `snapshot ${snapPath} is gone` };
       const dimension = readSnapshotDimension(snapPath);
       if (dimension === undefined) return { ok: false, detail: `snapshot ${snapPath} has no readable header` };
-      // The WAL and SHM beside a replaced database file belong to the file that was replaced. SQLite
-      // usually refuses a WAL whose salt no longer matches; removing them makes that certain.
-      for (const suffix of ['-wal', '-shm']) rmSync(`${request.dbPath}${suffix}`, { force: true });
       try {
         const result = await new SnapshotImporter({ expectedEmbeddingDimension: dimension }).import(snapPath, request.dbPath, { overwrite: true });
         return { ok: true, detail: `restored ${result.header.neuronCount} neurons from ${snapPath}` };
