@@ -57,6 +57,10 @@ function seed(contentFor: (beliefA: BeliefRecord) => Record<string, unknown>): S
   const dbPath = join(dir, 'memory.db');
   const kernel = createMemoryKernel({ dbPath });
   kernel.eventStore.append({
+    eventId: 'evt-evidence', streamId: 's1', streamType: 'thread', eventType: 'MESSAGE',
+    rawEventType: 'message', projectId: PROJECT, role: 'user', payload: { text: '之前的说法有误。' },
+  });
+  kernel.eventStore.append({
     eventId: 'evt-confirm', streamId: 's1', streamType: 'thread', eventType: 'MESSAGE',
     rawEventType: 'message', projectId: PROJECT, role: 'user', payload: { text: '我确认这条结论有效。' },
   });
@@ -69,11 +73,11 @@ function seed(contentFor: (beliefA: BeliefRecord) => Record<string, unknown>): S
   const beliefA = upsert('runs_on', 'bun');
   const beliefB = upsert('port', '8080');
   const store = new DeepWriteCandidateStore(kernel.factStore.getDatabase());
-  store.insertRun({ runId: 'run-correction', projectId: PROJECT, sourceNeuronIds: ['evt-confirm'], mode: 'episode', promptHash: 'p', outputHash: 'o', status: 'succeeded' });
+  store.insertRun({ runId: 'run-correction', projectId: PROJECT, sourceNeuronIds: ['evt-evidence'], mode: 'episode', promptHash: 'p', outputHash: 'o', status: 'succeeded' });
   store.insertCandidates([{
     candidateId: 'cand-correction', runId: 'run-correction', candidateType: 'correction',
     status: 'needs_confirmation', confidence: 0.78, content: contentFor(beliefA),
-    evidence: [{ eventId: 'evt-confirm', role: 'user' }],
+    evidence: [{ eventId: 'evt-evidence', role: 'user' }],
   }]);
   return { kernel, beliefA, beliefB, dbPath, dir };
 }

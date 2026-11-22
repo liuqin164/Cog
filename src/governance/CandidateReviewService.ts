@@ -90,7 +90,7 @@ export class CandidateReviewService {
           reason: `manual_review_superseded:${reason}`,
         });
       } else {
-        const confirmation = this.requireUserConfirmation(input.confirmationEventId, input.projectId);
+        const confirmation = this.requireUserConfirmation(input.confirmationEventId, input.projectId, candidate);
         let content = asObject(candidate.content);
         let targetType = candidate.promotionTargetType;
         let targetId = candidate.promotionTargetId;
@@ -156,12 +156,28 @@ export class CandidateReviewService {
     })();
   }
 
-  private requireUserConfirmation(eventId: string | undefined, projectId: string): MemoryEvent {
+  private requireUserConfirmation(eventId: string | undefined, projectId: string, candidate: DeepWriteCandidateRecord): MemoryEvent {
     if (!eventId) throw new Error('confirmation_event_required');
     const event = this.eventLookup(eventId);
     if (!event) throw new Error('confirmation_event_not_found');
     if (event.projectId !== projectId) throw new Error('confirmation_event_project_mismatch');
     if (event.role !== 'user') throw new Error('confirmation_event_must_be_user');
+    const evidenceIds = (Array.isArray(candidate.evidence) ? candidate.evidence : [])
+      .map((item) => asObject(item).eventId)
+      .filter((value): value is string => typeof value === 'string');
+    if (evidenceIds.includes(event.eventId)) throw new Error('confirmation_requires_distinct_user_evidence');
+    const evidenceSequences = evidenceIds.map((evidenceId) => this.eventLookup(evidenceId)?.globalSeq);
+    if (event.globalSeq === undefined
+      || evidenceSequences.some((sequence) => sequence === undefined)
+      || event.globalSeq <= Math.max(...evidenceSequences as number[])) {
+      throw new Error('confirmation_must_follow_proposal_evidence');
+    }
+    const priorUse = this.db.prepare(`
+      SELECT candidate_id FROM deep_write_candidate_reviews
+      WHERE project_id = ? AND confirmation_event_id = ? AND candidate_id <> ?
+      LIMIT 1
+    `).get(projectId, event.eventId, candidate.candidateId);
+    if (priorUse) throw new Error('confirmation_evidence_already_used');
     return event;
   }
 

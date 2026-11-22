@@ -79,6 +79,7 @@ describe('plugin self-install runs through the owner approval gate', () => {
       expect(JSON.parse(readFileSync(join(dataDir, 'plugins.json'), 'utf8'))).toEqual([sourcePath]);
       expect(kinds(first, 'plugin_approved')).toHaveLength(1);
       expect(kinds(first, 'plugin_install_pending_health')).toHaveLength(1);
+      expect(kinds(first, 'plugin_registered')[0]?.sourceSha256).toBe(pending[0].sourceSha256);
       const pendingList = await first.host.tools.invoke('installed_plugins', { toolCallId: 's3', input: {} }, { runId: 'test' });
       expect(pendingList.output).toContain('hello-clock');
       expect(pendingList.output).toContain('本进程未加载');
@@ -136,6 +137,34 @@ describe('plugin self-install runs through the owner approval gate', () => {
       await second.stop();
     }
   }, 45_000);
+
+  test('a proposal whose source changes after approval is refused before it reaches the registry', async () => {
+    const dir = makeTempDir('plugin-self-install-sha-');
+    const shell = makeShell(dir, new ScriptedProvider([{ text: 'ok', toolCalls: [] }]));
+    await shell.start();
+    try {
+      const proposed = shell.pluginProposals.propose(pluginInput('hello-clock', GREETING_SOURCE));
+      expect(proposed.accepted).toBe(true);
+      const proposal = proposed.proposal!;
+      expect(shell.pluginProposals.markApproved(proposal.id)).toBeDefined();
+      writeFileSync(proposal.sourcePath, FAILING_SOURCE, 'utf8');
+
+      const result = await shell.pluginsAdmin.installProposal(proposal.id);
+      expect(result.ok).toBe(false);
+      expect(result.reply.text).toContain('sha256');
+      const rejected = kinds(shell, 'plugin_install_rejected');
+      expect(rejected).toHaveLength(1);
+      expect(rejected[0]).toEqual(expect.objectContaining({
+        reason: 'plugin_source_sha256_mismatch',
+        expected: proposal.sourceSha256,
+      }));
+      expect(typeof rejected[0]?.actual).toBe('string');
+      expect(existsSync(join(shell.config.dataDir, 'plugins.json'))).toBe(false);
+      expect(kinds(shell, 'plugin_registered')).toHaveLength(0);
+    } finally {
+      await shell.stop();
+    }
+  }, 30_000);
 
   test('a plugin tool that never reaches the cage whitelist fails health and is removed', async () => {
     const dir = makeTempDir('plugin-self-install-whitelist-');

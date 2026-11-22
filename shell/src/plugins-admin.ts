@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -91,7 +92,7 @@ export class PluginsAdmin {
    * the owner's own action; a proposal-origin install only reaches here after the attach card's
    * confirmation.
    */
-  async installPlugin(rawSpec: string, origin?: { proposalId: string; pluginName: string; provided?: string[] }): Promise<CommandReply> {
+  async installPlugin(rawSpec: string, origin?: { proposalId: string; pluginName: string; provided?: string[]; sourceSha256?: string }): Promise<CommandReply> {
     const spec = rawSpec.trim();
     if (spec === '' || /[\r\n]/u.test(spec)) {
       this.shell.trace.append('plugin_install_rejected', { spec, reason: 'invalid_plugin_spec', ...(origin ? { id: origin.proposalId } : {}) });
@@ -128,6 +129,7 @@ export class PluginsAdmin {
       registry: path,
       registered: next,
       ...(origin ? { id: origin.proposalId, name: origin.pluginName } : {}),
+      ...(origin?.sourceSha256 ? { sourceSha256: origin.sourceSha256 } : {}),
     });
     if (origin) {
       this.shell.trace.append('plugin_install_pending_health', {
@@ -162,10 +164,28 @@ export class PluginsAdmin {
       });
       return { ok: false, reply: { text: 'plugin_approval_required: 插件提案尚未获批，不能加载。', receipt: true } };
     }
+    let sourceSha256: string;
+    try {
+      sourceSha256 = createHash('sha256').update(readFileSync(proposal.sourcePath)).digest('hex');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.shell.trace.append('plugin_install_rejected', {
+        id, name: proposal.name, spec: proposal.sourcePath, reason: 'plugin_source_unreadable', message,
+      });
+      return { ok: false, reply: { text: `插件未安装：plugin_source_unreadable: ${message}`, receipt: true } };
+    }
+    if (sourceSha256 !== proposal.sourceSha256) {
+      this.shell.trace.append('plugin_install_rejected', {
+        id, name: proposal.name, spec: proposal.sourcePath, reason: 'plugin_source_sha256_mismatch',
+        expected: proposal.sourceSha256, actual: sourceSha256,
+      });
+      return { ok: false, reply: { text: '插件未安装：源码在批准后被改动，sha256 与批准记录不符。', receipt: true } };
+    }
     const reply = await this.installPlugin(proposal.sourcePath, {
       proposalId: proposal.id,
       pluginName: proposal.name,
       provided: proposal.permissions.provide,
+      sourceSha256,
     });
     const ok = (reply.data?.plugin_install as { ok?: boolean } | undefined)?.ok === true;
     return { ok, reply };

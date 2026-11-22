@@ -37,12 +37,16 @@ test('candidate review closes approve reject defer and supersede with immutable 
   const dbPath = join(makeTempDir('cogmem-candidate-review-'), 'memory.db');
   const kernel = createMemoryKernel({ dbPath });
   try {
+    const evidence = kernel.eventStore.append({
+      eventId: 'evt-evidence', streamId: 'review', streamType: 'thread', eventType: 'MESSAGE',
+      rawEventType: 'message', projectId: 'cogmem', role: 'user', payload: { text: '这条结论值得记住。' },
+    });
     const confirmation = kernel.eventStore.append({
       eventId: 'evt-confirm', streamId: 'review', streamType: 'thread', eventType: 'MESSAGE',
       rawEventType: 'message', projectId: 'cogmem', role: 'user', payload: { text: '批准这个候选。' },
     });
     for (const id of ['approve', 'reject', 'defer', 'supersede']) {
-      seedCandidate(kernel, { candidateId: `cand-${id}`, projectId: 'cogmem', evidenceEventId: confirmation.eventId });
+      seedCandidate(kernel, { candidateId: `cand-${id}`, projectId: 'cogmem', evidenceEventId: evidence.eventId });
     }
 
     const approved = kernel.reviewDreamCandidate({
@@ -77,15 +81,53 @@ test('candidate review closes approve reject defer and supersede with immutable 
   }
 });
 
+test('candidate review requires a confirmation that is distinct, later, and unused', () => {
+  const dbPath = join(makeTempDir('cogmem-candidate-confirmation-'), 'memory.db');
+  const kernel = createMemoryKernel({ dbPath });
+  try {
+    const first = kernel.eventStore.append({
+      eventId: 'evt-first', streamId: 'review', streamType: 'thread', eventType: 'MESSAGE',
+      rawEventType: 'message', projectId: 'cogmem', role: 'user', payload: { text: '候选证据。' },
+    });
+    const confirmation = kernel.eventStore.append({
+      eventId: 'evt-confirm-later', streamId: 'review', streamType: 'thread', eventType: 'MESSAGE',
+      rawEventType: 'message', projectId: 'cogmem', role: 'user', payload: { text: '批准这些候选。' },
+    });
+    const late = kernel.eventStore.append({
+      eventId: 'evt-late-evidence', streamId: 'review', streamType: 'thread', eventType: 'MESSAGE',
+      rawEventType: 'message', projectId: 'cogmem', role: 'user', payload: { text: '更晚的证据。' },
+    });
+    seedCandidate(kernel, { candidateId: 'cand-self', projectId: 'cogmem', evidenceEventId: first.eventId });
+    seedCandidate(kernel, { candidateId: 'cand-late', projectId: 'cogmem', evidenceEventId: late.eventId });
+    seedCandidate(kernel, { candidateId: 'cand-one', projectId: 'cogmem', evidenceEventId: first.eventId });
+    seedCandidate(kernel, { candidateId: 'cand-two', projectId: 'cogmem', evidenceEventId: first.eventId });
+    const approve = (candidateId: string, confirmationEventId: string) => kernel.reviewDreamCandidate({
+      candidateId, projectId: 'cogmem', action: 'approve', actor: 'operator',
+      reason: 'verified against source', confirmationEventId,
+    });
+
+    expect(() => approve('cand-self', first.eventId)).toThrow('confirmation_requires_distinct_user_evidence');
+    expect(() => approve('cand-late', confirmation.eventId)).toThrow('confirmation_must_follow_proposal_evidence');
+    expect(approve('cand-one', confirmation.eventId).candidate.status).toBe('promoted');
+    expect(() => approve('cand-two', confirmation.eventId)).toThrow('confirmation_evidence_already_used');
+  } finally {
+    kernel.close();
+  }
+});
+
 test('candidate review is atomic when the audit insert fails', () => {
   const dbPath = join(makeTempDir('cogmem-candidate-review-atomic-'), 'memory.db');
   const kernel = createMemoryKernel({ dbPath });
   try {
+    const evidence = kernel.eventStore.append({
+      eventId: 'evt-atomic-evidence', streamId: 'review', streamType: 'thread', eventType: 'MESSAGE',
+      rawEventType: 'message', projectId: 'cogmem', role: 'user', payload: { text: '候选证据。' },
+    });
     const confirmation = kernel.eventStore.append({
       eventId: 'evt-atomic-confirm', streamId: 'review', streamType: 'thread', eventType: 'MESSAGE',
       rawEventType: 'message', projectId: 'cogmem', role: 'user', payload: { text: '确认这个候选。' },
     });
-    seedCandidate(kernel, { candidateId: 'cand-atomic', projectId: 'cogmem', evidenceEventId: confirmation.eventId });
+    seedCandidate(kernel, { candidateId: 'cand-atomic', projectId: 'cogmem', evidenceEventId: evidence.eventId });
     kernel.factStore.getDatabase().exec(`
       CREATE TRIGGER fail_candidate_review_audit
       BEFORE INSERT ON deep_write_candidate_reviews
@@ -133,7 +175,7 @@ test('candidate review rejects cross-project confirmation and relinks orphan cor
     }).belief!;
     seedCandidate(kernel, {
       candidateId: 'cand-correction', projectId: 'cogmem', candidateType: 'correction',
-      content: { newStatement: 'Hermes 状态已更新' }, evidenceEventId: confirmation.eventId,
+      content: { newStatement: 'Hermes 状态已更新' }, evidenceEventId: original.eventId,
     });
 
     expect(() => kernel.reviewDreamCandidate({

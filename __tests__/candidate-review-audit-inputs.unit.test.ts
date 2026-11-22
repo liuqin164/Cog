@@ -48,29 +48,37 @@ function seed(dbPath: string, candidateIds: string[]): void {
   const kernel = createMemoryKernel({ dbPath });
   try {
     kernel.eventStore.append({
+      eventId: 'evt-evidence', streamId: 'session-1', streamType: 'thread', eventType: 'MESSAGE',
+      rawEventType: 'message', projectId: PROJECT, role: 'user', payload: { text: '这条结论值得记住。' },
+    });
+    kernel.eventStore.append({
       eventId: 'evt-confirm', streamId: 'session-1', streamType: 'thread', eventType: 'MESSAGE',
       rawEventType: 'message', projectId: PROJECT, role: 'user', payload: { text: '我确认这条结论有效。' },
+    });
+    kernel.eventStore.append({
+      eventId: 'evt-confirm-relink', streamId: 'session-1', streamType: 'thread', eventType: 'MESSAGE',
+      rawEventType: 'message', projectId: PROJECT, role: 'user', payload: { text: '我确认这条修正的归属。' },
     });
     const db = kernel.factStore.getDatabase();
     db.prepare(`INSERT OR IGNORE INTO beliefs (id, project_id, scope, subject, predicate, object_value, canonical_key, confidence, trust_score, source_type, validity_kind, valid_from, status, created_at, updated_at)
       VALUES (?, ?, 'project', 'svc', 'runs_on', 'bun', 'svc::runs_on', 0.9, 0.9, 'user_input', 'open', ?, 'active', ?, ?)`)
       .run(BELIEF, PROJECT, 1_700_000_000_000, 1_700_000_000_000, 1_700_000_000_000);
     const store = new DeepWriteCandidateStore(db);
-    store.insertRun({ runId: 'run-replacement', projectId: PROJECT, sourceNeuronIds: ['evt-confirm'], mode: 'episode', promptHash: 'p', outputHash: 'o', status: 'succeeded' });
+    store.insertRun({ runId: 'run-replacement', projectId: PROJECT, sourceNeuronIds: ['evt-evidence'], mode: 'episode', promptHash: 'p', outputHash: 'o', status: 'succeeded' });
     store.insertCandidates([{
       candidateId: REPLACEMENT, runId: 'run-replacement', candidateType: 'semantic_tags',
       status: 'needs_confirmation', confidence: 0.8, content: { topicPath: 'audit/replacement' },
-      evidence: [{ eventId: 'evt-confirm', role: 'user' }],
+      evidence: [{ eventId: 'evt-evidence', role: 'user' }],
     }]);
     for (const candidateId of candidateIds) {
       const action = candidateId.split('-')[1];
-      store.insertRun({ runId: `run-${candidateId}`, projectId: PROJECT, sourceNeuronIds: ['evt-confirm'], mode: 'episode', promptHash: 'p', outputHash: 'o', status: 'succeeded' });
+      store.insertRun({ runId: `run-${candidateId}`, projectId: PROJECT, sourceNeuronIds: ['evt-evidence'], mode: 'episode', promptHash: 'p', outputHash: 'o', status: 'succeeded' });
       store.insertCandidates([{
         candidateId, runId: `run-${candidateId}`,
         candidateType: action === 'relink' ? 'correction' : 'semantic_tags',
         status: 'needs_confirmation', confidence: 0.8,
         content: action === 'relink' ? { correctedClaimKey: null, correctedBeliefCandidateIds: [] } : { topicPath: 'audit/input' },
-        evidence: [{ eventId: 'evt-confirm', role: 'user' }],
+        evidence: [{ eventId: 'evt-evidence', role: 'user' }],
       }]);
     }
   } finally {
@@ -160,8 +168,9 @@ describe('candidate review records only the inputs its action consumes', () => {
         };
         for (const action of ACTIONS) {
           const candidateId = `cand-${action}-confirmationEventId`;
+          const confirmationEventId = action === 'relink' ? 'evt-confirm-relink' : 'evt-confirm';
           const input: Record<string, unknown> = { candidateId, projectId: PROJECT, action, actor: 'operator', reason: 'probe' };
-          for (const consumed of CONSUMED[action]) input[consumed] = valueFor(consumed);
+          for (const consumed of CONSUMED[action]) input[consumed] = consumed === 'confirmationEventId' ? confirmationEventId : valueFor(consumed);
           const result = kernel.reviewDreamCandidate(input as never);
           expect(result.candidate.status).toBe(toStatus[action]);
           const rows = reviewRows(kernel, candidateId);
@@ -176,7 +185,7 @@ describe('candidate review records only the inputs its action consumes', () => {
             review_after: row.review_after === null ? null : 'set',
           }).toEqual({
             action,
-            confirmation_event_id: CONSUMED[action].includes('confirmationEventId') ? 'evt-confirm' : null,
+            confirmation_event_id: CONSUMED[action].includes('confirmationEventId') ? confirmationEventId : null,
             target_belief_id: CONSUMED[action].includes('targetBeliefId') ? BELIEF : null,
             replacement_candidate_id: CONSUMED[action].includes('replacementCandidateId') ? REPLACEMENT : null,
             review_after: CONSUMED[action].includes('reviewAfter') ? 'set' : null,

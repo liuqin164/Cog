@@ -9,10 +9,11 @@ const memoryBin = join(import.meta.dir, '..', 'src', 'bin', 'memory.ts');
 function seed(dbPath: string, candidateId: string): void {
   const kernel = createMemoryKernel({ dbPath });
   try {
+    kernel.eventStore.append({ eventId: `evt-${candidateId}-source`, streamId: candidateId, streamType: 'thread', eventType: 'MESSAGE', rawEventType: 'message', projectId: 'cogmem', role: 'user', payload: { text: '候选证据。' } });
     kernel.eventStore.append({ eventId: `evt-${candidateId}`, streamId: candidateId, streamType: 'thread', eventType: 'MESSAGE', rawEventType: 'message', projectId: 'cogmem', role: 'user', payload: { text: '确认候选。' } });
     const store = new DeepWriteCandidateStore(kernel.factStore.getDatabase());
-    store.insertRun({ runId: `run-${candidateId}`, projectId: 'cogmem', sourceNeuronIds: [`evt-${candidateId}`], mode: 'episode', promptHash: 'p', outputHash: 'o', status: 'succeeded' });
-    store.insertCandidates([{ candidateId, runId: `run-${candidateId}`, candidateType: 'semantic_tags', status: 'needs_confirmation', confidence: 0.8, content: { topicPath: 'cogmem/review' }, evidence: [{ eventId: `evt-${candidateId}`, role: 'user' }] }]);
+    store.insertRun({ runId: `run-${candidateId}`, projectId: 'cogmem', sourceNeuronIds: [`evt-${candidateId}-source`], mode: 'episode', promptHash: 'p', outputHash: 'o', status: 'succeeded' });
+    store.insertCandidates([{ candidateId, runId: `run-${candidateId}`, candidateType: 'semantic_tags', status: 'needs_confirmation', confidence: 0.8, content: { topicPath: 'cogmem/review' }, evidence: [{ eventId: `evt-${candidateId}-source`, role: 'user' }] }]);
   } finally { kernel.close(); }
 }
 
