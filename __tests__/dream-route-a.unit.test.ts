@@ -174,7 +174,8 @@ test('fault injection writes no fake model candidate and leaves the recall contr
       expect(modelCandidates).toHaveLength(0);
       expect(kernel.semanticIndexEnabled()).toBe(before);
       expect(recall().semanticIndex).toBe(before);
-      expect(kernel.listDreamCandidates({ projectId: 'demo', statuses: ['needs_confirmation'], limit: 200 })).toHaveLength(0);
+      expect(kernel.listDreamCandidates({ projectId: 'demo', statuses: ['needs_confirmation'], limit: 200 })
+        .filter((candidate) => candidate.statusReason === 'llm_inference_requires_user_review')).toHaveLength(0);
 
       kernel.promoteDreamCandidates({ projectId: 'demo', limit: 100 });
       const promotedFromModel = kernel.factStore.getDatabase()

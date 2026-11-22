@@ -532,11 +532,10 @@ export class DeepWritePromotionPolicy {
       },
       confidence: candidate.confidence,
       trustScore: Math.max(0.55, candidate.confidence),
+      canonicalKeyDiscriminator: value,
       sourceNeuronId: neuronId,
       sourceEventId: eventId,
-      // A reviewed model candidate stays model-inferred evidence. The user confirmed the claim, not
-      // the provenance; relabelling it `user_input` would repeat the audit lie #231 stopped.
-      sourceType: isInferenceOnly(content) ? 'llm_inference' : 'user_input',
+      sourceType: sourceOf(content).includes('rule') ? 'rule_extraction' : isInferenceOnly(content) ? 'llm_inference' : 'user_input',
       validityKind: durabilityOf(content).includes('temporary') ? 'time_range' : 'open',
       validFrom: candidate.createdAt,
       explanation: stringField(content, ['explanation', 'reason', 'sourceText']),

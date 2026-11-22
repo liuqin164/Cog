@@ -106,7 +106,7 @@ interface DreamEvidence {
   };
 }
 
-const PREFERENCE_PATTERN = /(请以后|以后请|始终|总是|偏好|喜欢|希望|不要|别|必须|一定要|长期目标|目标是|约束|边界|本地优先|local-first|prefer|preference|always|never|must|do not|don't|goal|constraint|boundary)/iu;
+const PREFERENCE_PATTERN = /((?:以后|今后)[^。！？.!?\n]{0,40}(?:别|不要|不再)|请以后|以后请|我(?:更|不)?(?:喜欢|偏好|讨厌)|i (?:prefer|like|hate|dislike)\b)/iu;
 const CORRECTION_PATTERN = /((?:^|[。！？.!?\s])不[，,]|(?<!对)不对|(?<!是)不是|纠正|更正|应该是|推翻|修正|actually|correction|instead)/iu;
 const LEADING_CORRECTION_PATTERN = /^\s*不[，,]/u;
 const CURATOR_EPISODE_CHAR_BUDGET = 24000;
@@ -342,7 +342,8 @@ export class DreamCuratorWorker {
       if (PREFERENCE_PATTERN.test(text)) {
         candidates.push({
           candidateType: 'preferences',
-          status,
+          status: options.mode === 'shadow' ? 'shadow' : 'needs_confirmation',
+          statusReason: 'rule_preference_requires_confirmation',
           confidence: 0.8,
           content: {
             projectId: event.projectId || options.projectId,
@@ -352,7 +353,7 @@ export class DreamCuratorWorker {
             statement: text,
             category: preferenceCategory(text),
             tags: preferenceTags(text),
-            source: 'explicit_user_statement',
+            source: 'rule_extraction',
             durability: 'durable',
             risk: 'curator_preference_candidate_requires_governance',
           },
@@ -1100,7 +1101,7 @@ function preferenceCategory(text: string): string {
 }
 
 function preferenceTags(text: string): string[] {
-  const tags = ['source:explicit_user_statement'];
+  const tags = ['source:rule_extraction'];
   if (/记忆内核|CogMem|cogmem|OpenClaw|Hermes|Obsidian|wiki/iu.test(text)) tags.push('scope:project');
   if (/本地优先|local-first/iu.test(text)) tags.push('policy:local_first');
   if (/不要|别|never|do not|don't/iu.test(text)) tags.push('kind:negative_constraint');
