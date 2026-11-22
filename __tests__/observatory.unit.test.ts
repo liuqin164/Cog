@@ -184,6 +184,24 @@ describe('the observatory read path writes nothing', () => {
       db.close();
     }
   });
+
+  test('a deletion invalidates the cached snapshot even when the watermark does not move', () => {
+    const db = new Database(dbPath);
+    try {
+      const observatory = new MemoryObservatory({ db });
+      const before = observatory.snapshot({ projectId: 'observatory' });
+      expect(before.nodes.some((node) => node.id === 'raw_event:evt-observatory-0')).toBe(true);
+      db.prepare(`DELETE FROM memory_events WHERE event_id = ?`).run('evt-observatory-0');
+      db.prepare(`DELETE FROM memory_atlas_documents WHERE node_id = ?`).run('raw_event:evt-observatory-0');
+      const after = observatory.snapshot({ projectId: 'observatory' });
+      expect(after.watermark).toBe(before.watermark);
+      expect(after.nodes.some((node) => node.id === 'raw_event:evt-observatory-0')).toBe(false);
+      expect(after.nodes.some((node) => node.label.includes('deploy window'))).toBe(false);
+      expect(after.counts.nodesTotal).toBe(before.counts.nodesTotal - 1);
+    } finally {
+      db.close();
+    }
+  });
 });
 
 describe('the page is served from beside the route module', () => {

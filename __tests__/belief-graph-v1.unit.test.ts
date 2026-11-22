@@ -94,6 +94,37 @@ describe('belief graph v1', () => {
     expect(history[1]?.supersededByBeliefId).toBe(corrected.beliefId);
   });
 
+  test('assistant evidence cannot supersede or reinforce a user-owned belief', () => {
+    const beliefs = service();
+    const original = 'No external calls without confirmation.';
+    const boundary = beliefs.apply({
+      projectId: 'brain', ownership: 'user', beliefType: 'boundary',
+      canonicalKey: 'user:no-external-calls', statement: original, evidenceEventIds: ['evt-user-1'],
+    });
+    expect(() => beliefs.apply({
+      projectId: 'brain', ownership: 'project', beliefType: 'boundary',
+      canonicalKey: 'user:no-external-calls', statement: 'External calls are allowed.',
+      evidenceEventIds: ['evt-assistant'], relation: 'correct',
+    })).toThrow('user_belief_requires_new_user_evidence');
+    expect(() => beliefs.apply({
+      projectId: 'brain', ownership: 'project', beliefType: 'boundary',
+      canonicalKey: 'user:no-external-calls', statement: original,
+      evidenceEventIds: ['evt-assistant'], relation: 'reinforce',
+    })).toThrow('user_belief_requires_new_user_evidence');
+    expect(() => beliefs.apply({
+      projectId: 'brain', ownership: 'user', beliefType: 'boundary',
+      canonicalKey: 'user:no-external-calls', statement: 'External calls are allowed.',
+      evidenceEventIds: ['evt-user-1'], relation: 'correct',
+    })).toThrow('user_belief_requires_new_user_evidence');
+
+    const current = beliefs.getCurrent('brain', 'user:no-external-calls');
+    expect(current).toHaveLength(1);
+    expect(current[0]?.beliefId).toBe(boundary.beliefId);
+    expect(current[0]?.confidence).toBe(boundary.confidence);
+    expect(current[0]?.version).toBe(1);
+    expect(current[0]?.sourceRoles).toEqual(['user']);
+  });
+
   test('keeps unsupported contradictions pending and enforces project isolation', () => {
     const beliefs = service();
     beliefs.apply({
