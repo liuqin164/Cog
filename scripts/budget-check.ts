@@ -61,6 +61,13 @@ function lineCounts(): Record<string, number> {
   return counts;
 }
 
+function nocheckFiles(): string[] {
+  return [
+    ...sourceFiles(join(ROOT, 'src')),
+    ...sourceFiles(join(ROOT, 'shell/src')),
+  ].filter((file) => readFileSync(file, 'utf8').includes('@ts-nocheck'));
+}
+
 function toolCount(): number {
   const names = new Set<string>();
   const context = {
@@ -131,6 +138,8 @@ for (const [area, lines] of Object.entries(measured.lines)) {
   if (typeof cap !== 'number') problems.push(`missing cap: ${area} has ${lines} lines`);
   else if (lines > cap) problems.push(`over cap: ${area} has ${lines} lines, cap ${cap}`);
 }
+
+for (const file of nocheckFiles()) problems.push(`@ts-nocheck: ${relative(ROOT, file)}`);
 
 for (const metric of ['tools', 'commands', 'states', 'tables', 'exportSymbols'] as const) {
   const cap = BUDGET[metric];

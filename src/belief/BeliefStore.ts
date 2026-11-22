@@ -1,6 +1,6 @@
-// @ts-nocheck
 import Database from 'bun:sqlite';
 import { randomUUID } from 'crypto';
+import type { QuerySemanticHints } from '../types/query-ir.js';
 import type {
   BeliefCandidate,
   BeliefConflictCandidate,
@@ -160,17 +160,7 @@ export class BeliefStore {
     entities?: string[];
     mustMatch?: string[];
     shouldMatch?: string[];
-    semantics?: {
-      subjectHint?: string;
-      predicateHint?: 'preference' | 'decision' | 'constraint' | 'fact' | 'workflow' | 'graph' | 'sequence' | 'plan';
-      entityHints: string[];
-      valueHints: string[];
-      conditionHints: string[];
-      environmentHints: string[];
-      stateHints: string[];
-      policyHints: string[];
-      asksForHistory: boolean;
-    };
+    semantics?: Partial<QuerySemanticHints>;
   }): BeliefRecord[] {
     const query = input.query.toLowerCase().trim();
     const atTime = input.atTime ?? Date.now();
@@ -899,15 +889,7 @@ export class BeliefStore {
         expectedValue?: string;
         asksForHistory?: boolean;
       };
-      semantics?: {
-        entityHints: string[];
-        conditionHints: string[];
-        environmentHints?: string[];
-        stateHints?: string[];
-        policyHints?: string[];
-        valueHints: string[];
-        asksForHistory: boolean;
-      };
+      semantics?: Partial<QuerySemanticHints>;
     }
   ): number {
     let score = 0;
@@ -1085,7 +1067,7 @@ export class BeliefStore {
           planDsl
         },
         {
-          projectId: input.projectId,
+          projectId: input.projectId ?? '',
           rawQuery: input.query,
           conditionHints: input.semantics?.conditionHints,
           entityHints: input.semantics?.entityHints,
@@ -1188,21 +1170,7 @@ export class BeliefStore {
     query: string,
     intent: 'fact_lookup' | 'preference_lookup' | 'decision_lookup' | 'constraint_lookup' | 'trace' | 'debug_context' | 'recall' | undefined,
     tokens: string[],
-    semantics?: {
-      subjectHint?: string;
-      predicateHint?: 'preference' | 'decision' | 'constraint' | 'fact' | 'workflow' | 'graph' | 'sequence' | 'plan';
-      entityHints: string[];
-      valueHints: string[];
-      conditionHints: string[];
-      environmentHints: string[];
-      stateHints: string[];
-      policyHints: string[];
-      guardHints: string[];
-      executorHints: string[];
-      validationHints: string[];
-      mergeHints: string[];
-      asksForHistory: boolean;
-    }
+    semantics?: Partial<QuerySemanticHints>
   ): {
     subject?: string;
     predicatePrefix?: string;

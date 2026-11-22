@@ -1,4 +1,3 @@
-// @ts-nocheck
 export interface ConditionEvaluationContext {
   projectId?: string;
   rawQuery?: string;
@@ -85,7 +84,7 @@ export class ConditionDslEvaluator {
     node: ConditionNode,
     context: ConditionEvaluationContext
   ): { matched: boolean; score: number; reasons: string[] } {
-    if (node.kind === 'group') {
+    if ('clauses' in node) {
       const childResults = node.clauses.map((clause: ConditionNode) => this.evaluateNode(clause, context));
       const matched = node.combinator === 'all'
         ? childResults.every((item: { matched: boolean }) => item.matched)

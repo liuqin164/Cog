@@ -1,4 +1,3 @@
-// @ts-nocheck
 import {
   MarkdownSourceLoader,
   buildEpisodeEnvelope,
@@ -106,7 +105,7 @@ export class InstalledBatchProcessor {
       this.deps.cursorStore.registerSource(source);
     }
 
-    const sources = registered.length > 0
+    const sources: SourceDefinition[] = registered.length > 0
       ? registered
       : this.deps.cursorStore.listRegisteredSources().map((cursor) => ({
           sourceId: cursor.sourceId,
