@@ -82,6 +82,8 @@ const RAW_TERM_DF_CACHE = new WeakMap<object, { watermark: number; counts: Map<s
 const PRIVATE_CHECKED_ITEMS = new WeakMap<object, WeakSet<AgentRecallItem>>();
 const FREQUENT_TERM_MIN = 3;
 const DISCRIMINATIVE_TERM_BUDGET = 8;
+const RAW_LANE_CANDIDATE_FLOOR = 40;
+const RAW_LANE_CANDIDATE_CAP = 200;
 
 export class AgentRecallEngine {
   constructor(private readonly kernel: MemoryKernel, private readonly binding?: ChannelBinding) {}
@@ -1090,9 +1092,6 @@ export class AgentRecallEngine {
         startTime: query.startTime,
         endTime: query.endTime,
         limit,
-        // Recall wants the event that answers the question. Chronological order
-        // here made the oldest match the best match, so the answer a query had
-        // found was ranked behind whatever happened first.
         orderBy: 'relevance',
       });
       for (const event of events) {
@@ -1148,34 +1147,36 @@ export class AgentRecallEngine {
     query: AgentRecallQuery,
     limit: number
   ): AgentRecallItem[] {
-    const semanticIds = this.kernel
-      .nearestRawEventIds(String(query.query ?? queryPlan.primarySearchText), query.projectId, Math.max(limit * 2, 10));
-    const semanticEvents = semanticIds
-      .map((eventId) => this.kernel.eventStore.getEvent(eventId))
-      .filter((event): event is MemoryEvent => Boolean(event));
-    const searchedEvents = [
-      ...semanticEvents,
-      ...this.searchRawEventsByQueryPlan(queryPlan, query, Math.max(limit * 2, 10)),
-    ];
-    const rawEvents = queryPlan.intent === 'forensic_quote'
-      ? this.dedupeRawEventsByTurnPreferUser(searchedEvents)
-      : this.dedupeRawEventsByTurnPreferCue(searchedEvents, queryPlan);
-    if (semanticIds.length > 0) {
-      const semanticRank = new Map(semanticIds.map((eventId, index) => [eventId, index]));
-      rawEvents.sort((left, right) => (
-        (semanticRank.get(left.eventId) ?? Number.MAX_SAFE_INTEGER)
-        - (semanticRank.get(right.eventId) ?? Number.MAX_SAFE_INTEGER)
-      ));
+    let candidateLimit = Math.min(Math.max(limit * 8, RAW_LANE_CANDIDATE_FLOOR), RAW_LANE_CANDIDATE_CAP);
+    for (;;) {
+      const semanticIds = this.kernel
+        .nearestRawEventIds(String(query.query ?? queryPlan.primarySearchText), query.projectId, candidateLimit);
+      const semanticEvents = semanticIds
+        .map((eventId) => this.kernel.eventStore.getEvent(eventId))
+        .filter((event): event is MemoryEvent => Boolean(event));
+      const searched = this.searchRawEventsByQueryPlan(queryPlan, query, candidateLimit);
+      const rawEvents = queryPlan.intent === 'forensic_quote'
+        ? this.dedupeRawEventsByTurnPreferUser([...semanticEvents, ...searched])
+        : this.dedupeRawEventsByTurnPreferCue([...semanticEvents, ...searched], queryPlan);
+      if (semanticIds.length > 0) {
+        const semanticRank = new Map(semanticIds.map((eventId, index) => [eventId, index]));
+        rawEvents.sort((left, right) => (
+          (semanticRank.get(left.eventId) ?? Number.MAX_SAFE_INTEGER)
+          - (semanticRank.get(right.eventId) ?? Number.MAX_SAFE_INTEGER)
+        ));
+      }
+      const items = rawEvents
+        .filter((event) => this.isRawEventInRecallScope(event, query, queryPlan.intent))
+        .filter((event) => !this.isOperationalNoiseRawEvent(event))
+        .slice(0, limit)
+        .map((event) => this.toAgentRawRecallItem(event, {
+          sourceType: 'raw_ledger',
+          whyMatched: 'raw_ledger_text_fallback',
+          canAnswerExactQuote: true,
+        }));
+      if (items.length >= limit || searched.length < candidateLimit || candidateLimit >= RAW_LANE_CANDIDATE_CAP) return items;
+      candidateLimit = Math.min(candidateLimit * 2, RAW_LANE_CANDIDATE_CAP);
     }
-    return rawEvents
-      .filter((event) => this.isRawEventInRecallScope(event, query, queryPlan.intent))
-      .filter((event) => !this.isOperationalNoiseRawEvent(event))
-      .slice(0, limit)
-      .map((event) => this.toAgentRawRecallItem(event, {
-        sourceType: 'raw_ledger',
-        whyMatched: 'raw_ledger_text_fallback',
-        canAnswerExactQuote: true,
-      }));
   }
 
   private memoryBindingGraphItemsForQuery(
