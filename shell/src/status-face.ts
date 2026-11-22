@@ -148,13 +148,15 @@ export class StatusFace {
     };
   }
 
-  memoryModelHealth(): { route: string; model: string; baseUrl: string; state: 'reachable' | 'unreachable' | 'rule_only'; line: string } {
+  memoryModelHealth(): { route: string; model: string; baseUrl: string; state: 'reachable' | 'unreachable' | 'degraded' | 'rule_only'; line: string } {
     const role = this.shell.modelRegistry.getRoleConfig('memory');
     const route = this.shell.modelRouter?.active ?? 'default';
     const ruleOnly = role.provider !== 'openai_compatible';
-    const state = ruleOnly ? 'rule_only' : this.shell.memoryModelFailed ? 'unreachable' : 'reachable';
+    const degraded = this.shell.machine.runtime.memoryModel?.state === 'degraded';
+    const state = ruleOnly ? 'rule_only' : this.shell.memoryModelFailed ? (degraded ? 'degraded' : 'unreachable') : 'reachable';
     const stateText = state === 'rule_only'
       ? '降级为规则；夜间整合不会用模型'
+      : state === 'degraded' ? '今夜模型预算用尽，降级为规则；缺帧记忆已排期回填'
       : state === 'unreachable' ? '不可达，降级为规则；夜间整合不会用模型' : '可达';
     return {
       route,

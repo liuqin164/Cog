@@ -71,7 +71,7 @@ test('dream curator compiles raw backlog into governed candidates without hot ve
   });
 
   const result = await kernel.runDreamCurator({ projectId: 'demo', limit: 10 });
-  const candidates = kernel.listDreamCandidates({ statuses: ['candidate'], limit: 20 });
+  const candidates = kernel.listDreamCandidates({ statuses: ['candidate', 'needs_confirmation'], limit: 20 });
   const candidateTypes = candidates.map((candidate) => candidate.candidateType);
 
   expect(result.skipped).toBe(false);
@@ -80,7 +80,11 @@ test('dream curator compiles raw backlog into governed candidates without hot ve
   expect(candidateTypes).toContain('summary');
   expect(candidateTypes).toContain('preferences');
   expect(kernel.getDreamBacklogStatus('demo').undreamedRawCount).toBe(0);
-  expect(candidates.every((candidate) => candidate.status === 'candidate')).toBe(true);
+  expect(candidates.find((candidate) => candidate.candidateType === 'summary')?.status).toBe('candidate');
+  expect(candidates.find((candidate) => candidate.candidateType === 'preferences')).toMatchObject({
+    status: 'needs_confirmation',
+    content: { source: 'rule_extraction' },
+  });
   expect(JSON.stringify(candidates)).toContain('"eventId"');
   expect(JSON.stringify(candidates)).toContain('"sourceAnchor"');
 
@@ -332,7 +336,7 @@ test('dream governance promotes semantic organization candidates instead of lett
 
   expect(governed.decisions.length).toBeGreaterThan(0);
   expect(promotedTypes).toContain('summary');
-  expect(promotedTypes).toContain('preferences');
+  expect(kernel.countDreamCandidates({ projectId: 'demo', statuses: ['needs_confirmation'], candidateTypes: ['preferences'] })).toBeGreaterThan(0);
   expect(promotedTypes).toContain('semantic_tags');
   expect(promotedTypes).toContain('indexing_decision');
   expect(promotedTypes).toContain('semantic_relation');
@@ -523,5 +527,72 @@ test('dream curator suppresses operational noise before candidate generation', a
   expect(serialized).not.toContain('HEARTBEAT_OK');
   expect(serialized).not.toContain('heartbeat poll');
 
+  kernel.close();
+});
+
+test('a one-off sentence containing the character 别 is not a rule preference', async () => {
+  const dir = makeTempDir('cogmem-dream-preference-noise-');
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db') });
+  const backend = new KernelAgentMemoryBackend(kernel);
+  await backend.rememberTurnWithResult({
+    agentId: 'openclaw',
+    projectId: 'demo',
+    sessionId: 'preference-noise',
+    userText: '别人说这个方案不错，我今天特别累。',
+    assistantText: '先休息。',
+    ingestMode: 'raw_then_dream',
+  });
+
+  await kernel.runDreamCurator({ projectId: 'demo', limit: 10 });
+  expect(kernel.countDreamCandidates({ projectId: 'demo', candidateTypes: ['preferences'] })).toBe(0);
+  kernel.close();
+});
+
+test('a real preference is rule_extraction and waits for review before becoming a belief', async () => {
+  const dir = makeTempDir('cogmem-dream-preference-governed-');
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.db') });
+  const backend = new KernelAgentMemoryBackend(kernel);
+  for (const [index, userText] of ['我喜欢简短回答。', '以后不要用表格。'].entries()) {
+    await backend.rememberTurnWithResult({
+      agentId: 'openclaw',
+      projectId: 'demo',
+      sessionId: `preference-${index}`,
+      userText,
+      assistantText: '记下了。',
+      ingestMode: 'raw_then_dream',
+    });
+  }
+
+  await kernel.runDreamCurator({ projectId: 'demo', limit: 10 });
+  const preferences = kernel.listDreamCandidates({ projectId: 'demo', candidateTypes: ['preferences'], limit: 10 });
+  expect(preferences).toHaveLength(2);
+  expect(preferences.every((candidate) => candidate.status === 'needs_confirmation')).toBe(true);
+  expect(preferences.every((candidate) => (candidate.content as { source?: string }).source === 'rule_extraction')).toBe(true);
+
+  kernel.promoteDreamCandidates({ projectId: 'demo', limit: 20 });
+  const unreviewed = kernel.factStore.getDatabase()
+    .prepare(`SELECT COUNT(*) AS count FROM beliefs WHERE source_type='rule_extraction'`).get() as { count: number };
+  expect(unreviewed.count).toBe(0);
+
+  const confirmation = kernel.eventStore.append({
+    eventId: 'evt-preference-confirm', streamId: 'preference-0', streamType: 'thread', eventType: 'MESSAGE',
+    rawEventType: 'message', projectId: 'demo', role: 'user', occurredAt: Date.now() + 60_000,
+    payload: { text: '对，我喜欢简短回答。' },
+  });
+  const target = preferences.find((candidate) => JSON.stringify(candidate.content).includes('简短回答'))!;
+  const reviewed = kernel.reviewDreamCandidate({
+    candidateId: target.candidateId,
+    projectId: 'demo',
+    action: 'approve',
+    actor: 'owner',
+    reason: 'owner confirmed the preference',
+    confirmationEventId: confirmation.eventId,
+  });
+  expect(reviewed.candidate.status).toBe('promoted');
+  const belief = kernel.factStore.getDatabase()
+    .prepare(`SELECT source_type, canonical_key FROM beliefs WHERE source_type='rule_extraction'`)
+    .get() as { source_type: string; canonical_key: string } | null;
+  expect(belief?.source_type).toBe('rule_extraction');
+  expect(belief?.canonical_key).toContain('我喜欢简短回答。');
   kernel.close();
 });

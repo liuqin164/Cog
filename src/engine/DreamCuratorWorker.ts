@@ -35,7 +35,6 @@ export interface DreamCuratorRunOptions {
   mode?: 'candidate' | 'shadow';
   now?: number;
   generateText?: TextGenerateFn;
-  /** Internal episode path: process only these authoritative raw events. */
   eventIds?: string[];
   sourceEpisodeId?: string;
   sourceEpisodeEventIds?: string[];
@@ -69,7 +68,6 @@ export interface DreamCuratorRunResult {
 }
 
 export interface DreamCuratorWorkerDeps {
-  /** The project's classification vocabulary (#132); absent means the shipped one. */
   taxonomy?: MemoryTaxonomy;
   eventStore: EventStore;
   dreamLedgerStore: DreamLedgerStore;
@@ -108,7 +106,7 @@ interface DreamEvidence {
   };
 }
 
-const PREFERENCE_PATTERN = /(请以后|以后请|始终|总是|偏好|喜欢|希望|不要|别|必须|一定要|长期目标|目标是|约束|边界|本地优先|local-first|prefer|preference|always|never|must|do not|don't|goal|constraint|boundary)/iu;
+const PREFERENCE_PATTERN = /((?:以后|今后)[^。！？.!?\n]{0,40}(?:别|不要|不再)|请以后|以后请|我(?:更|不)?(?:喜欢|偏好|讨厌)|i (?:prefer|like|hate|dislike)\b)/iu;
 const CORRECTION_PATTERN = /((?:^|[。！？.!?\s])不[，,]|(?<!对)不对|(?<!是)不是|纠正|更正|应该是|推翻|修正|actually|correction|instead)/iu;
 const LEADING_CORRECTION_PATTERN = /^\s*不[，,]/u;
 const CURATOR_EPISODE_CHAR_BUDGET = 24000;
@@ -156,8 +154,6 @@ export class DreamCuratorWorker {
       };
       let frame: MemoryFrameV1 | undefined;
       try {
-        // A rule-only registry has no semantic model. Use the injected local
-        // processor instead of parsing its guaranteed-empty text response.
         const frameGenerator = this.resolveGenerateText(options);
         const processor = frameGenerator
           ? new StructuredSemanticProcessorImpl(async (input) => JSON.parse(await frameGenerator(memoryFrameSystemPrompt(this.deps.taxonomy), JSON.stringify({
@@ -174,39 +170,35 @@ export class DreamCuratorWorker {
         }
       } catch (error) {
         semanticProcessorUnavailable = true;
-        semanticProcessorReason = 'semantic_processor_failed';
         semanticProcessorError = error instanceof Error ? error.message : String(error);
+        semanticProcessorReason = semanticProcessorError.startsWith('dream_model_budget_exceeded')
+          ? 'semantic_processor_budget'
+          : 'semantic_processor_failed';
         this.deps.pipelineMetrics?.recordNonFatal('memory_frame_processor_fallback', {
           projectId: options.projectId,
           message: error instanceof Error ? error.message : String(error),
           details: { episodeId: options.sourceEpisodeId, source: 'structured_semantic_processor' },
         });
-        // A provider failure is not a semantic result. Keep the Dream
-        // candidate/run outcome observable without persisting an
-        // unreviewable pseudo-success Frame.
         frame = undefined;
       }
       if (semanticProcessorUnavailable) {
         this.deps.pipelineMetrics?.recordNonFatal('semantic_processor_unavailable', { projectId: options.projectId, details: { episodeId: options.sourceEpisodeId } });
       } else {
       if (!frame) throw new Error('memory_frame_processor_no_output');
+      const sourceAuthority = frame.sourceAuthority === 'deterministic_fallback' ? 'deterministic_fallback' : 'processor'; const complete = (options.sourceEpisodeEventIds?.length ?? events.length) <= events.length; const needsReview = sourceAuthority === 'deterministic_fallback' || !complete;
       frame = {
         ...frame,
-        frameId: `frame:${createHash('sha256').update(`${options.sourceEpisodeId}\0${events.map((event) => event.eventId).join('\0')}`).digest('hex').slice(0, 32)}`,
-        processor: { ...frame.processor, ...this.resolveProviderConfig(options), promptVersion: MEMORY_FRAME_PROMPT_VERSION, generatedAt: now },
-        sourceAuthority: frame.sourceAuthority === 'deterministic_fallback' ? 'deterministic_fallback' : 'processor',
-        needsReview: frame.needsReview || frame.sourceAuthority === 'deterministic_fallback',
+        frameId: `frame:${createHash('sha256').update(`${options.sourceEpisodeId}\0${events.map((event) => event.eventId).join('\0')}`).digest('hex').slice(0, 32)}`, processor: { ...frame.processor, ...this.resolveProviderConfig(options), promptVersion: MEMORY_FRAME_PROMPT_VERSION, generatedAt: now },
+        sourceAuthority,
+        semanticCompleteness: complete ? 'full' : 'minimal',
+        needsReview,
+        publishStatus: needsReview ? 'needs_confirmation' : 'active',
       };
-      if ((options.sourceEpisodeEventIds?.length ?? events.length) > events.length) {
-        frame = { ...frame, semanticCompleteness: 'minimal', needsReview: true, publishStatus: 'needs_confirmation' };
-      }
       const savedFrame = this.deps.memoryFrameStore.save({
         frame,
         sourceFingerprint: frameSourceFingerprint(events.map((event) => event.eventId), options.sourceEpisodeId),
         status: 'staged',
-        publishStatus: options.mode === 'shadow' || frame.needsReview
-          ? 'needs_confirmation'
-          : (frame.publishStatus ?? 'active'),
+        publishStatus: options.mode === 'shadow' || needsReview ? 'needs_confirmation' : 'active',
         dreamJobLeaseId: options.dreamJobLeaseId,
         leaseUntil: options.leaseUntil,
         attemptGeneration: options.attemptGeneration,
@@ -218,7 +210,12 @@ export class DreamCuratorWorker {
     const maxGlobalSeq = Math.max(...events.map((event) => event.globalSeq || 0));
     const dreamableEvents = events.filter((event) => this.isDreamableEvent(event));
     const allowedEvidence = new Set(options.sourceEpisodeEventIds || events.map((event) => event.eventId));
-    const candidateInputs = (await this.buildCandidates(dreamableEvents, options, now))
+    const candidateInputs = (await this.buildCandidates(dreamableEvents, options, now).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.startsWith('dream_model_budget_exceeded')) throw error;
+      semanticProcessorUnavailable = true; semanticProcessorReason = 'semantic_processor_budget'; semanticProcessorError = message;
+      return [];
+    }))
       .filter((candidate) => {
         const evidence = Array.isArray(candidate.evidence) ? candidate.evidence as Array<{ eventId?: unknown }> : [];
         const content = objectRecord(candidate.content);
@@ -345,7 +342,8 @@ export class DreamCuratorWorker {
       if (PREFERENCE_PATTERN.test(text)) {
         candidates.push({
           candidateType: 'preferences',
-          status,
+          status: options.mode === 'shadow' ? 'shadow' : 'needs_confirmation',
+          statusReason: 'rule_preference_requires_confirmation',
           confidence: 0.8,
           content: {
             projectId: event.projectId || options.projectId,
@@ -355,7 +353,7 @@ export class DreamCuratorWorker {
             statement: text,
             category: preferenceCategory(text),
             tags: preferenceTags(text),
-            source: 'explicit_user_statement',
+            source: 'rule_extraction',
             durability: 'durable',
             risk: 'curator_preference_candidate_requires_governance',
           },
@@ -605,6 +603,8 @@ export class DreamCuratorWorker {
     try {
       raw = await generate(systemPrompt, userPrompt);
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.startsWith('dream_model_budget_exceeded')) throw error;
       const diagnostic = this.providerDiagnosticCandidate(events, now, options.projectId, 'dream_curator_provider_exception', error);
       return diagnostic ? [diagnostic] : [];
     }
@@ -866,9 +866,6 @@ export class DreamCuratorWorker {
     reason: string,
     detail: unknown,
   ): Omit<DeepWriteCandidateInput, 'runId'> | undefined {
-    // An empty detail is what a provider failure used to leave behind (the
-    // client returns '' when the endpoint answers non-2xx, and the status only
-    // reaches stderr). Say so, instead of storing nothing.
     const raw = detail instanceof Error ? detail.message : String(detail || '');
     const detailText = truncate(raw.trim() ? raw : 'provider returned an empty body (HTTP status is on stderr)', 500);
     this.deps.pipelineMetrics?.recordNonFatal(reason, {
@@ -935,8 +932,6 @@ export class DreamCuratorWorker {
         ? candidate.content as Record<string, unknown>
         : {};
       if (content.source !== 'dream_curator_provider_warning') continue;
-      // Same rule as review-queue expiry: the warning was retired because the provider recovered,
-      // not because something replaced it, so no promotion target is named.
       this.deps.candidateStore.updateCandidateStatus(candidate.candidateId, 'superseded', {
         type: 'diagnostic_conclusion',
         reason: 'provider_recovered',
@@ -1106,7 +1101,7 @@ function preferenceCategory(text: string): string {
 }
 
 function preferenceTags(text: string): string[] {
-  const tags = ['source:explicit_user_statement'];
+  const tags = ['source:rule_extraction'];
   if (/记忆内核|CogMem|cogmem|OpenClaw|Hermes|Obsidian|wiki/iu.test(text)) tags.push('scope:project');
   if (/本地优先|local-first/iu.test(text)) tags.push('policy:local_first');
   if (/不要|别|never|do not|don't/iu.test(text)) tags.push('kind:negative_constraint');

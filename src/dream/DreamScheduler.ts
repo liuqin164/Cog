@@ -38,8 +38,6 @@ export interface DreamTickResult {
   semanticProcessorAvailable: boolean;
   semanticProcessorUnavailableCount: number;
   semanticProcessorFailedCount: number;
-  /** Why the processor was skipped or gave up, and the error when it threw: a counter alone is not
-   *  a diagnosis. Absent on a skipped tick, which never reaches a processor. */
   semanticProcessorReason?: string;
   semanticProcessorError?: string;
 }
@@ -135,10 +133,11 @@ export class DreamScheduler {
         });
         if (run.semanticProcessorAvailable) semanticProcessorAvailable = true;
         if (run.semanticProcessorReason === 'semantic_processor_unavailable') semanticProcessorUnavailableCount += 1;
-        if (run.semanticProcessorReason === 'semantic_processor_failed') semanticProcessorFailedCount += 1;
-        // First writer wins: one reason for the tick, and the earliest failure is the one to read.
-        if (run.semanticProcessorReason && !semanticProcessorReason) semanticProcessorReason = run.semanticProcessorReason;
+        if (run.semanticProcessorReason === 'semantic_processor_failed') semanticProcessorFailedCount += 1; if (run.semanticProcessorReason && !semanticProcessorReason) semanticProcessorReason = run.semanticProcessorReason;
         if (run.semanticProcessorError && !semanticProcessorError) semanticProcessorError = run.semanticProcessorError;
+        if (run.semanticProcessorReason === 'semantic_processor_failed' || run.semanticProcessorReason === 'semantic_processor_budget') {
+          if (run.runId) this.candidateStore.failStagedRun(run.runId, clock.now(), run.semanticProcessorReason!); throw new Error(`${run.semanticProcessorReason}:${run.semanticProcessorError ?? 'semantic_processing_incomplete'}`);
+        }
         const ids = run.candidates.map((candidate) => candidate.candidateId);
         try {
           const commitCandidates = run.runId
@@ -219,6 +218,7 @@ function curatorLimits(mode: Exclude<SelectedDreamMode, 'none'>): { eventLimit: 
 function classifyFailure(message: string, attempts: number, now: number): {
   now: number; failureCategory: string; terminal: boolean; retryAfter?: number;
 } {
+  if (/semantic_processor_(failed|budget)/iu.test(message)) return { now, failureCategory: message.split(':')[0]!, terminal: false, retryAfter: now + 5 * 60_000 };
   if (/(candidate_evidence|project_mismatch|validation|schema|episode_has_no_raw_events)/iu.test(message)) {
     return { now, failureCategory: 'validation', terminal: true };
   }

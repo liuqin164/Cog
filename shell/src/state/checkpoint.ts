@@ -101,15 +101,11 @@ export interface Suspension {
 export interface ShellRuntimeState {
   lastDreamDate?: string;
   dreamRetry?: { night: string; attempts: number; nextAt: number; gaveUp?: boolean };
+  memoryModel?: { state: 'reachable' | 'unreachable' | 'degraded'; reason?: string; since: number; pendingBackfill?: boolean };
   lastSnapshotAt?: number;
   lastSnapshotFailureAt?: number;
   snapshotRetry?: { attempts: number; nextAt: number };
   lastInteractionAt?: number;
-  /**
-   * The tool loadout the transcript declared (Pi's `declareToolChanges`). Recovery compares it with
-   * the executable set: a loadout the checkpoint promised but the process can no longer run is a
-   * loud failure, not a silently degraded run.
-   */
   declaredTools?: string[];
   /**
    * The tool calls a RUNNING run had started but not finished when the checkpoint was last written.
@@ -290,6 +286,7 @@ const MAX_HISTORY = 200;
 const RUNTIME_KEYS: Record<keyof ShellRuntimeState, true> = {
   lastDreamDate: true,
   dreamRetry: true,
+  memoryModel: true,
   lastSnapshotAt: true,
   lastSnapshotFailureAt: true,
   snapshotRetry: true,

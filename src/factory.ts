@@ -7,7 +7,6 @@ import Database from 'bun:sqlite';
 import type { GraphEdgeStoreLike } from './types/ExtensionPoints.js';
 
 import { BeliefStore } from './belief/BeliefStore.js';
-import { projectFrameRelationsToBeliefs } from './belief/FrameRelationBeliefs.js';
 import { BeliefGovernanceService } from './belief/BeliefGovernanceService.js';
 import {
   MemoryBindingService,
