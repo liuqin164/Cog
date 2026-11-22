@@ -114,6 +114,7 @@ export function sessionContextPlugin(config: SessionContextPluginConfig): Native
                 excludeSessionId: config.sessionId,
                 excludeSessionTailTurns: config.tailTurns,
                 limit: config.recallLimit ?? 3, ...config.clock(),
+                includeProfileLane: false,
               }).items.map(toContextItem)
             : [];
           const assembly = assemble(recall, recent, busCtx?.runId, undefined, query, toolNames);

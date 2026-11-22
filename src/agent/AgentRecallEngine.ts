@@ -150,18 +150,9 @@ export class AgentRecallEngine {
     return { ...query, excludeSessionBeforeTurnSeq: latest - turns + 1 };
   }
 
-  /**
-   * The profile lane (#159). The owner's four ledgers are a compiled product with their own ranking
-   * and their own budget: they are **appended** after the ordinary lanes rather than merged through
-   * `mergeRecallItems`, so a profile entry never displaces the memory the question named and the
-   * compiled lane's cue ranking never reorders the profile's frozen priority/decay order.
-   *
-   * The item anchors the raw event the entry was compiled from, so the secret and agent scope gates
-   * (#142/#143, one chain) apply unchanged — the cross-identity rule stays #153's, not a second one.
-   * Exact-quote and previous-session lanes stay whole: they ask for words, not for a profile.
-   */
   private withProfileItems(query: AgentRecallQuery, result: RecallCoreResult): RecallCoreResult {
     if (!query.projectId) return result;
+    if (query.includeProfileLane === false) return result;
     if (!laneAllowed(query.retrievalPolicy, 'graph')) return result;
     const intent = result.queryPlan?.intent;
     if (intent === 'forensic_quote' || intent === 'previous_session_summary') return result;
@@ -171,11 +162,20 @@ export class AgentRecallEngine {
       now: query.now,
     });
     if (entries.length === 0) return result;
+    const seen = new Set(result.items.flatMap((item) => [item.canonicalId, item.sourceAnchor?.eventId, item.id]).filter(Boolean));
     const items = entries
       .map((entry) => this.toAgentProfileItem(entry, query))
-      .filter((item): item is AgentRecallItem => Boolean(item));
+      .filter((item): item is AgentRecallItem => Boolean(item))
+      .filter((item) => {
+        const keys = [item.canonicalId, item.sourceAnchor?.eventId, item.id].filter(Boolean);
+        if (keys.some((key) => seen.has(key))) return false;
+        keys.forEach((key) => seen.add(key));
+        return true;
+      })
+      .slice(0, query.limit ?? 5);
     if (items.length === 0) return result;
-    return { ...result, items: [...result.items, ...items] };
+    const limit = query.limit ?? 5;
+    return { ...result, items: [...result.items.slice(0, Math.max(0, limit - items.length)), ...items] };
   }
 
   /**
