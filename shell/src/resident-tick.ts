@@ -560,8 +560,13 @@ export class ResidentTick {
     await this.shell.machine.dispatch('dream_window_open', { reason: 'dream_window' });
     try {
       const result = await this.shell.dream!.integrate(localDate, `companion-day:${localDate}`, at);
-      if (result.memoryModelDegraded === 'semantic_processor_failed') this.shell.memoryModelFailed = true;
-      else if (result.memoryModelUsed) this.shell.memoryModelFailed = false;
+      if (result.memoryModelDegraded === 'semantic_processor_failed') this.shell.noteMemoryModel('unreachable', result.memoryModelDegraded, at);
+      else if (result.memoryModelDegraded === 'semantic_processor_budget') this.shell.noteMemoryModel('degraded', result.memoryModelDegraded, at);
+      else if (result.memoryModelUsed) this.shell.noteMemoryModel('reachable', undefined, at);
+      if (result.kernelNightFailed) {
+        await this.failDream(night, at, localDate, result.kernelNightSkippedReason ?? 'dream_kernel_night_failed');
+        return;
+      }
       this.shell.clock!.markDreamed(at);
       try {
         const promotion = this.shell.kernel.promoteDreamCandidates({ projectId: this.shell.config.projectId, limit: 100 });
@@ -589,18 +594,21 @@ export class ResidentTick {
       await this.shell.machine.dispatch('dream_complete', { reason: `dream:${localDate}` });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const retry = this.scheduleDreamRetry(night, at);
-      this.shell.trace.append('dream_failed', {
-        localDate,
-        message,
-        clockAt: at,
-        attempt: retry.attempts,
-        nextAt: retry.nextAt ?? null,
-        gaveUp: retry.gaveUp,
-      });
-      await this.shell.machine.dispatch('run_error', { reason: `dream_failed:${message}` });
+      await this.failDream(night, at, localDate, message);
     }
   }
 
+  private async failDream(night: string, at: number, localDate: string, message: string): Promise<void> {
+    const retry = this.scheduleDreamRetry(night, at);
+    this.shell.trace.append('dream_failed', {
+      localDate,
+      message,
+      clockAt: at,
+      attempt: retry.attempts,
+      nextAt: retry.nextAt ?? null,
+      gaveUp: retry.gaveUp,
+    });
+    await this.shell.machine.dispatch('run_error', { reason: `dream_failed:${message}` });
+  }
 
 }

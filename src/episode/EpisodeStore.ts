@@ -799,12 +799,12 @@ export class EpisodeStore {
     retryAfter?: number;
   }): void {
     this.transaction(() => {
-      const state: EpisodeDreamState = input.terminal ? 'failed_terminal' : 'failed_retryable';
+      const state: EpisodeDreamState = input.terminal ? 'failed_terminal' : 'failed_retryable'; const resetAttempts = input.failureCategory.startsWith('semantic_processor_') ? 1 : 0;
       const result = this.db.prepare(`
         UPDATE episode_dream_jobs SET state = ?, last_error = ?, failure_category = ?, retry_after = ?,
-          lease_id = NULL, lease_until = NULL, updated_at = ?
+          lease_id = NULL, lease_until = NULL, attempts = CASE WHEN ? THEN 0 ELSE attempts END, updated_at = ?
         WHERE episode_id = ? AND state = 'processing' AND lease_id = ?
-      `).run(state, error.slice(0, 2000), input.failureCategory, input.retryAfter ?? null, input.now, episodeId, leaseId);
+      `).run(state, error.slice(0, 2000), input.failureCategory, input.retryAfter ?? null, resetAttempts, input.now, episodeId, leaseId);
       if (!result.changes) return;
       this.db.prepare(`UPDATE memory_episodes SET dream_status = 'failed', dream_error = ? WHERE episode_id = ?`)
         .run(error.slice(0, 2000), episodeId);

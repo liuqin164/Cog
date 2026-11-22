@@ -35,7 +35,6 @@ export interface DreamCuratorRunOptions {
   mode?: 'candidate' | 'shadow';
   now?: number;
   generateText?: TextGenerateFn;
-  /** Internal episode path: process only these authoritative raw events. */
   eventIds?: string[];
   sourceEpisodeId?: string;
   sourceEpisodeEventIds?: string[];
@@ -69,7 +68,6 @@ export interface DreamCuratorRunResult {
 }
 
 export interface DreamCuratorWorkerDeps {
-  /** The project's classification vocabulary (#132); absent means the shipped one. */
   taxonomy?: MemoryTaxonomy;
   eventStore: EventStore;
   dreamLedgerStore: DreamLedgerStore;
@@ -156,8 +154,6 @@ export class DreamCuratorWorker {
       };
       let frame: MemoryFrameV1 | undefined;
       try {
-        // A rule-only registry has no semantic model. Use the injected local
-        // processor instead of parsing its guaranteed-empty text response.
         const frameGenerator = this.resolveGenerateText(options);
         const processor = frameGenerator
           ? new StructuredSemanticProcessorImpl(async (input) => JSON.parse(await frameGenerator(memoryFrameSystemPrompt(this.deps.taxonomy), JSON.stringify({
@@ -174,16 +170,15 @@ export class DreamCuratorWorker {
         }
       } catch (error) {
         semanticProcessorUnavailable = true;
-        semanticProcessorReason = 'semantic_processor_failed';
         semanticProcessorError = error instanceof Error ? error.message : String(error);
+        semanticProcessorReason = semanticProcessorError.startsWith('dream_model_budget_exceeded')
+          ? 'semantic_processor_budget'
+          : 'semantic_processor_failed';
         this.deps.pipelineMetrics?.recordNonFatal('memory_frame_processor_fallback', {
           projectId: options.projectId,
           message: error instanceof Error ? error.message : String(error),
           details: { episodeId: options.sourceEpisodeId, source: 'structured_semantic_processor' },
         });
-        // A provider failure is not a semantic result. Keep the Dream
-        // candidate/run outcome observable without persisting an
-        // unreviewable pseudo-success Frame.
         frame = undefined;
       }
       if (semanticProcessorUnavailable) {
@@ -218,7 +213,12 @@ export class DreamCuratorWorker {
     const maxGlobalSeq = Math.max(...events.map((event) => event.globalSeq || 0));
     const dreamableEvents = events.filter((event) => this.isDreamableEvent(event));
     const allowedEvidence = new Set(options.sourceEpisodeEventIds || events.map((event) => event.eventId));
-    const candidateInputs = (await this.buildCandidates(dreamableEvents, options, now))
+    const candidateInputs = (await this.buildCandidates(dreamableEvents, options, now).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.startsWith('dream_model_budget_exceeded')) throw error;
+      semanticProcessorUnavailable = true; semanticProcessorReason = 'semantic_processor_budget'; semanticProcessorError = message;
+      return [];
+    }))
       .filter((candidate) => {
         const evidence = Array.isArray(candidate.evidence) ? candidate.evidence as Array<{ eventId?: unknown }> : [];
         const content = objectRecord(candidate.content);
@@ -605,6 +605,8 @@ export class DreamCuratorWorker {
     try {
       raw = await generate(systemPrompt, userPrompt);
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.startsWith('dream_model_budget_exceeded')) throw error;
       const diagnostic = this.providerDiagnosticCandidate(events, now, options.projectId, 'dream_curator_provider_exception', error);
       return diagnostic ? [diagnostic] : [];
     }
@@ -866,9 +868,6 @@ export class DreamCuratorWorker {
     reason: string,
     detail: unknown,
   ): Omit<DeepWriteCandidateInput, 'runId'> | undefined {
-    // An empty detail is what a provider failure used to leave behind (the
-    // client returns '' when the endpoint answers non-2xx, and the status only
-    // reaches stderr). Say so, instead of storing nothing.
     const raw = detail instanceof Error ? detail.message : String(detail || '');
     const detailText = truncate(raw.trim() ? raw : 'provider returned an empty body (HTTP status is on stderr)', 500);
     this.deps.pipelineMetrics?.recordNonFatal(reason, {
@@ -935,8 +934,6 @@ export class DreamCuratorWorker {
         ? candidate.content as Record<string, unknown>
         : {};
       if (content.source !== 'dream_curator_provider_warning') continue;
-      // Same rule as review-queue expiry: the warning was retired because the provider recovered,
-      // not because something replaced it, so no promotion target is named.
       this.deps.candidateStore.updateCandidateStatus(candidate.candidateId, 'superseded', {
         type: 'diagnostic_conclusion',
         reason: 'provider_recovered',

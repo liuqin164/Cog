@@ -137,7 +137,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   runtime?: AgentRuntime;
   cage?: RunCage;
   clock?: ClockService;
-  dream?: { integrate(...args: [string, string, number?]): Promise<{ localDate: string; eventCount: number; sourceRefs: unknown[]; summary: string; memoryModelUsed?: boolean; memoryModelDegraded?: string; kernelNightRan?: boolean }> };
+  dream?: { integrate(...args: [string, string, number?]): Promise<{ localDate: string; eventCount: number; sourceRefs: unknown[]; summary: string; memoryModelUsed?: boolean; memoryModelDegraded?: string; kernelNightRan?: boolean; kernelNightFailed?: boolean; kernelNightSkippedReason?: string }> };
   emergence?: {
     hasDue?(now?: number): boolean;
     decide(now?: number): {
@@ -230,16 +230,22 @@ export class CompanionShell implements ShellControl, AttachShell {
   private tickTimer?: ReturnType<typeof setInterval>;
   private started = false;
   readonly now: () => number;
-  /** This process's native plugin load outcomes; `/plugins` and `/health` read it. */
   readonly pluginResults: PluginLoadResult[] = [];
   private readonly embedding?: ShellEmbeddingProvider;
-  /** Any host-supplied embedder, so the install's semantic probe is not limited to the local one. */
   private readonly embeddingProvider?: EmbeddingProvider;
   private readonly shellRegistry?: ShellModelRegistry;
   readonly modelRegistry: ModelRegistry;
   readonly stateLedger: ShellStateLedger;
   memoryModelFailed = false;
-  /** A degraded provider must not claim the index; only a warm provider over a current index may. */
+
+  noteMemoryModel(state: 'reachable' | 'unreachable' | 'degraded', reason?: string, at = this.now()): void {
+    const previous = this.machine.runtime.memoryModel;
+    this.memoryModelFailed = state !== 'reachable';
+    if (previous?.state === state && previous.reason === reason) return;
+    if (!previous && state === 'reachable') return;
+    this.machine.updateRuntime({ memoryModel: { state, ...(reason ? { reason } : {}), since: at, pendingBackfill: state !== 'reachable' } });
+    this.trace.append('memory_model_state', { state, reason, previous: previous?.state });
+  }
   private embeddingReadyAllowed = false;
 
   constructor(readonly options: CompanionShellOptions = {}) {
@@ -249,8 +255,6 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.cliConfigPath = join(this.config.dataDir, 'cogmem-cli.toml');
     this.writeCliConfig();
     this.lock = new ProcessLock(this.config.dataDir);
-    // The nightly snapshot lives beside the resident's other state, so a default install keeps the
-    // last seven nights without an extra config key (#196).
     const registry = options.modelRegistry ?? this.buildModelRegistry();
     this.modelRegistry = registry;
     this.shellRegistry = registry instanceof ShellModelRegistry ? registry : undefined;
@@ -388,7 +392,6 @@ export class CompanionShell implements ShellControl, AttachShell {
     return this.runtime;
   }
 
-  /** The loopback HTTP face's address (status + star map), when this process started one. */
   get httpUrl(): string | undefined {
     return this.http?.baseUrl;
   }
@@ -505,8 +508,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       this.lock.release(process.pid);
       throw error;
     }
-    // The loadout the checkpoint's transcript declared, read before any plugin registers a tool so
-    // the comparison below sees what the previous process promised, not what this one just built.
+    if (this.machine.runtime.memoryModel) this.memoryModelFailed = this.machine.runtime.memoryModel.state !== 'reachable';
     const restoredTools = this.machine.runtime.declaredTools ? [...this.machine.runtime.declaredTools] : undefined;
     if (restored.previous && ['RUNNING', 'DREAMING', 'WAKING'].includes(restored.previous)) {
       const recoveredRunId = this.machine.activeRunId;
@@ -521,8 +523,6 @@ export class CompanionShell implements ShellControl, AttachShell {
       }
       await this.machine.dispatch('recovered_run', { reason: `recovered_after_kill:${restored.previous}` });
     }
-    // A pause survives the process (#228). With the object present the shell stays SUSPENDED and
-    // waits; without it there is nothing to wait for, and the recovered_run edge returns to standby.
     if (restored.previous === 'SUSPENDED') {
       const suspension = this.machine.runtime.suspension;
       if (!suspension) {
@@ -575,8 +575,6 @@ export class CompanionShell implements ShellControl, AttachShell {
       });
       this.trace.append('http_face_started', { url: this.http.baseUrl, port: this.http.port });
     }
-    // The executable set is complete only now (built-in tools, then registry plugins). A checkpoint
-    // that declared a different loadout is a loud failure, and the current one becomes the declaration.
     const mismatch = this.declaredToolMismatch(restoredTools);
     if (mismatch) {
       this.trace.append('tool_set_mismatch', mismatch);
@@ -594,9 +592,6 @@ export class CompanionShell implements ShellControl, AttachShell {
       this.residentTick.injectTimeContext('process_start');
       await this.machine.dispatch('context_injected', { reason: 'waking_complete' });
     }
-    // The upgrade's report is owed to the user, not to the next command: it is settled here and on
-    // every tick until it lands. It runs *after* the plugins because the report is spoken through the
-    // line channel's `terminal_print` subscription, which `startPlugins` is what installs.
     this.upgradeAdmin.settleUpgradeReport(this.now());
     this.clock!.scheduleIdleWake();
     this.terminal?.start();
@@ -1175,24 +1170,17 @@ export class CompanionShell implements ShellControl, AttachShell {
   }
 
 
-  /** The TUI route list; with no router (an injected provider) it is just the one label, as before. */
   modelRoutes(): string[] {
     return this.modelRouter ? this.modelRouter.labels() : [this.modelLabel];
   }
 
-  /**
-   * Switch the active route in place. The runtime holds this router object, so the next turn's request
-   * uses the new endpoint: no restart, no checkpoint rewrite, the session is untouched. A stored
-   * switch is remembered by the route store; the built-in mg route is not persisted because it is not
-   * user configuration.
-   */
   switchModelRoute(name: string): { ok: true; name: string; model: string } | { ok: false; message: string } {
     if (!this.modelRouter) return { ok: false, message: '本进程用的是注入的模型提供者，没有路线表可切。' };
     try {
       const route = this.modelRouter.switchTo(name);
       this.modelLabel = `${route.name}/${route.model}`;
       this.memoryModelFailed = false;
-      // The key is not in any of these fields; the URL is redacted in case it carries one.
+      if (this.machine.runtime.memoryModel) this.noteMemoryModel('reachable', undefined, this.now());
       this.trace.append('model_route_switched', { name: route.name, model: route.model, baseUrl: redactUrl(route.baseUrl, [route.apiKey]) });
       void this.host.bus.emit('companion_model_routes', { routes: this.modelRoutes(), active: route.name });
       return { ok: true, name: route.name, model: route.model };

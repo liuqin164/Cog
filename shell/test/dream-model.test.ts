@@ -24,9 +24,35 @@ function startModelServer(usage = { prompt_tokens: 100, completion_tokens: 50 })
       calls += 1;
       const body = await request.json() as { messages: Array<{ role: string; content: string }> };
       const userPrompt = JSON.parse(body.messages.find((message) => message.role === 'user')!.content) as {
-        rawLedgerEvents?: Array<{ eventId: string; role?: string }>;
+        schemaVersion?: string;
+        projectId?: string;
+        episodeId?: string;
+        episodeType?: string;
         events?: Array<{ eventId: string; role?: string }>;
+        rawLedgerEvents?: Array<{ eventId: string; role?: string }>;
       };
+      if (userPrompt.schemaVersion === 'memory_frame.v1') {
+        const ids = (userPrompt.events ?? []).map((event) => event.eventId);
+        return Response.json({ choices: [{ message: { content: JSON.stringify({
+          schemaVersion: 'memory_frame.v1',
+          frameId: 'frame-test',
+          projectId: userPrompt.projectId,
+          episodeId: userPrompt.episodeId,
+          title: 'test',
+          summary: 'test',
+          episodeKind: 'discussion',
+          nodes: [
+            { frameNodeId: 'episode', dimension: 'episode', label: 'episode', confidence: 0.9, evidenceEventIds: ids },
+            { frameNodeId: 'project', dimension: 'project', label: userPrompt.projectId, confidence: 0.9, evidenceEventIds: ids },
+          ],
+          relations: [],
+          temporalReferences: [],
+          stateTransitions: [],
+          confidence: 0.9,
+          evidenceEventIds: ids,
+          processor: { promptVersion: 'test', generatedAt: Date.now() },
+        }) } }], usage });
+      }
       const events = userPrompt.rawLedgerEvents ?? userPrompt.events ?? [];
       const userIds = events.filter((event) => event.role === 'user').map((event) => event.eventId);
       const content = JSON.stringify({
@@ -132,8 +158,8 @@ describe('Dream route A in the shell', () => {
       const runs = shell.kernel.factStore.getDatabase()
         .prepare(`SELECT status FROM episode_dream_runs`)
         .all() as Array<{ status: string }>;
-      expect(runs).toHaveLength(3);
-      expect(runs.every((run) => run.status === 'partial')).toBe(true);
+      expect(runs.filter((run) => run.status === 'partial')).toHaveLength(3);
+      expect(runs.filter((run) => run.status === 'failed')).toHaveLength(3);
     } finally {
       await shell.stop();
     }
@@ -197,7 +223,7 @@ describe('Dream route A in the shell', () => {
     }
   });
 
-  test('the nightly cap stops model calls, keeps rule candidates, and charges the day counter', async () => {
+  test('the nightly cap is reported as a budget degradation and leaves the episode retryable', async () => {
     const model = startModelServer({ prompt_tokens: 100, completion_tokens: 50 });
     const dir = makeTempDir();
     const shell = makeShell(dir, new ScriptedProvider([{ text: 'unused', toolCalls: [] }]), {
@@ -225,12 +251,40 @@ describe('Dream route A in the shell', () => {
       const modelCandidates = shell.kernel.listDreamCandidates({ projectId: shell.config.projectId, limit: 200 })
         .filter((candidate) => JSON.stringify(candidate.content).includes('llm_dream_curator_candidate'));
       expect(modelCandidates).toHaveLength(0);
-      expect(shell.kernel.listDreamCandidates({ projectId: shell.config.projectId, limit: 200 }).length).toBeGreaterThan(0);
       expect(shell.trace.read().some((record) => record.kind === 'dream_model_budget_exceeded' && record.reason === 'night_token_budget')).toBe(true);
-      expect(shell.trace.read().some((record) => record.kind === 'dream_model_degraded')).toBe(true);
+      expect(shell.trace.read().some((record) => record.kind === 'dream_model_degraded' && record.reason === 'semantic_processor_budget')).toBe(true);
+      expect(shell.machine.runtime.memoryModel).toMatchObject({
+        state: 'degraded',
+        reason: 'semantic_processor_budget',
+        pendingBackfill: true,
+      });
+      expect(shell.currentStatus().memoryModel.state).toBe('degraded');
+      expect(shell.kernel.factStore.getDatabase()
+        .prepare(`SELECT failure_category, state FROM episode_dream_jobs LIMIT 1`).get())
+        .toMatchObject({ failure_category: 'semantic_processor_budget', state: 'failed_retryable' });
       expect(shell.machine.runtime.costDayTokens ?? 0).toBeGreaterThanOrEqual(150);
     } finally {
       await shell.stop();
+    }
+  });
+
+  test('a degraded memory model survives a restart instead of reading reachable', async () => {
+    const dir = makeTempDir();
+    const shell = makeShell(dir);
+    await shell.start();
+    shell.noteMemoryModel('degraded', 'semantic_processor_budget', Date.now());
+    await shell.stop();
+
+    const restarted = makeShell(dir);
+    await restarted.start();
+    try {
+      expect(restarted.currentStatus().memoryModel).toMatchObject({
+        state: 'degraded',
+        line: expect.stringContaining('预算'),
+      });
+      expect(restarted.machine.runtime.memoryModel?.reason).toBe('semantic_processor_budget');
+    } finally {
+      await restarted.stop();
     }
   });
 });

@@ -287,9 +287,8 @@ export class HealthService {
       .sort(([left], [right]) => right.localeCompare(left))
       .map(([night, statuses]) => ({
         night,
-        status: statuses.has('succeeded') ? 'succeeded' as const
-          : statuses.has('partial') ? 'failed' as const
-            : 'idle' as const,
+        status: statuses.has('failed') || statuses.has('partial') ? 'failed' as const
+          : statuses.has('succeeded') ? 'succeeded' as const : 'idle' as const,
       }));
     let streak = 0;
     for (const night of nights) {

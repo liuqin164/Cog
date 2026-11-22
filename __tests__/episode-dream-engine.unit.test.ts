@@ -515,6 +515,45 @@ test('a tick reports why the semantic processor gave up, not only that it did', 
       semanticProcessorReason: 'semantic_processor_failed',
       semanticProcessorError: 'The operation was aborted',
     }));
+    expect(store.getDreamJobState(episode.episodeId)).toBe('failed_retryable');
+    const job = db.prepare(`SELECT failure_category, retry_after, attempts FROM episode_dream_jobs WHERE episode_id=?`)
+      .get(episode.episodeId) as { failure_category: string; retry_after: number; attempts: number };
+    expect(job).toMatchObject({ failure_category: 'semantic_processor_failed', attempts: 0 });
+    expect(job.retry_after).toBeGreaterThan(200);
+  } finally {
+    db.close();
+  }
+});
+
+test('a spent model budget is its own degraded reason and is retried instead of completed', async () => {
+  const db = new Database(':memory:');
+  const store = testEpisodeStore(db);
+  const curator = {
+    run: async () => ({
+      candidates: [],
+      semanticProcessorAvailable: false,
+      semanticProcessorReason: 'semantic_processor_budget',
+      semanticProcessorError: 'dream_model_budget_exceeded: 120 >= 100',
+    }),
+  };
+  const scheduler = new DreamScheduler(store, curator as never);
+  try {
+    const episode = store.createEpisode({
+      projectId: 'brain', sessionId: 'budget', episodeType: 'decision', importance: 0.9,
+      eventId: 'evt-budget', occurredAt: 100,
+    });
+    store.appendEvent({ episodeId: episode.episodeId, eventId: 'evt-budget', relation: 'continues_previous', confidence: 1, occurredAt: 100 });
+    store.sealEpisode(episode.episodeId, { mode: 'hard', reason: 'test', now: 101 });
+
+    expect(await scheduler.tick({ projectId: 'brain', now: 200, maxAttempts: 1 })).toEqual(expect.objectContaining({
+      semanticProcessorReason: 'semantic_processor_budget',
+      failedEpisodeCount: 1,
+    }));
+    expect(store.getDreamJobState(episode.episodeId)).toBe('failed_retryable');
+    const job = db.prepare(`SELECT failure_category, retry_after, attempts FROM episode_dream_jobs WHERE episode_id=?`)
+      .get(episode.episodeId) as { failure_category: string; retry_after: number; attempts: number };
+    expect(job).toMatchObject({ failure_category: 'semantic_processor_budget', attempts: 0 });
+    expect(job.retry_after).toBeGreaterThan(200);
   } finally {
     db.close();
   }

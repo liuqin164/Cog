@@ -1,13 +1,5 @@
-/**
- * The night integration, run in the DREAMING state.
- *
- * The product is written as the companion's own agent identity and carries the full `sourceRefs` of
- * the day's events, so it can be attributed (and later deleted) like any other memory rather than
- * laundering itself into the user's recall as anonymous evidence.
- *
- * Deterministic by design: the summary is a function of the day's redacted ledger, not a model call.
- * Its provenance says so — `rule_extraction`, never `llm_inference`.
- */
+import { randomUUID } from 'node:crypto';
+
 import type { KernelAgentMemoryBackend, MemoryEvent, MemoryKernel, MemorySourceRef } from 'cogmem';
 import type { TraceLog } from '../trace.ts';
 import type { NativePlugin } from './host.ts';
@@ -21,7 +13,6 @@ export interface DreamServiceOptions {
   runKernelNight: boolean;
   maxEpisodes: number;
   trace?: TraceLog;
-  /** The host's model budget seam, around the kernel Night that may call the memory model. */
   beforeKernelNight?: (now: number) => void;
   afterKernelNight?: (now: number) => void;
 }
@@ -35,6 +26,7 @@ export interface DreamResult {
   summary: string;
   dreamEventId?: string;
   kernelNightRan: boolean;
+  kernelNightFailed?: boolean;
   kernelNightSkippedReason?: string;
   memoryModelUsed: boolean;
   memoryModelDegraded?: string;
@@ -45,20 +37,16 @@ export class DreamService {
 
   async integrate(localDate: string, dayThreadId: string, now = Date.now()): Promise<DreamResult> {
     const { kernel, backend, agentId, projectId, sessionId } = this.options;
-    const events = kernel
-      .getThreadEvents(dayThreadId, { projectId, limit: 5_000 })
-      .filter((event) => !isDreamProduct(event));
+    const events = kernel.getThreadEvents(dayThreadId, { projectId, limit: 5_000 }).filter((event) => !isDreamProduct(event));
     const refs = dedupeRefs(events);
-    let kernelNightRan = false;
+    let kernelNightRan = false; let kernelNightFailed = false;
     let kernelNightSkippedReason: string | undefined;
-    let memoryModelUsed = false;
-    let memoryModelDegraded: string | undefined;
+    let memoryModelUsed = false; let memoryModelDegraded: string | undefined;
     if (this.options.runKernelNight) {
       this.options.beforeKernelNight?.(now);
       try {
         const night = await kernel.runNight({ projectId, maxEpisodes: this.options.maxEpisodes, now });
-        kernelNightRan = true;
-        kernelNightSkippedReason = night.dream.skipped ? night.dream.reason : undefined;
+        kernelNightRan = true; kernelNightSkippedReason = night.dream.skipped ? night.dream.reason : undefined;
         if (night.dream.semanticProcessorReason) {
           memoryModelDegraded = night.dream.semanticProcessorReason;
           this.options.trace?.append('dream_model_degraded', {
@@ -73,11 +61,13 @@ export class DreamService {
               error: night.dream.semanticProcessorError,
             });
           }
+          if (night.dream.semanticProcessorReason === 'semantic_processor_failed' || night.dream.semanticProcessorReason === 'semantic_processor_budget') kernelNightFailed = true;
         } else if (night.dream.semanticProcessorAvailable) {
           memoryModelUsed = true;
           this.options.trace?.append('dream_model_used', { localDate });
         }
       } catch (error) {
+        kernelNightFailed = true;
         kernelNightSkippedReason = error instanceof Error ? error.message : String(error);
         this.options.trace?.append('dream_kernel_night_failed', { localDate, message: kernelNightSkippedReason });
       } finally {
@@ -87,6 +77,16 @@ export class DreamService {
       kernelNightSkippedReason = 'disabled_by_config';
     }
     const summary = summarize(localDate, events, kernelNightSkippedReason);
+    if (kernelNightFailed) {
+      kernel.episodeStore.recordDreamRun({
+        runId: `dream-night-${randomUUID()}`, projectId, requestedMode: 'auto', selectedMode: 'none',
+        reason: 'night_failed', episodeIds: [], candidateIds: [], status: 'failed', durationMs: 0, error: kernelNightSkippedReason ?? 'night_failed', createdAt: now,
+      });
+      return {
+        localDate, eventCount: events.length, sourceRefs: refs, summary, kernelNightRan, kernelNightFailed,
+        memoryModelUsed, memoryModelDegraded, ...(kernelNightSkippedReason === undefined ? {} : { kernelNightSkippedReason }),
+      };
+    }
     const dreamEvent = await backend.ingestTaskEvent({
       agentId,
       projectId,
@@ -179,7 +179,6 @@ function textOf(event: MemoryEvent): string {
   return typeof text === 'string' ? text : '';
 }
 
-/** The night integration as a plugin: DREAMING is a state, the integration is an installed ability. */
 export function dreamPlugin(config: DreamPluginConfig): NativePlugin {
   return {
     name: 'dream',
