@@ -118,7 +118,7 @@ export function filterSuperseded<T>(items: readonly T[], toView: (item: T) => Su
   const groups = new Map<string, Array<{ item: T; view: SupersessionView }>>();
   for (const item of items) {
     const view = toView(item);
-    if (!view) continue;
+    if (!view || view.createdAt === undefined) continue;
     const topicKey = extractTopicKey(view);
     if (!topicKey) continue;
     const key = `${view.projectId ?? ''}|${extractSpeaker(view)}|${topicKey}`;

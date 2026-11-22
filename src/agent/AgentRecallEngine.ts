@@ -1301,8 +1301,8 @@ export class AgentRecallEngine {
     }
     const superseded = filterSuperseded(merged, (item) => ({
       id: item.id, content: item.text,
-      createdAt: item.sourceContext?.event?.occurredAt ?? item.sourceAnchor?.turnSeq ?? item.sourceAnchor?.eventOrdinal ?? 0,
-      orderSeq: item.sourceContext?.event?.globalSeq ?? item.sourceAnchor?.threadSeq ?? item.sourceAnchor?.eventOrdinal ?? 0,
+      createdAt: item.sourceContext?.event?.occurredAt ?? item.sourceAnchor?.occurredAt,
+      orderSeq: item.sourceContext?.event?.globalSeq,
       tags: item.tags,
       projectId: item.projectId,
     }));
@@ -1651,6 +1651,7 @@ export class AgentRecallEngine {
       sessionId: event.sessionId,
       turnId: event.turnId,
       role: event.role,
+      occurredAt: event.occurredAt,
       threadSeq: event.threadSeq,
       turnSeq: event.turnSeq,
       eventOrdinal: event.eventOrdinal,
@@ -1664,6 +1665,7 @@ export class AgentRecallEngine {
       sessionId: event.sessionId,
       turnId: event.turnId,
       role: event.role,
+      occurredAt: event.occurredAt,
       threadSeq: event.threadSeq,
       turnSeq: event.turnSeq,
       eventOrdinal: event.eventOrdinal,

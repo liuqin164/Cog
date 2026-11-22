@@ -1,6 +1,7 @@
 import { extractEntityCues, inferOperationalActionCue } from '../utils/EntityCueExtractor.js';
 import { escapeRegExp } from '../utils/Values.js';
 import type { MemoryTaxonomy } from '../config/MemoryTaxonomy.js';
+import { contentCues } from './AgentRecallText.js';
 
 export type AgentRecallIntent = 'memory_recall' | 'previous_session_summary' | 'forensic_quote' | 'historical_discussion' | 'action_history';
 
@@ -341,19 +342,27 @@ const CJK_QUERY_STOP_PHRASES = [
   '过',
 ];
 
+const CJK_SINGLE_STOPS = new Set(CJK_QUERY_STOP_PHRASES.filter((filler) => filler.length === 1));
+
 function extractCjkCueTerms(text: string): string[] {
   const candidates: string[] = [];
-  for (const match of text.matchAll(/[\u3040-\u30ff\u3400-\u9fff]{2,}/gu)) {
+  for (const match of text.matchAll(/[\u3040-\u30ff\u3400-\u9fff]+/gu)) {
     let chunk = match[0];
     for (const filler of CJK_QUERY_STOP_PHRASES) {
-      chunk = chunk.replace(new RegExp(escapeRegExp(filler), 'giu'), ' ');
+      const guarded = filler === '的' || filler === '了' || filler === '过';
+      const pattern = guarded
+        ? `(?<!^)(?<!\\s)${escapeRegExp(filler)}(?!\\s|$)`
+        : escapeRegExp(filler);
+      chunk = chunk.replace(new RegExp(pattern, 'giu'), ' ');
     }
     for (const part of chunk.split(/\s+/)) {
-      const trimmed = part.trim();
-      if (trimmed.length >= 2 && trimmed.length <= 12) candidates.push(trimmed);
-      if (trimmed.length > 12) {
-        for (let index = 0; index <= trimmed.length - 2 && candidates.length < 12; index += 2) {
-          candidates.push(trimmed.slice(index, Math.min(index + 4, trimmed.length)));
+      if (!part.trim()) continue;
+      if ([...part].every((character) => CJK_SINGLE_STOPS.has(character))) continue;
+      if (part.length === 1 && contentCues(part).length === 0) continue;
+      if (part.length <= 12) candidates.push(part);
+      else {
+        for (let index = 0; index <= part.length - 2 && candidates.length < 12; index += 2) {
+          candidates.push(part.slice(index, Math.min(index + 4, part.length)));
         }
       }
     }

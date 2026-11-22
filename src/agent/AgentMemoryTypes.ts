@@ -99,6 +99,7 @@ export interface AgentRecallSourceAnchor {
   sessionId?: string;
   turnId?: string;
   role?: MemoryEvent['role'];
+  occurredAt?: number;
   threadSeq?: number;
   turnSeq?: number;
   eventOrdinal?: number;
