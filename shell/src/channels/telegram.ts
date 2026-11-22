@@ -8,7 +8,7 @@ import type { TraceLog } from '../trace.ts';
 import type { ChannelRegistry } from './registry.ts';
 
 export interface TelegramShell {
-  submit(text: string): Promise<unknown>;
+  submit(text: string, channel?: string): Promise<unknown>;
   confirmProposal(id: string): Promise<{ ok: boolean; reason?: string; proposal?: { resultText?: string } }>;
   discardProposal(id: string): unknown;
 }
@@ -369,7 +369,7 @@ export class TelegramChannel {
     this.chatId = String(message.chat.id);
     this.options.contract.presence(this.session, { reachability: 'online', ownerActivity: 'active' });
     this.pendingReplies += 1;
-    void this.options.shell.submit(ingress.text).catch((error) => {
+    void this.options.shell.submit(ingress.text, this.session.channelId).catch((error) => {
       this.pendingReplies = Math.max(0, this.pendingReplies - 1);
       this.options.trace.append('telegram_submit_failed', { message: error instanceof Error ? error.message : String(error) });
     });

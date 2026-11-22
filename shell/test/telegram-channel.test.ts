@@ -333,4 +333,48 @@ describe('telegram channel plugin (F12)', () => {
       fake.stop();
     }
   }, 60_000);
+
+  test('Telegram turns carry their channel id and a Web turn recaps them as telegram', async () => {
+    const fake = startFakeTelegram();
+    const dir = makeTempDir('telegram-recap-');
+    const dataDir = join(dir, 'data');
+    writeConfig(dataDir, fake.base);
+    writePluginRegistry(dataDir, ['builtin:web-channel', 'builtin:telegram-channel']);
+    const seen: string[] = [];
+    const provider = new ScriptedProvider([
+      { text: '记下了。', toolCalls: [] },
+      (input: any) => {
+        const text = input.messages.map((message: any) => message.content).join('\n');
+        seen.push(text);
+        return {
+          text: text.includes('<channel-recap channel="web">') && text.includes(`telegram:${OWNER}`) ? '部署窗口是周二。' : '没有记录。',
+          toolCalls: [],
+        };
+      },
+    ]);
+    const shell = makeTelegramShell(dir, provider, dataDir, { plugins: ['builtin:web-channel', 'builtin:telegram-channel'] });
+    await shell.start();
+    const base = shell.httpUrl!;
+    try {
+      await connectTelegram(base, fake);
+      fake.push({ update_id: 10, message: { text: '记一下：部署窗口是周二。', chat: { id: OWNER }, from: { id: OWNER } } });
+      await waitUntil(() => fake.sent.some((entry) => entry.method === 'sendMessage' && entry.body.text === '记下了。'));
+
+      const turns = shell.backend.sessionTurns({
+        projectId: shell.config.projectId,
+        agentId: shell.config.agentId,
+        sessionId: shell.config.sessionId,
+        limit: 50,
+      }).turns.filter((turn) => turn.text === '记一下：部署窗口是周二。' || turn.text === '记下了。');
+      expect(turns.map((turn) => turn.channel)).toEqual([`telegram:${OWNER}`, `telegram:${OWNER}`]);
+
+      const answer = await shell.submit('部署窗口是哪天？', 'web');
+      expect(seen.at(-1)).toContain('<channel-recap channel="web">');
+      expect(seen.at(-1)).toContain(`telegram:${OWNER}`);
+      expect(answer?.assistantText).toBe('部署窗口是周二。');
+    } finally {
+      await shell.stop();
+      fake.stop();
+    }
+  }, 60_000);
 });

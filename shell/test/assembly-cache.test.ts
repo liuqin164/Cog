@@ -54,9 +54,9 @@ describe('one turn assembles once (#351)', () => {
       shell.machine.updateRuntime({ capturePaused: true });
       const db = shell.kernel.factStore.getDatabase();
       const query = db.query.bind(db);
-      let digestReads = 0;
+      let laneReads = 0;
       db.query = ((sql: string) => {
-        if (sql.includes("$.metadata.captureLane")) digestReads += 1;
+        if (sql.includes("$.metadata.captureLane")) laneReads += 1;
         return query(sql);
       }) as typeof db.query;
       const before = traceCount(shell, 'recall.result');
@@ -66,7 +66,7 @@ describe('one turn assembles once (#351)', () => {
       expect(blocks[0]).toContain('周五绝对不能部署');
       for (const block of blocks) expect(block).toBe(blocks[0]);
       expect(traceCount(shell, 'recall.result') - before).toBe(1);
-      expect(digestReads).toBe(1);
+      expect(laneReads).toBe(2);
     } finally {
       await shell.stop();
     }

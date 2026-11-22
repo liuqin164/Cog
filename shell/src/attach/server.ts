@@ -81,7 +81,7 @@ export type AttachServerMessage =
 
 /** What the server needs from the shell; `CompanionShell` implements it. */
 export interface AttachShell {
-  submit(text: string): Promise<unknown>;
+  submit(text: string, channel?: string): Promise<unknown>;
   /** One dispatch for core and plugin commands alike; an unknown name answers with a receipt. */
   runCommand(name: string, args?: string): Promise<CommandReply>;
   /** The user's confirmation of a command proposal; the only path that runs one. */
@@ -212,7 +212,7 @@ export class AttachServer {
           this.pushSteering();
           break;
         }
-        await this.options.shell.submit(message.text);
+        await this.options.shell.submit(message.text, 'attach');
         this.pushSteering();
         break;
       }
@@ -251,7 +251,7 @@ export class AttachServer {
       }
       case 'wake':
         // A wake is a submit with no text: DREAMING -> WAKING is the legal message_received edge.
-        await this.options.shell.submit('');
+        await this.options.shell.submit('', 'attach');
         break;
       case 'probe-remember': {
         const result = await this.options.shell.probeRemember(message.text, message.turnId);
