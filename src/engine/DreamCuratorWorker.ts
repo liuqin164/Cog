@@ -185,23 +185,20 @@ export class DreamCuratorWorker {
         this.deps.pipelineMetrics?.recordNonFatal('semantic_processor_unavailable', { projectId: options.projectId, details: { episodeId: options.sourceEpisodeId } });
       } else {
       if (!frame) throw new Error('memory_frame_processor_no_output');
+      const sourceAuthority = frame.sourceAuthority === 'deterministic_fallback' ? 'deterministic_fallback' : 'processor'; const complete = (options.sourceEpisodeEventIds?.length ?? events.length) <= events.length; const needsReview = sourceAuthority === 'deterministic_fallback' || !complete;
       frame = {
         ...frame,
-        frameId: `frame:${createHash('sha256').update(`${options.sourceEpisodeId}\0${events.map((event) => event.eventId).join('\0')}`).digest('hex').slice(0, 32)}`,
-        processor: { ...frame.processor, ...this.resolveProviderConfig(options), promptVersion: MEMORY_FRAME_PROMPT_VERSION, generatedAt: now },
-        sourceAuthority: frame.sourceAuthority === 'deterministic_fallback' ? 'deterministic_fallback' : 'processor',
-        needsReview: frame.needsReview || frame.sourceAuthority === 'deterministic_fallback',
+        frameId: `frame:${createHash('sha256').update(`${options.sourceEpisodeId}\0${events.map((event) => event.eventId).join('\0')}`).digest('hex').slice(0, 32)}`, processor: { ...frame.processor, ...this.resolveProviderConfig(options), promptVersion: MEMORY_FRAME_PROMPT_VERSION, generatedAt: now },
+        sourceAuthority,
+        semanticCompleteness: complete ? 'full' : 'minimal',
+        needsReview,
+        publishStatus: needsReview ? 'needs_confirmation' : 'active',
       };
-      if ((options.sourceEpisodeEventIds?.length ?? events.length) > events.length) {
-        frame = { ...frame, semanticCompleteness: 'minimal', needsReview: true, publishStatus: 'needs_confirmation' };
-      }
       const savedFrame = this.deps.memoryFrameStore.save({
         frame,
         sourceFingerprint: frameSourceFingerprint(events.map((event) => event.eventId), options.sourceEpisodeId),
         status: 'staged',
-        publishStatus: options.mode === 'shadow' || frame.needsReview
-          ? 'needs_confirmation'
-          : (frame.publishStatus ?? 'active'),
+        publishStatus: options.mode === 'shadow' || needsReview ? 'needs_confirmation' : 'active',
         dreamJobLeaseId: options.dreamJobLeaseId,
         leaseUntil: options.leaseUntil,
         attemptGeneration: options.attemptGeneration,

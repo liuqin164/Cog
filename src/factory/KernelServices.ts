@@ -7,7 +7,7 @@ import Database from 'bun:sqlite';
 import type { GraphEdgeStoreLike } from '../types/ExtensionPoints.js';
 
 import { BeliefStore } from '../belief/BeliefStore.js';
-import { projectFrameRelationsToBeliefs } from '../belief/FrameRelationBeliefs.js';
+import { stageFrameRelationCandidates } from '../belief/FrameRelationBeliefs.js';
 import { BeliefGovernanceService } from '../belief/BeliefGovernanceService.js';
 import {
   MemoryBindingService,
@@ -488,11 +488,8 @@ export abstract class KernelServices {
     this.memoryBindingService = new MemoryBindingService(this.memoryBindingStore, this.entityStore);
     this.memoryAtlasStore = new MemoryAtlasStore(db, this.projectClock.timeZone);
     this.memoryFrameStore = new MemoryFrameStore(db, this.taxonomyResolution.taxonomy);
-    // A frame's preference and relationship relations also belong in the belief layer:
-    // the frame answers "what did this episode say", the belief path answers "what is
-    // true now and what did it replace", and that is the one recall reads (#102).
     this.memoryFrameStore.setFrameActiveListener((frame, now) => {
-      projectFrameRelationsToBeliefs(this.beliefStore, frame, now);
+      stageFrameRelationCandidates(this.deepWriteCandidateStore, frame, now);
     });
     this.memoryAtlasIndexer = new MemoryAtlasIndexer(db, this.eventStore, this.memoryAtlasStore, this.memoryFrameStore, this.taxonomyResolution.taxonomy);
     // The person facet reaches the person layer (#214): a query cue that names a person becomes an

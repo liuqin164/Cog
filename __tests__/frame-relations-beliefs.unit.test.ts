@@ -2,24 +2,15 @@ import { expect, test } from 'bun:test';
 import { join } from 'node:path';
 
 import { createMemoryKernel, type MemoryKernel } from '../src/factory.js';
-import { projectFrameRelationsToBeliefs } from '../src/belief/FrameRelationBeliefs.js';
+import { stageFrameRelationCandidates } from '../src/belief/FrameRelationBeliefs.js';
 import { deterministicFrameFallback } from '../src/semantic/DeterministicFrameFallback.js';
+import { DeepWriteCandidateStore } from '../src/store/DeepWriteCandidateStore.js';
 import { makeTempDir } from './helpers/tmp.js';
 
-/**
- * #102: a preference or a relationship must be queryable through the **belief** path,
- * not only stored in a frame.
- *
- * The frame layer answers "what did this episode say"; the belief layer answers "what is
- * true now and what did it replace", and that is the one a host's recall reads. The
- * ticket's acceptance was written in two halves and only the first (storable) was
- * implemented before the review caught it, so these tests go through the beliefs table.
- */
 function createKernel(): MemoryKernel {
   return createMemoryKernel({ dbPath: join(makeTempDir('cogmem-frame-beliefs-'), 'memory.db') });
 }
 
-/** One real event with an episode link, so a frame built from it can be published. */
 function seedEvent(
   kernel: MemoryKernel,
   text = '我喜欢钓鱼。',
@@ -42,8 +33,6 @@ function seedEvent(
     payload: { text },
   });
   kernel.appendRawEventToEpisode(event, { projectId: 'p', sessionId: 'session-1', sourceAgent: 'test', now: occurredAt });
-  // The assembler decides the episode id; a hand-written 'ep-1' would not be the one the
-  // event is linked to, and `hasPublishableEvidence` joins on exactly that link.
   const link = kernel.memoryFrameStore.getDatabase()
     .prepare('SELECT episode_id FROM memory_episode_events WHERE event_id=?')
     .get(eventId) as { episode_id?: string } | null;
@@ -77,90 +66,96 @@ function frameWith(
   };
 }
 
-test('a published frame puts its preference in the belief path, where it can be queried', () => {
+function publish(kernel: MemoryKernel, frame: ReturnType<typeof frameWith>): void {
+  const saved = kernel.memoryFrameStore.save({ frame, sourceFingerprint: 'fp', publishStatus: 'active' });
+  expect(kernel.memoryFrameStore.publish(saved.frameId, 'staged', 'active')).toBe(true);
+}
+
+function confirm(kernel: MemoryKernel, candidateId: string, eventId: string, text: string) {
+  const confirmation = kernel.eventStore.append({
+    eventId, streamId: 'session-1', streamType: 'thread', eventType: 'MESSAGE',
+    rawEventType: 'message', projectId: 'p', role: 'user', payload: { text },
+  });
+  return kernel.reviewDreamCandidate({
+    candidateId,
+    projectId: 'p',
+    action: 'approve',
+    actor: 'owner',
+    reason: 'owner confirmed the relation',
+    confirmationEventId: confirmation.eventId,
+  });
+}
+
+test('a published frame stages its relations as needs_confirmation candidates, not beliefs', () => {
   const kernel = createKernel();
   try {
     const evidence = seedEvent(kernel);
-    const frame = frameWith(evidence, [{ sourceFrameNodeId: 'n-actor', relationType: 'LIKES', targetFrameNodeId: 'n-fishing' }]);
-    const saved = kernel.memoryFrameStore.save({ frame, sourceFingerprint: 'fp', publishStatus: 'active' });
-    expect(kernel.memoryFrameStore.publish(saved.frameId, 'staged', 'active')).toBe(true);
+    publish(kernel, frameWith(evidence, [{ sourceFrameNodeId: 'n-actor', relationType: 'LIKES', targetFrameNodeId: 'n-fishing' }]));
 
-    // The belief path, not the frame's own relations table.
+    expect(kernel.beliefStore.findByCanonicalKey('用户|preference.LIKES|project', 'p')).toHaveLength(0);
+    const candidates = kernel.listDreamCandidates({ projectId: 'p', candidateTypes: ['relations'], limit: 10 });
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).toMatchObject({
+      status: 'needs_confirmation',
+      promotionTargetType: 'belief',
+      content: { from: '用户', to: '钓鱼', relationType: 'LIKES', source: 'llm_inference' },
+    });
+    expect(kernel.countDreamCandidates({ projectId: 'p', statuses: ['needs_confirmation'] })).toBe(1);
+  } finally {
+    kernel.close();
+  }
+});
+
+test('a frame waiting for review stages no relation candidate', () => {
+  const kernel = createKernel();
+  try {
+    const evidence = seedEvent(kernel);
+    kernel.memoryFrameStore.save({
+      frame: frameWith(evidence, [{ sourceFrameNodeId: 'n-actor', relationType: 'LIKES', targetFrameNodeId: 'n-fishing' }]),
+      sourceFingerprint: 'fp',
+      publishStatus: 'needs_confirmation',
+    });
+    expect(kernel.listDreamCandidates({ projectId: 'p', candidateTypes: ['relations'], limit: 10 })).toHaveLength(0);
+  } finally {
+    kernel.close();
+  }
+});
+
+test('review confirmation promotes the relation into the belief path', () => {
+  const kernel = createKernel();
+  try {
+    const evidence = seedEvent(kernel);
+    publish(kernel, frameWith(evidence, [{ sourceFrameNodeId: 'n-actor', relationType: 'LIKES', targetFrameNodeId: 'n-fishing' }]));
+    const candidate = kernel.listDreamCandidates({ projectId: 'p', candidateTypes: ['relations'], limit: 10 })[0]!;
+
+    expect(kernel.promoteDreamCandidates({ projectId: 'p', limit: 20 }).promotedCandidates).toBe(0);
+    const reviewed = confirm(kernel, candidate.candidateId, 'evt-confirm-like', '对，我喜欢钓鱼。');
+    expect(reviewed.candidate.status).toBe('promoted');
+    expect(reviewed.decision).toMatchObject({ targetType: 'belief' });
+
     const beliefs = kernel.beliefStore.findByCanonicalKey('用户|preference.LIKES|project', 'p');
     expect(beliefs).toHaveLength(1);
-    expect(beliefs[0]!.predicate).toBe('preference.LIKES');
     expect(beliefs[0]!.objectValue.raw).toBe('钓鱼');
+    expect(beliefs[0]!.sourceType).toBe('llm_inference');
     expect(beliefs[0]!.status).toBe('active');
-
-    // And through the query API a host actually calls, with the intent that host passes
-    // (`recall`, not `preference_lookup`) — the first version only proved the row existed.
-    const recalled = kernel.beliefStore.getActiveBeliefsForQuery({ query: '我喜欢什么', projectId: 'p', limit: 6, intent: 'recall' });
-    expect(recalled.map((belief) => belief.objectValue.raw)).toContain('钓鱼');
   } finally {
     kernel.close();
   }
 });
 
-test('a frame that is not active yet records no belief', () => {
-  // The projection hangs off publication. A frame waiting for review is not a claim
-  // about the world, and writing one would make an unreviewed reading recallable.
+test('confirmed relationships coexist instead of superseding each other', () => {
   const kernel = createKernel();
   try {
     const evidence = seedEvent(kernel);
-    const frame = frameWith(evidence, [{ sourceFrameNodeId: 'n-actor', relationType: 'LIKES', targetFrameNodeId: 'n-fishing' }]);
-    kernel.memoryFrameStore.save({ frame, sourceFingerprint: 'fp', publishStatus: 'needs_confirmation' });
-    expect(kernel.beliefStore.findByCanonicalKey('用户|preference.LIKES|project', 'p')).toHaveLength(0);
-  } finally {
-    kernel.close();
-  }
-});
-
-test('a superseded preference keeps the old row and points at the new one', () => {
-  const kernel = createKernel();
-  try {
-    // Two episodes, not one: the second is later, which is what makes it a revision
-    // rather than a restatement. `validFrom` now comes from the evidence event, so the
-    // times have to differ for the supersession rule to fire at all.
-    const first = seedEvent(kernel, '我喜欢钓鱼。', { eventId: 'evt-1', occurredAt: Date.UTC(2026, 5, 5, 12) });
-    const later = seedEvent(kernel, '现在喜欢登山了。', { eventId: 'evt-2', occurredAt: Date.UTC(2026, 6, 5, 12) });
-    projectFrameRelationsToBeliefs(kernel.beliefStore, frameWith(first, [
-      { sourceFrameNodeId: 'n-actor', relationType: 'LIKES', targetFrameNodeId: 'n-fishing' },
-    ]) as never, first.occurredAt);
-    projectFrameRelationsToBeliefs(kernel.beliefStore, frameWith(later, [
-      { sourceFrameNodeId: 'n-actor', relationType: 'LIKES', targetFrameNodeId: 'n-hiking' },
-    ]) as never, later.occurredAt);
-
-    const rows = kernel.beliefStore.findByCanonicalKey('用户|preference.LIKES|project', 'p');
-    const current = rows.filter((row) => row.status === 'active');
-    const superseded = rows.filter((row) => row.status === 'superseded');
-    expect(current).toHaveLength(1);
-    expect(current[0]!.objectValue.raw).toBe('登山');
-    // The old row survives, with the pointer the ticket asks for.
-    expect(superseded).toHaveLength(1);
-    expect(superseded[0]!.objectValue.raw).toBe('钓鱼');
-    expect(superseded[0]!.supersededByBeliefId).toBe(current[0]!.id);
-
-    // Recall returns the current value and not the row it replaced.
-    const recalled = kernel.beliefStore.getActiveBeliefsForQuery({ query: '我喜欢什么', projectId: 'p', limit: 6, intent: 'recall' });
-    expect(recalled.map((belief) => belief.objectValue.raw)).toEqual(['登山']);
-  } finally {
-    kernel.close();
-  }
-});
-
-test('two relationships on the same subject coexist instead of replacing each other', () => {
-  // A person has many friends. A single-valued key here would have made 王五 supersede
-  // 李四 and silently forget one of them.
-  const kernel = createKernel();
-  try {
-    const evidence = seedEvent(kernel);
-    projectFrameRelationsToBeliefs(kernel.beliefStore, frameWith(evidence, [
+    publish(kernel, frameWith(evidence, [
       { sourceFrameNodeId: 'n-actor', relationType: 'FRIEND_OF', targetFrameNodeId: 'n-li' },
-    ]) as never, 1_000);
-    projectFrameRelationsToBeliefs(kernel.beliefStore, frameWith(evidence, [
       { sourceFrameNodeId: 'n-actor', relationType: 'FRIEND_OF', targetFrameNodeId: 'n-wang' },
-    ]) as never, 2_000);
-
+    ]));
+    const candidates = kernel.listDreamCandidates({ projectId: 'p', candidateTypes: ['relations'], limit: 10 });
+    expect(candidates).toHaveLength(2);
+    for (const [index, candidate] of candidates.entries()) {
+      confirm(kernel, candidate.candidateId, `evt-confirm-friend-${index}`, `对，我们是朋友 ${index}。`);
+    }
     const friends = kernel.beliefStore.findByCanonicalKey('用户|FRIEND_OF|project|李四', 'p')
       .concat(kernel.beliefStore.findByCanonicalKey('用户|FRIEND_OF|project|王五', 'p'));
     expect(friends.map((row) => row.objectValue.raw).sort()).toEqual(['李四', '王五']);
@@ -170,15 +165,15 @@ test('two relationships on the same subject coexist instead of replacing each ot
   }
 });
 
-test('a relation the vocabulary has no name for is still recorded, as RELATED_TO', () => {
+test('an unknown relation name survives review as RELATED_TO', () => {
   const kernel = createKernel();
   try {
     const evidence = seedEvent(kernel);
-    // The name the model invented is rewritten to RELATED_TO where the frame is stored,
-    // and the claim must survive into the belief path too.
     const frame = frameWith(evidence, [{ sourceFrameNodeId: 'n-actor', relationType: 'ADMIRES', targetFrameNodeId: 'n-li' }]);
-    const saved = kernel.memoryFrameStore.save({ frame, sourceFingerprint: 'fp', publishStatus: 'active' });
-    expect(kernel.memoryFrameStore.publish(saved.frameId, 'staged', 'active')).toBe(true);
+    publish(kernel, frame as ReturnType<typeof frameWith>);
+    const candidate = kernel.listDreamCandidates({ projectId: 'p', candidateTypes: ['relations'], limit: 10 })[0]!;
+    expect(candidate.content).toMatchObject({ relationType: 'RELATED_TO', to: '李四' });
+    confirm(kernel, candidate.candidateId, 'evt-confirm-related', '对，我欣赏李四。');
     const beliefs = kernel.beliefStore.findByCanonicalKey('用户|RELATED_TO|project|李四', 'p');
     expect(beliefs).toHaveLength(1);
     expect(beliefs[0]!.objectValue.raw).toBe('李四');
@@ -187,17 +182,17 @@ test('a relation the vocabulary has no name for is still recorded, as RELATED_TO
   }
 });
 
-test('publishing the same frame twice does not duplicate its beliefs', () => {
+test('staging the same frame twice does not duplicate its candidates', () => {
   const kernel = createKernel();
   try {
     const evidence = seedEvent(kernel);
     const frame = frameWith(evidence, [{ sourceFrameNodeId: 'n-actor', relationType: 'LIKES', targetFrameNodeId: 'n-fishing' }]);
-    const first = projectFrameRelationsToBeliefs(kernel.beliefStore, frame as never, 1_000);
-    const second = projectFrameRelationsToBeliefs(kernel.beliefStore, frame as never, 2_000);
-    expect(first.written).toBe(1);
-    expect(second.written).toBe(0);
-    expect(second.skipped).toContainEqual({ relation: 'LIKES', reason: 'already_recorded' });
-    expect(kernel.beliefStore.findByCanonicalKey('用户|preference.LIKES|project', 'p')).toHaveLength(1);
+    const store = new DeepWriteCandidateStore(kernel.factStore.getDatabase());
+    const first = stageFrameRelationCandidates(store, frame as never, 1_000);
+    const second = stageFrameRelationCandidates(store, frame as never, 2_000);
+    expect(first.staged).toBe(1);
+    expect(second.staged).toBe(0);
+    expect(second.skipped).toContainEqual({ relation: '*', reason: 'already_recorded' });
   } finally {
     kernel.close();
   }

@@ -11,6 +11,7 @@ import {
 import type { BeliefCandidate } from '../types/index.js';
 import { projectScope } from '../topology/ProjectScope.js';
 import { asRecord } from '../utils/Values.js';
+import { upsertFrameRelationBelief } from '../belief/FrameRelationBeliefs.js';
 
 export type DeepWritePromotionOutcome =
   | 'promote_provisional'
@@ -266,7 +267,7 @@ export class DeepWritePromotionPolicy {
     }
 
     if (candidate.candidateType === 'summary') return this.promoteSummary(candidate, content);
-    if (candidate.candidateType === 'relations') return this.promoteRelation(candidate, content);
+    if (candidate.candidateType === 'relations') return this.promoteRelation(candidate, content, options);
     if (candidate.candidateType === 'causalLinks') return this.promoteCausalLink(candidate, content);
 
     if (!hasExplicitUserSource(content) && !options.reviewConfirmed) {
@@ -312,11 +313,6 @@ export class DeepWritePromotionPolicy {
       outcome: 'promote_provisional',
       reason: 'semantic_organization_candidate_accepted',
       targetType: candidate.promotionTargetType || candidate.candidateType,
-      // The id answers "what is this candidate about?"; it is written only when the candidate names
-      // a real target (an event id, a topic path, or a target an earlier pass recorded). Falling
-      // back to the candidate's own id would make a promoted row claim a target that is itself.
-      // Such an id is a locator, not the id of a stored row; see `GLOSSARY.md` for the three
-      // classes a promotion target can belong to.
       targetId: candidate.promotionTargetId || stringField(content, ['sourceEventId', 'targetEventId', 'topicPath'])
     });
   }
@@ -412,8 +408,18 @@ export class DeepWritePromotionPolicy {
     });
   }
 
-  private promoteRelation(candidate: DeepWriteCandidateRecord, content: Record<string, unknown>): DeepWritePromotionDecision {
+  private promoteRelation(candidate: DeepWriteCandidateRecord, content: Record<string, unknown>, options: DeepWriteEvaluationOptions = {}): DeepWritePromotionDecision {
+    if (candidate.promotionTargetType === 'belief') return this.promoteRelationBelief(candidate, content, options);
     return this.promoteGraphEdge(candidate, content, 'deep_write_relation', false);
+  }
+
+  private promoteRelationBelief(candidate: DeepWriteCandidateRecord, content: Record<string, unknown>, options: DeepWriteEvaluationOptions): DeepWritePromotionDecision {
+    if (!this.deps.beliefStore) return this.keep(candidate, 'belief_store_unavailable');
+    if (!options.reviewConfirmed) return this.mark(candidate, 'needs_confirmation', { outcome: 'needs_confirmation', reason: 'frame_relation_requires_review' });
+    const outcome = upsertFrameRelationBelief(this.deps.beliefStore, this.resolveProvenance(candidate), candidate, content);
+    return outcome.beliefId
+      ? this.mark(candidate, 'promoted', { outcome: 'promote_provisional', reason: 'frame_relation_confirmed_by_review', targetType: 'belief', targetId: outcome.beliefId })
+      : this.mark(candidate, 'needs_confirmation', { outcome: 'needs_confirmation', reason: outcome.reason! });
   }
 
   private promoteCausalLink(candidate: DeepWriteCandidateRecord, content: Record<string, unknown>): DeepWritePromotionDecision {
