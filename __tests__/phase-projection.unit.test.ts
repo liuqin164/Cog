@@ -84,32 +84,20 @@ test('with the projection off, a recall is exactly what it was', async () => {
   }
 });
 
-test('with the projection on, an item carrying no timestamp is left exactly as it was', async () => {
+test('with the projection on, the anchor event time decides the phase', async () => {
   const { kernel, backend } = seeded({ phaseProjectionEnabled: true });
   try {
     await seedTurns(backend);
     const result = backend.recall({ agentId: 'hermes', projectId: 'p', query: 'deploy window', limit: 5, now: NOW });
-    // Measured, and the reason this sample stops where it does: the compiled items the default lane returns
-    // carry no `sourceAnchor.occurredAt`, so there is nothing to age against and the phase is `detail`. The
-    // function is right; the lane has no timestamp to give it. That is a prerequisite recorded on the ticket
-    // rather than papered over — and it is also why turning the switch on changes nothing here, which is the
-    // safe direction for a half-finished mechanism to fail in.
-    expect(result.items.every((item) => (item as { phase?: string }).phase === undefined)).toBe(true);
-    expect(JSON.stringify(result.decisionTrace)).not.toContain('phase_');
+    expect(result.items.some((item) => (item as { phase?: string }).phase === 'gist')).toBe(true);
+    expect(JSON.stringify(result.decisionTrace)).toContain('phase_gist');
+    expect(JSON.stringify(result.decisionTrace)).toContain('phase_dormant');
     expect(result.items.length).toBeGreaterThan(0);
   } finally {
     kernel.close();
   }
 });
 
-/**
- * #171: a gist is a pointer, not the memory.
- *
- * `projectPhases` used to push `{ ...item, ...phaseGist(item) }`, which put the whole record — text, sourceContext
- * and all — back beside the whitelist the module describes. These items are constructed rather than seeded because
- * the projection is pure: it reads `sourceAnchor.occurredAt`, which the lanes do not send yet (recorded above), so
- * a lane fixture could not reach the gist path at all.
- */
 test('a gist item carries the whitelist and not the body, and the renderer labels it', () => {
   const body = 'The rollback plan for the harbour deployment was rehearsed twice and the runbook was updated afterwards, with the certificate rotation moved to the Tuesday window.';
   expect(body.length).toBeGreaterThan(120);
