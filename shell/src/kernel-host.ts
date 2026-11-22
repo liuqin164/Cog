@@ -72,6 +72,7 @@ export interface HttpChannelCard {
   state: 'disconnected' | 'pairing' | 'connected' | 'error';
   detail?: string;
   pairingCode?: string;
+  config: Array<{ name: string; label?: string; secret?: boolean }>;
   connectable: boolean;
 }
 

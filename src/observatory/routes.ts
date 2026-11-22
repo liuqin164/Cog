@@ -65,6 +65,7 @@ export interface ObservatoryChannelCard {
   state: 'disconnected' | 'pairing' | 'connected' | 'error';
   detail?: string;
   pairingCode?: string;
+  config: ObservatoryCredentialField[];
   connectable: boolean;
 }
 

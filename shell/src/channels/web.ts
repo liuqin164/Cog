@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ChannelContract, ChannelSession } from 'cogmem';
 import type { NativePlugin } from '../plugins/host.ts';
+import type { ChannelRegistry } from './registry.ts';
 
 const SOURCE_LAYOUT = import.meta.url.endsWith('.ts');
 const ROUTES_MODULE = SOURCE_LAYOUT ? '../../../src/observatory/routes.ts' : '../../observatory/routes.js';
@@ -348,7 +349,7 @@ export interface WebChannelPluginOptions {
 export function webChannelPlugin(options: WebChannelPluginOptions): NativePlugin {
   return {
     name: 'web-channel',
-    inject: ['shell', 'memory', 'kernel', 'clock'],
+    inject: ['shell', 'memory', 'kernel', 'clock', 'channelRegistry'],
     provide: ['webChannel'],
     async apply(ctx) {
       const routes = await import(ROUTES_MODULE);
@@ -367,10 +368,19 @@ export function webChannelPlugin(options: WebChannelPluginOptions): NativePlugin
         token: tokenModule.readObservatoryToken(options.dataDir),
       });
       ctx.provide('webChannel', channel);
+      const unregister = ctx.getService<ChannelRegistry>('channelRegistry').register({
+        id: 'web',
+        name: 'Web',
+        config: [],
+        status: () => ({ state: 'connected', detail: '本页由 Web 渠道提供' }),
+      });
       for (const name of ['message_update', 'message_end', 'companion_command_proposal', 'companion_emergence', 'companion_transition']) {
         ctx.on(name, (payload: any) => channel.onBusEvent(name, payload));
       }
-      ctx.dispose(() => channel.stop());
+      ctx.dispose(() => {
+        unregister();
+        channel.stop();
+      });
     },
   };
 }

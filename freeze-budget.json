@@ -10,7 +10,7 @@
   "lines": {
     "shell/src": 6872,
     "shell/src/attach": 457,
-    "shell/src/channels": 1071,
+    "shell/src/channels": 1207,
     "shell/src/embedding": 836,
     "shell/src/install": 2465,
     "shell/src/model": 354,
@@ -57,7 +57,7 @@
     "src/migrations": 2901,
     "src/models": 431,
     "src/observability": 621,
-    "src/observatory": 4964,
+    "src/observatory": 4973,
     "src/occasion": 179,
     "src/ontology": 10,
     "src/person": 721,

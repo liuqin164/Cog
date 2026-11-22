@@ -5,6 +5,7 @@ import type { ChannelContract, ChannelSession } from 'cogmem';
 import type { CredentialService } from '../credentials.ts';
 import type { NativePlugin } from '../plugins/host.ts';
 import type { TraceLog } from '../trace.ts';
+import type { ChannelRegistry } from './registry.ts';
 
 export interface TelegramShell {
   submit(text: string): Promise<unknown>;
@@ -20,7 +21,7 @@ interface TelegramClock {
 export interface TelegramChannelOptions {
   shell: TelegramShell;
   contract: ChannelContract;
-  credentials: Pick<CredentialService, 'use' | 'revoke'>;
+  credentials: Pick<CredentialService, 'use' | 'revoke' | 'requestForOwner' | 'pending' | 'refs'>;
   clock: TelegramClock;
   trace: TraceLog;
   dataDir: string;
@@ -33,13 +34,10 @@ export interface TelegramChannelPluginOptions {
 
 export type TelegramChannelState = 'disconnected' | 'pairing' | 'connected' | 'error';
 
-export interface TelegramChannelCard {
-  id: 'telegram';
-  name: 'Telegram';
+export interface TelegramChannelStatus {
   state: TelegramChannelState;
   detail?: string;
   pairingCode?: string;
-  connectable: true;
 }
 
 interface TelegramConfig {
@@ -177,7 +175,7 @@ export class TelegramChannel {
     this.setOffline();
   }
 
-  card(): TelegramChannelCard {
+  card(): TelegramChannelStatus {
     const detail = this.state === 'connected'
       ? `owner ${this.config.ownerId}`
       : this.state === 'pairing'
@@ -186,16 +184,13 @@ export class TelegramChannel {
           ? (this.lastError ?? '连接异常')
           : '未填写 Bot Token';
     return {
-      id: 'telegram',
-      name: 'Telegram',
       state: this.state,
       detail,
-      connectable: true,
       ...(this.state === 'pairing' && this.pairingCode ? { pairingCode: this.pairingCode } : {}),
     };
   }
 
-  beginConnect(credential: string): TelegramChannelCard {
+  beginConnect(credential: string): TelegramChannelStatus {
     this.stopPolling();
     this.setOffline();
     const previous = this.config.credential;
@@ -214,7 +209,7 @@ export class TelegramChannel {
     return this.card();
   }
 
-  disconnect(): TelegramChannelCard {
+  disconnect(): TelegramChannelStatus {
     this.stopPolling();
     this.setOffline();
     if (this.config.credential) this.options.credentials.revoke(this.config.credential);
@@ -488,7 +483,7 @@ export class TelegramChannel {
 export function telegramChannelPlugin(options: TelegramChannelPluginOptions): NativePlugin {
   return {
     name: 'telegram-channel',
-    inject: ['shell', 'credentials', 'clock', 'trace'],
+    inject: ['shell', 'credentials', 'clock', 'trace', 'channelRegistry'],
     apply(ctx) {
       let config: TelegramConfig | undefined;
       let error: string | undefined;
@@ -498,20 +493,54 @@ export function telegramChannelPlugin(options: TelegramChannelPluginOptions): Na
         error = cause instanceof Error ? cause.message : String(cause);
         ctx.getService<TraceLog>('trace').append('telegram_config_invalid', { message: error });
       }
+      const credentials = ctx.getService<Pick<CredentialService, 'use' | 'revoke' | 'requestForOwner' | 'pending' | 'refs'>>('credentials');
       const channel = new TelegramChannel({
         shell: ctx.getService<TelegramShell>('shell'),
         contract: options.contract,
-        credentials: ctx.getService<Pick<CredentialService, 'use' | 'revoke'>>('credentials'),
+        credentials,
         clock: ctx.getService<TelegramClock>('clock'),
         trace: ctx.getService<TraceLog>('trace'),
         dataDir: options.dataDir,
       }, config, error);
       ctx.provide('telegramChannel', channel);
+      const configFields = [{ name: 'token', label: 'Bot Token', secret: true }];
+      const unregister = ctx.getService<ChannelRegistry>('channelRegistry').register({
+        id: 'telegram',
+        name: 'Telegram',
+        config: configFields,
+        status: () => channel.card(),
+        begin: () => {
+          const before = new Set(credentials.pending().map((entry) => entry.id));
+          void credentials.requestForOwner({
+            service: 'telegram-bot',
+            purpose: '连接 Telegram 渠道',
+            requestedBy: 'web:channels',
+            fields: configFields,
+          });
+          const request = credentials.pending().find((entry) => !before.has(entry.id));
+          return request ? { ok: true, requestId: request.id } : { ok: false, error: 'credential_request_failed' };
+        },
+        start: (ref) => {
+          const value = ref.trim();
+          if (!value || !credentials.refs().some((entry) => entry.ref === value && entry.service === 'telegram-bot')) {
+            return { ok: false, error: 'credential_not_found' };
+          }
+          channel.beginConnect(value);
+          return { ok: true };
+        },
+        disconnect: () => {
+          channel.disconnect();
+          return { ok: true };
+        },
+      });
       for (const name of ['message_end', 'companion_command_proposal', 'companion_emergence']) {
         ctx.on(name, (payload: any) => channel.onBusEvent(name, payload));
       }
       channel.start();
-      ctx.dispose(() => channel.stop());
+      ctx.dispose(() => {
+        unregister();
+        channel.stop();
+      });
     },
   };
 }

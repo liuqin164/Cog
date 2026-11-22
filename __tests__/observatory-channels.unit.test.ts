@@ -18,6 +18,7 @@ const card = (state: 'disconnected' | 'pairing' | 'connected' | 'error', pairing
   name: 'Telegram',
   state,
   detail: 'test',
+  config: [{ name: 'token', label: 'Token', secret: true }],
   connectable: true,
   ...(pairingCode ? { pairingCode } : {}),
 });

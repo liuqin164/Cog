@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { pluginWorkspaceDir } from '../src/plugins/self-install.ts';
 import { readPluginRegistry, writePluginRegistry } from '../src/plugins/registry.ts';
+import type { ChannelRegistry } from '../src/channels/registry.ts';
 import { ScriptedProvider, makeShell, makeTempDir, waitUntil } from './helpers.ts';
 
 const NO_DREAM = { runKernelNight: false, maxEpisodes: 5, windowStartHour: 0, windowEndHour: 1 };
@@ -45,6 +46,9 @@ function startFakeTelegram() {
     push(update: Record<string, unknown>): void {
       updates.push(update);
     },
+    clear(): void {
+      updates.length = 0;
+    },
     calls: () => calls,
     stop: () => server.stop(true),
   };
@@ -79,10 +83,14 @@ function post(base: string, path: string, body: unknown, token = OBSERVATORY_TOK
   });
 }
 
-async function channelState(base: string): Promise<{ state: string; pairingCode?: string }> {
+async function channelCards(base: string): Promise<Array<{ id: string; state: string; pairingCode?: string; config: unknown[] }>> {
   const response = await fetch(`${base}/observatory/channels`, { headers: { 'x-observatory-token': OBSERVATORY_TOKEN } });
-  const body = await response.json() as { channels: Array<{ id: string; state: string; pairingCode?: string }> };
-  return body.channels.find((entry) => entry.id === 'telegram')!;
+  const body = await response.json() as { channels: Array<{ id: string; state: string; pairingCode?: string; config: unknown[] }> };
+  return body.channels;
+}
+
+async function channelState(base: string): Promise<{ state: string; pairingCode?: string }> {
+  return (await channelCards(base)).find((entry) => entry.id === 'telegram')!;
 }
 
 async function waitChannelState(base: string, wanted: string): Promise<{ state: string; pairingCode?: string }> {
@@ -105,10 +113,9 @@ async function connectTelegram(base: string, fake: ReturnType<typeof startFakeTe
   expect(saved.ok).toBe(true);
   const started = await post(base, '/observatory/channels/telegram/start', { ref: saved.ref });
   expect(started.status).toBe(200);
-  const startedBody = await started.json() as { ok: boolean; channel: { state: string; pairingCode: string } };
+  const startedBody = await started.json() as { ok: boolean };
   expect(startedBody.ok).toBe(true);
-  expect(startedBody.channel.state).toBe('pairing');
-  const code = startedBody.channel.pairingCode;
+  const code = (await waitChannelState(base, 'pairing')).pairingCode!;
   fake.push({ update_id: updateId, message: { text: code, chat: { id: OWNER }, from: { id: OWNER } } });
   await waitChannelState(base, 'connected');
 }
@@ -165,8 +172,39 @@ describe('telegram channel plugin (F12)', () => {
       fake.push({ update_id: 101, message: { text: '重连了吗', chat: { id: OWNER }, from: { id: OWNER } } });
       await waitUntil(() => fake.sent.some((entry) => entry.method === 'sendMessage' && entry.body.text === '又见面了'));
       expect(readPluginRegistry(dataDir)).toContain('builtin:telegram-channel');
+
+      expect((await (await fetch(`${base}/observatory/app.js`)).text()).toLowerCase()).not.toContain('telegram');
+      expect((await (await fetch(`${base}/observatory/`)).text()).toLowerCase()).not.toContain('telegram');
+      const registry = shell.host.getService<ChannelRegistry>('channelRegistry');
+      const unregister = registry.register({
+        id: 'fake-channel',
+        name: 'Fake',
+        config: [{ name: 'apiKey', label: 'API Key', secret: true }],
+        status: () => ({ state: 'connected', detail: 'fake' }),
+        begin: () => ({ ok: true, requestId: 'request-1' }),
+        start: () => ({ ok: true }),
+        disconnect: () => ({ ok: true }),
+      });
+      expect((await channelCards(base)).find((card) => card.id === 'fake-channel')?.config).toEqual([{ name: 'apiKey', label: 'API Key', secret: true }]);
+      unregister();
+      expect((await channelCards(base)).some((card) => card.id === 'fake-channel')).toBe(false);
+
+      await shell.pluginsAdmin.removePlugin('builtin:telegram-channel');
+      await waitUntil(() => shell.trace.read().some((record) => record.kind === 'plugin_removed'));
+      expect((await channelCards(base)).some((card) => card.id === 'telegram')).toBe(false);
     } finally {
       await shell.stop();
+    }
+
+    fake.clear();
+    writePluginRegistry(dataDir, ['builtin:telegram-channel']);
+    const reinstalled = makeTelegramShell(dir, new ScriptedProvider([{ text: 'unused', toolCalls: [] }]), dataDir);
+    await reinstalled.start();
+    try {
+      expect((await channelCards(reinstalled.httpUrl!)).some((card) => card.id === 'telegram')).toBe(true);
+      expect((await channelState(reinstalled.httpUrl!)).state).toBe('connected');
+    } finally {
+      await reinstalled.stop();
       fake.stop();
     }
   }, 60_000);

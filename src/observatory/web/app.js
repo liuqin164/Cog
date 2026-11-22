@@ -1554,7 +1554,7 @@ function channelStateText(value) {
 }
 
 function renderChannelsPanel(panel) {
-  panel.append(panelHeader('渠道', '渠道插件在 Web 上连接；Bot Token 直达保险库。'));
+  panel.append(panelHeader('渠道', '渠道插件在 Web 上连接；配置项直达保险库。'));
   const cards = state.channels ?? [];
   if (cards.length === 0) {
     panel.append(el('p', { class: 'dim', text: state.channelsLoading ? '读取中…' : (state.channelsError || '没有渠道插件。') }));
@@ -1570,21 +1570,25 @@ function renderChannelsPanel(panel) {
   }
 }
 
-function channelForm() {
+function channelForm(card) {
   const form = el('div', { class: 'channel-form' });
-  const input = el('input', {
-    type: 'password',
-    placeholder: 'Bot Token',
-    autocomplete: 'off',
-    spellcheck: 'false',
-  });
+  const inputs = [];
   const error = el('p', { class: 'channel-error' });
   const save = el('button', { type: 'button', class: 'primary', text: '保存并连接' });
   const cancel = el('button', { type: 'button', text: '取消' });
-  save.addEventListener('click', () => { void saveChannelToken(input, error); });
+  save.addEventListener('click', () => { void saveChannelConfig(inputs, error); });
   cancel.addEventListener('click', () => { void cancelChannelConnect(); });
-  form.append(el('label', { class: 'channel-hint', text: 'Bot Token（遮罩输入，只写入 0600 保险库）' }));
-  form.append(input);
+  for (const field of card.config ?? []) {
+    const input = el('input', {
+      type: field.secret ? 'password' : 'text',
+      placeholder: field.label || field.name,
+      autocomplete: 'off',
+      spellcheck: 'false',
+    });
+    inputs.push({ name: field.name, label: field.label || field.name, input });
+    form.append(el('label', { class: 'channel-hint', text: `${field.label || field.name}（只写入 0600 保险库）` }));
+    form.append(input);
+  }
   form.append(error);
   form.append(el('div', { class: 'channel-actions' }, [save, cancel]));
   return form;
@@ -1599,14 +1603,14 @@ function renderChannelCard(card) {
   if (card.detail) wrap.append(el('p', { class: 'channel-hint', text: card.detail }));
   if (card.pairingCode) {
     wrap.append(el('div', { class: 'channel-code', text: card.pairingCode }));
-    wrap.append(el('p', { class: 'channel-hint', text: '在 Telegram 里把上述配对码发给 bot，绑定成功后会显示已连接。' }));
+    wrap.append(el('p', { class: 'channel-hint', text: '把上述配对码发给该渠道的 bot，绑定成功后会显示已连接。' }));
   }
   if (card.connectable) {
     const actions = el('div', { class: 'channel-actions' });
     if (card.state !== 'connected') {
       const connect = el('button', { type: 'button', class: 'primary', text: '连接 ' + card.name });
       connect.disabled = Boolean(state.channelForm);
-      connect.addEventListener('click', () => { void beginChannelConnect(card.id); });
+      connect.addEventListener('click', () => { void beginChannelConnect(card); });
       actions.append(connect);
     }
     if (card.state !== 'disconnected') {
@@ -1616,7 +1620,7 @@ function renderChannelCard(card) {
       actions.append(disconnect);
     }
     wrap.append(actions);
-    if (state.channelForm?.id === card.id) wrap.append(channelForm());
+    if (state.channelForm?.id === card.id) wrap.append(channelForm(card));
   }
   return wrap;
 }
@@ -1630,7 +1634,7 @@ function renderChannels() {
   }
   const head = el('div', { class: 'section' });
   head.append(el('h2', { text: '渠道' }));
-  head.append(el('p', { class: 'channel-hint', text: '渠道以插件提供，在这里连接与断开。Bot Token 只进保险库，页面、日志与账本不保留明文。' }));
+  head.append(el('p', { class: 'channel-hint', text: '渠道以插件提供，在这里连接与断开。配置项只进保险库，页面、日志与账本不保留明文。' }));
   head.append(credentialTokenInput());
   if (state.channelsError) head.append(el('p', { class: 'channel-error', text: state.channelsError }));
   root.append(head);
@@ -1658,12 +1662,12 @@ async function loadChannels() {
   }
 }
 
-async function beginChannelConnect(id) {
+async function beginChannelConnect(card) {
   state.channelsError = null;
   try {
-    const result = await postJson(`channels/${id}/begin`, {});
+    const result = await postJson(`channels/${card.id}/begin`, {});
     if (!result.ok) throw new Error(result.error || 'credential_request_failed');
-    state.channelForm = { id, requestId: result.requestId };
+    state.channelForm = { id: card.id, requestId: result.requestId };
     renderChannels();
     renderPanel();
   } catch (error) {
@@ -1672,19 +1676,23 @@ async function beginChannelConnect(id) {
   }
 }
 
-async function saveChannelToken(input, errorHost) {
+async function saveChannelConfig(inputs, errorHost) {
   const form = state.channelForm;
   if (!form) return;
-  const token = input.value.trim();
-  if (!token) {
-    errorHost.textContent = 'Bot Token 不能为空。';
-    return;
+  const values = {};
+  for (const entry of inputs) {
+    const value = entry.input.value.trim();
+    if (!value) {
+      errorHost.textContent = `${entry.label} 不能为空。`;
+      return;
+    }
+    values[entry.name] = value;
+    entry.input.value = '';
   }
-  input.value = '';
   state.channelsError = null;
   let ref = null;
   try {
-    const saved = await postJson('credentials/submit', { id: form.requestId, values: { token } });
+    const saved = await postJson('credentials/submit', { id: form.requestId, values });
     ref = saved.ref;
     const started = await postJson(`channels/${form.id}/start`, { ref });
     if (!started.ok) throw new Error(started.error || 'channel_start_failed');
