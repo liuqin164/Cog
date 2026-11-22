@@ -104,3 +104,43 @@ test('a recall builds an Atlas that was never built', () => {
     kernel.close();
   }
 });
+
+test('a recall serves the pre-write Atlas for 24h, then picks the write up', () => {
+  const kernel = createMemoryKernel({ dbPath: join(makeTempDir('cogmem-atlas-recall-window-'), 'memory.db') });
+  try {
+    seedClosedEpisode(kernel);
+    kernel.rebuildMemoryAtlas({ projectId: 'p' });
+    const builtAt = kernel.memoryAtlasStore.getProjectionState('p')?.lastRebuildAt;
+    expect(builtAt).toBeNumber();
+
+    const old = Date.now() - 2 * 60 * 60 * 1000;
+    kernel.appendEpisodeMessage({
+      projectId: 'p', sessionId: 's', sourceAgent: 'a', role: 'user',
+      text: '缓存层换成 Valkey，端口 6380。', timestamp: old,
+    });
+    kernel.appendEpisodeMessage({
+      projectId: 'p', sessionId: 's', sourceAgent: 'a', role: 'assistant',
+      text: '记下了：Valkey 6380。', timestamp: old + 1000,
+    });
+    kernel.runMaintenanceTick({ projectId: 'p', now: Date.now(), atlasRefresh: false });
+    expect(kernel.memoryAtlasStore.getProjectionState('p')?.status).toBe('dirty');
+
+    new KernelAgentMemoryBackend(kernel).recall({
+      agentId: 'a', projectId: 'p', query: 'Valkey 端口', limit: 4, now: Date.now(),
+    });
+    expect(kernel.memoryAtlasStore.getProjectionState('p')?.status).toBe('dirty');
+    expect(kernel.memoryAtlasStore.listNodes('p', 100).some((node) => node.label.includes('Valkey'))).toBe(false);
+
+    kernel.memoryAtlasStore.db.prepare(`
+      UPDATE memory_atlas_projection_state SET last_rebuild_at=? WHERE project_id=? AND projection_name='memory_atlas.v2'
+    `).run(Date.now() - 25 * 60 * 60 * 1000, 'p');
+    new KernelAgentMemoryBackend(kernel).recall({
+      agentId: 'a', projectId: 'p', query: 'Valkey 端口', limit: 4, now: Date.now(),
+    });
+
+    expect(kernel.memoryAtlasStore.getProjectionState('p')?.status).toBe('clean');
+    expect(kernel.memoryAtlasStore.listNodes('p', 100).some((node) => node.label.includes('Valkey'))).toBe(true);
+  } finally {
+    kernel.close();
+  }
+});
