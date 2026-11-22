@@ -1,12 +1,11 @@
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ChannelContract, ChannelSession, SessionTurnRead, SessionTurnReadInput } from 'cogmem';
+import { isLocalAuthority, isLoopbackAddress, jsonResponse, readJsonBody, readObservatoryToken, refuseWrite } from 'cogmem/internal';
 import type { NativePlugin } from '../plugins/host.ts';
 import type { ChannelRegistry } from './registry.ts';
 
 const SOURCE_LAYOUT = import.meta.url.endsWith('.ts');
-const ROUTES_MODULE = SOURCE_LAYOUT ? '../../../src/observatory/routes.ts' : '../../observatory/routes.js';
-const TOKEN_MODULE = SOURCE_LAYOUT ? '../../../src/observatory/token.ts' : '../../observatory/token.js';
 
 const PREFIX = '/channel/web';
 const STATIC_FILES: Record<string, { file: string; type: string }> = {
@@ -370,8 +369,6 @@ export function webChannelPlugin(options: WebChannelPluginOptions): NativePlugin
     inject: ['shell', 'memory', 'kernel', 'clock', 'channelRegistry'],
     provide: ['webChannel'],
     async apply(ctx) {
-      const routes = await import(ROUTES_MODULE);
-      const tokenModule = await import(TOKEN_MODULE);
       const channel = new WebChannel({
         shell: ctx.getService<WebChannelShell>('shell'),
         backend: ctx.getService<WebChannelBackend>('memory'),
@@ -382,8 +379,8 @@ export function webChannelPlugin(options: WebChannelPluginOptions): NativePlugin
         agentId: options.agentId,
         sessionId: options.sessionId,
         webRoot: defaultWebRoot(),
-        routes,
-        token: tokenModule.readObservatoryToken(options.dataDir),
+        routes: { isLoopbackAddress, isLocalAuthority, jsonResponse, readJsonBody, refuseWrite },
+        token: readObservatoryToken(options.dataDir),
       });
       ctx.provide('webChannel', channel);
       const unregister = ctx.getService<ChannelRegistry>('channelRegistry').register({
