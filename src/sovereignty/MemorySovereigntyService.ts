@@ -22,6 +22,7 @@ import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, re
 import { dirname, join } from 'node:path';
 
 import type { CommitmentBook } from '../commitment/CommitmentBook.js';
+import { eraseDerivedOf, gcInvalidatedAtlasRows } from '../governance/DerivedErasureRegistry.js';
 import type { ProcedureCompiler } from '../procedure/ProcedureCompiler.js';
 import type { ProfileCompiler, ProfileEntry } from '../profile/ProfileCompiler.js';
 import { eventLifeSensitivityTier } from '../security/LifeSensitivity.js';
@@ -353,6 +354,21 @@ export class MemorySovereigntyService {
       if (episodeIds.size === 0) {
         deleted.episodes = 0;
         deleted.frames = 0;
+      } else {
+        this.ports.db.prepare(`
+          INSERT OR IGNORE INTO _sovereignty_event_ids (id)
+          SELECT event_id FROM memory_episode_events
+          WHERE episode_id IN (SELECT id FROM _sovereignty_episode_ids)
+        `).run();
+        const expanded = this.ports.db.prepare(`SELECT id FROM _sovereignty_event_ids`).all() as Array<{ id: string }>;
+        for (const row of expanded) deleteIds.add(row.id);
+        const added: string[] = [];
+        this.eachEvent(scope, (event) => {
+          if (deleteIds.has(event.eventId)) return;
+          if (refsOf(event.payload).some((id) => deleteIds.has(id))) added.push(event.eventId);
+        });
+        for (const id of added) deleteIds.add(id);
+        for (const id of added) insertEventId.run(id);
       }
 
       this.ports.db.transaction(() => {
@@ -398,6 +414,12 @@ export class MemorySovereigntyService {
       deleted.traceEvents = this.deleteIfTable('trace_events',
         `DELETE FROM trace_events WHERE COALESCE(project_id,'')=? AND timestamp>=? AND timestamp<?`,
         [scope, input.start, input.end]);
+      eraseDerivedOf({
+        db: this.ports.db,
+        eventIdsSource: '_sovereignty_event_ids',
+        episodeIdsSource: '_sovereignty_episode_ids',
+        scope,
+      });
       this.runDelete(`DELETE FROM memory_events WHERE event_id IN (SELECT id FROM _sovereignty_event_ids)`, []);
       })();
     } finally {
@@ -423,6 +445,7 @@ export class MemorySovereigntyService {
       this.ports.commitments.compile({ projectId: scope, now: this.now() });
     }
     this.ports.rebuildAtlas?.(scope);
+    gcInvalidatedAtlasRows(this.ports.db, scope);
     return { ...input, projectId: scope, auditId, deleted, artifacts };
   }
 

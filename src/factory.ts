@@ -115,6 +115,7 @@ import { MemoryGovernanceStore } from './store/MemoryGovernanceStore.js';
 import { SummaryStore } from './store/SummaryStore.js';
 import { matchesProjectScope, projectScope } from './topology/ProjectScope.js';
 import { deleteRegisteredProjectContent, deleteResidualProjectOwnedContent } from './governance/PrivacyDeletionRegistry.js';
+import { eraseDerivedOf } from './governance/DerivedErasureRegistry.js';
 import type {
   IngestInput,
   MemoryEvent,
@@ -2316,6 +2317,8 @@ export class MemoryKernel extends KernelServices {
       for (const canonicalEntityId of affectedCanonicalEntityIds) {
         rebuildCanonicalEntityAfterForget(db, canonicalEntityId, runDelete);
       }
+      Object.assign((deleted as typeof deleted & { derivedTables?: Record<string, number> }).derivedTables ??= {},
+        eraseDerivedOf({ db, eventIdsSource: '_forget_event_ids', scope, wholeProject: true }));
       const residualPrivacyTables = deleteResidualProjectOwnedContent({
         scope,
         runDelete,

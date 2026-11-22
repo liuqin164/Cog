@@ -43,9 +43,9 @@ export class MemoryAtlasIndexer {
         else this.db.exec(`DELETE FROM memory_atlas_fts WHERE node_id IN (SELECT node_id FROM memory_atlas_documents WHERE 1${keepFrameDocuments});`);
       }
       if (projectId !== undefined) {
-        this.db.prepare(`DELETE FROM memory_atlas_documents WHERE project_id=? AND node_type IN ('project','entity','topic','issue','session','thread','memoryKind','actionKind','cluster','episode','raw_event','belief','time')${keepFrameDocuments}`).run(projectId);
+        this.db.prepare(`DELETE FROM memory_atlas_documents WHERE project_id=? AND node_type IN ('project','entity','topic','issue','session','thread','memoryKind','actionKind','cluster','episode','raw_event','belief','time','alias','relation')${keepFrameDocuments}`).run(projectId);
       } else {
-        this.db.exec(`DELETE FROM memory_atlas_documents WHERE node_type IN ('project','entity','topic','issue','session','thread','memoryKind','actionKind','cluster','episode','raw_event','belief','time')${keepFrameDocuments};`);
+        this.db.exec(`DELETE FROM memory_atlas_documents WHERE node_type IN ('project','entity','topic','issue','session','thread','memoryKind','actionKind','cluster','episode','raw_event','belief','time','alias','relation')${keepFrameDocuments};`);
       }
       backfillAtlasDocuments(this.db, projectId);
       actions = this.actions.rebuild(projectId);

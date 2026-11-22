@@ -156,12 +156,9 @@ function dedupeRefs(events: MemoryEvent[]): MemorySourceRef[] {
 
 function summarize(localDate: string, events: MemoryEvent[], nightNote?: string): string {
   const counts = { user: 0, assistant: 0, tool: 0, other: 0 };
-  const topics: string[] = [];
   for (const event of events) {
     if (event.role === 'user') {
       counts.user += 1;
-      const text = textOf(event);
-      if (text && topics.length < 5) topics.push(text.replace(/\s+/gu, ' ').slice(0, 80));
     } else if (event.role === 'assistant') counts.assistant += 1;
     else if (event.role === 'tool') counts.tool += 1;
     else counts.other += 1;
@@ -169,14 +166,9 @@ function summarize(localDate: string, events: MemoryEvent[], nightNote?: string)
   const lines = [
     `夜间整合 ${localDate}：当日共 ${events.length} 条事件（用户 ${counts.user}、助手 ${counts.assistant}、工具 ${counts.tool}、其它 ${counts.other}）。`,
   ];
-  if (topics.length > 0) lines.push(`当日谈到：\n- ${topics.join('\n- ')}`);
+  if (events.length > 0) lines.push(`事件：${events.slice(0, 20).map((event) => event.eventId).join(', ')}${events.length > 20 ? ` 等 ${events.length} 条` : ''}`);
   if (nightNote) lines.push(`内核 dream 备注：${nightNote}`);
   return lines.join('\n');
-}
-
-function textOf(event: MemoryEvent): string {
-  const text = (event.payload as { text?: unknown } | undefined)?.text;
-  return typeof text === 'string' ? text : '';
 }
 
 /** The night integration as a plugin: DREAMING is a state, the integration is an installed ability. */
