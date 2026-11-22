@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { CompanionShell } from '../src/app.ts';
-import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
+import { ScriptedProvider, makeShell, makeTempDir, waitUntil } from './helpers.ts';
 
 const MINUTE = 60_000;
 const T0 = Date.UTC(2026, 0, 1, 3);
@@ -10,6 +10,48 @@ function healthSnapshot(payload: unknown): { lastSuccessAt: number | null; lastF
 }
 
 describe('resident snapshot retry (#404)', () => {
+  test('overlapping ticks run one pass and trace the skip (#453)', async () => {
+    const clock = { now: T0 };
+    const shell: CompanionShell = makeShell(
+      makeTempDir('resident-tick-inflight-'),
+      new ScriptedProvider([{ text: '在。', toolCalls: [] }]),
+      {},
+      { now: () => clock.now },
+    );
+    await shell.start();
+    try {
+      let calls = 0;
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const backup = shell.kernel.backup as unknown as { snapshot: () => Promise<unknown> };
+      backup.snapshot = async () => {
+        calls += 1;
+        await gate;
+        return {
+          snapshot: { file: 'brain-test.snap' },
+          createdAt: new Date(clock.now).toISOString(),
+          verification: { ok: true },
+        };
+      };
+
+      const first = shell.tick(T0);
+      const second = shell.tick(T0);
+      await waitUntil(() => calls === 1);
+      release();
+      await Promise.all([first, second]);
+
+      expect(calls).toBe(1);
+      expect(shell.trace.read().filter((record) => record.kind === 'tick_skipped')).toHaveLength(1);
+      expect(shell.trace.read().filter((record) => record.kind === 'snapshot_taken')).toHaveLength(1);
+
+      clock.now = T0 + 24 * 60 * MINUTE;
+      await shell.tick(clock.now);
+      expect(calls).toBe(2);
+    } finally {
+      await shell.stop();
+    }
+  }, 60_000);
+
   test('a failed snapshot backs off 5/10/20/30 minutes and only success advances the day', async () => {
     const clock = { now: T0 };
     const shell: CompanionShell = makeShell(

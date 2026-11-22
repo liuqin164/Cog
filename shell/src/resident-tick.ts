@@ -67,6 +67,7 @@ export class ResidentTick {
   freshness?: FreshnessReadings;
   private backfillInFlight = false;
   private inPlaceDream = false;
+  private tickInFlight = false;
   private lastFreshnessPassAt?: number;
   private embeddingRowCursor = 0;
   private bindingSeqCursor?: number;
@@ -74,6 +75,19 @@ export class ResidentTick {
   constructor(private readonly shell: CompanionShell) {}
 
   async tick(at = this.shell.now()): Promise<void> {
+    if (this.tickInFlight) {
+      this.shell.trace.append('tick_skipped', { reason: 'in_flight', at });
+      return;
+    }
+    this.tickInFlight = true;
+    try {
+      await this.tickOnce(at);
+    } finally {
+      this.tickInFlight = false;
+    }
+  }
+
+  private async tickOnce(at: number): Promise<void> {
     this.rotateServiceLog();
     this.sweepSurfacing(at);
     this.shell.upgradeAdmin.settleUpgradeReport(at);
