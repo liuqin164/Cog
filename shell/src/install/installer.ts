@@ -11,7 +11,7 @@
  * single-shot command does not need one, add it when concurrent installs ever become a thing.
  */
 import { spawn } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, statfsSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statfsSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -46,6 +46,7 @@ import {
   type EmbeddingProviderKind,
 } from '../embedding/model.ts';
 import { probeEmbedding, resolveEmbeddingDimensions, type EmbeddingProbeResult } from '../embedding/provider.ts';
+import { writeAtomicFile } from '../upgrade/records.ts';
 
 export const INSTALL_STEPS = ['preflight', 'place', 'model', 'rhythm', 'resident', 'awake'] as const;
 export type InstallStepId = (typeof INSTALL_STEPS)[number];
@@ -255,20 +256,22 @@ export class Installer {
   }
 
   private loadState(): InstallState {
+    if (!existsSync(this.statePath)) return { schema: 1, done: [], choices: {}, updatedAt: this.now() };
     try {
       const raw = JSON.parse(readFileSync(this.statePath, 'utf8')) as InstallState;
       if (raw && raw.schema === 1 && Array.isArray(raw.done)) return raw;
-    } catch {
-      // No state yet, or an unreadable one: a fresh install starts at step 0.
-    }
-    return { schema: 1, done: [], choices: {}, updatedAt: this.now() };
+    } catch {}
+    try {
+      renameSync(this.statePath, `${this.statePath}.broken`);
+    } catch {}
+    throw new Error(`install_state_corrupt: ${this.statePath}（原文件已保留为 .broken）`);
   }
 
   private saveState(): void {
     mkdirSync(this.choices.dataDir, { recursive: true, mode: 0o700 });
     this.state.choices = { ...this.state.choices, ...this.choices, model: { ...this.choices.model } };
     this.state.updatedAt = this.now();
-    writeFileSync(this.statePath, `${JSON.stringify(this.state, null, 2)}\n`, { mode: 0o600 });
+    writeAtomicFile(this.statePath, `${JSON.stringify(this.state, null, 2)}\n`);
   }
 
   /** The observatory's soul-write token, minted once at 0600. A re-run keeps the existing value. */
@@ -290,8 +293,7 @@ export class Installer {
       if (value === undefined) delete merged[key];
       else merged[key] = value;
     }
-    writeFileSync(this.envPath, serializeEnvFile(merged), { mode: 0o600 });
-    chmodSync(this.envPath, 0o600);
+    writeAtomicFile(this.envPath, serializeEnvFile(merged));
   }
 
   async run(): Promise<number> {
@@ -1133,17 +1135,17 @@ export async function runInstallCli(argv: string[], streams?: TerminalStreams): 
   }
   const io = createTerminalIO(resolvedStreams);
   const shellDir = resolve(flags.shell ?? defaultShellHome(fileURLToPath(new URL('.', import.meta.url))));
-  const installer = new Installer({
-    io,
-    run: defaultRunner(),
-    flags,
-    shellDir,
-    bunPath: process.execPath,
-    cwd: process.cwd(),
-    platform: process.platform,
-    homeDir: flags.homeDir ? resolve(flags.homeDir) : homedir(),
-  });
   try {
+    const installer = new Installer({
+      io,
+      run: defaultRunner(),
+      flags,
+      shellDir,
+      bunPath: process.execPath,
+      cwd: process.cwd(),
+      platform: process.platform,
+      homeDir: flags.homeDir ? resolve(flags.homeDir) : homedir(),
+    });
     return await installer.run();
   } finally {
     io.close();

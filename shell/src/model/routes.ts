@@ -11,8 +11,9 @@
  * carries `name`/`baseUrl`/`model`, and anything that prints a URL or an error goes through
  * `redactSecrets`/`redactUrl` first.
  */
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { writeAtomicFile } from '../upgrade/records.ts';
 
 export interface ModelRoute {
   name: string;
@@ -204,8 +205,7 @@ export class RouteStore {
         // Best effort: an un-renamable file is still overwritten below, and `error` keeps naming it.
       }
     }
-    writeFileSync(this.path, `${JSON.stringify(this.data, null, 2)}\n`, { mode: 0o600 });
-    chmodSync(this.path, 0o600);
+    writeAtomicFile(this.path, `${JSON.stringify(this.data, null, 2)}\n`);
   }
 }
 
