@@ -168,6 +168,7 @@ export class StateMachine {
   }
 
   private commit(next: CheckpointState): void {
+    if (this.halted) throw new StateMachineHaltedError('state_machine_halted: a failed checkpoint write stops the machine');
     try {
       this.options.checkpoint.save(next);
     } catch (error) {

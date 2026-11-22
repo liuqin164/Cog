@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import { StateMachine, StateMachineHaltedError } from '../src/state/machine.ts';
 import { CheckpointStore, CheckpointWriteError, emptyCheckpoint } from '../src/state/checkpoint.ts';
 import { IllegalTransitionError, STATES, TRANSITION_TABLE, TRIGGERS, type State, type Trigger } from '../src/state/table.ts';
@@ -87,6 +88,12 @@ describe('transition table', () => {
     expect(machine.isHalted).toBe(true);
     expect(alarms.length).toBe(1);
     await expect(machine.dispatch('message_received', { runId: 'run-x' })).rejects.toBeInstanceOf(StateMachineHaltedError);
+    const before = readFileSync(store.path, 'utf8');
+    expect(() => machine.updateRuntime({ lastInteractionAt: 123 })).toThrow(StateMachineHaltedError);
+    expect(() => machine.addWakeIntent({ at: Date.now() + 1_000, reason: 'after_halt' })).toThrow(StateMachineHaltedError);
+    expect(() => machine.consumeWakeIntent('wake-after-halt')).toThrow(StateMachineHaltedError);
+    expect(machine.runtime.lastInteractionAt).toBeUndefined();
+    expect(readFileSync(store.path, 'utf8')).toBe(before);
     expect(new TraceLog(dir).read().some((record) => record.kind === 'alarm')).toBe(true);
   });
 
