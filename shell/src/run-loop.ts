@@ -135,7 +135,7 @@ export class RunLoop {
     sourceRefs?: Array<{ eventId?: string; sourceId?: string; contentHash?: string }>,
   ): Promise<RunSummary> {
     if (this.stopping) return Promise.reject(new Error('run_loop_stopping'));
-    const run = this.runOnce(text, trigger, reason, dispatchTrigger, grant, channel);
+    const run = this.runOnce(text, trigger, reason, dispatchTrigger, grant, channel, sourceRefs);
     if (!this.activeRun) {
       this.activeRun = run;
       const clear = () => {
@@ -153,6 +153,7 @@ export class RunLoop {
     dispatchTrigger: Trigger,
     grant?: { tokens: number; turns: number },
     channel?: string,
+    sourceRefs?: Array<{ eventId?: string; sourceId?: string; contentHash?: string }>,
   ): Promise<RunSummary> {
     const runId = `run-${this.shell.now().toString(36)}-${randomUUID().slice(0, 8)}`;
     const origin = trigger === 'emergence_due' ? 'emergence' : 'user';
