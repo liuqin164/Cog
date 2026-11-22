@@ -44,6 +44,7 @@ import { AgentRuntime, type ModelProvider, type RunSummary } from './state/agent
 import type { ToolOutputAccount } from './state/context-budget.ts';
 import { laneAssemblyView, type ContextMetrics } from './state/session-lanes.ts';
 import { startKernelHttpFace, type HttpFaceHandle } from './kernel-host.ts';
+import { companionAvatar, readCompanionName } from './companion-name.ts';
 import { AttachServer, defaultSocketPath, type AttachShell } from './attach/server.ts';
 import { loadNativePlugins, type PluginLoadResult } from './plugins/load.ts';
 import { UpgradeAdmin } from './upgrade/admin.ts';
@@ -557,6 +558,8 @@ export class CompanionShell implements ShellControl, AttachShell {
         connectedAgents: () => [this.config.agentId],
         tracePath: join(this.config.dataDir, 'shell-events.jsonl'),
         credentials: this.credentials,
+        companionName: () => readCompanionName(this.config.dataDir) ?? this.config.companionName,
+        companionAvatar: () => companionAvatar(readCompanionName(this.config.dataDir) ?? this.config.companionName),
         webChannel: () => (this.host.hasService('webChannel') ? this.host.getService<{ handle(request: Request, remoteAddress?: string): Promise<Response | null> }>('webChannel') : undefined),
       });
       this.trace.append('http_face_started', { url: this.http.baseUrl, port: this.http.port });

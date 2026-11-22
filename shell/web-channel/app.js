@@ -1,3 +1,32 @@
+const slot = document.getElementById('view-chat');
+if (slot && !document.getElementById('messages')) {
+  slot.innerHTML = `
+    <div class="chat-status"><span id="state">未连接</span></div>
+    <main id="messages" aria-live="polite"><div class="daymark" id="daymark"></div></main>
+    <div id="token-bar" class="hidden">
+      <input id="token" type="password" placeholder="observatory-token" autocomplete="off" spellcheck="false">
+      <button id="token-save" type="button">保存令牌</button>
+    </div>
+    <footer class="composer">
+      <div class="composer-inner">
+        <div class="composer-box">
+          <textarea id="text" rows="1" placeholder="跟同伴说话…（Enter 发送）" aria-label="输入消息"></textarea>
+          <button id="send" class="send-btn" type="button" aria-label="发送">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>
+          </button>
+        </div>
+        <div class="hint">Enter 发送 · Shift+Enter 换行</div>
+      </div>
+    </footer>
+    <div id="modal" class="hidden">
+      <div class="sheet">
+        <div class="bar"><button id="modal-close" type="button">关闭</button></div>
+        <iframe id="modal-frame" title="保密输入面"></iframe>
+      </div>
+    </div>`;
+}
+
+const companion = window.__COGMEM_COMPANION__ ?? { name: 'Cog', avatar: 'C' };
 const TOKEN_KEY = 'observatory-write-token';
 let token = sessionStorage.getItem(TOKEN_KEY) || '';
 let active = null;
@@ -13,6 +42,10 @@ const text = document.getElementById('text');
 const send = document.getElementById('send');
 const modal = document.getElementById('modal');
 const modalFrame = document.getElementById('modal-frame');
+const daymark = document.getElementById('daymark');
+
+const now = new Date();
+daymark.textContent = `今天 · ${now.getMonth() + 1} 月 ${now.getDate()} 日 周${'日一二三四五六'[now.getDay()]}`;
 
 function el(tag, className, textContent) {
   const node = document.createElement(tag);
@@ -29,11 +62,25 @@ function scroll() {
   messages.scrollTop = messages.scrollHeight;
 }
 
-function addMessage(role, textContent, prepend) {
+function clock(at) {
+  const date = new Date(at);
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+}
+
+function addMessage(role, textContent, prepend, at) {
   const row = el('div', `msg ${role}`);
+  const body = el('div', 'msg-body');
   const bubble = el('div', 'bubble', textContent);
-  row.append(bubble);
-  if (prepend) messages.prepend(row);
+  if (role === 'notice') {
+    body.append(bubble);
+    row.append(body);
+  } else {
+    const who = el('div', 'who', `${role === 'assistant' ? companion.name : '你'}${at || !prepend ? ` · ${clock(at ?? Date.now())}` : ''}`);
+    body.append(who, bubble);
+    const avatar = el('span', 'avatar', role === 'assistant' ? companion.avatar : '你');
+    row.append(...(role === 'user' ? [body, avatar] : [avatar, body]));
+  }
+  if (prepend) messages.insertBefore(row, daymark.nextSibling);
   else {
     messages.append(row);
     scroll();
@@ -49,13 +96,16 @@ function addProvenance(row, provenance) {
   if (!Array.isArray(provenance) || provenance.length === 0) return;
   const chips = el('div', 'chips');
   for (const node of provenance) {
-    const chip = el('a', 'chip', node.label || node.id);
+    const chip = el('a', 'chip');
     chip.href = `/observatory/#node=${encodeURIComponent(node.id)}`;
     chip.target = '_blank';
     chip.rel = 'noopener';
+    const dot = el('span', 'dot');
+    dot.style.color = node.color || node.role || 'var(--gold)';
+    chip.append(dot, node.label || node.id);
     chips.append(chip);
   }
-  row.append(chips);
+  (row.querySelector('.msg-body') || row).append(chips);
 }
 
 function addCard(title, body, actions) {
@@ -81,10 +131,14 @@ function addCard(title, body, actions) {
 }
 
 function showResult(card, textContent, ok) {
-  let result = card.querySelector('.result');
+  let result = card.querySelector('.p-status') || card.querySelector('.result');
   if (!result) {
     result = el('div', 'result');
     card.append(result);
+  }
+  if (result.classList.contains('p-status')) {
+    result.classList.add('show', ok ? 'ok' : 'no');
+    result.classList.remove(ok ? 'no' : 'ok');
   }
   result.textContent = textContent;
   result.style.color = ok ? '' : 'var(--warn)';
@@ -103,10 +157,10 @@ async function post(path, body) {
 }
 
 function proposalCard(proposal) {
-  const existing = [...document.querySelectorAll('.card[data-proposal]')]
+  const existing = [...document.querySelectorAll('.card[data-proposal], .proposal[data-proposal]')]
     .find((card) => card.dataset.proposal === proposal.id);
   if (existing) {
-    for (const button of existing.querySelectorAll('.actions button')) button.disabled = true;
+    for (const button of existing.querySelectorAll('.actions button, .p-actions button')) button.disabled = true;
     if (proposal.status === 'discarded') showResult(existing, '已作废。', true);
     else if (proposal.status === 'rejected') showResult(existing, proposal.rejectedReason || proposal.resultText || '已拒绝。', false);
     else if (proposal.status && proposal.status !== 'pending') showResult(existing, proposal.resultText || '已执行。', true);
@@ -127,41 +181,53 @@ function proposalCard(proposal) {
     return;
   }
   const detail = Array.isArray(proposal.detail) ? proposal.detail : [];
-  const card = addCard(
-    `插件提案：${proposal.name || proposal.args || ''}`,
-    [proposal.reason, proposal.removal ? `摘除：${proposal.removal}` : ''].filter(Boolean).join('\n'),
-    [
-      {
-        label: '批准',
-        primary: true,
-        run: async (target) => {
-          try {
-            const result = await post('/channel/web/proposal', { id: proposal.id, action: 'confirm' });
-            showResult(target, result.text, result.ok);
-          } catch (error) {
-            showResult(target, error.message, false);
-          }
-        },
-      },
-      {
-        label: '拒绝',
-        run: async (target) => {
-          try {
-            const result = await post('/channel/web/proposal', { id: proposal.id, action: 'discard' });
-            showResult(target, result.text, true);
-          } catch (error) {
-            showResult(target, error.message, false);
-          }
-        },
-      },
-    ],
-  );
+  const card = el('div', 'proposal');
   card.dataset.proposal = proposal.id;
-  if (detail.length > 0) {
-    const list = el('ul');
-    for (const line of detail) list.append(el('li', '', line));
-    card.insertBefore(list, card.querySelector('.actions'));
+  const head = el('div', 'p-head');
+  head.append(el('span', 'tag', '插件提案'), el('b', '', proposal.name || proposal.args || ''), el('span', 'from', '同伴起草 · 待你批准'));
+  const list = el('dl');
+  const rows = [['装什么', proposal.purpose || proposal.reason || '']];
+  for (const line of detail) {
+    const split = line.search(/[：:]/);
+    if (split > 0) rows.push([line.slice(0, split), line.slice(split + 1).trim()]);
+    else rows.push(['明细', line]);
   }
+  if (proposal.removal && !detail.some((line) => line.includes(proposal.removal))) rows.push(['怎么摘', proposal.removal]);
+  for (const [label, value] of rows) list.append(el('dt', '', label), el('dd', '', value));
+  const steps = el('div', 'steps');
+  for (const label of ['写入注册表', '重启并加载插件', '健康检查', '连通性自检']) {
+    const step = el('div', 'st');
+    step.append(el('i'), el('span', '', label));
+    steps.append(step);
+  }
+  const status = el('p', 'p-status');
+  const actions = el('div', 'p-actions');
+  const settle = (ok, text) => {
+    for (const step of steps.children) step.className = ok ? 'st done' : 'st';
+    if (!ok) steps.lastElementChild.className = 'st fail';
+    showResult(card, text, ok);
+  };
+  const run = async (action, okOnSuccess) => {
+    for (const button of actions.querySelectorAll('button')) button.disabled = true;
+    steps.classList.add('show');
+    steps.firstElementChild.className = 'st doing';
+    try {
+      const result = await post('/channel/web/proposal', { id: proposal.id, action });
+      settle(okOnSuccess(result), result.text);
+    } catch (error) {
+      settle(false, error.message);
+    }
+  };
+  const approve = el('button', 'btn primary', '批准安装');
+  approve.type = 'button';
+  approve.addEventListener('click', () => run('confirm', (result) => result.ok));
+  const reject = el('button', 'btn ghost', '拒绝');
+  reject.type = 'button';
+  reject.addEventListener('click', () => run('discard', () => true));
+  actions.append(approve, reject);
+  card.append(head, list, steps, status, actions);
+  messages.append(card);
+  scroll();
 }
 
 function emergenceCard(event) {
@@ -170,35 +236,33 @@ function emergenceCard(event) {
     addNotice(`浮现：${event.text || event.reason || ''}`);
     return;
   }
-  addCard(
-    '承诺浮现',
-    `${event.text || ''}\n${event.reason || ''}`.trim(),
-    [
-      {
-        label: '确认',
-        primary: true,
-        run: async (card) => {
-          try {
-            const result = await post('/channel/web/commitment', { id: event.id, action: 'confirm' });
-            showResult(card, result.text, true);
-          } catch (error) {
-            showResult(card, error.message, false);
-          }
-        },
-      },
-      {
-        label: '顺延 1 小时',
-        run: async (card) => {
-          try {
-            const result = await post('/channel/web/commitment', { id: event.id, action: 'snooze', minutes: 60 });
-            showResult(card, result.text, true);
-          } catch (error) {
-            showResult(card, error.message, false);
-          }
-        },
-      },
-    ],
-  );
+  const card = el('div', 'surface-card');
+  const icon = el('div', 'sc-ic');
+  icon.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>';
+  const body = el('div');
+  body.append(el('b', '', '承诺浮现'), el('p', '', `${event.text || ''}\n${event.reason || ''}`.trim()));
+  body.append(el('p', 'result'));
+  const actions = el('div', 'sc-actions');
+  const act = async (action, minutes, okOnSuccess) => {
+    for (const button of actions.querySelectorAll('button')) button.disabled = true;
+    try {
+      const result = await post('/channel/web/commitment', { id: event.id, action, ...(minutes ? { minutes } : {}) });
+      showResult(card, result.text, okOnSuccess);
+    } catch (error) {
+      showResult(card, error.message, false);
+    }
+  };
+  const confirm = el('button', '', '知道了');
+  confirm.type = 'button';
+  confirm.addEventListener('click', () => act('confirm', undefined, true));
+  const snooze = el('button', '', '顺延 1 小时');
+  snooze.type = 'button';
+  snooze.addEventListener('click', () => act('snooze', 60, true));
+  actions.append(snooze, confirm);
+  body.append(actions);
+  card.append(icon, body);
+  messages.append(card);
+  scroll();
 }
 
 function openModal(url) {
@@ -263,10 +327,10 @@ async function loadHistory(before) {
     const page = await response.json();
     const items = page.messages || [];
     if (!before) {
-      for (const message of items) addMessage(message.role, message.text);
+      for (const message of items) addMessage(message.role, message.text, false, message.at);
     } else {
       const height = messages.scrollHeight;
-      for (const message of [...items].reverse()) addMessage(message.role, message.text, true);
+      for (const message of [...items].reverse()) addMessage(message.role, message.text, true, message.at);
       messages.scrollTop += messages.scrollHeight - height;
     }
     oldestCursor = page.cursor || 0;

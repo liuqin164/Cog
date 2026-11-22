@@ -42,6 +42,16 @@ export interface ObservatoryRouteOptions {
    */
   token?: string;
   credentials?: ObservatoryCredentialFace;
+  uiSlots?: () => ObservatoryUiSlot[];
+  companionName?: () => string;
+  companionAvatar?: () => string;
+}
+
+export interface ObservatoryUiSlot {
+  id: string;
+  label: string;
+  script: string;
+  style?: string;
 }
 
 export interface ObservatoryCredentialField {
@@ -60,12 +70,16 @@ export interface ObservatoryCredentialFace {
 
 /** Everything the page loads, by exact path: no directory walk, so no traversal to defend against. */
 const STATIC_FILES: Record<string, { file: string; type: string }> = {
-  '/observatory/': { file: 'index.html', type: 'text/html; charset=utf-8' },
-  '/observatory/index.html': { file: 'index.html', type: 'text/html; charset=utf-8' },
   '/observatory/app.js': { file: 'app.js', type: 'text/javascript; charset=utf-8' },
   '/observatory/three.bundle.js': { file: 'three.bundle.js', type: 'text/javascript; charset=utf-8' },
   '/observatory/three.LICENSE': { file: 'three.LICENSE', type: 'text/plain; charset=utf-8' },
   '/observatory/demo.json': { file: 'demo.json', type: 'application/json; charset=utf-8' },
+  '/observatory/fonts/noto-sans-sc-400-latin.woff2': { file: 'fonts/noto-sans-sc-400-latin.woff2', type: 'font/woff2' },
+  '/observatory/fonts/noto-sans-sc-400-chinese-simplified.woff2': { file: 'fonts/noto-sans-sc-400-chinese-simplified.woff2', type: 'font/woff2' },
+  '/observatory/fonts/noto-sans-sc-600-latin.woff2': { file: 'fonts/noto-sans-sc-600-latin.woff2', type: 'font/woff2' },
+  '/observatory/fonts/noto-sans-sc-600-chinese-simplified.woff2': { file: 'fonts/noto-sans-sc-600-chinese-simplified.woff2', type: 'font/woff2' },
+  '/observatory/fonts/noto-serif-sc-600-latin.woff2': { file: 'fonts/noto-serif-sc-600-latin.woff2', type: 'font/woff2' },
+  '/observatory/fonts/noto-serif-sc-600-chinese-simplified.woff2': { file: 'fonts/noto-serif-sc-600-chinese-simplified.woff2', type: 'font/woff2' },
 };
 
 function defaultWebRoot(): string {
@@ -266,6 +280,32 @@ export function createObservatoryRoutes(
 ) {
   // The page always ships beside this module: `bun run build` copies `src/observatory/web` into `dist`.
   const webRoot = defaultWebRoot();
+  const indexFile = `${webRoot}index.html`;
+
+  async function page(): Promise<Response> {
+    let html = await Bun.file(indexFile).text();
+    const slots = options.uiSlots?.() ?? [];
+    const name = options.companionName?.() ?? 'Cog';
+    const avatar = options.companionAvatar?.() ?? 'C';
+    const data = JSON.stringify({ name, avatar }).replace(/</gu, '\\u003c');
+    const tabs = slots.map((slot) =>
+        `<button class="nav-item" id="tab-${slot.id}" role="tab" aria-controls="view-${slot.id}" aria-selected="false">${slot.label}</button>`,
+      ).join('');
+    const tabbar = slots.map((slot) =>
+        `<button data-view="${slot.id}">${slot.label}</button>`,
+      ).join('');
+    html = html
+      .replace('<!--ui:tabs-->', tabs)
+      .replace('<!--ui:tabbar-->', tabbar)
+      .replace('<!--ui:views-->', slots.map((slot) =>
+        `<section class="view" id="view-${slot.id}" role="tabpanel" aria-labelledby="tab-${slot.id}" data-slot="${slot.id}"></section>`,
+      ).join(''))
+      .replace('<!--ui:assets-->', slots.map((slot) =>
+        `${slot.style ? `<link rel="stylesheet" href="${slot.style}">` : ''}<script type="module" src="${slot.script}"></script>`,
+      ).join(''))
+      .replace('<!--ui:companion-->', `<script>window.__COGMEM_COMPANION__=${data}</script>`);
+    return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
+  }
 
   return async function handleObservatory(request: Request, remoteAddress?: string): Promise<Response | null> {
     const url = new URL(request.url);
@@ -373,6 +413,7 @@ export function createObservatoryRoutes(
     }
 
     if (url.pathname === OBSERVATORY_PREFIX) return new Response(null, { status: 301, headers: { location: `${OBSERVATORY_PREFIX}/${url.search}` } });
+    if (url.pathname === '/observatory/' || url.pathname === '/observatory/index.html') return page();
     if (url.pathname === '/observatory/events') {
       // HEAD would open a subscription it can never drain; the stream is GET-only.
       if (request.method === 'HEAD') return new Response('method_not_allowed', { status: 405, headers: { allow: 'GET' } });

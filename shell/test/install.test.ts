@@ -290,7 +290,7 @@ describe('model probe diagnosis', () => {
 
 describe('the six-step install', () => {
   test('the rhythm step refuses a zero-length dream window and says why', async () => {
-    const io = createScriptedIO(['UTC', '3', '3', '', 'y']);
+    const io = createScriptedIO(['小海', 'UTC', '3', '3', '', 'y']);
     const harness = makeHarness({ probeOk: true, io, flags: { yes: false } });
     const step = (harness.installer as unknown as {
       stepRhythm(): Promise<{ ok: boolean; message?: string; hint?: string }>;
@@ -307,8 +307,9 @@ describe('the six-step install', () => {
     const code = await harness.installer.run();
     expect(code).toBe(0);
 
-    const state = JSON.parse(readFileSync(join(harness.dataDir, 'install.json'), 'utf8')) as { done: string[] };
+    const state = JSON.parse(readFileSync(join(harness.dataDir, 'install.json'), 'utf8')) as { done: string[]; choices: { companionName?: string } };
     expect(state.done).toEqual(['preflight', 'place', 'model', 'rhythm', 'resident', 'awake']);
+    expect(state.choices.companionName).toBe('Cog');
 
     expect(readSoul(join(harness.dataDir, 'memory.sqlite'), 'cogmem-companion')?.content).toBe(EXPECTED_SOUL);
 
@@ -591,6 +592,7 @@ describe('the model step: a custom OpenAI-protocol route', () => {
       'myroute',
       'sk-custom-secret',
       '', // embedding provider -> default local
+      '小海', // companion name
       '', // time zone -> default
       '', // dream start -> default
       '', // dream end -> default

@@ -26,6 +26,18 @@ The page cannot run `explain` on demand in this version. That path can write a t
 observatory reads stored traces instead (`GET /observatory/recalls`) — written by the default recall
 lane, see [Recall decisions](#recall-decisions-and-who-writes-them).
 
+## Shell and UI slots
+
+`/observatory/` is the one application shell: a 268px sidebar, the main view, and a 330px companion
+inspector. The observatory owns the frame, the star map, the classification audit, and the soul
+editor. The chat view is not a second page: the `builtin:web-channel` plugin contributes a slot
+(`id`, label, script, stylesheet) through the host's UI contribution registry, and the shell injects
+that nav item and view only while the plugin is loaded. `/channel/web/` redirects to
+`/observatory/#chat`; unloading the plugin removes the chat view and its routes, leaving the other
+views untouched. The companion name is read from `install.json` (`companionName`) and rendered by
+the shell and the chat view; the avatar label is the first letter of an English name or up to two
+Chinese characters.
+
 ## Endpoints
 
 All under `/observatory`, all loopback. `GET`/`HEAD` everywhere except the two soul `POST` routes.
@@ -50,7 +62,7 @@ process memory per `(project, watermark, max(updated_at))` and recomputed when e
 
 ## Soul editor
 
-The fourth tab edits one agent's soul. It reads `GET /observatory/soul`, shows the live token estimate
+The Soul tab edits one agent's soul. It reads `GET /observatory/soul`, shows the live token estimate
 beside the text area, and writes only when the owner presses save or rollback. The kernel's
 `soul_versions` table is append-only: a save adds a version with `supersedes`, a rollback copies an
 older version into a new row, and both land a `governance_audit_log` row. An agent's proposal is

@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { createMemoryKernel } from 'cogmem';
 import { DEFAULT_AUTONOMOUS_BUDGET, DEFAULT_DAILY_BUDGET, DEFAULT_MAX_IDLE_TURNS, DEFAULT_NIGHT_BUDGET, DEFAULT_WORK_BUDGET } from '../config.ts';
+import { normalizeCompanionName } from '../companion-name.ts';
 import { DEFAULT_SOUL, readSoul, writeDefaultSoul } from './soul.ts';
 import { MODEL_PRESETS, modelEnv, probeModel, type ModelChoice, type ModelProviderKind } from './model.ts';
 import { RouteStore, safeRouteName, type ModelRoute } from '../model/routes.ts';
@@ -65,6 +66,7 @@ export interface InstallFlags {
   workspace?: string;
   project?: string;
   agent?: string;
+  name?: string;
   httpPort?: number;
   /** `linux` | `darwin` | `win32`; the last is refused with a plain reason. */
   platform?: string;
@@ -93,6 +95,7 @@ export interface InstallChoices {
   workspaceRoot: string;
   projectId: string;
   agentId: string;
+  companionName: string;
   httpPort: number;
   platform: string;
   serviceName: string;
@@ -207,6 +210,7 @@ export class Installer {
       workspaceRoot: resolve(this.flags.workspace ?? this.cwd),
       projectId: this.flags.project ?? 'companion',
       agentId: this.flags.agent ?? 'cogmem-companion',
+      companionName: normalizeCompanionName(this.flags.name),
       httpPort: this.flags.httpPort ?? 7338,
       platform: this.flags.platform ?? options.platform,
       serviceName: this.flags.serviceName ?? 'cogmem-companion',
@@ -224,6 +228,7 @@ export class Installer {
     Object.assign(this.choices, this.state.choices);
     this.choices.dataDir = resolve(this.choices.dataDir);
     this.choices.workspaceRoot = resolve(this.choices.workspaceRoot);
+    if (this.flags.name !== undefined) this.choices.companionName = normalizeCompanionName(this.flags.name);
   }
 
   private get statePath(): string {
@@ -302,6 +307,7 @@ export class Installer {
       return 0;
     }
     if (this.flags.uninstall) return this.uninstall();
+    if (this.flags.name !== undefined) this.saveState();
 
     // An unattended install cannot answer the route question later, so it is refused before the
     // first step touches disk. mg is not a fallback; a missing flag is named here (#286).
@@ -828,6 +834,7 @@ export class Installer {
   // ── Step 3: 节律 ──────────────────────────────────────────────────────────
 
   private async stepRhythm(): Promise<StepResult> {
+    let companionName = this.choices.companionName;
     let timeZone = this.choices.timeZone;
     let dreamStart = this.choices.dreamStartHour;
     let dreamEnd = this.choices.dreamEndHour;
@@ -835,6 +842,7 @@ export class Installer {
     let quietEnd = this.choices.quietEndHour;
 
     if (!this.flags.yes) {
+      companionName = normalizeCompanionName(await this.io.ask('同伴的名字（中文名或英文名；装好后可用 --name 改名）', { default: companionName }));
       timeZone = await this.io.ask('时区（IANA，如 Asia/Tokyo）', { default: timeZone });
       try {
         new Intl.DateTimeFormat('en-US', { timeZone });
@@ -869,6 +877,7 @@ export class Installer {
     }
 
     this.choices.timeZone = timeZone;
+    this.choices.companionName = companionName;
     this.choices.dreamStartHour = dreamStart;
     this.choices.dreamEndHour = dreamEnd;
     this.choices.quietStartHour = quietStart;
@@ -1068,11 +1077,13 @@ export class Installer {
 
 export const INSTALL_USAGE = [
   'Usage: cogmem install [--data <dir>] [--workspace <dir>] [--project <id>] [--agent <id>]',
+  '              [--name <companion name>]',
   '              [--http-port <n>] [--service-name <name>] [--home <dir>] [--platform linux|darwin]',
   '              [--provider mg|openai_compatible --base-url <url> --model <name>]',
   '              [--embedding-provider local|ollama|openai --embedding-base-url <url> --embedding-model <name>]',
   '              [--yes] [--skip-service] [--uninstall] [--help]',
   '  --data         数据目录（默认 ~/.cogmem/companion）',
+  '  --name         同伴名字；装好后重跑 --name 即改名（Web 与观测台刷新即变）',
   '  --provider     模型路线；与 --base-url、--model 一起构成 --yes 的必填路线',
   '  --base-url     OpenAI 兼容端点（通常以 /v1 结尾）',
   '  --model        模型名；钥匙放 MG_API_KEY 或 COGMEM_MODEL_KEY 环境变量，不放命令行',
@@ -1103,6 +1114,7 @@ export function parseInstallFlags(argv: string[]): InstallFlags {
     ['workspace', 'workspace'],
     ['project', 'project'],
     ['agent', 'agent'],
+    ['name', 'name'],
     ['platform', 'platform'],
     ['service-name', 'serviceName'],
     ['home', 'homeDir'],
