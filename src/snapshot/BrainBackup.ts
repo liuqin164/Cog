@@ -10,7 +10,7 @@
  */
 import { createHash } from 'node:crypto';
 import Database from 'bun:sqlite';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 
 import { SnapshotExporter } from './SnapshotExporter.js';
@@ -83,9 +83,17 @@ export class BrainBackup {
       },
     };
     manifest.verification = this.verifyFiles(snapshotPath, manifest, createdAt);
+    if (!manifest.verification.ok) {
+      const failedFile = `failed-${stamp}.snap`;
+      renameSync(snapshotPath, join(dir, failedFile));
+      manifest.snapshot.file = failedFile;
+      writeFileSync(join(dir, `failed-${stamp}.json`), JSON.stringify(manifest, null, 2), 'utf8');
+      this.recordLast(manifest, `failed-${stamp}.json`);
+      this.rotate(dir);
+      return manifest;
+    }
     writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
-    // Only a snapshot that passed its own checks is a clean point worth archiving.
-    if (manifest.verification.ok) this.archive(dir, snapshotPath, manifest, createdAt);
+    this.archive(dir, snapshotPath, manifest, createdAt);
     this.recordLast(manifest, manifestFile);
     this.rotate(dir);
     return manifest;
@@ -191,13 +199,18 @@ export class BrainBackup {
   }
 
   private rotate(dir: string): void {
-    const snapshots = readdirSync(dir)
-      .filter((file) => /^brain-.*\.snap$/u.test(file))
-      .sort()
-      .reverse();
-    for (const old of snapshots.slice(SNAPSHOT_RETENTION)) {
-      rmSync(join(dir, old), { force: true });
-      rmSync(join(dir, old.replace(/\.snap$/u, '.json')), { force: true });
+    const verified: string[] = [];
+    for (const file of readdirSync(dir)) {
+      if (!/^brain-.*\.json$/u.test(file)) continue;
+      try {
+        const manifest = JSON.parse(readFileSync(join(dir, file), 'utf8')) as BrainManifest;
+        if (manifest.verification?.ok) verified.push(file);
+      } catch {
+      }
+    }
+    for (const manifestFile of verified.sort().reverse().slice(SNAPSHOT_RETENTION)) {
+      rmSync(join(dir, manifestFile.replace(/\.json$/u, '.snap')), { force: true });
+      rmSync(join(dir, manifestFile), { force: true });
     }
   }
 
@@ -208,7 +221,7 @@ export class BrainBackup {
     const manifestFile = `archive-${week}.json`;
     const archivePath = join(dir, archiveFile);
     if (existsSync(archivePath) && existsSync(join(dir, manifestFile))) return;
-    copyFileSync(snapshotPath, archivePath);
+    const stagedPath = join(dir, `.archive-${week}-${Math.random().toString(36).slice(2)}.snap`);
     const archiveManifest: BrainManifest = {
       ...manifest,
       snapshot: { ...manifest.snapshot, file: archiveFile },
@@ -218,9 +231,16 @@ export class BrainBackup {
         checks: { checksum: false, opens: false, counts: false },
       },
     };
-    archiveManifest.verification = this.verifyFiles(archivePath, archiveManifest, createdAt);
-    writeFileSync(join(dir, manifestFile), JSON.stringify(archiveManifest, null, 2), 'utf8');
-    this.rotateWeekly(dir);
+    try {
+      copyFileSync(snapshotPath, stagedPath);
+      archiveManifest.verification = this.verifyFiles(stagedPath, archiveManifest, createdAt);
+      if (!archiveManifest.verification.ok) return;
+      renameSync(stagedPath, archivePath);
+      writeFileSync(join(dir, manifestFile), JSON.stringify(archiveManifest, null, 2), 'utf8');
+      this.rotateWeekly(dir);
+    } finally {
+      rmSync(stagedPath, { force: true });
+    }
   }
 
   private rotateWeekly(dir: string): void {

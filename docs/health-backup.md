@@ -127,11 +127,11 @@ with `night-dnd` and a normally interruptible channel it is `deliver` / `proacti
 |---|---|
 | `trigger` | `MemoryKernel.runNight`, after the Dream pass and the atlas reconcile. |
 | `contents` | The whole database, every table including `soul_versions`, plus the JSON manifest. |
-| `location` | `<paths.snapshots_dir>/brain-<ISO>.snap` and `brain-<ISO>.json`. |
-| `retention` | The newest `7` nightly snapshots are kept; older `.snap` and `.json` pairs are deleted. Weekly archives are separate (below). |
+| `location` | `<paths.snapshots_dir>/brain-<ISO>.snap` and `brain-<ISO>.json`; a failed verification is kept as `failed-<ISO>.snap` and `failed-<ISO>.json`. |
+| `retention` | The newest `7` verified nightly snapshots are kept; older `.snap` and `.json` pairs are deleted. Failed snapshots do not consume a slot. Weekly archives are separate (below). |
 | `verification` | Every snapshot is checked for `checksum`, `opens` and `counts` before it is reported. |
 | `query` | `cogmem backup list --json`, `GET /observatory/health`. |
-| `failure` | A snapshot that cannot be written fails the Night. The Dream rows are already committed and a re-run is idempotent. |
+| `failure` | A snapshot that cannot be written is retried after 5, 10, 20, then 30 minutes; `lastSnapshotAt` advances only on success. `/health`'s `snapshot` reports the last success and failure. The Dream rows are already committed and a re-run is idempotent. |
 
 The snapshot reuses `SnapshotExporter`: `VACUUM INTO`, forgotten rows removed, sha256 over the DB
 bytes. The manifest is written after the export and rewritten with the verification result.
