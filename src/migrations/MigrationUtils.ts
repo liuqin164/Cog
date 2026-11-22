@@ -181,7 +181,8 @@ export function backfillAtlasDocuments(db: Database, projectId?: string): void {
   }
   // Rebuild FTS index
   if (tableExists(db, 'memory_atlas_fts')) {
-    db.exec(`DELETE FROM memory_atlas_fts;`);
+    if (projectId !== undefined) db.prepare(`DELETE FROM memory_atlas_fts WHERE project_id=?`).run(projectId);
+    else db.exec(`DELETE FROM memory_atlas_fts;`);
     db.prepare(`
       INSERT INTO memory_atlas_fts (node_id, project_id, node_type, label, summary, topic_path)
       SELECT node_id, project_id, node_type, label, summary, topic_path
