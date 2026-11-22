@@ -536,9 +536,6 @@ export abstract class KernelServices {
         return event ? { content: eventPayloadText(event.payload) } : null;
       },
     });
-    // The profile compiler (#159). It owns no storage either: every version of an entry is a ledger
-    // row, so the ledger is the state, the history and the audit. Contract:
-    // `docs/profile-compilation.md`.
     this.profile = new ProfileCompiler({
       events: this.eventStore,
       facts: this.factStore,
@@ -552,6 +549,7 @@ export abstract class KernelServices {
         statuses: ['pending', 'confirmed', 'deferred', 'rejected', 'completed', 'expired'],
         limit: 200,
       }),
+      supersedeFrames: (projectId, eventIds, now) => this.memoryFrameStore.supersedeReferencingEvents(projectId, eventIds, now),
     });
     this.surfacingFeedback = new SurfacingFeedback({ events: this.eventStore });
     this.occasionScope = new OccasionScope();

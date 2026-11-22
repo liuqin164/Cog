@@ -46,7 +46,7 @@ function beliefPredicate(relation: string): string {
 export interface FrameRelationWriteResult {
   written: number;
   /** Relations this pass left alone, with the reason, so a silent no-op is visible. */
-  skipped: Array<{ relation: string; reason: 'not_projected' | 'unresolved_node' | 'empty_label' | 'already_recorded' }>;
+  skipped: Array<{ relation: string; reason: 'not_projected' | 'unresolved_node' | 'empty_label' | 'already_recorded' | 'owner_corrected' }>;
   /** Relations the belief layer refused, with the store's own message. */
   failed: Array<{ relation: string; error: string }>;
 }
@@ -114,6 +114,10 @@ export function projectFrameRelationsToBeliefs(
     // coexistence and would insert one.
     if (beliefStore.findActiveEquivalent(candidate).length > 0) {
       projection.skipped.push({ relation: relation.relationType, reason: 'already_recorded' });
+      continue;
+    }
+    if (beliefStore.hasNewerOwnerCorrection(candidate)) {
+      projection.skipped.push({ relation: relation.relationType, reason: 'owner_corrected' });
       continue;
     }
 

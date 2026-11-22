@@ -112,16 +112,6 @@ export class MemoryFrameStore {
     return rows.map((row) => this.read(row));
   }
 
-  /**
-   * Frames whose stored `source_fingerprint` no longer matches their episode's current events —
-   * the read-only half of the frame repair story (#110). Nothing is written here, so a caller
-   * can report the stale set nightly without changing behaviour; acting on it is the repair
-   * path, which does not exist yet.
-   *
-   * The check is `frameSourceFingerprint` again, over `memory_episode_events` as it stands now.
-   * Measured at 0.05 ms/frame over 100 frames on the 20k-event corpus, so the report is free
-   * next to the 382 ms/frame it would take to re-project them.
-   */
   listStaleFrames(options: { projectId?: string; statuses?: MemoryFrameStatus[]; limit?: number } = {}): { checked: number; total: number; stale: string[]; truncated: boolean } {
     const limit = Math.max(1, Math.min(Math.trunc(options.limit ?? 1000), 5000));
     // `active` by default, because that is the set the projector projects. A caller may widen
@@ -142,15 +132,6 @@ export class MemoryFrameStore {
     return { checked: rows.length, total, stale, truncated: total > rows.length };
   }
 
-  /**
-   * The frames a bounded Night repair must re-project: the double-stamp stale set (#110) plus
-   * active frames whose projection is absent (the ones Dream just wrote). "Absent" is a missing
-   * active `frame` support, which is what the projector writes per node; a frame with any support
-   * was projected.
-   *
-   * Capped, because a repair that needs the whole corpus is a full rebuild and should be asked for
-   * explicitly. The cap bounds one night's work; the rest is the next night's set.
-   */
   listRepairFrames(options: { projectId: string; limit?: number }): { ids: string[]; stale: number; unprojected: number; truncated: boolean } {
     const limit = Math.max(1, Math.min(Math.trunc(options.limit ?? 100), 500));
     const scan = this.listStaleFrames({ projectId: options.projectId, statuses: ['active'], limit: 5000 });
@@ -278,6 +259,17 @@ export class MemoryFrameStore {
     if (changed || derivedChanged) for (const id of episodeIds) { const row = this.db.prepare(`SELECT project_id FROM memory_frames WHERE episode_id=? LIMIT 1`).get(id) as { project_id?: string } | null; if (row?.project_id) this.markDirty(row.project_id, now); }
     return changed;
     })();
+  }
+
+  supersedeReferencingEvents(projectId: string, eventIds: readonly string[], now = Date.now()): number {
+    if (eventIds.length === 0) return 0;
+    const placeholders = eventIds.map(() => '?').join(',');
+    const rows = this.db.prepare(`
+      SELECT DISTINCT episode_id FROM memory_frames
+      WHERE project_id=? AND status IN ('active','needs_confirmation','staged')
+        AND EXISTS (SELECT 1 FROM json_each(memory_frames.evidence_event_ids_json) WHERE value IN (${placeholders}))
+    `).all(projectId, ...eventIds) as Array<{ episode_id: string }>;
+    return this.supersedeEpisodes(rows.map((row) => row.episode_id), now);
   }
 
   deleteByProject(projectId: string, now = Date.now()): number {

@@ -843,6 +843,15 @@ export class BeliefStore {
       .filter((belief) => belief.status === 'active' && this.isSameBeliefValue(candidate.objectValue, belief.objectValue));
   }
 
+  hasNewerOwnerCorrection(candidate: BeliefCandidate): boolean {
+    const key = this.toCanonicalKey(candidate.subject, candidate.predicate, candidate.scope, candidate.canonicalKeyDiscriminator);
+    return this.findByCanonicalKey(key, candidate.projectId ?? '').some((belief) => (
+      belief.status === 'active'
+      && Boolean((belief.metadata as { profileCorrection?: unknown } | undefined)?.profileCorrection)
+      && (belief.validFrom ?? 0) > (candidate.validFrom ?? 0)
+    ));
+  }
+
   /**
    * The identity of a claim.
    *
