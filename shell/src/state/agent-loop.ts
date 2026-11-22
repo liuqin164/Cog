@@ -369,6 +369,10 @@ export class AgentRuntime {
     return this.running;
   }
 
+  contextCalibrationFactor(model = this.options.provider.model): number {
+    return this.calibrator.factor(model);
+  }
+
   get pendingMessages(): number {
     return this.steering.length + this.followUps.length;
   }
@@ -534,6 +538,7 @@ export class AgentRuntime {
             systemPrompt: request.systemPrompt,
             tools: request.tools ?? this.options.tools.list(),
             budgetTokens: this.options.requestBudget?.(),
+            scale: this.calibrator.factor(request.model),
           });
           // The request is measured once it is final: after `transformContext`, so a block it injected
           // (the recall context) is part of the number instead of invisible to it.

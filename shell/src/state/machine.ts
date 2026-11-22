@@ -14,6 +14,7 @@ import {
   type ShellRuntimeState,
   type TransitionRecord,
   type WakeIntent,
+  trimWakeIntents,
 } from './checkpoint.ts';
 import { TraceLog } from '../trace.ts';
 
@@ -116,8 +117,10 @@ export class StateMachine {
 
   consumeWakeIntent(id: string): void {
     const now = this.clock();
-    const wakeIntents = this.checkpointState.wakeIntents.map((intent) =>
-      intent.id === id ? { ...intent, consumedAt: now } : intent,
+    const wakeIntents = trimWakeIntents(
+      this.checkpointState.wakeIntents.map((intent) =>
+        intent.id === id ? { ...intent, consumedAt: now } : intent,
+      ),
     );
     this.commit(this.nextCheckpoint({ wakeIntents }));
     this.options.trace.append('wake_intent_consumed', { id }, now);

@@ -15,6 +15,7 @@
  */
 import { renderBrowseStub, type AgentRecallItem, type KernelAgentMemoryBackend, type SessionContextAssembly, type SessionContextItem, type SessionContextLane, type SessionDigestEntry } from 'cogmem';
 import type { AgentMessage } from '../state/agent-loop.ts';
+import { accountRequest, TOOL_RESULT_RESERVE, type ToolDeclaration } from '../state/context-budget.ts';
 import type { NativePlugin } from './host.ts';
 
 export interface SessionContextPluginConfig {
@@ -23,6 +24,8 @@ export interface SessionContextPluginConfig {
   sessionId: string;
   /** The model route's sweet spot, read at request time so a route switch takes effect. */
   targetTokens: () => number;
+  /** The provider's measured estimate/actual ratio, so the lanes and the fit share one ruler (#439). */
+  calibrationFactor?: (model?: string) => number;
   /** How many recent turns stay verbatim; the kernel splits the rest into the digest. */
   tailTurns: number;
   pinned: () => string[];
@@ -52,12 +55,14 @@ export function sessionContextPlugin(config: SessionContextPluginConfig): Native
       let turn:
         | { runId?: string; seq: number; query?: string; recent: string[]; recall: SessionContextItem[]; toolNames: string[]; assembly: SessionContextAssembly; pendingBlock: string; stablePrompt: string }
         | undefined;
-      const assemble = (recall: SessionContextItem[], recent: string[], runId?: string, cachedDigest?: SessionContextAssembly['digest'], query?: string, toolNames?: readonly string[]): SessionContextAssembly =>
-        backend.assembleSessionContext({
+      const assemble = (recall: SessionContextItem[], recent: string[], runId?: string, cachedDigest?: SessionContextAssembly['digest'], query?: string, toolNames?: readonly string[], toolTokens = 0, model?: string): SessionContextAssembly => {
+        const factor = config.calibrationFactor?.(model) ?? 1;
+        const laneTarget = Math.max(1, Math.floor(config.targetTokens() / (factor > 0 ? factor : 1)) - toolTokens - TOOL_RESULT_RESERVE);
+        return backend.assembleSessionContext({
           projectId: config.projectId,
           agentId: config.agentId,
           sessionId: config.sessionId,
-          targetTokens: Math.max(1, Math.floor(config.targetTokens())),
+          targetTokens: laneTarget,
           tailTurns: config.tailTurns,
           excludeTurnIds: runId ? [`${runId}:0`] : undefined,
           pinned: config.pinned(),
@@ -69,6 +74,7 @@ export function sessionContextPlugin(config: SessionContextPluginConfig): Native
           recentText: recent,
           ...(cachedDigest ? { cachedDigest } : {}),
         });
+      };
       const accept = (assembly: SessionContextAssembly): string => {
         config.onAssembly?.(assembly);
         pendingBlock = assembly.lanes
@@ -87,12 +93,15 @@ export function sessionContextPlugin(config: SessionContextPluginConfig): Native
         pendingBlock = '';
         const query = newestUserText(messages);
         const toolNames = requestToolNames(messages);
+        const tools = Array.isArray(request.tools) ? request.tools as ToolDeclaration[] : [];
+        const toolTokens = accountRequest({ messages: [], systemPrompt: '', tools }).toolTokens;
+        const model = typeof request.model === 'string' ? request.model : undefined;
         const recent = recentText(messages);
         const seq = config.ledgerSeq();
         try {
           if (busCtx?.runId && turn && turn.runId === busCtx.runId && turn.query === query && turn.seq === seq) {
             if (turn.recent.join('\n') !== recent.join('\n') || turn.toolNames.join(',') !== toolNames.join(',')) {
-              const assembly = assemble(turn.recall, recent, busCtx?.runId, turn.assembly.digest, query, toolNames);
+              const assembly = assemble(turn.recall, recent, busCtx?.runId, turn.assembly.digest, query, toolNames, toolTokens, model);
               turn.assembly = assembly;
               turn.recent = recent;
               turn.toolNames = toolNames;
@@ -115,7 +124,7 @@ export function sessionContextPlugin(config: SessionContextPluginConfig): Native
                 limit: config.recallLimit ?? 3,
               }).items.map(toContextItem)
             : [];
-          const assembly = assemble(recall, recent, busCtx?.runId, undefined, query, toolNames);
+          const assembly = assemble(recall, recent, busCtx?.runId, undefined, query, toolNames, toolTokens, model);
           const stablePrompt = accept(assembly);
           turn = busCtx?.runId
             ? { runId: busCtx.runId, seq, query, recent, recall, toolNames, assembly, pendingBlock, stablePrompt }

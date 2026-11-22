@@ -282,6 +282,7 @@ export interface CheckpointFallback {
 }
 
 const MAX_HISTORY = 200;
+export const MAX_CONSUMED_WAKE_INTENTS = 32;
 
 const RUNTIME_KEYS: Record<keyof ShellRuntimeState, true> = {
   lastDreamDate: true,
@@ -321,6 +322,20 @@ export interface RuntimeTextLedger {
 
 export function emptyCheckpoint(now = Date.now()): CheckpointState {
   return { version: 1, state: 'DORMANT', seq: 0, wakeIntents: [], runtime: {}, history: [], updatedAt: now };
+}
+
+export function trimWakeIntents(intents: WakeIntent[]): WakeIntent[] {
+  let consumed = 0;
+  const kept: WakeIntent[] = [];
+  for (let index = intents.length - 1; index >= 0; index -= 1) {
+    const intent = intents[index]!;
+    if (intent.consumedAt !== undefined) {
+      if (consumed >= MAX_CONSUMED_WAKE_INTENTS) continue;
+      consumed += 1;
+    }
+    kept.push(intent);
+  }
+  return kept.length === intents.length ? intents : kept.reverse();
 }
 
 export function forgetRuntimeText(runtime: ShellRuntimeState, ledger: RuntimeTextLedger): { runtime: ShellRuntimeState; cleared: number } {
@@ -444,7 +459,9 @@ export class CheckpointStore {
     if (value.version !== 1 || !isState(String(value.state)) || typeof value.seq !== 'number') {
       throw new CheckpointCorruptError(`checkpoint_corrupt: ${this.path}: unexpected shape`);
     }
-    return this.hydrate(value);
+    const state = this.hydrate(value);
+    state.wakeIntents = trimWakeIntents(state.wakeIntents ?? []);
+    return state;
   }
 
   /** Atomic and durable: temp file, fsync, rename, fsync the directory. Throws on any failure. */
@@ -452,7 +469,9 @@ export class CheckpointStore {
     const temp = `${this.path}.tmp`;
     try {
       mkdirSync(this.dir, { recursive: true });
-      writeFileSync(temp, `${JSON.stringify(this.persist(state), null, 2)}\n`, 'utf8');
+      const persisted = this.persist(state);
+      const bounded = { ...persisted, wakeIntents: trimWakeIntents(persisted.wakeIntents) };
+      writeFileSync(temp, `${JSON.stringify(bounded, null, 2)}\n`, 'utf8');
       const fd = openSync(temp, 'r+');
       try {
         fsyncSync(fd);

@@ -64,6 +64,7 @@ import { SovereigntyCommands } from './sovereignty.ts';
 import { StatusFace } from './status-face.ts';
 import { ResidentTick } from './resident-tick.ts';
 
+const SHUTDOWN_RUN_TIMEOUT_MS = 10_000;
 
 export interface CompanionShellOptions {
   config?: Partial<ShellConfig>;
@@ -760,6 +761,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       projectId: this.config.projectId,
       sessionId: this.config.sessionId,
       targetTokens: () => this.targetTokens(),
+      calibrationFactor: (model) => this.runtimeInstance?.contextCalibrationFactor(model) ?? 1,
       tailTurns: this.config.tailTurns,
       pinned: () => this.contextLanes.lanePinned(),
       profile: () => this.contextLanes.laneProfile(),
@@ -1335,7 +1337,11 @@ export class CompanionShell implements ShellControl, AttachShell {
     try {
       if (this.machine.state === 'RUNNING') {
         this.runtime?.abort('shutdown');
-        await this.machine.dispatch('run_aborted', { reason: 'shutdown' });
+        const settled = await this.runLoop.settleInFlight(SHUTDOWN_RUN_TIMEOUT_MS);
+        if (!settled) this.trace.append('run_settle_timeout', { state: this.machine.state });
+        if (this.machine.state === 'RUNNING') {
+          await this.machine.dispatch('run_aborted', { reason: 'shutdown' });
+        }
       }
       if (this.machine.state === 'DREAMING') await this.machine.dispatch('run_error', { reason: 'shutdown' });
       // A pause outlives the process (#228): writing DORMANT here would drop a question or budget
