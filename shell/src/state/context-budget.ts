@@ -23,6 +23,8 @@ import { sessionTokens } from 'cogmem';
 
 /** A reported/estimated deviation smaller than this is measurement noise, not a tokenizer change. */
 export const CONTEXT_CALIBRATION_THRESHOLD = 0.2;
+const CONTEXT_CALIBRATION_MIN = 0.5;
+const CONTEXT_CALIBRATION_MAX = 2;
 
 export interface ToolDeclaration {
   name: string;
@@ -100,6 +102,8 @@ export function accountRequest(input: {
 export const TOOL_RESULT_TOKEN_LIMIT = 2_000;
 /** All in-run tool output's cap; the rest of the lane budget is not available to it (#319). */
 export const TOOL_OUTPUT_TOKEN_LIMIT = 4_000;
+/** Lane headroom held back so the newest tool result is never squeezed to a stub (#439). */
+export const TOOL_RESULT_RESERVE = TOOL_RESULT_TOKEN_LIMIT;
 
 export interface ToolOutputAccount {
   /** The stated whole-request ceiling; absent when the caller did not state one. */
@@ -135,12 +139,14 @@ export function fitRequestToBudget(input: {
   systemPrompt: string;
   tools: readonly ToolDeclaration[];
   budgetTokens?: number;
+  scale?: number;
   perResultTokens?: number;
   toolOutputTokens?: number;
 }): FittedRequest {
   const perResult = input.perResultTokens ?? TOOL_RESULT_TOKEN_LIMIT;
   const turnLimit = input.toolOutputTokens ?? TOOL_OUTPUT_TOKEN_LIMIT;
-  const budget = input.budgetTokens;
+  const scale = input.scale && input.scale > 0 ? input.scale : 1;
+  const budget = input.budgetTokens === undefined ? undefined : input.budgetTokens / scale;
   const indexes = input.messages
     .map((message, index) => message.role === 'tool' ? index : -1)
     .filter((index) => index >= 0);
@@ -150,7 +156,7 @@ export function fitRequestToBudget(input: {
     return {
       messages: [...input.messages],
       toolOutput: {
-        ...(budget === undefined ? {} : { requestBudgetTokens: budget }),
+        ...(input.budgetTokens === undefined ? {} : { requestBudgetTokens: input.budgetTokens }),
         rawTokens: 0,
         toolOutputTokens: 0,
         foldedResults: 0,
@@ -182,11 +188,13 @@ export function fitRequestToBudget(input: {
 
   const contents = new Map<number, string>();
   let folded = 0;
-  // Newest first: the result the model just asked for is the one still in play.
+  const newest = indexes.at(-1)!;
   for (const index of [...indexes].reverse()) {
     const message = input.messages[index]!;
     const raw = estimateTokens(message);
-    const allow = Math.max(0, Math.min(perResult, headRoom));
+    const allow = index === newest
+      ? Math.min(perResult, raw)
+      : Math.max(0, Math.min(perResult, headRoom));
     if (raw <= allow) {
       headRoom -= raw;
       continue;
@@ -196,7 +204,7 @@ export function fitRequestToBudget(input: {
     if (stub.tokens >= raw) continue;
     const head = headToTokens(message.content, allow - stub.tokens);
     contents.set(index, head.length === 0 ? stub.content : `${head}${stub.content}`);
-    headRoom -= Math.min(raw, sessionTokens(head));
+    headRoom = Math.max(0, headRoom - Math.min(raw, sessionTokens(head)));
     folded += 1;
   }
 
@@ -208,12 +216,12 @@ export function fitRequestToBudget(input: {
   return {
     messages,
     toolOutput: {
-      ...(budget === undefined ? {} : { requestBudgetTokens: budget }),
+      ...(input.budgetTokens === undefined ? {} : { requestBudgetTokens: input.budgetTokens }),
       rawTokens,
       toolOutputTokens: final.toolOutputTokens,
       foldedResults: folded,
       totalTokens: final.totalTokens,
-      overBudgetTokens: budget === undefined ? 0 : Math.max(0, final.totalTokens - budget),
+      overBudgetTokens: budget === undefined ? 0 : Math.max(0, Math.round(final.totalTokens * scale - input.budgetTokens!)),
     },
   };
 }
@@ -306,7 +314,7 @@ export class ContextCalibrator {
     const corrected = Math.round(estimated * factor);
     const deviation = Math.abs(actual - corrected) / Math.max(1, corrected);
     if (deviation <= CONTEXT_CALIBRATION_THRESHOLD) return undefined;
-    const next = actual / estimated;
+    const next = Math.min(CONTEXT_CALIBRATION_MAX, Math.max(CONTEXT_CALIBRATION_MIN, actual / estimated));
     this.factors.set(model, next);
     return { factor: next, estimated, actual, adjusted: true };
   }
