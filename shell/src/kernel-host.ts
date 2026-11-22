@@ -6,27 +6,19 @@
  * and this shell's only other caller — the installer — speaks the control socket instead. What is
  * left on the loopback HTTP port is status and the star map, and nothing that runs a tool: `GET
  * /health` (the doctor's window into a *running* resident, so it never opens a second kernel) and
- * the read-only observatory when the kernel source is beside the shell.
- *
- * The observatory's modules are exported by neither `cogmem` nor `cogmem/internal`, so the star map
- * is reached by path — and only when it resolves. A shell copied away from the kernel source (the
- * detach test does exactly that) keeps serving health and simply has no observatory page. This is
- * the same class of borrow the secret redactor had (#189, now closed) and is named in the round
- * report rather than probed here: it is a relative path into the kernel's file layout, which no
- * package export covers.
+ * the read-only observatory.
  */
 import { Database } from 'bun:sqlite';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { redactSecretText } from 'cogmem';
+import {
+  createObservatoryRoutes,
+  MemoryObservatory,
+  readObservatoryToken,
+} from 'cogmem/internal';
 import { readMemoryUsage } from './memory.ts';
-
-// Source: the kernel's TypeScript beside the checkout. Published: the compiled copy under dist/.
-const SOURCE_LAYOUT = import.meta.url.endsWith('.ts');
-const OBSERVATORY_MODULE = SOURCE_LAYOUT ? '../../src/observatory/MemoryObservatory.ts' : '../observatory/MemoryObservatory.js';
-const OBSERVATORY_ROUTES = SOURCE_LAYOUT ? '../../src/observatory/routes.ts' : '../observatory/routes.js';
-const OBSERVATORY_TOKEN = SOURCE_LAYOUT ? '../../src/observatory/token.ts' : '../observatory/token.js';
 
 /** The product manifest beside this module (`dist/shell` → package root). */
 function productVersion(): string {
@@ -96,11 +88,6 @@ export interface HttpFaceHandle {
   stop(): void;
 }
 
-/**
- * The read-only star map, over a connection the page can never write through, or undefined when the
- * kernel has no database file to point a page at (`:memory:` has no second connection) or when the
- * kernel source is not where this shell can see it.
- */
 async function openObservatory(
   kernel: unknown,
   dbPath: string | undefined,
@@ -111,40 +98,27 @@ async function openObservatory(
   ui?: { slots: () => Array<{ id: string; label: string; script: string; style?: string }>; name: () => string; avatar: () => string },
 ): Promise<{ db: Database; handle: (request: Request, remoteAddress?: string) => Promise<Response | null> } | undefined> {
   if (!dbPath || dbPath === ':memory:' || dbPath.startsWith('file:')) return undefined;
-  try {
-    const [observatoryModule, routesModule, tokenModule] = await Promise.all([
-      import(OBSERVATORY_MODULE),
-      import(OBSERVATORY_ROUTES),
-      import(OBSERVATORY_TOKEN),
-    ]);
-    const db = new Database(dbPath, { readonly: true });
-    const atlas = (kernel as { memoryAtlasService?: { node(...args: unknown[]): any } }).memoryAtlasService;
-    // The factory's shape drifted under the shell (23-165 probe): it takes the kernel's event
-    // stream as a second positional argument now, not an options object. The stream is what backs
-    // `/observatory/events`, so borrowing it keeps this face identical to the kernel's own
-    // `startObservatoryServer` rather than a variant with one route missing.
-    const events = (kernel as { events?: unknown }).events;
-    const soul = (kernel as { soul?: unknown }).soul as Parameters<typeof routesModule.createObservatoryRoutes>[2];
-    const observatory = new observatoryModule.MemoryObservatory({
-      db,
-      nodeDetail: atlas ? (nodeId: string, projectId: string) => atlas.node(nodeId, { projectId, includeEvidence: true, evidenceLimit: 8, refresh: false, staleOk: true }) : undefined,
-      connectedAgents,
-      tracePath: tracePath ?? (dbPath ? join(dirname(dbPath), 'shell-events.jsonl') : undefined),
-    });
-    return {
-      db,
-      handle: routesModule.createObservatoryRoutes(observatory, events, soul, {
-        token: tokenModule.readObservatoryToken(dirname(dbPath)),
-        credentials,
-        channels,
-        uiSlots: ui?.slots,
-        companionName: ui?.name,
-        companionAvatar: ui?.avatar,
-      }),
-    };
-  } catch {
-    return undefined;
-  }
+  const db = new Database(dbPath, { readonly: true });
+  const atlas = (kernel as { memoryAtlasService?: { node(...args: unknown[]): any } }).memoryAtlasService;
+  const events = (kernel as { events?: unknown }).events as Parameters<typeof createObservatoryRoutes>[1];
+  const soul = (kernel as { soul?: unknown }).soul as Parameters<typeof createObservatoryRoutes>[2];
+  const observatory = new MemoryObservatory({
+    db,
+    nodeDetail: atlas ? (nodeId: string, projectId: string) => atlas.node(nodeId, { projectId, includeEvidence: true, evidenceLimit: 8, refresh: false, staleOk: true }) : undefined,
+    connectedAgents,
+    tracePath: tracePath ?? (dbPath ? join(dirname(dbPath), 'shell-events.jsonl') : undefined),
+  });
+  return {
+    db,
+    handle: createObservatoryRoutes(observatory, events, soul, {
+      token: readObservatoryToken(dirname(dbPath)),
+      credentials,
+      channels,
+      uiSlots: ui?.slots,
+      companionName: ui?.name,
+      companionAvatar: ui?.avatar,
+    }),
+  };
 }
 
 /** A loopback-only HTTP face over the in-process kernel: status and the read-only star map. */
