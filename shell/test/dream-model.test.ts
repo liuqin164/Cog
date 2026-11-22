@@ -258,7 +258,7 @@ describe('Dream route A in the shell', () => {
         reason: 'semantic_processor_budget',
         pendingBackfill: true,
       });
-      expect(shell.currentStatus().memoryModel.state).toBe('degraded');
+      expect(shell.currentStatus().memoryModel?.state).toBe('degraded');
       expect(shell.kernel.factStore.getDatabase()
         .prepare(`SELECT failure_category, state FROM episode_dream_jobs LIMIT 1`).get())
         .toMatchObject({ failure_category: 'semantic_processor_budget', state: 'failed_retryable' });
@@ -270,12 +270,12 @@ describe('Dream route A in the shell', () => {
 
   test('a degraded memory model survives a restart instead of reading reachable', async () => {
     const dir = makeTempDir();
-    const shell = makeShell(dir);
+    const shell = makeShell(dir, undefined);
     await shell.start();
     shell.noteMemoryModel('degraded', 'semantic_processor_budget', Date.now());
     await shell.stop();
 
-    const restarted = makeShell(dir);
+    const restarted = makeShell(dir, undefined);
     await restarted.start();
     try {
       expect(restarted.currentStatus().memoryModel).toMatchObject({
