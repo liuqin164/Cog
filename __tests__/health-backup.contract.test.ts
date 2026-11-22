@@ -34,6 +34,7 @@ import {
   BrainBundleError,
   restoreBrainBundle,
   type BrainConfig,
+  type BrainVerification,
 } from '../src/snapshot/index.js';
 import { createMemoryKernel, type MemoryKernel } from '../src/factory.js';
 import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
@@ -369,6 +370,42 @@ describe('nightly snapshot and the machine bundle', () => {
       expect(archive.verification.ok).toBe(true);
       expect(archive.verification.checks).toEqual({ checksum: true, opens: true, counts: true });
     }
+  });
+
+  test('failed snapshots do not consume the verified retention slots (#403)', async () => {
+    const snapshotsDir = join(dir, 'failed-rotation');
+    let now = NIGHT_ONE;
+    const backup = new BrainBackup({
+      dbPath,
+      snapshotsDir,
+      embeddingDimension: 8,
+      coreVersion: 'test',
+      config,
+      now: () => now,
+    });
+    for (let index = 0; index < SNAPSHOT_RETENTION; index += 1) {
+      now = NIGHT_ONE + index * DAY_MS;
+      expect((await backup.snapshot())!.verification.ok).toBe(true);
+    }
+    const verifiedFiles = readdirSync(snapshotsDir).filter((file) => /^brain-.*\.snap$/u.test(file));
+    expect(verifiedFiles).toHaveLength(SNAPSHOT_RETENTION);
+
+    (backup as unknown as { verifyFiles: () => BrainVerification }).verifyFiles = () => ({
+      ok: false,
+      checkedAt: new Date(now).toISOString(),
+      checks: { checksum: false, opens: false, counts: false },
+      detail: 'forced failure',
+    });
+    for (let index = 0; index < SNAPSHOT_RETENTION + 3; index += 1) {
+      now += DAY_MS;
+      expect((await backup.snapshot())!.verification.ok).toBe(false);
+    }
+
+    const files = readdirSync(snapshotsDir);
+    expect(files.filter((file) => /^brain-.*\.snap$/u.test(file)).sort()).toEqual([...verifiedFiles].sort());
+    expect(files.filter((file) => /^failed-.*\.snap$/u.test(file))).toHaveLength(SNAPSHOT_RETENTION + 3);
+    expect(backup.list().filter((manifest) => manifest.snapshot.file.startsWith('brain-'))).toHaveLength(SNAPSHOT_RETENTION);
+    expect(files.some((file) => file.startsWith('.archive-'))).toBe(false);
   });
 
   test('weekly archives keep four ISO weeks, verify, and prune the oldest pair', async () => {
