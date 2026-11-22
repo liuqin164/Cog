@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { CompanionShell } from '../src/app.ts';
 import type { ClockService } from '../src/plugins/clock.ts';
-import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
+import { ScriptedProvider, makeShell, makeTempDir, startModelServer } from './helpers.ts';
 
 const MINUTE = 60_000;
 const VECTOR = new Float32Array([1, 0]);
@@ -100,11 +100,12 @@ describe('dream window and backlog (#455)', () => {
 
   test('25 of 26 episodes do not mark the night dreamed; the rest drain on the next idle tick', async () => {
     const clock = { now: at('2026-06-05', 12) };
+    const model = startModelServer();
     const shell = makeShell(
       makeTempDir('dream-backlog-continue-'),
       new ScriptedProvider([{ text: '在。', toolCalls: [] }]),
       {
-        model: { baseUrl: 'http://127.0.0.1:1/v1', apiKey: 'test', model: 'test', timeoutMs: 1_000 },
+        model: { baseUrl: model.url, apiKey: 'test', model: 'test', timeoutMs: 1_000 },
         dream: { runKernelNight: true, maxEpisodes: 25, windowStartHour: 0, windowEndHour: 24 },
       },
       { now: () => clock.now, embeddingProvider: embedder() },
@@ -130,6 +131,7 @@ describe('dream window and backlog (#455)', () => {
       expect(products(shell, target)).toBe(1);
     } finally {
       await shell.stop();
+      model.stop();
     }
   }, 120_000);
 });

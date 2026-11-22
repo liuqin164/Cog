@@ -1,72 +1,13 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { RouteStore } from '../src/model/routes.ts';
-import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
+import { ScriptedProvider, makeShell, makeTempDir, startModelServer } from './helpers.ts';
 
 const DREAM_ALL_DAY = { runKernelNight: true, maxEpisodes: 5, windowStartHour: 0, windowEndHour: 24 };
 /** Seed the episode two hours before the Night so the boundary sees the idle gap and seals it. */
 const BASE = new Date('2026-01-01T12:00:00Z').getTime();
 const NIGHT = BASE + 2 * 60 * 60_000;
 
-let server: ReturnType<typeof Bun.serve> | undefined;
-
-afterEach(() => {
-  server?.stop(true);
-  server = undefined;
-});
-
-/** An OpenAI-compatible memory model that answers the candidate prompt with one user preference. */
-function startModelServer(usage = { prompt_tokens: 100, completion_tokens: 50 }): { url: string; calls: () => number } {
-  let calls = 0;
-  server = Bun.serve({
-    port: 0,
-    async fetch(request) {
-      calls += 1;
-      const body = await request.json() as { messages: Array<{ role: string; content: string }> };
-      const userPrompt = JSON.parse(body.messages.find((message) => message.role === 'user')!.content) as {
-        schemaVersion?: string;
-        projectId?: string;
-        episodeId?: string;
-        episodeType?: string;
-        events?: Array<{ eventId: string; role?: string }>;
-        rawLedgerEvents?: Array<{ eventId: string; role?: string }>;
-      };
-      if (userPrompt.schemaVersion === 'memory_frame.v1') {
-        const ids = (userPrompt.events ?? []).map((event) => event.eventId);
-        return Response.json({ choices: [{ message: { content: JSON.stringify({
-          schemaVersion: 'memory_frame.v1',
-          frameId: 'frame-test',
-          projectId: userPrompt.projectId,
-          episodeId: userPrompt.episodeId,
-          title: 'test',
-          summary: 'test',
-          episodeKind: 'discussion',
-          nodes: [
-            { frameNodeId: 'episode', dimension: 'episode', label: 'episode', confidence: 0.9, evidenceEventIds: ids },
-            { frameNodeId: 'project', dimension: 'project', label: userPrompt.projectId, confidence: 0.9, evidenceEventIds: ids },
-          ],
-          relations: [],
-          temporalReferences: [],
-          stateTransitions: [],
-          confidence: 0.9,
-          evidenceEventIds: ids,
-          processor: { promptVersion: 'test', generatedAt: Date.now() },
-        }) } }], usage });
-      }
-      const events = userPrompt.rawLedgerEvents ?? userPrompt.events ?? [];
-      const userIds = events.filter((event) => event.role === 'user').map((event) => event.eventId);
-      const content = JSON.stringify({
-        userPreferenceCandidates: [{
-          statement: '用户要求不要碰事实同伴库。',
-          confidence: 0.9,
-          evidenceEventIds: userIds,
-        }],
-      });
-      return Response.json({ choices: [{ message: { content } }], usage });
-    },
-  });
-  return { url: `http://127.0.0.1:${server.port}`, calls: () => calls };
-}
 
 describe('Dream route A in the shell', () => {
   test('the memory role follows the active custom route and calls its provider', async () => {
@@ -107,6 +48,7 @@ describe('Dream route A in the shell', () => {
       expect(shell.trace.read().some((record) => record.kind === 'dream_model_usage')).toBe(true);
     } finally {
       await shell.stop();
+      model.stop();
     }
   });
 
@@ -220,6 +162,7 @@ describe('Dream route A in the shell', () => {
       expect(usage.every((record) => record.estimated === false)).toBe(true);
     } finally {
       await shell.stop();
+      model.stop();
     }
   });
 
@@ -265,6 +208,7 @@ describe('Dream route A in the shell', () => {
       expect(shell.machine.runtime.costDayTokens ?? 0).toBeGreaterThanOrEqual(150);
     } finally {
       await shell.stop();
+      model.stop();
     }
   });
 

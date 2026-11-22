@@ -212,3 +212,56 @@ export function makeShell(dir: string, provider: ModelProvider | undefined, conf
     stageUpgrade: options.stageUpgrade,
   });
 }
+
+/** An OpenAI-compatible memory model that answers frame prompts with a test frame and candidate prompts with one user preference. */
+export function startModelServer(usage = { prompt_tokens: 100, completion_tokens: 50 }): { url: string; calls: () => number; stop: () => void } {
+  let calls = 0;
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      calls += 1;
+      const body = await request.json() as { messages: Array<{ role: string; content: string }> };
+      const userPrompt = JSON.parse(body.messages.find((message) => message.role === 'user')!.content) as {
+        schemaVersion?: string;
+        projectId?: string;
+        episodeId?: string;
+        episodeType?: string;
+        events?: Array<{ eventId: string; role?: string }>;
+        rawLedgerEvents?: Array<{ eventId: string; role?: string }>;
+      };
+      if (userPrompt.schemaVersion === 'memory_frame.v1') {
+        const ids = (userPrompt.events ?? []).map((event) => event.eventId);
+        return Response.json({ choices: [{ message: { content: JSON.stringify({
+          schemaVersion: 'memory_frame.v1',
+          frameId: 'frame-test',
+          projectId: userPrompt.projectId,
+          episodeId: userPrompt.episodeId,
+          title: 'test',
+          summary: 'test',
+          episodeKind: 'discussion',
+          nodes: [
+            { frameNodeId: 'episode', dimension: 'episode', label: 'episode', confidence: 0.9, evidenceEventIds: ids },
+            { frameNodeId: 'project', dimension: 'project', label: userPrompt.projectId, confidence: 0.9, evidenceEventIds: ids },
+          ],
+          relations: [],
+          temporalReferences: [],
+          stateTransitions: [],
+          confidence: 0.9,
+          evidenceEventIds: ids,
+          processor: { promptVersion: 'test', generatedAt: Date.now() },
+        }) } }], usage });
+      }
+      const events = userPrompt.rawLedgerEvents ?? userPrompt.events ?? [];
+      const userIds = events.filter((event) => event.role === 'user').map((event) => event.eventId);
+      const content = JSON.stringify({
+        userPreferenceCandidates: [{
+          statement: '用户要求不要碰事实同伴库。',
+          confidence: 0.9,
+          evidenceEventIds: userIds,
+        }],
+      });
+      return Response.json({ choices: [{ message: { content } }], usage });
+    },
+  });
+  return { url: `http://127.0.0.1:${server.port}`, calls: () => calls, stop: () => server.stop(true) };
+}
