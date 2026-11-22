@@ -19,7 +19,7 @@
 import type Database from 'bun:sqlite';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 import type { CommitmentBook } from '../commitment/CommitmentBook.js';
 import { eraseDerivedOf, gcInvalidatedAtlasRows } from '../governance/DerivedErasureRegistry.js';
@@ -139,10 +139,25 @@ export interface SovereigntyDeleteResult extends SovereigntyDeleteInput {
 export interface SovereigntyArtifactCoverage {
   snapshotsRemoved: number;
   archivesRemoved: number;
+  upgradesRemoved: number;
+  failedCopiesRemoved: number;
+  databasesRemoved: number;
   exportsRemoved: number;
   snapshotsScanned: number;
   exportsScanned: number;
   notCovered: string[];
+}
+
+interface PendingErase {
+  start: number;
+  end: number;
+  cutoff: number;
+  reason?: string;
+  auditId: string;
+  deleted: Record<string, number>;
+  artifacts: SovereigntyArtifactCoverage;
+  walSettled: boolean;
+  artifactsDone?: boolean;
 }
 
 export interface SovereigntyExportInput {
@@ -209,6 +224,53 @@ function iso(ms: number): string {
   return Number.isFinite(value.getTime()) ? value.toISOString() : String(ms);
 }
 
+function emptyCoverage(): SovereigntyArtifactCoverage {
+  return {
+    snapshotsRemoved: 0,
+    archivesRemoved: 0,
+    upgradesRemoved: 0,
+    failedCopiesRemoved: 0,
+    databasesRemoved: 0,
+    exportsRemoved: 0,
+    snapshotsScanned: 0,
+    exportsScanned: 0,
+    notCovered: ['数据目录之外的导出文件', '已复制到其他机器的备份'],
+  };
+}
+
+function mergeCoverage(into: SovereigntyArtifactCoverage, added: SovereigntyArtifactCoverage): SovereigntyArtifactCoverage {
+  return {
+    snapshotsRemoved: into.snapshotsRemoved + added.snapshotsRemoved,
+    archivesRemoved: into.archivesRemoved + added.archivesRemoved,
+    upgradesRemoved: into.upgradesRemoved + added.upgradesRemoved,
+    failedCopiesRemoved: into.failedCopiesRemoved + added.failedCopiesRemoved,
+    databasesRemoved: into.databasesRemoved + added.databasesRemoved,
+    exportsRemoved: into.exportsRemoved + added.exportsRemoved,
+    snapshotsScanned: into.snapshotsScanned + added.snapshotsScanned,
+    exportsScanned: into.exportsScanned + added.exportsScanned,
+    notCovered: [...new Set([...into.notCovered, ...added.notCovered])],
+  };
+}
+
+export function checkpointTruncate(db: Database): boolean {
+  type CheckpointRow = { busy?: number; log?: number; checkpointed?: number };
+  const previous = (db.prepare('PRAGMA busy_timeout').get() as { timeout?: number } | null)?.timeout ?? 0;
+  db.exec('PRAGMA busy_timeout = 50');
+  try {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      let row: CheckpointRow | null = null;
+      try {
+        row = db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get() as CheckpointRow | null;
+      } catch {}
+      if (Number(row?.busy ?? 0) === 0 && Number(row?.log ?? 0) === Number(row?.checkpointed ?? 0)) return true;
+      if (attempt < 3) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25 * (attempt + 1));
+    }
+    return false;
+  } finally {
+    db.exec(`PRAGMA busy_timeout = ${previous}`);
+  }
+}
+
 function sensitivityLabel(event: MemoryEvent): string | undefined {
   const labels: string[] = [];
   if (eventHoldsSecretMark(event)) labels.push('secret');
@@ -240,6 +302,9 @@ export class MemorySovereigntyService {
   constructor(private readonly ports: MemorySovereigntyPorts) {
     this.now = ports.now ?? (() => Date.now());
     this.ensureAuditTable();
+    try {
+      for (const pending of this.listPendingErases()) this.runPendingErase(pending.projectId);
+    } catch {}
   }
 
   /** Whether the project is paused. The write path asks this before appending a raw row. */
@@ -289,6 +354,7 @@ export class MemorySovereigntyService {
     if (!Number.isFinite(input.start) || !Number.isFinite(input.end) || input.start >= input.end) {
       throw error('invalid_sovereignty_range');
     }
+    const recovered = this.runPendingErase(scope);
     // Range ids, not range events: a decade-size window is 200k rows, and holding every parsed
     // payload to delete them is what took the resident toward MemoryMax. The scan stays paged.
     const rangeIds = new Set<string>();
@@ -316,18 +382,14 @@ export class MemorySovereigntyService {
     deleted.events = rangeIds.size;
     deleted.derivedEntries = derived.length;
     deleted.entryVersions = streamRows.length;
-    const artifacts: SovereigntyArtifactCoverage = {
-      snapshotsRemoved: 0,
-      archivesRemoved: 0,
-      exportsRemoved: 0,
-      snapshotsScanned: 0,
-      exportsScanned: 0,
-      notCovered: ['数据目录之外的导出文件', '已复制到其他机器的备份'],
-    };
+    const artifacts = emptyCoverage();
     if (deleteIds.size === 0) {
-      const auditId = this.writeAudit('delete_range', scope, { start: input.start, end: input.end, counts: deleted, artifacts }, input.reason);
-      return { ...input, projectId: scope, auditId, deleted, artifacts };
+      if (recovered) return { ...input, projectId: scope, ...recovered };
+      const scanned = this.removeAffectedArtifacts(Number.POSITIVE_INFINITY, false);
+      const auditId = this.writeAudit('delete_range', scope, { start: input.start, end: input.end, counts: deleted, artifacts: scanned }, input.reason);
+      return { ...input, projectId: scope, auditId, deleted, artifacts: scanned };
     }
+    const auditId = `audit-${randomUUID()}`;
 
     // The live database is rewritten, not only logically emptied: without secure_delete the
     // deleted text stays in freelist pages, and without VACUUM it stays in pages that the table
@@ -421,6 +483,16 @@ export class MemorySovereigntyService {
         scope,
       });
       this.runDelete(`DELETE FROM memory_events WHERE event_id IN (SELECT id FROM _sovereignty_event_ids)`, []);
+      this.writePendingErase({
+        start: input.start,
+        end: input.end,
+        cutoff: earliestRecordedAt,
+        reason: input.reason,
+        auditId,
+        deleted,
+        artifacts,
+        walSettled: false,
+      }, scope);
       })();
     } finally {
       this.ports.db.exec(`
@@ -428,25 +500,14 @@ export class MemorySovereigntyService {
         DROP TABLE IF EXISTS _sovereignty_episode_ids;
       `);
     }
-    this.eraseFreedPages();
-
-    // A snapshot or export made after the earliest deleted row was recorded may hold that row's
-    // text. Both are whole copies, so they are removed rather than rewritten.
-    Object.assign(artifacts, this.removeAffectedArtifacts(earliestRecordedAt));
-
-    // The ledger and derived rows are gone before the audit row is written, so a failed recompile
-    // still leaves the owner a record of what was removed.
-    const auditId = this.writeAudit('delete_range', scope, { start: input.start, end: input.end, counts: deleted, artifacts }, input.reason);
-    // The books are views over the ledger, so a recompile is the consistency proof rather than a
-    // second deletion list: an entry whose evidence is gone does not come back.
-    if (scope) {
-      this.ports.profile.compile({ projectId: scope, now: this.now() });
-      this.ports.procedures.compile({ projectId: scope, now: this.now() });
-      this.ports.commitments.compile({ projectId: scope, now: this.now() });
-    }
-    this.ports.rebuildAtlas?.(scope);
-    gcInvalidatedAtlasRows(this.ports.db, scope);
-    return { ...input, projectId: scope, auditId, deleted, artifacts };
+    const completed = this.runPendingErase(scope);
+    return {
+      ...input,
+      projectId: scope,
+      auditId: completed?.auditId ?? auditId,
+      deleted: completed?.deleted ?? deleted,
+      artifacts: completed?.artifacts ?? artifacts,
+    };
   }
 
   /** Write the human-readable archive. The current ledger is the source, so deleted ranges are absent. */
@@ -619,7 +680,7 @@ export class MemorySovereigntyService {
     `).all(scope) as Array<{ node_type: string; label: string }>;
   }
 
-  private eraseFreedPages(): void {
+  private eraseFreedPages(): boolean {
     const db = this.ports.db;
     const ftsTables = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND sql LIKE '%USING fts5%'`).all() as Array<{ name: string }>;
     for (const { name } of ftsTables) db.exec(`INSERT INTO "${name}"("${name}") VALUES('optimize')`);
@@ -630,7 +691,7 @@ export class MemorySovereigntyService {
     } finally {
       db.exec(`PRAGMA temp_store = ${previousTempStore}`);
     }
-    db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    return checkpointTruncate(this.ports.db);
   }
 
   /**
@@ -638,40 +699,35 @@ export class MemorySovereigntyService {
    * removed, not rewritten: a snapshot is a verification chain of checksum + manifest, and
    * re-creating an old point in time would silently change what that day held.
    */
-  private removeAffectedArtifacts(cutoff: number): SovereigntyArtifactCoverage {
-    const coverage: SovereigntyArtifactCoverage = {
-      snapshotsRemoved: 0,
-      archivesRemoved: 0,
-      exportsRemoved: 0,
-      snapshotsScanned: 0,
-      exportsScanned: 0,
-      notCovered: ['数据目录之外的导出文件', '已复制到其他机器的备份'],
-    };
+  private removeAffectedArtifacts(cutoff: number, remove = true): SovereigntyArtifactCoverage {
+    const coverage = emptyCoverage();
     const snapshotsDir = this.ports.snapshotsDir;
     if (snapshotsDir && existsSync(snapshotsDir)) {
       const removedBrainManifests = new Set<string>();
+      const liveDatabase = (this.ports.db as Database & { filename?: string }).filename;
       for (const file of readdirSync(snapshotsDir)) {
-        if (!/^(?:brain|archive)-.*\.snap$/u.test(file)) continue;
-        coverage.snapshotsScanned += 1;
+        if (!/\.(?:snap|db)$/u.test(file)) continue;
         const snapshotPath = join(snapshotsDir, file);
-        const manifestPath = snapshotPath.replace(/\.snap$/u, '.json');
+        if (liveDatabase && resolve(snapshotPath) === resolve(liveDatabase)) continue;
+        coverage.snapshotsScanned += 1;
+        const manifestPath = snapshotPath.replace(/\.(?:snap|db)$/u, '.json');
         let createdAt = statSync(snapshotPath).mtimeMs;
         try {
           const parsed = JSON.parse(readFileSync(manifestPath, 'utf8')) as { createdAt?: unknown };
           if (typeof parsed.createdAt === 'string' && Number.isFinite(Date.parse(parsed.createdAt))) {
             createdAt = Date.parse(parsed.createdAt);
           }
-        } catch {
-          // No readable manifest: the file's own mtime is the only timestamp left.
-        }
+        } catch {}
         if (createdAt < cutoff) continue;
+        if (!remove) continue;
         rmSync(snapshotPath, { force: true });
         rmSync(manifestPath, { force: true });
-        if (file.startsWith('archive-')) coverage.archivesRemoved += 1;
-        else {
-          coverage.snapshotsRemoved += 1;
-          removedBrainManifests.add(file);
-        }
+        if (/(?:^|\.)archive-.*\.snap$/u.test(file)) coverage.archivesRemoved += 1;
+        else coverage.snapshotsRemoved += 1;
+        if (/(?:^|\.)pre-upgrade-.*\.snap$/u.test(file)) coverage.upgradesRemoved += 1;
+        if (/(?:^|\.)failed-.*\.snap$/u.test(file)) coverage.failedCopiesRemoved += 1;
+        if (/\.db$/u.test(file)) coverage.databasesRemoved += 1;
+        if (/(?:^|\.)brain-.*\.snap$/u.test(file)) removedBrainManifests.add(file);
       }
       this.forgetSnapshotMarker(removedBrainManifests);
     }
@@ -682,11 +738,92 @@ export class MemorySovereigntyService {
         coverage.exportsScanned += 1;
         const exportPath = join(exportsDir, file);
         if (statSync(exportPath).mtimeMs < cutoff) continue;
+        if (!remove) continue;
         rmSync(exportPath, { force: true });
         coverage.exportsRemoved += 1;
       }
     }
     return coverage;
+  }
+
+  private pendingKey(scope: string): string {
+    return `sovereignty.pending_erase:${scope}`;
+  }
+
+  private listPendingErases(): Array<PendingErase & { projectId: string }> {
+    if (!this.tableExists('_meta')) return [];
+    const rows = this.ports.db.prepare(`SELECT key, value FROM _meta WHERE key LIKE 'sovereignty.pending_erase:%'`).all() as Array<{ key: string; value: string }>;
+    const pending: Array<PendingErase & { projectId: string }> = [];
+    for (const row of rows) {
+      const parsed = this.parsePending(row.value);
+      if (parsed) pending.push({ ...parsed, projectId: row.key.slice('sovereignty.pending_erase:'.length) });
+    }
+    return pending;
+  }
+
+  private readPendingErase(scope: string): PendingErase | undefined {
+    if (!this.tableExists('_meta')) return undefined;
+    const row = this.ports.db.prepare(`SELECT value FROM _meta WHERE key=?`).get(this.pendingKey(scope)) as { value?: string } | undefined;
+    return row?.value ? this.parsePending(row.value) : undefined;
+  }
+
+  private parsePending(value: string): PendingErase | undefined {
+    try {
+      const parsed = JSON.parse(value) as Partial<PendingErase>;
+      if (typeof parsed.start !== 'number' || typeof parsed.end !== 'number' || typeof parsed.cutoff !== 'number') return undefined;
+      if (typeof parsed.auditId !== 'string' || typeof parsed.deleted !== 'object' || parsed.deleted === null) return undefined;
+      return {
+        start: parsed.start,
+        end: parsed.end,
+        cutoff: parsed.cutoff,
+        reason: typeof parsed.reason === 'string' ? parsed.reason : undefined,
+        auditId: parsed.auditId,
+        deleted: parsed.deleted as Record<string, number>,
+        artifacts: mergeCoverage(emptyCoverage(), { ...emptyCoverage(), ...(parsed.artifacts ?? {}) }),
+        walSettled: parsed.walSettled === true,
+        artifactsDone: parsed.artifactsDone === true,
+      };
+    } catch {
+      return undefined;
+    }
+  }
+
+  private writePendingErase(pending: PendingErase & { artifactsDone?: boolean }, scope: string): void {
+    this.ports.db.prepare(`INSERT OR REPLACE INTO _meta (key, value) VALUES (?, ?)`)
+      .run(this.pendingKey(scope), JSON.stringify(pending));
+  }
+
+  private clearPendingErase(scope: string): void {
+    this.ports.db.prepare(`DELETE FROM _meta WHERE key=?`).run(this.pendingKey(scope));
+  }
+
+  private runPendingErase(scope: string): { auditId: string; deleted: Record<string, number>; artifacts: SovereigntyArtifactCoverage } | undefined {
+    const pending = this.readPendingErase(scope);
+    if (!pending) return undefined;
+    if (!pending.walSettled) pending.walSettled = this.eraseFreedPages();
+    if (!pending.artifactsDone) {
+      pending.artifacts = mergeCoverage(pending.artifacts, this.removeAffectedArtifacts(pending.cutoff));
+      pending.artifactsDone = true;
+    }
+    if (!pending.walSettled) {
+      pending.artifacts = {
+        ...pending.artifacts,
+        notCovered: [...new Set([...pending.artifacts.notCovered, 'WAL 尚未回写：secure_delete/VACUUM 的页仍在 -wal，稍后重试'])],
+      };
+    }
+    this.writePendingErase(pending, scope);
+    const details = { start: pending.start, end: pending.end, counts: pending.deleted, artifacts: pending.artifacts };
+    if (this.auditExists(pending.auditId)) this.updateAudit(pending.auditId, details);
+    else this.writeAudit('delete_range', scope, details, pending.reason, pending.auditId);
+    if (scope) {
+      this.ports.profile.compile({ projectId: scope, now: this.now() });
+      this.ports.procedures.compile({ projectId: scope, now: this.now() });
+      this.ports.commitments.compile({ projectId: scope, now: this.now() });
+    }
+    this.ports.rebuildAtlas?.(scope);
+    gcInvalidatedAtlasRows(this.ports.db, scope);
+    if (pending.walSettled) this.clearPendingErase(scope);
+    return { auditId: pending.auditId, deleted: pending.deleted, artifacts: pending.artifacts };
   }
 
   /** `brain_snapshot_last` must not point at a snapshot this deletion removed. */
@@ -725,13 +862,22 @@ export class MemorySovereigntyService {
     return `sha256:${createHash('sha256').update(scope).digest('hex')}`;
   }
 
-  private writeAudit(action: SovereigntyAction, scope: string, details: Record<string, unknown>, reason?: string): string {
-    const auditId = `audit-${randomUUID()}`;
+  private writeAudit(action: SovereigntyAction, scope: string, details: Record<string, unknown>, reason?: string, id?: string): string {
+    const auditId = id ?? `audit-${randomUUID()}`;
     this.ports.db.prepare(`
       INSERT INTO governance_audit_log (audit_id, action, project_id, reason, details_json, created_at)
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(auditId, action, this.auditScope(scope), reason ?? null, JSON.stringify(details), this.now());
     return auditId;
+  }
+
+  private auditExists(auditId: string): boolean {
+    return Boolean(this.ports.db.prepare(`SELECT 1 FROM governance_audit_log WHERE audit_id=?`).get(auditId));
+  }
+
+  private updateAudit(auditId: string, details: Record<string, unknown>): void {
+    this.ports.db.prepare(`UPDATE governance_audit_log SET details_json=? WHERE audit_id=?`)
+      .run(JSON.stringify(details), auditId);
   }
 
   private ensureAuditTable(): void {

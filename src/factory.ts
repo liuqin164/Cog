@@ -116,6 +116,7 @@ import { SummaryStore } from './store/SummaryStore.js';
 import { matchesProjectScope, projectScope } from './topology/ProjectScope.js';
 import { deleteRegisteredProjectContent, deleteResidualProjectOwnedContent } from './governance/PrivacyDeletionRegistry.js';
 import { eraseDerivedOf } from './governance/DerivedErasureRegistry.js';
+import { checkpointTruncate } from './sovereignty/MemorySovereigntyService.js';
 import type {
   IngestInput,
   MemoryEvent,
@@ -2339,7 +2340,7 @@ export class MemoryKernel extends KernelServices {
       db.exec(`DROP TABLE IF EXISTS _forget_event_ids`);
     }
 
-    db.exec(`PRAGMA wal_checkpoint(TRUNCATE)`);
+    checkpointTruncate(db);
     // #64: VACUUM needs temporary space, and the default is a file in a directory
     // the process may not be able to write, which surfaces as `unable to open
     // database file` and blames the database. In memory for the duration of the
@@ -2360,7 +2361,7 @@ export class MemoryKernel extends KernelServices {
     // #303: VACUUM writes its new page images through the WAL, so the checkpoint above (taken
     // before the rebuild) is not enough: the main database file still holds the pre-VACUUM pages
     // until a later checkpoint, and a copy of that file still contains the deleted text.
-    db.exec(`PRAGMA wal_checkpoint(TRUNCATE)`);
+    checkpointTruncate(db);
 
     return { projectId: scope, auditId, deleted };
   }
