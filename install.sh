@@ -62,7 +62,7 @@ install_package() {
       install_from_location "$spec"
       ;;
     *)
-      bun add "cogmem@$spec"
+      bun add --omit=optional "cogmem@$spec"
       ;;
   esac
 }
@@ -76,7 +76,7 @@ install_package() {
 # because the bins cannot be linked while their target does not exist yet.
 install_from_location() {
   local spec="$1"
-  bun add --ignore-scripts "$spec"
+  bun add --omit=optional --ignore-scripts "$spec"
   if [ -x "$INSTALL_HOME/node_modules/.bin/cogmem" ]; then
     return
   fi
@@ -88,14 +88,14 @@ install_from_location() {
     [ -e "${dir}dist" ] && continue
     grep -q '"prepare"[[:space:]]*:' "$dir/package.json" || continue
     log "Building the source package at ${dir%/}."
-    if ! ( cd "$dir" && bun install && bun run prepare ); then
+    if ! ( cd "$dir" && bun install --omit=optional && bun run prepare ); then
       log "Building ${dir%/} failed, so no CLI was created."
       exit 1
     fi
     built=1
   done
   [ "$built" = "1" ] || return 0
-  ( cd "$INSTALL_HOME" && bun install )
+  ( cd "$INSTALL_HOME" && bun install --omit=optional )
 }
 
 link_cli() {

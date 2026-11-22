@@ -6,8 +6,9 @@
  * Hugging Face Xenova repository, resolved by `@huggingface/transformers` itself.
  */
 import { mkdirSync } from 'node:fs';
-import { env, pipeline } from '@huggingface/transformers';
 import { EMBEDDING_MODEL, embeddingModelPresent, embeddingModelsRoot } from './model.ts';
+
+const transformers = import('@huggingface/transformers').catch(() => undefined);
 
 export interface EmbeddingProgress {
   status?: string;
@@ -30,12 +31,15 @@ export async function ensureEmbeddingModel(
   }
   const root = embeddingModelsRoot(dataDir);
   mkdirSync(root, { recursive: true, mode: 0o700 });
-  env.localModelPath = root;
-  env.cacheDir = root;
-  env.allowLocalModels = true;
-  env.allowRemoteModels = true;
-  env.useBrowserCache = false;
   try {
+    const runtime = await transformers;
+    if (!runtime) return { ok: false, downloaded: false, detail: '@huggingface/transformers is not installed' };
+    const { env, pipeline } = runtime;
+    env.localModelPath = root;
+    env.cacheDir = root;
+    env.allowLocalModels = true;
+    env.allowRemoteModels = true;
+    env.useBrowserCache = false;
     const loaded = await pipeline('feature-extraction', EMBEDDING_MODEL, {
       dtype: 'q8',
       progress_callback: (progress: EmbeddingProgress) => onProgress?.(progress),
