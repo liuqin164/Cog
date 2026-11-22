@@ -29,7 +29,7 @@ export interface SessionContextPluginConfig {
   profile: () => string[];
   workingSet?: () => string[];
   /** Wake intents and the open assignment; the kernel merges these into `working_set`. */
-  openLoops?: () => SessionContextItem[];
+  openLoops?: (query?: string, toolNames?: readonly string[]) => SessionContextItem[];
   /** The per-turn part of the system prompt: time context and a pending question. */
   variablePrompt: () => string;
   /** Finished tasks' digest stubs (#263), built from ledger rows and kept across restarts. */
@@ -50,9 +50,9 @@ export function sessionContextPlugin(config: SessionContextPluginConfig): Native
       const backend = ctx.getService<KernelAgentMemoryBackend>('memory');
       let pendingBlock = '';
       let turn:
-        | { runId?: string; seq: number; query?: string; recent: string[]; recall: SessionContextItem[]; assembly: SessionContextAssembly; pendingBlock: string; stablePrompt: string }
+        | { runId?: string; seq: number; query?: string; recent: string[]; recall: SessionContextItem[]; toolNames: string[]; assembly: SessionContextAssembly; pendingBlock: string; stablePrompt: string }
         | undefined;
-      const assemble = (recall: SessionContextItem[], recent: string[], runId?: string, cachedDigest?: SessionContextAssembly['digest']): SessionContextAssembly =>
+      const assemble = (recall: SessionContextItem[], recent: string[], runId?: string, cachedDigest?: SessionContextAssembly['digest'], query?: string, toolNames?: readonly string[]): SessionContextAssembly =>
         backend.assembleSessionContext({
           projectId: config.projectId,
           agentId: config.agentId,
@@ -63,7 +63,7 @@ export function sessionContextPlugin(config: SessionContextPluginConfig): Native
           pinned: config.pinned(),
           profile: config.profile(),
           workingSet: config.workingSet?.() ?? [],
-          openLoops: config.openLoops?.() ?? [],
+          openLoops: config.openLoops?.(query, toolNames) ?? [],
           recall,
           digestStubs: config.digestStubs?.() ?? [],
           recentText: recent,
@@ -86,14 +86,16 @@ export function sessionContextPlugin(config: SessionContextPluginConfig): Native
         const messages = Array.isArray(request.messages) ? request.messages : [];
         pendingBlock = '';
         const query = newestUserText(messages);
+        const toolNames = requestToolNames(messages);
         const recent = recentText(messages);
         const seq = config.ledgerSeq();
         try {
           if (busCtx?.runId && turn && turn.runId === busCtx.runId && turn.query === query && turn.seq === seq) {
-            if (turn.recent.join('\n') !== recent.join('\n')) {
-              const assembly = assemble(turn.recall, recent, busCtx?.runId, turn.assembly.digest);
+            if (turn.recent.join('\n') !== recent.join('\n') || turn.toolNames.join(',') !== toolNames.join(',')) {
+              const assembly = assemble(turn.recall, recent, busCtx?.runId, turn.assembly.digest, query, toolNames);
               turn.assembly = assembly;
               turn.recent = recent;
+              turn.toolNames = toolNames;
               turn.stablePrompt = accept(assembly);
               turn.pendingBlock = pendingBlock;
             }
@@ -113,10 +115,10 @@ export function sessionContextPlugin(config: SessionContextPluginConfig): Native
                 limit: config.recallLimit ?? 3,
               }).items.map(toContextItem)
             : [];
-          const assembly = assemble(recall, recent, busCtx?.runId);
+          const assembly = assemble(recall, recent, busCtx?.runId, undefined, query, toolNames);
           const stablePrompt = accept(assembly);
           turn = busCtx?.runId
-            ? { runId: busCtx.runId, seq, query, recent, recall, assembly, pendingBlock, stablePrompt }
+            ? { runId: busCtx.runId, seq, query, recent, recall, toolNames, assembly, pendingBlock, stablePrompt }
             : undefined;
           return {
             ...request,
@@ -152,6 +154,13 @@ function newestUserText(messages: readonly AgentMessage[]): string | undefined {
   const index = newestUserIndex(messages);
   const text = index >= 0 ? messages[index].content.trim() : '';
   return text === '' ? undefined : text;
+}
+
+function requestToolNames(messages: readonly AgentMessage[]): string[] {
+  return messages.flatMap((message) => [
+    ...(message.toolCalls ?? []).map((call) => call.toolName),
+    ...(message.toolName ? [message.toolName] : []),
+  ]);
 }
 
 /**

@@ -8,7 +8,7 @@ import { defaultRunner } from './install/service.ts';
 import { restartService, servicePath, type Platform, type ServiceSpec } from './install/service.ts';
 import { checkPluginSpec } from './plugins/load.ts';
 import { isOfficialPluginSpec, pluginsConfigPath, readPluginRegistry, writePluginRegistry } from './plugins/registry.ts';
-import { latestAuditForSpec, pluginWorkspaceDir } from './plugins/self-install.ts';
+import { compilePluginDossier, latestAuditForSpec, pluginWorkspaceDir } from './plugins/self-install.ts';
 import { readInstallState, shellDirOfTree, treeOfThisProcess } from './upgrade/paths.ts';
 
 /**
@@ -236,6 +236,14 @@ export class PluginsAdmin {
           spec,
           tools: result.tools,
           commands: result.commands,
+        });
+        compilePluginDossier({
+          trace: this.shell.trace,
+          id,
+          name,
+          tools: result.tools,
+          commands: result.commands,
+          now: this.shell.now(),
         });
       }
     }

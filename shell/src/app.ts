@@ -756,7 +756,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       tailTurns: this.config.tailTurns,
       pinned: () => this.contextLanes.lanePinned(),
       profile: () => this.contextLanes.laneProfile(),
-      openLoops: () => this.contextLanes.laneOpenLoops(),
+      openLoops: (query, toolNames) => this.contextLanes.laneOpenLoops(query, toolNames),
       digestStubs: () => this.contextLanes.laneDigestStubs(),
       ledgerSeq: () => this.backend.latestEventSeq(),
       variablePrompt: () => this.systemPromptSections().tail,
