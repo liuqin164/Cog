@@ -26,6 +26,7 @@ export interface SessionContextPluginConfig {
   targetTokens: () => number;
   /** The provider's measured estimate/actual ratio, so the lanes and the fit share one ruler (#439). */
   calibrationFactor?: (model?: string) => number;
+  clock: () => { now: number; timeZone?: string };
   /** How many recent turns stay verbatim; the kernel splits the rest into the digest. */
   tailTurns: number;
   pinned: () => string[];
@@ -121,7 +122,8 @@ export function sessionContextPlugin(config: SessionContextPluginConfig): Native
                 query,
                 excludeSessionId: config.sessionId,
                 excludeSessionTailTurns: config.tailTurns,
-                limit: config.recallLimit ?? 3,
+                limit: config.recallLimit ?? 3, ...config.clock(),
+                includeProfileLane: false,
               }).items.map(toContextItem)
             : [];
           const assembly = assemble(recall, recent, busCtx?.runId, undefined, query, toolNames, toolTokens, model);

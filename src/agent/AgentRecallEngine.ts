@@ -24,6 +24,8 @@ import {
 } from './AgentRecallQueryCompiler.js';
 import { cliArg } from '../utils/CliArgument.js';
 import { projectPhaseItems } from '../recall/PhaseProjection.js';
+import { localDateRange, nextCivilDate } from '../utils/LocalDateContext.js';
+import { relativeDateRange } from '../temporal/RelativeDateRange.js';
 import { eventHoldsSecretMark } from '../security/SecretMarks.js';
 import { eventHoldsLifeSensitivityMark } from '../security/LifeSensitivity.js';
 import { RecallDecisionTrace, type RecallTraceSuppression } from '../observability/RecallDecisionTrace.js';
@@ -152,6 +154,7 @@ export class AgentRecallEngine {
 
   private withProfileItems(query: AgentRecallQuery, result: RecallCoreResult): RecallCoreResult {
     if (!query.projectId) return result;
+    if (query.includeProfileLane === false) return result;
     if (!laneAllowed(query.retrievalPolicy, 'graph')) return result;
     const intent = result.queryPlan?.intent;
     if (intent === 'forensic_quote' || intent === 'previous_session_summary') return result;
@@ -161,11 +164,20 @@ export class AgentRecallEngine {
       now: query.now,
     });
     if (entries.length === 0) return result;
+    const seen = new Set(result.items.flatMap((item) => [item.canonicalId, item.sourceAnchor?.eventId, item.id]).filter(Boolean));
     const items = entries
       .map((entry) => this.toAgentProfileItem(entry, query))
-      .filter((item): item is AgentRecallItem => Boolean(item));
+      .filter((item): item is AgentRecallItem => Boolean(item))
+      .filter((item) => {
+        const keys = [item.canonicalId, item.sourceAnchor?.eventId, item.id].filter(Boolean);
+        if (keys.some((key) => seen.has(key))) return false;
+        keys.forEach((key) => seen.add(key));
+        return true;
+      })
+      .slice(0, query.limit ?? 5);
     if (items.length === 0) return result;
-    return { ...result, items: [...result.items, ...items] };
+    const limit = query.limit ?? 5;
+    return { ...result, items: [...result.items.slice(0, Math.max(0, limit - items.length)), ...items] };
   }
 
   private withoutSupersededByProfile(
@@ -740,6 +752,13 @@ export class AgentRecallEngine {
   }
 
   private recallCore(query: AgentRecallQuery, laneLimit?: number): RecallCoreResult {
+    const timeZone = query.timeZone ?? this.kernel.eventStore.getProjectTimeZone();
+    const relative = relativeDateRange(query.query, { now: query.now, localDateNow: query.localDateNow, timeZone });
+    query = {
+      ...query,
+      ...(timeZone === undefined ? {} : { timeZone }),
+      ...(relative ? { startTime: query.startTime ?? relative.from, endTime: query.endTime ?? relative.to } : {}),
+    };
     const queryPlan = compileAgentRecallQuery({
       query: query.query,
       intent: query.intent,
@@ -1105,27 +1124,23 @@ export class AgentRecallEngine {
   }
 
   private rawEventsForLocalDateCue(query: AgentRecallQuery, limit: number): MemoryEvent[] {
-    const localDate = localDateCue(query.query, query);
+    const timeZone = query.timeZone ?? this.kernel.eventStore.getProjectTimeZone();
+    const localDate = localDateCue(query.query, { now: query.now, localDateNow: query.localDateNow, timeZone });
     if (!localDate) return [];
     const [year, month, day] = localDate.split('-').map(Number);
-    const byLocalDate = this.kernel.eventStore.queryEvents(1, 1000, {
+    const scope = {
       projectId: query.projectId !== undefined ? [query.projectId] : undefined,
       workspaceId: query.workspaceId ? [query.workspaceId] : undefined,
-    }).records.filter((event) => event.localDate === localDate).slice(0, limit);
+    };
+    const byLocalDate = this.kernel.eventStore.queryEvents(1, Math.max(1, limit), { ...scope, localDate }).records;
     if (byLocalDate.length) return byLocalDate;
-    const startTime = Date.UTC(year!, month! - 1, day!);
-    const endTime = Date.UTC(year!, month! - 1, day! + 1);
-    const byTime = this.kernel.eventStore.queryEvents(1, Math.max(1, Math.min(limit, 200)), {
-      projectId: query.projectId !== undefined ? [query.projectId] : undefined,
-      workspaceId: query.workspaceId ? [query.workspaceId] : undefined,
-      startTime,
-      endTime,
+    const next = nextCivilDate(year!, month!, day!, 1, timeZone);
+    const range = localDateRange(year!, month!, day!, next[0], next[1], next[2], timeZone);
+    return this.kernel.eventStore.queryEvents(1, Math.max(1, Math.min(limit, 200)), {
+      ...scope,
+      startTime: range.from,
+      endTime: range.to,
     }).records;
-    if (byTime.length) return byTime;
-    return this.kernel.eventStore.queryEvents(1, 1000, {
-      projectId: query.projectId !== undefined ? [query.projectId] : undefined,
-      workspaceId: query.workspaceId ? [query.workspaceId] : undefined,
-    }).records.filter((event) => event.localDate === localDate).slice(0, limit);
   }
 
   private rawLedgerFallbackItemsForQuery(
@@ -1226,8 +1241,8 @@ export class AgentRecallEngine {
   }
 
   private graphRecallTextScore(item: AgentRecallItem, query: AgentRecallQuery): number {
-    const queryTerms = uniqueNonEmpty(query.query.toLowerCase().split(/[^a-z0-9\u4e00-\u9fff_-]+/))
-      .filter((term) => term.length >= 2 && !/^(cogmem|memory|project|之前|什么|问题|why|did|say)$/i.test(term));
+    const queryTerms = discriminativeProbes(query.query)
+      .filter((term) => !/^(cogmem|memory|project|之前|什么|问题|why|did|say)$/i.test(term));
     const haystack = this.itemSearchableText(item).toLowerCase();
     const overlap = queryTerms.filter((term) => haystack.includes(term)).length;
     return overlap + (item.confidence || 0);
@@ -1301,9 +1316,9 @@ export class AgentRecallEngine {
   private recallCueTerms(queryPlan: AgentRecallQueryPlan): string[] {
     const terms = [
       ...queryPlan.keywords,
-      ...queryPlan.semanticCuePhrases.flatMap((phrase) => phrase.split(/\s+/)),
+      ...queryPlan.semanticCuePhrases,
     ]
-      .map((term) => term.trim())
+      .flatMap(discriminativeProbes)
       .filter((term) => term.length >= 2 && !/^(hermes|openclaw|cogmem)$/i.test(term));
     return uniqueNonEmpty(terms);
   }
@@ -1484,6 +1499,9 @@ export class AgentRecallEngine {
         byTurn.set(key, event);
         continue;
       }
+      const eventUnusable = isToolObservationEvent(event) && !isPromotedToolObservation(event);
+      const existingUnusable = isToolObservationEvent(existing) && !isPromotedToolObservation(existing);
+      if (eventUnusable !== existingUnusable) { if (!eventUnusable) byTurn.set(key, event); continue; }
       const eventScore = this.rawEventCueScore(event, queryPlan);
       const existingScore = this.rawEventCueScore(existing, queryPlan);
       const rolePriority = this.quoteEventPriority(event) - this.quoteEventPriority(existing);
@@ -1542,6 +1560,8 @@ export class AgentRecallEngine {
 
   private isRawEventInRecallScope(event: MemoryEvent, query: AgentRecallQuery, effectiveIntent?: AgentRecallIntent): boolean {
     if (event.eventType === 'SHELL_STATE_RECORDED') return false;
+    if (query.startTime !== undefined && event.occurredAt < query.startTime) return false;
+    if (query.endTime !== undefined && event.occurredAt >= query.endTime) return false;
     if (isToolObservationEvent(event) && !isPromotedToolObservation(event)) return false;
     if (eventHoldsSecretMark(event) && !FORENSIC_SOCIAL_EXEMPT_INTENTS.has(String(effectiveIntent ?? ''))) {
       SECRET_WITHHELD_EVENT_IDS.set(this, (SECRET_WITHHELD_EVENT_IDS.get(this) ?? new Set()).add(event.eventId));

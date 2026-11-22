@@ -4,7 +4,7 @@ import { readRedactionMarks } from '../governance/PiiRedactor.js';
 import type { MemoryEvent } from '../types/index.js';
 import { occasionMaterialOf, occasionVisibility, type Occasion, type OccasionDecision } from '../occasion/index.js';
 import type { StrategyRetrievalPolicy } from '../strategy/StrategyCapsule.js';
-import { localDateFor, resolveTimeZone } from '../utils/LocalDateContext.js';
+import { inferYearForMonth } from '../temporal/RelativeDateRange.js';
 import { pad2 } from '../utils/Values.js';
 import type {
   AgentRecallDecisionTrace,
@@ -314,18 +314,14 @@ export function laneAllowed(policy: StrategyRetrievalPolicy | undefined, lane: S
 }
 
 export function localDateCue(query: string, options: Pick<AgentRecallQuery, 'now' | 'localDateNow' | 'timeZone'> = {}): string | undefined {
-  const currentYear = localYear(options);
   const iso = query.match(/(20\d{2})[-年\/.](\d{1,2})[-月\/.](\d{1,2})日?/);
   if (iso) return `${iso[1]}-${padDatePart(Number(iso[2]))}-${padDatePart(Number(iso[3]))}`;
   const cn = query.match(/(?:(20\d{2})年)?(\d{1,2})月(\d{1,2})(?:号|日)?/);
-  if (cn) return `${cn[1] || currentYear}-${padDatePart(Number(cn[2]))}-${padDatePart(Number(cn[3]))}`;
+  if (cn) {
+    const year = cn[1] ?? inferYearForMonth(Number(cn[2]), options);
+    return `${year}-${padDatePart(Number(cn[2]))}-${padDatePart(Number(cn[3]))}`;
+  }
   return undefined;
-}
-
-export function localYear(options: Pick<AgentRecallQuery, 'now' | 'localDateNow' | 'timeZone'>): number {
-  const explicit = options.localDateNow?.match(/^(20\d{2})-\d{2}-\d{2}$/u)?.[1];
-  if (explicit) return Number(explicit);
-  return Number(localDateFor(options.now ?? Date.now(), resolveTimeZone(options.timeZone)).slice(0, 4));
 }
 
 export function padDatePart(value: number): string {

@@ -1,5 +1,6 @@
 import type { MemoryDimension, MemoryQueryFacet, MemoryQueryFrameV1, MemoryQueryIntent } from '../semantic/MemoryFrameTypes.js';
-import { localDateFor, localDateRange, nextCivilDate, resolveTimeZone } from '../utils/LocalDateContext.js';
+import { localDateFor, localDateRange, nextCivilDate } from '../utils/LocalDateContext.js';
+import { inferYearForMonth, relativeDateRange } from '../temporal/RelativeDateRange.js';
 
 const DIMENSION_WORDS: Array<[MemoryDimension, RegExp]> = [
   ['actor', /^(who|谁|谁参与(?:了)?|actor|作者)$/iu],
@@ -65,18 +66,19 @@ export class MultidimensionalQueryPlanner {
 
   private timeRange(query: string, options: { now?: number; localDateNow?: string; timeZone?: string }): MemoryQueryFrameV1['time'] | undefined {
     const now = options.now ?? Date.now();
-    const month = query.match(/(?:20\d{2}[年/-]?)?(\d{1,2})月|\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b/iu);
-    if (month) {
-      const monthNames = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
-      const raw = month[1] ?? month[0].slice(0, 3).toLocaleLowerCase('en');
-      const monthIndex = month[1] ? Number(raw) - 1 : monthNames.indexOf(raw);
+    const cnMonth = query.match(/(?:20\d{2}[年/-]?)?(\d{1,2})月/);
+    const enMonth = englishMonth(query);
+    if (cnMonth || enMonth) {
+      const monthIndex = cnMonth ? Number(cnMonth[1]) - 1 : enMonth!.index;
       if (monthIndex >= 0 && monthIndex < 12) {
-        const yearValue = Number(query.match(/\b(20\d{2})\b/u)?.[1] ?? localYear(options));
+        const yearValue = Number(query.match(/\b(20\d{2})\b/u)?.[1] ?? inferYearForMonth(monthIndex + 1, options));
         const [endYear, endMonth] = monthIndex === 11 ? [yearValue + 1, 1] : [yearValue, monthIndex + 2];
         const range = localDateRange(yearValue, monthIndex + 1, 1, endYear, endMonth, 1, options.timeZone);
-        return { ...range, expressions: [month[0]] };
+        return { ...range, expressions: [cnMonth?.[0] ?? enMonth!.text] };
       }
     }
+    const relative = relativeDateRange(query, options);
+    if (relative) return { from: relative.from, to: relative.to, expressions: [relative.expression] };
     const year = query.match(/\b(20\d{2})\b/u)?.[1];
     if (year) {
       const range = localDateRange(Number(year), 1, 1, Number(year) + 1, 1, 1, options.timeZone);
@@ -92,8 +94,15 @@ export class MultidimensionalQueryPlanner {
   }
 }
 
-function localYear(options: { now?: number; localDateNow?: string; timeZone?: string }): number {
-  const explicit = options.localDateNow?.match(/^(20\d{2})-/u)?.[1];
-  if (explicit) return Number(explicit);
-  return Number(localDateFor(options.now ?? Date.now(), resolveTimeZone(options.timeZone)).slice(0, 4));
+function englishMonth(query: string): { index: number; text: string } | undefined {
+  const names = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+  const month = '(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)';
+  const match = query.match(new RegExp(
+    `\\b(?:in|on|during|since|from|by|until|before|after)\\s+${month}\\b|\\b\\d{1,2}(?:st|nd|rd|th)?\\s+${month}\\b|\\b${month}\\s+\\d{1,2}(?:st|nd|rd|th)?\\b`,
+    'iu',
+  ));
+  if (!match) return undefined;
+  const name = (match[1] ?? match[2] ?? match[3] ?? '').toLocaleLowerCase('en');
+  const index = names.indexOf(name.slice(0, 3));
+  return index >= 0 ? { index, text: match[0] } : undefined;
 }

@@ -39,6 +39,37 @@ const STATUS_WORDS: Record<SessionContextLaneStatus, string> = {
 };
 
 describe('the six-lane assembly (#249 A5)', () => {
+  test('a rendered profile entry is not appended again to the recall lane (#448)', async () => {
+    const provider = new ScriptedProvider([{ text: '在。', toolCalls: [] }]);
+    const shell = makeShell(makeTempDir('lanes-profile-dedupe-'), provider, { dream: NO_DREAM });
+    await shell.start();
+    try {
+      const projectId = shell.config.projectId;
+      const evidence = shell.kernel.recordRawEvent({
+        threadId: 'profile-seed', projectId, role: 'user',
+        content: '我喜欢一种饮料。',
+      });
+      shell.kernel.beliefStore.upsert({
+        projectId, scope: 'project', subject: 'owner', predicate: 'likes',
+        objectValue: { raw: '喝乌龙茶', type: 'string' }, confidence: 0.9,
+        sourceType: 'user_input', extractionReason: 'preference_signal',
+        sourceEventId: evidence.eventId,
+      });
+      shell.kernel.profile.compile({ projectId });
+
+      await shell.submit('乌龙茶是什么');
+
+      const lanes = shell.lastLaneAssembly!.lanes;
+      const profile = lanes.find((lane) => lane.lane === 'profile')!;
+      expect(profile.items.filter((item) => item.text.includes('喝乌龙茶'))).toHaveLength(1);
+      const recall = lanes.find((lane) => lane.lane === 'recall')!;
+      expect(recall.items.length).toBeLessThanOrEqual(3);
+      expect(recall.items.some((item) => item.whyMatched?.startsWith('profile_'))).toBe(false);
+    } finally {
+      await shell.stop();
+    }
+  }, 30_000);
+
   test('lanes render in the frozen pinned → profile → digest → working_set → recall → tail order', async () => {
     const provider = new ScriptedProvider([{ text: '收到一。', toolCalls: [] }, { text: '收到二。', toolCalls: [] }, { text: '收到三。', toolCalls: [] }]);
     const shell = makeShell(makeTempDir('lanes-order-'), provider, { dream: NO_DREAM, tailTurns: 2 });

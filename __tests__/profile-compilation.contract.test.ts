@@ -117,7 +117,7 @@ describe('a correction reaches the source event and the ledger recompiles', () =
 
     // The profile is in default recall before the correction.
     const seenBefore = backend.recall({ projectId, agentId: 'hermes', query: '乌龙茶', limit: 5 });
-    expect(seenBefore.items.some((item) => item.id.startsWith('profile:'))).toBe(true);
+    expect(seenBefore.items.filter((item) => item.text.includes('喝乌龙茶'))).toHaveLength(1);
 
     const correction = kernel.recordRawEvent({
       threadId: 't-correction', projectId, role: 'user', content: '其实我不喝乌龙茶了，现在喜欢红茶。',
@@ -279,11 +279,11 @@ describe('cross-identity visibility follows #153, not a second rule', () => {
     // A turn hermes had. The source event carries `hermes:<session>`, which is what the scope rule reads.
     const owned = await kernel.appendEpisodeMessageAsync({
       projectId, sessionId: 'hermes-profile-1', sourceAgent: 'hermes', role: 'user',
-      text: '我只喝手冲咖啡。',
+      text: '我只喝一种饮料。',
     });
     const imported = await kernel.appendEpisodeMessageAsync({
       projectId, sessionId: 'import-profile-1', sourceAgent: 'hermes', role: 'user',
-      text: 'Imported note: the owner keeps a spare key under the mat.',
+      text: 'Imported note: the owner keeps a spare item at home.',
       metadata: { imported: true },
     });
 
@@ -445,4 +445,14 @@ describe('the evidence window is a read bound, not a retirement signal (#434)', 
     const deadHistory = kernel.profile.history({ projectId, entryId: before.find((entry) => entry.key === 'owner.has_pet')!.entryId });
     expect(deadHistory[0]!.status).toBe('retired');
   }, 30_000);
+});
+test('a profile entry already in the ordinary lanes is not appended again, and the lane keeps its limit (#448)', async () => {
+  const projectId = 'profile-dedupe-limit';
+  await kernel.ingest({ content: '我喜欢喝乌龙茶。', projectId });
+  kernel.profile.compile({ projectId });
+
+  const recalled = backend.recall({ projectId, agentId: 'hermes', query: '乌龙茶', limit: 1 });
+  expect(recalled.items).toHaveLength(1);
+  const anchors = recalled.items.map((item) => item.sourceAnchor?.eventId ?? item.id);
+  expect(new Set(anchors).size).toBe(anchors.length);
 });

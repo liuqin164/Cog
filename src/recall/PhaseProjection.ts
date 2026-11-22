@@ -31,6 +31,8 @@
  * distribution that would settle it needs a model-driven Dream run, which is a box-phase item.
  */
 
+import { discriminativeProbesOf } from '../agent/AgentRecallText.js';
+
 export type MemoryPhase = 'protected' | 'detail' | 'gist' | 'dormant';
 
 /** Which kind of memory the item is, as far as its own fields can say. */
@@ -155,7 +157,7 @@ function phaseCategory(sourceType: string): PhaseCategory {
 }
 
 function queryTerms(text: string): string[] {
-  return Array.from(new Set(text.toLowerCase().match(/[\p{L}\p{N}_-]{2,}/gu) ?? []));
+  return discriminativeProbesOf(text);
 }
 
 function searchableText(item: unknown): string {

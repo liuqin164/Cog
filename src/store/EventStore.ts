@@ -771,6 +771,7 @@ export class EventStore {
       workspaceId?: string[];
       threadId?: string[];
       sessionId?: string[];
+      localDate?: string;
       startTime?: number;
       endTime?: number;
       sinceGlobalSeq?: number;
@@ -824,6 +825,10 @@ export class EventStore {
       conditions.push(`session_id IN (${filters.sessionId.map(() => '?').join(', ')})`);
       params.push(...filters.sessionId);
     }
+    if (filters?.localDate) {
+      conditions.push('local_date = ?');
+      params.push(filters.localDate);
+    }
     if (filters?.startTime !== undefined) {
       conditions.push('occurred_at >= ?');
       params.push(filters.startTime);
@@ -872,6 +877,7 @@ export class EventStore {
         workspaceId: filters?.workspaceId,
         threadId: filters?.threadId,
         sessionId: filters?.sessionId,
+        localDate: filters?.localDate,
         startTime: filters?.startTime,
         endTime: filters?.endTime,
         sinceGlobalSeq: filters?.sinceGlobalSeq,

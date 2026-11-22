@@ -164,7 +164,16 @@ describe('/correct changes the profile entry the next recall reads', () => {
     const dir = makeTempDir();
     const shell = await startedShell(dir);
     try {
-      await shell.kernel.ingest({ content: '我喜欢喝乌龙茶。', projectId: PROJECT });
+      const evidence = shell.kernel.recordRawEvent({
+        threadId: 'profile-correction', projectId: PROJECT, role: 'user',
+        content: '我喜欢一种饮料。',
+      });
+      shell.kernel.beliefStore.upsert({
+        projectId: PROJECT, scope: 'project', subject: 'owner', predicate: 'likes',
+        objectValue: { raw: '喝乌龙茶', type: 'string' }, confidence: 0.9,
+        sourceType: 'user_input', extractionReason: 'preference_signal',
+        sourceEventId: evidence.eventId,
+      });
       shell.kernel.profile.compile({ projectId: PROJECT });
       const entry = shell.kernel.profile.entries({ projectId: PROJECT, ledger: 'preferences' })[0];
       expect(entry).toBeDefined();
