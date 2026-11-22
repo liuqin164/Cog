@@ -39,7 +39,6 @@ case "$cmd" in
     for arg in "$@"; do
       case "$arg" in
         --ignore-scripts) ignore_scripts=1 ;;
-        --omit=optional) ;;
         *) spec="$arg" ;;
       esac
     done
@@ -173,7 +172,7 @@ describe('install.sh installs the package it was asked for', () => {
     const run = runInstaller('latest');
     expect(run.stderr).toBe('');
     expect(run.exitCode).toBe(0);
-    expect(run.chunks).toEqual(['add --omit=optional cogmem@latest']);
+    expect(run.chunks).toEqual(['add cogmem@latest']);
     // And the script's own link_cli step linked what `bun add` produced.
     expect(existsSync(run.launcher)).toBe(true);
     expect(existsSync(run.cogLauncher)).toBe(true);
@@ -181,24 +180,24 @@ describe('install.sh installs the package it was asked for', () => {
   });
 
   test('a version and a range keep the package name', () => {
-    expect(runInstaller('4.0.0').chunks).toEqual(['add --omit=optional cogmem@4.0.0']);
-    expect(runInstaller('^4.0.0').chunks).toEqual(['add --omit=optional cogmem@^4.0.0']);
-    expect(runInstaller('*').chunks).toEqual(['add --omit=optional cogmem@*']);
+    expect(runInstaller('4.0.0').chunks).toEqual(['add cogmem@4.0.0']);
+    expect(runInstaller('^4.0.0').chunks).toEqual(['add cogmem@^4.0.0']);
+    expect(runInstaller('*').chunks).toEqual(['add cogmem@*']);
   });
 
   test('a tarball, a path, a URL and a scheme are locations, not versions', () => {
     // `cogmem@/tmp/cogmem-4.0.0.tgz` is a version range that cannot resolve, which is
     // what made COGMEM_RELEASE_TARBALL unusable and a local install impossible.
     const relative = runInstaller('./cogmem-4.0.0.tgz');
-    expect(relative.chunks).toEqual(['add --omit=optional --ignore-scripts ./cogmem-4.0.0.tgz']);
+    expect(relative.chunks).toEqual(['add --ignore-scripts ./cogmem-4.0.0.tgz']);
     // The absolute form of the same fixture, which the stub resolves on disk.
     const byAbsolutePath = runInstaller(relative.tarball);
-    expect(byAbsolutePath.chunks).toEqual([`add --omit=optional --ignore-scripts ${relative.tarball}`]);
-    expect(runInstaller('https://example.test/cogmem-4.0.0.tgz').chunks).toEqual(['add --omit=optional --ignore-scripts https://example.test/cogmem-4.0.0.tgz']);
-    expect(runInstaller('file:../cogmem-4.0.0.tgz').chunks).toEqual(['add --omit=optional --ignore-scripts file:../cogmem-4.0.0.tgz']);
+    expect(byAbsolutePath.chunks).toEqual([`add --ignore-scripts ${relative.tarball}`]);
+    expect(runInstaller('https://example.test/cogmem-4.0.0.tgz').chunks).toEqual(['add --ignore-scripts https://example.test/cogmem-4.0.0.tgz']);
+    expect(runInstaller('file:../cogmem-4.0.0.tgz').chunks).toEqual(['add --ignore-scripts file:../cogmem-4.0.0.tgz']);
     // The README names `npm:cogmem@latest` as the update source, and `update` falls
     // back to `github:<repo>#<tag>`, so both are specs a reader will pass here.
-    expect(runInstaller('npm:cogmem@4.0.0').chunks).toEqual(['add --omit=optional --ignore-scripts npm:cogmem@4.0.0']);
+    expect(runInstaller('npm:cogmem@4.0.0').chunks).toEqual(['add --ignore-scripts npm:cogmem@4.0.0']);
   });
 
   test('a source location is installed with scripts off, built, then relinked', () => {
@@ -209,10 +208,10 @@ describe('install.sh installs the package it was asked for', () => {
     const run = runInstaller('github:liuqin164/Cog#v4.0.0');
     expect(run.exitCode).toBe(0);
     expect(run.chunks).toEqual([
-      'add --omit=optional --ignore-scripts github:liuqin164/Cog#v4.0.0',
-      'install --omit=optional',
+      'add --ignore-scripts github:liuqin164/Cog#v4.0.0',
+      'install',
       'run prepare',
-      'install --omit=optional',
+      'install',
     ]);
     expect(existsSync(run.launcher)).toBe(true);
   });
@@ -229,13 +228,13 @@ describe('install.sh installs the package it was asked for', () => {
     const fixture = runInstaller('latest');
     const fromTarball = runInstaller(undefined, { COGMEM_RELEASE_TARBALL: fixture.tarball });
     expect(fromTarball.exitCode).toBe(0);
-    expect(fromTarball.chunks).toEqual([`add --omit=optional --ignore-scripts ${fixture.tarball}`]);
+    expect(fromTarball.chunks).toEqual([`add --ignore-scripts ${fixture.tarball}`]);
 
     // The same precedence `resolveLatestNpmSpec` uses, pinned on both sides, so
     // setting two cannot install one thing and update another.
     expect(runInstaller('4.0.0', { COGMEM_NPM_SPEC: '3.6.5', COGMEM_RELEASE_TARBALL: '5.0.0' }).chunks)
-      .toEqual(['add --omit=optional cogmem@4.0.0']);
+      .toEqual(['add cogmem@4.0.0']);
     expect(runInstaller(undefined, { COGMEM_NPM_SPEC: '3.6.5', COGMEM_RELEASE_TARBALL: '5.0.0' }).chunks)
-      .toEqual(['add --omit=optional cogmem@3.6.5']);
+      .toEqual(['add cogmem@3.6.5']);
   });
 });

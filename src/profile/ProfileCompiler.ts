@@ -503,9 +503,9 @@ export class ProfileCompiler {
   }
 
   private beliefProfileKey(
-    belief: { subject: string; predicate: string; canonicalKey: string; sourceType?: string; metadata?: Record<string, unknown> }
+    belief: { subject: string; predicate: string; canonicalKey: string }
   ): { ledger: ProfileLedger; key: string } | null {
-    const predicate = belief.sourceType === 'llm_inference' && belief.metadata?.reviewConfirmed !== true ? '' : String(belief.predicate ?? '').trim();
+    const predicate = String(belief.predicate ?? '').trim();
     if (!predicate || (PROFILE_TRANSIENT_PREDICATES as readonly string[]).includes(predicate)) return null;
     const ledger: ProfileLedger = (PROFILE_PREFERENCE_PREDICATES as readonly string[]).includes(predicate) ? 'preferences' : 'facts';
     return { ledger, key: String(belief.canonicalKey || `${belief.subject}.${predicate}`).trim() };
