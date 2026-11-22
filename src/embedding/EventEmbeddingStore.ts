@@ -6,7 +6,7 @@ export interface EventEmbeddingHit {
 }
 
 export class EventEmbeddingStore {
-  constructor(private readonly db: Database) {}
+  constructor(private readonly db: Database, private readonly minSimilarity = 0.5) {}
 
   upsert(eventId: string, modelId: string, vector: Float32Array, projectId: string | undefined): void {
     if (vector.length === 0) return;
@@ -26,8 +26,8 @@ export class EventEmbeddingStore {
     if (vector.length === 0) return [];
     const rows = this.db.prepare(`
       SELECT event_id, vector_blob FROM memory_event_embeddings
-      WHERE model_id=? AND dimensions=? AND COALESCE(project_id,'')=?
-    `).all(modelId, vector.length, projectId ?? '') as Array<{ event_id: string; vector_blob: Uint8Array }>;
+      WHERE model_id=? AND dimensions=? AND (? IS NULL OR COALESCE(project_id,'')=?)
+    `).all(modelId, vector.length, projectId ?? null, projectId ?? '') as Array<{ event_id: string; vector_blob: Uint8Array }>;
     return rows
       .map((row) => ({
         eventId: row.event_id,
@@ -37,6 +37,7 @@ export class EventEmbeddingStore {
           row.vector_blob.byteLength / 4,
         )),
       }))
+      .filter((hit) => hit.score >= this.minSimilarity)
       .sort((left, right) => right.score - left.score)
       .slice(0, Math.max(1, limit));
   }

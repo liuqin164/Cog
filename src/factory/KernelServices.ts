@@ -734,7 +734,7 @@ export abstract class KernelServices {
     );
     this.pipelineMetrics = new PipelineMetrics(db);
     this.summaryStore = new SummaryStore(db);
-    this.eventEmbeddingStore = new EventEmbeddingStore(db);
+    this.eventEmbeddingStore = new EventEmbeddingStore(db, options.semanticMinSimilarity);
     this.summaryStore.migrateLegacyFactSummaries();
     this.deepWriteCandidateStore = new DeepWriteCandidateStore(db);
     this.dreamCuratorWorker = new DreamCuratorWorker({

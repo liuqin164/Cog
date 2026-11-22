@@ -74,6 +74,8 @@ import {
   ZERO_EXPLANATION_SAMPLE,
 } from './AgentRecallText.js';
 
+const RRF_K = 60;
+
 /**
  * Per backend instance, never global: document frequency describes one database, and a daemon serving
  * two of them must not answer the second with the first one's counts.
@@ -1092,9 +1094,6 @@ export class AgentRecallEngine {
         startTime: query.startTime,
         endTime: query.endTime,
         limit,
-        // Recall wants the event that answers the question. Chronological order
-        // here made the oldest match the best match, so the answer a query had
-        // found was ranked behind whatever happened first.
         orderBy: 'relevance',
       });
       for (const event of events) {
@@ -1138,9 +1137,6 @@ export class AgentRecallEngine {
   ): AgentRecallItem[] {
     const scoped = this.collectRawLedgerItems(queryPlan, query, limit);
     if (scoped.length > 0 || !query.threadId) return scoped;
-    // A thread is one conversation, and recall exists to reach across them. A
-    // thread with no evidence of its own falls back to the whole project
-    // instead of answering nothing.
     return this.collectRawLedgerItems(queryPlan, { ...query, threadId: undefined }, limit)
       .map((item) => ({ ...item, tags: [...(item.tags ?? []), 'cross_thread'] }));
   }
@@ -1150,25 +1146,27 @@ export class AgentRecallEngine {
     query: AgentRecallQuery,
     limit: number
   ): AgentRecallItem[] {
+    const candidateLimit = Math.max(limit * 2, 10);
     const semanticIds = this.kernel
-      .nearestRawEventIds(String(query.query ?? queryPlan.primarySearchText), query.projectId, Math.max(limit * 2, 10));
+      .nearestRawEventIds(String(query.query ?? queryPlan.primarySearchText), query.projectId, candidateLimit);
     const semanticEvents = semanticIds
       .map((eventId) => this.kernel.eventStore.getEvent(eventId))
       .filter((event): event is MemoryEvent => Boolean(event));
+    const lexicalEvents = this.searchRawEventsByQueryPlan(queryPlan, query, candidateLimit);
     const searchedEvents = [
       ...semanticEvents,
-      ...this.searchRawEventsByQueryPlan(queryPlan, query, Math.max(limit * 2, 10)),
+      ...lexicalEvents,
     ];
     const rawEvents = queryPlan.intent === 'forensic_quote'
       ? this.dedupeRawEventsByTurnPreferUser(searchedEvents)
       : this.dedupeRawEventsByTurnPreferCue(searchedEvents, queryPlan);
-    if (semanticIds.length > 0) {
-      const semanticRank = new Map(semanticIds.map((eventId, index) => [eventId, index]));
-      rawEvents.sort((left, right) => (
-        (semanticRank.get(left.eventId) ?? Number.MAX_SAFE_INTEGER)
-        - (semanticRank.get(right.eventId) ?? Number.MAX_SAFE_INTEGER)
-      ));
-    }
+    const semanticRank = new Map(semanticIds.map((eventId, index) => [eventId, index + 1]));
+    const lexicalRank = new Map(lexicalEvents.map((event, index) => [event.eventId, index + 1]));
+    const fusedScore = (event: MemoryEvent): number => (
+      (semanticRank.has(event.eventId) ? 1 / (RRF_K + semanticRank.get(event.eventId)!) : 0)
+      + (lexicalRank.has(event.eventId) ? 1 / (RRF_K + lexicalRank.get(event.eventId)!) : 0)
+    );
+    rawEvents.sort((left, right) => fusedScore(right) - fusedScore(left));
     return rawEvents
       .filter((event) => this.isRawEventInRecallScope(event, query, queryPlan.intent))
       .filter((event) => !this.isOperationalNoiseRawEvent(event))
@@ -1498,23 +1496,6 @@ export class AgentRecallEngine {
         byTurn.set(key, event);
       }
     }
-    // Deliberately re-ranked. The search orders by BM25 relevance, which alone
-    // ranks a second-hand retelling above the conversation it retells — this sort
-    // by cue coverage is what makes the original user turn win (pinned by
-    // `agent-nerve-system`: "prefers the original user anchor"). Removing it
-    // raises raw-lane delivery from 2 to 4 on the evaluation corpus and changes
-    // the end-to-end score not at all, because searching by relevance and
-    // preferring a primary source are different questions and this ordering only
-    // answers the second. A fix has to combine them — preference first, the
-    // search's rank within a preference class — rather than drop one.
-    // Preference first, the search's ranking within it.
-    //
-    // Ranking by cue coverage alone discards the BM25 order the search produced,
-    // and ranking by relevance alone puts a second-hand retelling above the
-    // conversation it retells. They are different questions — which source is
-    // trustworthy, and which event is relevant — so the order answers them in that
-    // order and keeps the search's ranking inside each class rather than throwing
-    // it away.
     const searchRank = new Map(events.map((event, index) => [event.eventId, index]));
     return [...byTurn.values()].sort((a, b) => (
       this.quoteEventPriority(a, queryPlan) - this.quoteEventPriority(b, queryPlan)
