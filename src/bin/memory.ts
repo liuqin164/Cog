@@ -216,6 +216,7 @@ function usage(): string {
   '  --json               print cogmem.cli.v1 JSON; queue counters are stable top-level fields',
     '',
     'Dream processes sealed episodes only. A timer may call the conditional tick, but recall and message ingestion never run Dream.',
+    'Recall refreshes a dirty Atlas at most once every 24 hours; until then it serves the existing projection and the raw ledger covers newer events.',
     'Candidate interpretation uses deterministic rules unless [memory_model] configures an OpenAI-compatible local or cloud chat model.',
     'This is a local audit console, not a notes app or UI dashboard. It exposes provenance so memory is not a black box.',
   ].join('\n');

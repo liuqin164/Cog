@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type {
   EmbedFn,
   ModelTextUsage,
@@ -144,6 +143,7 @@ export class ModelRegistry {
     visited: Set<ModelRoleName>
   ): Promise<string> {
     if (!fallback || fallback === 'rule_only' || fallback === 'deterministic_local') return '';
+    if (fallback === 'embedding') return '';
     return this.generateText(fallback, system, user, visited);
   }
 

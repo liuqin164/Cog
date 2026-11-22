@@ -48,9 +48,13 @@ export class MemoryAtlasService {
       // project that reports `nodes: 19, edges: 24` at `--limit 20`. An edgeless scatter is a
       // wrong answer to "show me this project's graph", so the fact goes in `warnings` — the
       // field that exists for it — rather than being inferred from an empty array.
-      const available = this.safeEdges(this.store.listEdges(projectId), projectId).length;
+      const listed = this.store.listEdges(projectId);
+      const available = this.safeEdges(listed.edges, projectId).length;
       if (available > 0) {
         result.warnings.push(`edges_hidden_by_node_budget: ${available} relation(s) exist in this project, but this overview's ${nodes.length}-node budget was spent on nodes that no relation touches. Raise --limit (maximum 30) to see them.`);
+      }
+      if (listed.omitted > 0) {
+        result.warnings.push(`edges_truncated: ${listed.omitted} relation(s) omitted from the project edge scan. Narrow the query or inspect a node directly.`);
       }
     }
     return result;
