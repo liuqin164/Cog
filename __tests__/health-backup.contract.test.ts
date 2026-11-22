@@ -372,6 +372,27 @@ describe('nightly snapshot and the machine bundle', () => {
     }
   });
 
+  test('recordLast writes through the injected kernel connection (#456)', async () => {
+    const db = new Database(':memory:');
+    db.exec('CREATE TABLE _meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+    try {
+      const backup = new BrainBackup({
+        dbPath,
+        db,
+        snapshotsDir: join(dir, 'injected'),
+        embeddingDimension: 8,
+        coreVersion: 'test',
+        config,
+        now: () => NIGHT_ONE,
+      });
+      expect(await backup.snapshot()).toBeDefined();
+      const row = db.prepare(`SELECT value FROM _meta WHERE key='brain_snapshot_last'`).get() as { value: string };
+      expect((JSON.parse(row.value) as { file: string }).file).toMatch(/^brain-.*\.json$/u);
+    } finally {
+      db.close();
+    }
+  });
+
   test('failed snapshots do not consume the verified retention slots (#403)', async () => {
     const snapshotsDir = join(dir, 'failed-rotation');
     let now = NIGHT_ONE;

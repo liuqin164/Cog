@@ -67,6 +67,7 @@ export class ResidentTick {
   freshness?: FreshnessReadings;
   private backfillInFlight = false;
   private inPlaceDream = false;
+  private tickInFlight = false;
   private lastFreshnessPassAt?: number;
   private embeddingRowCursor = 0;
   private bindingSeqCursor?: number;
@@ -74,6 +75,19 @@ export class ResidentTick {
   constructor(private readonly shell: CompanionShell) {}
 
   async tick(at = this.shell.now()): Promise<void> {
+    if (this.tickInFlight) {
+      this.shell.trace.append('tick_skipped', { reason: 'in_flight', at });
+      return;
+    }
+    this.tickInFlight = true;
+    try {
+      await this.tickOnce(at);
+    } finally {
+      this.tickInFlight = false;
+    }
+  }
+
+  private async tickOnce(at: number): Promise<void> {
     this.rotateServiceLog();
     this.sweepSurfacing(at);
     this.shell.upgradeAdmin.settleUpgradeReport(at);
@@ -616,7 +630,19 @@ export class ResidentTick {
         await this.failDream(night, at, localDate, result.kernelNightSkippedReason ?? 'dream_kernel_night_failed');
         return;
       }
-      this.shell.clock!.markDreamed(at);
+      if (result.memoryModelDegraded === 'semantic_processor_failed') this.shell.memoryModelFailed = true;
+      else if (result.memoryModelUsed) this.shell.memoryModelFailed = false;
+      const processed = result.processedEpisodeCount ?? 0;
+      const drained = !result.kernelNightRan
+        || result.kernelNightSkippedReason === 'no_sealed_episode_backlog'
+        || processed < this.shell.config.dream.maxEpisodes
+        || this.dreamBacklog(at).episodes === 0;
+      if (drained) this.shell.clock!.markDreamed(at);
+      else this.shell.trace.append('dream_backlog_remaining', {
+        localDate,
+        processedEpisodeCount: result.processedEpisodeCount,
+        maxEpisodes: this.shell.config.dream.maxEpisodes,
+      });
       try {
         const limit = Math.max(100, result.candidateCount ?? 0);
         const promotion = this.shell.kernel.promoteDreamCandidates({ projectId: this.shell.config.projectId, limit, now: at });

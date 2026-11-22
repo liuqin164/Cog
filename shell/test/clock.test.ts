@@ -68,14 +68,14 @@ describe('the dream window and its target day (#327)', () => {
     expect(clock.dreamWindowOpen(Date.UTC(2026, 2, 11, 3, 0))).toBe(false);
   });
 
-  test('the 02:00 dream folds yesterday; the 23:30 dream folds the day before that', () => {
+  test('the 02:00 dream folds yesterday; a cross-midnight window folds its own night', () => {
     const morning = service({ startHour: 2, endHour: 5 });
     expect(morning.dreamTargetDate(Date.UTC(2026, 2, 11, 2, 0))).toBe('2026-03-10');
     expect(morning.dreamTargetDate(Date.UTC(2026, 2, 11, 4, 59))).toBe('2026-03-10');
 
     const midnight = service({ startHour: 23, endHour: 6 });
-    expect(midnight.dreamTargetDate(Date.UTC(2026, 2, 10, 23, 30))).toBe('2026-03-09');
-    expect(midnight.dreamTargetDate(Date.UTC(2026, 2, 11, 2, 0))).toBe('2026-03-09');
+    expect(midnight.dreamTargetDate(Date.UTC(2026, 2, 10, 23, 30))).toBe('2026-03-10');
+    expect(midnight.dreamTargetDate(Date.UTC(2026, 2, 11, 2, 0))).toBe('2026-03-10');
   });
 
   test('catch-up is closed only after the window ends', () => {

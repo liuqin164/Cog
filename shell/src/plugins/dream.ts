@@ -29,6 +29,7 @@ export interface DreamResult {
   kernelNightRan: boolean;
   kernelNightFailed?: boolean;
   kernelNightSkippedReason?: string;
+  processedEpisodeCount: number;
   memoryModelUsed: boolean;
   memoryModelDegraded?: string;
 }
@@ -43,7 +44,9 @@ export class DreamService {
     let kernelNightRan = false; let kernelNightFailed = false;
     let candidateCount = 0;
     let kernelNightSkippedReason: string | undefined;
-    let memoryModelUsed = false; let memoryModelDegraded: string | undefined;
+    let processedEpisodeCount = 0;
+    let memoryModelUsed = false;
+    let memoryModelDegraded: string | undefined;
     if (this.options.runKernelNight) {
       this.options.beforeKernelNight?.(now);
       try {
@@ -51,6 +54,7 @@ export class DreamService {
         kernelNightRan = true;
         candidateCount = night.dream.candidateCount;
         kernelNightSkippedReason = night.dream.skipped ? night.dream.reason : undefined;
+        processedEpisodeCount = night.dream.processedEpisodeCount;
         if (night.dream.semanticProcessorReason) {
           memoryModelDegraded = night.dream.semanticProcessorReason;
           this.options.trace?.append('dream_model_degraded', {
@@ -88,10 +92,13 @@ export class DreamService {
       });
       return {
         localDate, eventCount: events.length, candidateCount, sourceRefs: refs, summary, kernelNightRan, kernelNightFailed,
-        memoryModelUsed, memoryModelDegraded, ...(kernelNightSkippedReason === undefined ? {} : { kernelNightSkippedReason }),
+        memoryModelUsed, memoryModelDegraded, processedEpisodeCount, ...(kernelNightSkippedReason === undefined ? {} : { kernelNightSkippedReason }),
       };
     }
-    const dreamEvent = await backend.ingestTaskEvent({
+    const existing = kernel
+      .getThreadEvents(`companion-dream:${localDate}`, { projectId, limit: 50 })
+      .find((event) => isDreamProduct(event));
+    const dreamEvent = existing ?? await backend.ingestTaskEvent({
       agentId,
       projectId,
       workspaceId: projectId,
@@ -115,6 +122,7 @@ export class DreamService {
       sourceRefCount: refs.length,
       dreamEventId: dreamEvent.eventId,
       kernelNightRan,
+      reused: existing !== undefined,
     });
     return {
       localDate,
@@ -125,6 +133,7 @@ export class DreamService {
       dreamEventId: dreamEvent.eventId,
       kernelNightRan,
       kernelNightSkippedReason,
+      processedEpisodeCount,
       memoryModelUsed,
       memoryModelDegraded,
     };

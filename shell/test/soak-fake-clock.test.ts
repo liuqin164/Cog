@@ -319,7 +319,7 @@ describe('dream scheduling (#327)', () => {
       await shell.tick(clock.now);
       const dreams = shell.trace.read().filter((record) => record.kind === 'dream_complete');
       expect(dreams).toHaveLength(1);
-      expect(dreams[0]!.localDate).toBe('2026-03-09');
+      expect(dreams[0]!.localDate).toBe('2026-03-10');
     } finally {
       await shell.stop();
     }

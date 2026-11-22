@@ -736,7 +736,7 @@ export class MemorySovereigntyService {
         if (/(?:^|\.)pre-upgrade-.*\.snap$/u.test(file)) coverage.upgradesRemoved += 1;
         if (/(?:^|\.)failed-.*\.snap$/u.test(file)) coverage.failedCopiesRemoved += 1;
         if (/\.db$/u.test(file)) coverage.databasesRemoved += 1;
-        if (/(?:^|\.)brain-.*\.snap$/u.test(file)) removedBrainManifests.add(file);
+        if (/(?:^|\.)(?:brain|failed)-.*\.snap$/u.test(file)) removedBrainManifests.add(file);
       }
       this.forgetSnapshotMarker(removedBrainManifests);
     }
@@ -836,18 +836,16 @@ export class MemorySovereigntyService {
     return { auditId: pending.auditId, deleted: pending.deleted, artifacts: pending.artifacts };
   }
 
-  /** `brain_snapshot_last` must not point at a snapshot this deletion removed. */
   private forgetSnapshotMarker(removedBrainManifests: Set<string>): void {
     if (removedBrainManifests.size === 0 || !this.tableExists('_meta')) return;
     const row = this.ports.db.prepare(`SELECT value FROM _meta WHERE key='brain_snapshot_last'`).get() as { value?: string } | undefined;
     if (!row?.value) return;
     try {
       const file = (JSON.parse(row.value) as { file?: unknown }).file;
-      if (typeof file === 'string' && removedBrainManifests.has(file)) {
+      if (typeof file === 'string' && removedBrainManifests.has(file.replace(/\.json$/u, '.snap'))) {
         this.ports.db.prepare(`DELETE FROM _meta WHERE key='brain_snapshot_last'`).run();
       }
     } catch {
-      // A malformed marker is not a reason to keep a deleted snapshot's name around.
       this.ports.db.prepare(`DELETE FROM _meta WHERE key='brain_snapshot_last'`).run();
     }
   }

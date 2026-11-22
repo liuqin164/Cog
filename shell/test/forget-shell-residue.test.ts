@@ -176,6 +176,42 @@ describe('/forget covers the shell checkpoint and trace', () => {
     }
   }, 30_000);
 
+  test('a snapshot covered by /forget leaves no last-snapshot mark (#456)', async () => {
+    const dir = makeTempDir('forget-shell-snapshot-');
+    const now = Date.now();
+    const shell = makeShell(
+      dir,
+      new ScriptedProvider([{ text: '在。', toolCalls: [] }]),
+      { http: { enabled: true, port: 0, hostname: '127.0.0.1' } },
+      { now: () => now },
+    );
+    await shell.start();
+    try {
+      await shell.submit('我的旧住址是青叶町十二号。');
+      const manifest = await shell.kernel.backup.snapshot();
+      expect(manifest?.verification.ok).toBe(true);
+      const health = await (await fetch(`${shell.httpUrl}/observatory/health`)).json() as {
+        snapshot: { file: string; ok: boolean } | null;
+      };
+      expect(health.snapshot).toMatchObject({ ok: true });
+
+      const marker = (): { value?: string } | null => shell.kernel.factStore.getDatabase()
+        .prepare(`SELECT value FROM _meta WHERE key='brain_snapshot_last'`)
+        .get() as { value?: string } | null;
+      expect(marker()?.value).toBeTruthy();
+
+      await shell.runCommand('forget', `${new Date(now - DAY).toISOString()} ${new Date(now + DAY).toISOString()}`);
+      const receipt = await shell.runCommand('forget', 'confirm');
+      expect(receipt.text).toContain('本机快照 1 个');
+      expect(marker()).toBeNull();
+
+      const after = await (await fetch(`${shell.httpUrl}/observatory/health`)).json() as { snapshot: unknown };
+      expect(after.snapshot).toBeNull();
+    } finally {
+      await shell.stop();
+    }
+  }, 60_000);
+
   test('a pending binding reference leaves the database bytes after confirm', async () => {
     const dir = makeTempDir('forget-shell-pending-');
     const data = join(dir, 'data');

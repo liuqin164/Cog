@@ -140,7 +140,8 @@ export class ClockService {
   }
 
   dreamTargetDate(at = this.now()): string {
-    return shiftDate(this.dreamNightDate(at), -1);
+    const night = this.dreamNightDate(at);
+    return this.config.dreamWindow.startHour > this.config.dreamWindow.endHour ? night : shiftDate(night, -1);
   }
 
   dreamedNight(at = this.now()): boolean {
