@@ -74,6 +74,11 @@ export class BeliefGovernanceService {
     const relation = input.relation ?? 'assert';
     const current = this.getCurrent(input.projectId, canonicalKey)[0];
     const sameStatement = current && this.normalizeStatement(current.statement) === this.normalizeStatement(statement);
+    if (current?.ownership === 'user'
+      && (relation === 'correct' || relation === 'reinforce' || (relation === 'assert' && sameStatement))
+      && !evidence.some((item) => item?.role === 'user' && !current.evidenceEventIds.includes(item.eventId))) {
+      throw new Error('user_belief_requires_new_user_evidence');
+    }
     if (current && (relation === 'reinforce' || (relation === 'assert' && sameStatement))) {
       return this.reinforce(current, input, evidence as BeliefEvidenceRecord[]);
     }
