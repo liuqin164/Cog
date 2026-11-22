@@ -38,6 +38,7 @@
     "ci:status": "bun scripts/ci-status.ts",
     "leak:check": "bun scripts/leak-check.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "reachability": "bun scripts/reachability-check.ts",
     "scorecard": "bun scripts/scorecard.ts"
   },
   "engines": {

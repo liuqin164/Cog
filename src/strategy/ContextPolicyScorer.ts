@@ -1,5 +1,5 @@
-import type { ContextIntent } from '../../context/ContextCortex.js';
-import type { StrategyTemplateId } from '../../strategy/StrategyCapsule.js';
+import type { ContextIntent } from '../context/ContextCortex.js';
+import type { StrategyTemplateId } from './StrategyCapsule.js';
 import type { StrategyRolloutOutcome } from './MemoryUseJudge.js';
 
 export interface ContextPolicyScore {

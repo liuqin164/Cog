@@ -14,7 +14,7 @@ import { filterSuperseded } from '../recall/SupersessionFilter.js';
 import { isOperationalNoiseText } from '../recall/RecallGovernance.js';
 import { correctionAffects, profileCorrectionSignals, supersededSourceEventIds } from '../profile/CorrectionSignal.js';
 import type { ProfileRecallEntry } from '../profile/index.js';
-import type { MemoryEvent, MemorySourceRef } from '../types/index.js';
+import type { MemoryEvent } from '../types/index.js';
 import type { ChannelBinding, Occasion, OccasionWithholdReason } from '../occasion/index.js';
 import { eventsVisibleToAgent, isAgentRawEvent } from './AgentScopeRules.js';
 import {
@@ -29,9 +29,7 @@ import { eventHoldsLifeSensitivityMark } from '../security/LifeSensitivity.js';
 import { RecallDecisionTrace, type RecallTraceSuppression } from '../observability/RecallDecisionTrace.js';
 import { TraceStore } from '../observability/TraceStore.js';
 import type {
-  AgentRecallBeliefTouch,
   AgentRecallDecisionTrace,
-  AgentRecallEntityCard,
   AgentRecallItem,
   AgentRecallQuery,
   AgentRecallResult,
@@ -1234,71 +1232,6 @@ export class AgentRecallEngine {
     return overlap + (item.confidence || 0);
   }
 
-  private shouldPreferRawLedgerFallback(
-    candidateItems: AgentRecallItem[],
-    rawFallbackItems: AgentRecallItem[],
-    queryPlan: AgentRecallQueryPlan
-  ): boolean {
-    if (rawFallbackItems.length === 0) return false;
-    const rawHasCue = this.itemsContainRecallCue(rawFallbackItems, queryPlan);
-    if (!rawHasCue) return false;
-
-    // Ask which lane holds the better match, not whether each lane holds a match.
-    // The compiled lane is a broad sample of the whole project, so it contains any
-    // common word and "does this set mention the query" is true for every query —
-    // measured: of eleven questions whose raw lane carried the cues, the compiled
-    // lane carried them eleven times too, so the preference below never fired and
-    // the compiled lane won by default while the raw lane held the record.
-    const rawMatch = this.bestRecallCueMatch(rawFallbackItems, queryPlan);
-    const candidateMatch = this.bestRecallCueMatch(candidateItems, queryPlan);
-    if (rawMatch > candidateMatch) return true;
-
-    if (queryPlan.temporalHints.includes('past')) {
-      const rawLead = rawFallbackItems.find((item) => this.itemsContainRecallCue([item], queryPlan));
-      const candidateLead = candidateItems.find((item) => this.itemsContainRecallCue([item], queryPlan));
-      if (rawLead?.sourceAnchor?.role === 'user' && candidateLead?.sourceAnchor?.role !== 'user') {
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  /**
-   * How many of the query's cues the best item in this set carries.
-   *
-   * A set-wide yes/no cannot compare two lanes of different sizes: a large diverse
-   * set answers yes to everything. Counting the best single item's coverage says
-   * which lane actually has the memory being asked about.
-   */
-  private bestRecallCueMatch(items: AgentRecallItem[], queryPlan: AgentRecallQueryPlan): number {
-    const cues = this.recallCueTerms(queryPlan);
-    if (cues.length === 0) return 0;
-    let best = 0;
-    for (const item of items) {
-      const haystack = this.itemSearchableText(item).toLowerCase();
-      const matched = cues.filter((cue) => haystack.includes(cue.toLowerCase())).length;
-      if (matched > best) best = matched;
-    }
-    return best;
-  }
-
-  private itemsContainRecallCue(items: AgentRecallItem[], queryPlan: AgentRecallQueryPlan): boolean {
-    const cues = this.recallCueTerms(queryPlan);
-    if (cues.length === 0) return true;
-    // One shared word is not evidence of relevance. "CI" appears in nearly every
-    // review comment, so a single-word match marked the whole compiled lane as an
-    // answer and kept the raw lane — which held the record — from ever being read.
-    // An item carries the query when it holds more than one of its cues, or when
-    // the query named only one thing and that thing is present.
-    const required = cues.length === 1 ? 1 : 2;
-    return items.some((item) => {
-      const haystack = this.itemSearchableText(item).toLowerCase();
-      const matched = cues.filter((cue) => haystack.includes(cue.toLowerCase())).length;
-      return matched >= required;
-    });
-  }
-
   private recallCueTerms(queryPlan: AgentRecallQueryPlan): string[] {
     const terms = [
       ...queryPlan.keywords,
@@ -1306,26 +1239,6 @@ export class AgentRecallEngine {
     ]
       .map((term) => term.trim())
       .filter((term) => term.length >= 2 && !/^(hermes|openclaw|cogmem)$/i.test(term));
-    return uniqueNonEmpty(terms);
-  }
-
-  private queryHasStructuredCue(queryPlan: AgentRecallQueryPlan): boolean {
-    return /hermes|openclaw|cogmem|启动|安装|配置|重启|停止|操作|处理|执行|start|launch|install|configure|restart|stop|run/i.test(queryPlan.originalQuery)
-      || queryPlan.intent === 'action_history';
-  }
-
-  private structuredCueTerms(queryPlan: AgentRecallQueryPlan): string[] {
-    const terms = [
-      ...queryPlan.keywords,
-      ...queryPlan.semanticCuePhrases.flatMap((phrase) => phrase.split(/\s+/)),
-    ]
-      .map((term) => term.trim())
-      .filter((term) => term.length >= 2)
-      .filter((term) => !/^(之前|什么|做过|做了|让你|我的|原话|精确|完整|the|what|did|you|to)$/i.test(term));
-    if (/启动|start|launch/i.test(queryPlan.originalQuery)) terms.push('启动', 'start', 'launch');
-    if (/安装|install|setup/i.test(queryPlan.originalQuery)) terms.push('安装', 'install', 'setup');
-    if (/配置|修改|config/i.test(queryPlan.originalQuery)) terms.push('配置', '修改', 'config');
-    if (/操作|处理|执行|run|ran/i.test(queryPlan.originalQuery)) terms.push('操作', '执行', 'run');
     return uniqueNonEmpty(terms);
   }
 
@@ -1757,125 +1670,8 @@ export class AgentRecallEngine {
     };
   }
 
-  private toSourceRef(event: MemoryEvent, sourceId: string): MemorySourceRef {
-    return {
-      eventId: event.eventId,
-      eventType: event.rawEventType || event.eventType,
-      sourceId,
-      contentHash: event.contentHash,
-      threadId: event.threadId,
-      sessionId: event.sessionId,
-      turnId: event.turnId,
-      role: event.role,
-      threadSeq: event.threadSeq,
-      turnSeq: event.turnSeq,
-      eventOrdinal: event.eventOrdinal,
-      parentEventId: event.parentEventId,
-      prevEventId: event.prevEventId,
-      nextEventId: event.nextEventId,
-      causalityType: event.causalityType,
-      orderingConfidence: event.orderingConfidence,
-    };
-  }
-
   private eventText(event: MemoryEvent): string {
     return occasionEventText(event);
-  }
-
-  private buildEntityCards(
-    query: AgentRecallQuery,
-    allows: (id: string, text: string, events: readonly MemoryEvent[], sourceType?: string) => boolean,
-  ): AgentRecallEntityCard[] {
-    const cards = new Map<string, AgentRecallEntityCard>();
-    for (const candidate of this.entityLookupCandidates(query.query)) {
-      const entity = this.kernel.entityStore.findByAlias(candidate, undefined, query.projectId);
-      if (!entity || cards.has(entity.entityId)) continue;
-      const mentions = this.kernel.entityStore.listTimeline({
-        entityId: entity.entityId,
-        projectId: query.projectId,
-        limit: 6,
-      });
-      const attributes = this.kernel.entityStore.listAttributes(entity.entityId, undefined, query.projectId)
-        .filter((attribute) => {
-          return allows(
-            `${entity.entityId}:${attribute.attributeKey}`,
-            `${attribute.attributeKey} ${attribute.attributeValue}`,
-            occasionChainEvents(this.kernel, attribute.sourceNeuronId),
-          );
-        })
-        .slice(0, 8);
-      cards.set(entity.entityId, {
-        entityId: entity.entityId,
-        canonicalName: entity.canonicalName,
-        type: entity.type,
-        aliases: entity.aliases,
-        attributes: attributes.map((attribute) => ({
-          key: attribute.attributeKey,
-          value: attribute.attributeValue,
-          updatedAt: attribute.updatedAt,
-        })),
-        recentMentions: mentions.map((mention) => ({
-          neuronId: mention.neuronId,
-          projectId: mention.projectId,
-          mentionType: mention.mentionType,
-          createdAt: mention.createdAt,
-        })),
-      });
-      if (cards.size >= 4) break;
-    }
-    return Array.from(cards.values());
-  }
-
-  private buildBeliefTouches(
-    query: AgentRecallQuery,
-    allows: (id: string, text: string, events: readonly MemoryEvent[], sourceType?: string) => boolean,
-  ): AgentRecallBeliefTouch[] {
-    const beliefs = this.kernel.beliefStore.getActiveBeliefsForQuery({
-      query: query.query,
-      projectId: query.projectId,
-      limit: 6,
-      intent: 'recall',
-    });
-    const history = this.kernel.beliefStore.getBeliefHistoryForCanonicalKeys(
-      beliefs.map((belief) => belief.canonicalKey),
-      { projectId: query.projectId, limitPerCanonical: 8 },
-    );
-    return beliefs.filter((belief) => allows(
-      belief.id,
-      [belief.subject, belief.predicate, belief.objectValue.normalized || belief.objectValue.raw, belief.explanation]
-        .filter(Boolean)
-        .join(' '),
-      occasionChainEvents(this.kernel, belief.sourceEventId),
-    )).map((belief) => {
-      const alternatives = history.get(belief.canonicalKey) || [];
-      return {
-        beliefId: belief.id,
-        subject: belief.subject,
-        predicate: belief.predicate,
-        objectValue: belief.objectValue.normalized || belief.objectValue.raw,
-        confidence: belief.confidence,
-        trustScore: belief.trustScore,
-        status: belief.status,
-        supportCount: alternatives.filter((item) => item.status === 'active' || item.status === 'superseded').length,
-        conflictCount: alternatives.filter((item) => item.status === 'suspect' || item.contradictionGroup).length,
-        explanation: belief.explanation,
-      };
-    });
-  }
-
-  private entityLookupCandidates(query: string): string[] {
-    const tokens = query
-      .split(/[\s,，。！？、:：?？!！/]+/)
-      .map((token) => token.trim())
-      .filter((token) => token.length >= 2);
-    return uniqueNonEmpty([
-      query.trim(),
-      ...tokens,
-      ...tokens.flatMap((token, index) => {
-        const next = tokens[index + 1];
-        return next ? [`${token} ${next}`] : [];
-      }),
-    ]);
   }
 
 }

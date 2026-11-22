@@ -394,7 +394,7 @@ export {
   type StrategyRolloutOutcome,
   type StrategyRolloutReport,
   type StrategyVectorCandidate,
-} from './eval/strategy/index.js';
+} from './strategy/index.js';
 
 /**
  * Agent framework integration facade.

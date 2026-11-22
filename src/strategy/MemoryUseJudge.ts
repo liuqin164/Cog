@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
-import type { ContextIntent, ContextLayer } from '../../context/ContextCortex.js';
-import type { StrategyCapsule, StrategyTemplateId } from '../../strategy/StrategyCapsule.js';
+import type { ContextIntent, ContextLayer } from '../context/ContextCortex.js';
+import type { StrategyCapsule, StrategyTemplateId } from './StrategyCapsule.js';
 
 export type MemoryUseViolation =
   | 'exact_quote_without_source'

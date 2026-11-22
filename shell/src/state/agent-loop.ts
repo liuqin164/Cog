@@ -384,12 +384,6 @@ export class AgentRuntime {
     this.persistQueues();
   }
 
-  /** Follow-up: injected only when the loop would otherwise end. */
-  followUp(text: string): void {
-    this.followUps.push(text);
-    this.persistQueues();
-  }
-
   /** The steering queue as the view shows it; FIFO, so the newest is last. */
   get steeringMessages(): readonly string[] {
     return this.steering;

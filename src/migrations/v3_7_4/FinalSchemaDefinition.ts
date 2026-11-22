@@ -89,16 +89,6 @@ export const FINAL_TABLES: readonly FinalSchemaObject[] = [
         applied_at TEXT NOT NULL
       , checksum TEXT)` },
 
-  { type: "table", name: "entity_scope_migration_quarantine", table: "entity_scope_migration_quarantine", sql: `CREATE TABLE entity_scope_migration_quarantine (
-      quarantine_id TEXT PRIMARY KEY,
-      record_type TEXT NOT NULL,
-      record_id TEXT NOT NULL,
-      record_hash TEXT NOT NULL,
-      implicated_scopes_json TEXT NOT NULL,
-      reason TEXT NOT NULL,
-      created_at INTEGER NOT NULL
-    )` },
-
   { type: "table", name: "memory_governance_plans", table: "memory_governance_plans", sql: `CREATE TABLE memory_governance_plans (
         plan_id TEXT PRIMARY KEY,
         project_id TEXT,
@@ -431,11 +421,6 @@ export const FINAL_TABLES: readonly FinalSchemaObject[] = [
         UNIQUE(project_id, primary_event_id, policy_version)
       )` },
 
-  { type: "table", name: "_episode_integrity_markers", table: "_episode_integrity_markers", sql: `CREATE TABLE _episode_integrity_markers (
-        marker TEXT PRIMARY KEY,
-        applied_at INTEGER NOT NULL
-      )` },
-
   { type: "table", name: "memory_atlas_aliases", table: "memory_atlas_aliases", sql: `CREATE TABLE memory_atlas_aliases (
         alias_id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL,
@@ -504,127 +489,6 @@ export const FINAL_TABLES: readonly FinalSchemaObject[] = [
     content_window_start INTEGER NOT NULL,content_window_end INTEGER NOT NULL,processed_at INTEGER NOT NULL,
     neuron_id TEXT,project_id TEXT NOT NULL DEFAULT '',PRIMARY KEY(project_scope,source_id,record_hash)
   )` },
-
-  { type: "table", name: "policy_execution_quarantine", table: "policy_execution_quarantine", sql: `CREATE TABLE policy_execution_quarantine (
-    execution_id TEXT PRIMARY KEY,
-    record_hash TEXT NOT NULL,
-    reason TEXT NOT NULL,
-    created_at INTEGER NOT NULL
-  )` },
-
-  { type: "table", name: "policy_execution_legacy_tombstones", table: "policy_execution_legacy_tombstones", sql: `CREATE TABLE policy_execution_legacy_tombstones (
-    idempotency_key_hash TEXT PRIMARY KEY,
-    legacy_execution_id TEXT NOT NULL,
-    legacy_status TEXT NOT NULL,
-    reason TEXT NOT NULL,
-    created_at INTEGER NOT NULL
-  )` },
-
-  { type: "table", name: "policy_executions", table: "policy_executions", sql: `CREATE TABLE policy_executions (
-    execution_id TEXT PRIMARY KEY,
-    project_scope TEXT NOT NULL,
-    idempotency_key TEXT NOT NULL,
-    runtime_id TEXT,
-    policy TEXT NOT NULL,
-    action TEXT NOT NULL,
-    target TEXT,
-    status TEXT NOT NULL CHECK(status IN ('in_progress','executed','skipped','failed')),
-    attempt_count INTEGER NOT NULL DEFAULT 0,
-    next_retry_at INTEGER,
-    dead_lettered_at INTEGER,
-    replay_policy TEXT,
-    actor_id TEXT,
-    causation_id TEXT,
-    correlation_id TEXT,
-    policy_group TEXT,
-    stream_type TEXT,
-    event_type TEXT,
-    detail TEXT,
-    metadata_json TEXT,
-    lease_owner TEXT,
-    lease_until INTEGER,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL,
-    execution_outcome TEXT,
-    CHECK (
-      (status IN ('executed','skipped') AND execution_outcome='executed')
-      OR (status='failed' AND execution_outcome IN ('definitely_not_executed','failed_before_execution','outcome_unknown'))
-      OR (status='in_progress' AND execution_outcome IS NULL)
-    ),
-    UNIQUE(project_scope,idempotency_key)
-  )` },
-
-  { type: "table", name: "policy_projection_state", table: "policy_projection_state", sql: `CREATE TABLE policy_projection_state (
-      projection_name TEXT PRIMARY KEY,
-      last_event_id TEXT,
-      last_event_time INTEGER,
-      last_global_seq INTEGER,
-      last_rebuild_at INTEGER,
-      last_full_count INTEGER NOT NULL DEFAULT 0,
-      last_checksum TEXT,
-      status TEXT NOT NULL DEFAULT 'idle',
-      metadata_json TEXT
-    )` },
-
-  { type: "table", name: "runtime_projection_state", table: "runtime_projection_state", sql: `CREATE TABLE runtime_projection_state (
-      projection_name TEXT PRIMARY KEY,
-      last_event_id TEXT,
-      last_event_time INTEGER,
-      last_global_seq INTEGER,
-      last_rebuild_at INTEGER,
-      last_full_count INTEGER NOT NULL DEFAULT 0,
-      last_checksum TEXT,
-      status TEXT NOT NULL DEFAULT 'idle',
-      metadata_json TEXT
-    )` },
-
-  { type: "table", name: "runtime_states", table: "runtime_states", sql: `CREATE TABLE runtime_states (
-      project_scope TEXT NOT NULL, runtime_id TEXT NOT NULL, entity_type TEXT NOT NULL,
-      entity_key TEXT NOT NULL, status TEXT NOT NULL, metadata_json TEXT, updated_at INTEGER NOT NULL,
-      PRIMARY KEY(project_scope,runtime_id,entity_type,entity_key)
-    )` },
-
-  { type: "table", name: "runtime_transitions", table: "runtime_transitions", sql: `CREATE TABLE runtime_transitions (
-      project_scope TEXT NOT NULL, transition_id TEXT NOT NULL, runtime_id TEXT NOT NULL,
-      entity_type TEXT NOT NULL, entity_key TEXT NOT NULL, transition_type TEXT NOT NULL,
-      from_status TEXT, to_status TEXT NOT NULL, payload_json TEXT, occurred_at INTEGER NOT NULL,
-      PRIMARY KEY(project_scope,transition_id)
-    )` },
-
-  { type: "table", name: "runtime_projection_states", table: "runtime_projection_states", sql: `CREATE TABLE runtime_projection_states (
-      projection_name TEXT NOT NULL, project_scope TEXT NOT NULL, runtime_id TEXT NOT NULL,
-      entity_type TEXT NOT NULL, entity_key TEXT NOT NULL, status TEXT NOT NULL, metadata_json TEXT,
-      updated_at INTEGER NOT NULL, source_global_seq INTEGER NOT NULL DEFAULT 0,
-      PRIMARY KEY(projection_name,project_scope,runtime_id,entity_type,entity_key)
-    )` },
-
-  { type: "table", name: "runtime_projection_transitions", table: "runtime_projection_transitions", sql: `CREATE TABLE runtime_projection_transitions (
-      projection_name TEXT NOT NULL, project_scope TEXT NOT NULL, transition_id TEXT NOT NULL,
-      source_event_id TEXT NOT NULL,
-      runtime_id TEXT NOT NULL, entity_type TEXT NOT NULL, entity_key TEXT NOT NULL,
-      transition_type TEXT NOT NULL, from_status TEXT, to_status TEXT NOT NULL, payload_json TEXT,
-      occurred_at INTEGER NOT NULL, source_global_seq INTEGER NOT NULL DEFAULT 0,
-      PRIMARY KEY(projection_name,project_scope,transition_id)
-    )` },
-
-  { type: "table", name: "runtime_scope_discard_receipts", table: "runtime_scope_discard_receipts", sql: `CREATE TABLE runtime_scope_discard_receipts (
-    quarantine_id TEXT PRIMARY KEY,
-    source_table TEXT NOT NULL,
-    record_hash TEXT NOT NULL,
-    reason TEXT NOT NULL,
-    created_at INTEGER NOT NULL
-  )` },
-
-  { type: "table", name: "projection_event_discard_receipts", table: "projection_event_discard_receipts", sql: `CREATE TABLE projection_event_discard_receipts (
-        projector TEXT NOT NULL,
-        event_id TEXT NOT NULL,
-        global_seq INTEGER NOT NULL DEFAULT 0,
-        event_type TEXT NOT NULL,
-        event_identity_hash TEXT NOT NULL,
-        reason TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        PRIMARY KEY(projector,event_id)
-      )` },
 
   { type: "table", name: "_meta", table: "_meta", sql: `CREATE TABLE _meta (
         key TEXT PRIMARY KEY,
@@ -771,16 +635,6 @@ export const FINAL_TABLES: readonly FinalSchemaObject[] = [
         last_dreamed_global_seq INTEGER,
         last_dreamed_at INTEGER,
         updated_at INTEGER NOT NULL
-      )` },
-
-  { type: "table", name: "memory_activation", table: "memory_activation", sql: `CREATE TABLE memory_activation (
-        neuron_id TEXT PRIMARY KEY,
-        project_id TEXT,
-        activation REAL NOT NULL DEFAULT 0,
-        touch_count INTEGER NOT NULL DEFAULT 0,
-        source TEXT,
-        last_touched_at INTEGER NOT NULL,
-        last_decayed_at INTEGER
       )` },
 
   { type: "table", name: "memory_entities", table: "memory_entities", sql: `CREATE TABLE memory_entities (
@@ -984,12 +838,6 @@ export const FINAL_TABLES: readonly FinalSchemaObject[] = [
         FOREIGN KEY(run_id) REFERENCES deep_write_runs(run_id)
       )` },
 
-  { type: "table", name: "pipeline_checkpoints", table: "pipeline_checkpoints", sql: `CREATE TABLE pipeline_checkpoints (
-        projectId TEXT NOT NULL PRIMARY KEY,
-        nextStep TEXT NOT NULL,
-        savedAt INTEGER NOT NULL
-      )` },
-
   { type: "table", name: "memory_frames", table: "memory_frames", sql: `CREATE TABLE memory_frames (
         frame_id TEXT PRIMARY KEY,
         revision_id TEXT NOT NULL,
@@ -1087,36 +935,6 @@ export const FINAL_TABLES: readonly FinalSchemaObject[] = [
     PRIMARY KEY(event_id,model_id),
     FOREIGN KEY(event_id) REFERENCES memory_events(event_id) ON DELETE CASCADE
   )` },
-
-  { type: "table", name: "pending_entity_resolution_quarantine", table: "pending_entity_resolution_quarantine", sql: `CREATE TABLE pending_entity_resolution_quarantine (
-    pending_id TEXT PRIMARY KEY,record_json TEXT NOT NULL,reason TEXT NOT NULL,created_at INTEGER NOT NULL
-  , project_scope TEXT NOT NULL DEFAULT '', implicated_scopes_json TEXT NOT NULL DEFAULT '[]', context_neuron_id TEXT, scope_resolved INTEGER NOT NULL DEFAULT 0)` },
-
-  { type: "table", name: "policy_execution_read_model", table: "policy_execution_read_model", sql: `CREATE TABLE policy_execution_read_model (
-      execution_id TEXT NOT NULL, project_scope TEXT NOT NULL, idempotency_key TEXT NOT NULL,
-      runtime_id TEXT, policy TEXT NOT NULL, action TEXT NOT NULL, target TEXT,
-      status TEXT NOT NULL CHECK(status IN ('in_progress','executed','skipped','failed')),
-      attempt_count INTEGER NOT NULL DEFAULT 0, next_retry_at INTEGER, dead_lettered_at INTEGER,
-      replay_policy TEXT, actor_id TEXT, causation_id TEXT, correlation_id TEXT, policy_group TEXT,
-      stream_type TEXT, event_type TEXT, detail TEXT, metadata_json TEXT, created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL, source_global_seq INTEGER NOT NULL DEFAULT 0,
-      execution_outcome TEXT,
-      CHECK (
-        (status IN ('executed','skipped') AND execution_outcome='executed')
-        OR (status='failed' AND execution_outcome IN ('definitely_not_executed','failed_before_execution','outcome_unknown'))
-        OR (status='in_progress' AND execution_outcome IS NULL)
-      ),
-      PRIMARY KEY(project_scope,idempotency_key)
-    )` },
-
-  { type: "table", name: "policy_execution_audit_outbox", table: "policy_execution_audit_outbox", sql: `CREATE TABLE policy_execution_audit_outbox (
-      outbox_id TEXT NOT NULL PRIMARY KEY, project_scope TEXT NOT NULL, payload_json TEXT NOT NULL, created_at INTEGER NOT NULL
-    , attempt_count INTEGER NOT NULL DEFAULT 0, last_error TEXT, next_retry_at INTEGER, dead_lettered_at INTEGER)` },
-
-  { type: "table", name: "runtime_event_outbox", table: "runtime_event_outbox", sql: `CREATE TABLE runtime_event_outbox (
-      project_scope TEXT NOT NULL, outbox_id TEXT NOT NULL, payload_json TEXT NOT NULL, created_at INTEGER NOT NULL, attempt_count INTEGER NOT NULL DEFAULT 0, last_error TEXT, next_retry_at INTEGER, dead_lettered_at INTEGER,
-      PRIMARY KEY(project_scope,outbox_id)
-    )` },
 
 ] as const;
 
@@ -1290,12 +1108,6 @@ export const FINAL_AUXILIARY_OBJECTS: readonly FinalSchemaObject[] = [
   { type: "index", name: "idx_ingestion_processed_source_window", table: "ingestion_processed_records", sql: `CREATE INDEX idx_ingestion_processed_source_window
     ON ingestion_processed_records(project_scope,source_id,content_window_start,content_window_end,processed_at DESC)` },
 
-  { type: "index", name: "idx_policy_executions_runtime", table: "policy_executions", sql: `CREATE INDEX idx_policy_executions_runtime
-    ON policy_executions(project_scope,runtime_id,updated_at DESC)` },
-
-  { type: "index", name: "idx_policy_executions_policy_group", table: "policy_executions", sql: `CREATE INDEX idx_policy_executions_policy_group
-    ON policy_executions(project_scope,policy_group,updated_at DESC)` },
-
   { type: "index", name: "idx_entities_name_type", table: "entities", sql: `CREATE INDEX idx_entities_name_type
         ON entities(canonical_name, type, updated_at DESC)` },
 
@@ -1332,9 +1144,6 @@ export const FINAL_AUXILIARY_OBJECTS: readonly FinalSchemaObject[] = [
 
   { type: "index", name: "idx_compiler_confidence_project", table: "compiler_confidence_runs", sql: `CREATE INDEX idx_compiler_confidence_project
         ON compiler_confidence_runs(project_id, created_at DESC)` },
-
-  { type: "index", name: "idx_memory_activation_project", table: "memory_activation", sql: `CREATE INDEX idx_memory_activation_project
-        ON memory_activation(project_id, activation DESC, last_touched_at DESC)` },
 
   { type: "index", name: "idx_memory_entities_project_name", table: "memory_entities", sql: `CREATE INDEX idx_memory_entities_project_name
         ON memory_entities(project_id, canonical_name)` },
@@ -2057,17 +1866,5 @@ export const FINAL_AUXILIARY_OBJECTS: readonly FinalSchemaObject[] = [
 
 
       END` },
-
-  { type: "index", name: "idx_policy_execution_read_model_runtime", table: "policy_execution_read_model", sql: `CREATE INDEX idx_policy_execution_read_model_runtime ON policy_execution_read_model(project_scope,runtime_id,updated_at)` },
-
-  { type: "index", name: "idx_runtime_states_scope_runtime", table: "runtime_states", sql: `CREATE INDEX idx_runtime_states_scope_runtime ON runtime_states(project_scope,runtime_id,entity_type,updated_at)` },
-
-  { type: "index", name: "idx_runtime_transitions_scope_runtime", table: "runtime_transitions", sql: `CREATE INDEX idx_runtime_transitions_scope_runtime ON runtime_transitions(project_scope,runtime_id,occurred_at)` },
-
-  { type: "index", name: "idx_runtime_event_outbox_scope", table: "runtime_event_outbox", sql: `CREATE INDEX idx_runtime_event_outbox_scope ON runtime_event_outbox(project_scope,created_at,outbox_id)` },
-
-  { type: "index", name: "idx_runtime_projection_states_scope", table: "runtime_projection_states", sql: `CREATE INDEX idx_runtime_projection_states_scope ON runtime_projection_states(projection_name,project_scope,runtime_id)` },
-
-  { type: "index", name: "idx_runtime_projection_transitions_scope", table: "runtime_projection_transitions", sql: `CREATE INDEX idx_runtime_projection_transitions_scope ON runtime_projection_transitions(projection_name,project_scope,runtime_id)` },
 
 ] as const;
