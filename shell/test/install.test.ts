@@ -460,6 +460,31 @@ describe('the six-step install', () => {
     expect(output).toContain('1/6 预检（系统 / 运行时 / 磁盘 / 端口）（已完成，跳过）');
     expect(output).toContain('2/6 落位');
     expect(output).toContain('安装完成');
+  }, 15_000);
+
+  test('a damaged install.json is reported and kept, not treated as a fresh install', () => {
+    const harness = makeHarness();
+    mkdirSync(harness.dataDir, { recursive: true });
+    writeFileSync(join(harness.dataDir, 'install.json'), '{ not json');
+    expect(() => harness.buildInstaller()).toThrow('install_state_corrupt');
+    expect(readFileSync(join(harness.dataDir, 'install.json.broken'), 'utf8')).toBe('{ not json');
+    expect(existsSync(join(harness.dataDir, 'install.json'))).toBe(false);
+  });
+
+  test('a failed env or state write leaves the previous file whole', async () => {
+    const harness = makeHarness({ probeOk: true });
+    mkdirSync(harness.dataDir, { recursive: true });
+    const statePath = join(harness.dataDir, 'install.json');
+    const stateBefore = `${JSON.stringify({ schema: 1, done: ['preflight', 'place'], choices: {}, updatedAt: 1 }, null, 2)}\n`;
+    writeFileSync(statePath, stateBefore);
+    const envPath = join(harness.dataDir, 'env');
+    writeFileSync(envPath, 'MG_MODEL=old-model\n');
+    mkdirSync(`${statePath}.${process.pid}.tmp`);
+    mkdirSync(`${envPath}.${process.pid}.tmp`);
+
+    await expect(harness.buildInstaller().run()).rejects.toThrow();
+    expect(readFileSync(statePath, 'utf8')).toBe(stateBefore);
+    expect(readFileSync(envPath, 'utf8')).toBe('MG_MODEL=old-model\n');
   });
 
   test('a workspace that is $HOME is called out loudly and recorded (#302)', async () => {

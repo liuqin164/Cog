@@ -153,12 +153,15 @@ export function supervisorIsAlive(dataDir: string): boolean {
 
 /** Temp + fsync + rename, the same durability contract the checkpoint publishes under. */
 export function writeUpgradeJson(path: string, value: unknown): void {
+  writeAtomicFile(path, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+export function writeAtomicFile(path: string, contents: string | Uint8Array): void {
   mkdirSync(dirname(path), { recursive: true });
   const temp = `${path}.${process.pid}.tmp`;
-  const bytes = Buffer.from(`${JSON.stringify(value, null, 2)}\n`, 'utf8');
   const fd = openSync(temp, 'w', 0o600);
   try {
-    writeFileSync(fd, bytes);
+    writeFileSync(fd, contents);
     fsyncSync(fd);
   } finally {
     closeSync(fd);
@@ -171,9 +174,7 @@ export function writeUpgradeJson(path: string, value: unknown): void {
     } finally {
       closeSync(dir);
     }
-  } catch {
-    // A directory fsync is not available everywhere; the rename is the load-bearing half.
-  }
+  } catch {}
 }
 
 function readJson<T>(path: string): T | undefined {

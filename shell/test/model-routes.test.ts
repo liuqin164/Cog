@@ -4,7 +4,7 @@
  * through the existing failure ladder (`classifyProviderError`/`planFailure`), not around it.
  */
 import { describe, expect, test } from 'bun:test';
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { MgModelProvider } from '../src/plugins/mg-provider.ts';
 import { ModelRouter, routeLine } from '../src/model/router.ts';
@@ -65,6 +65,23 @@ describe('the named route store', () => {
     // The next write keeps the unreadable bytes beside the file instead of losing them.
     broken.add(STORED);
     expect(existsSync(`${path}.broken`)).toBe(true);
+    expect(storeAt(dir).list()).toEqual([STORED]);
+  });
+
+  test('an interrupted publish leaves the previous routes file whole', () => {
+    const dir = makeTempDir();
+    const path = join(dir, 'routes.json');
+    const store = storeAt(dir);
+    store.add(STORED);
+    const before = readFileSync(path, 'utf8');
+
+    writeFileSync(`${path}.${process.pid}.tmp`, '{"schema":1,"routes":[');
+    expect(storeAt(dir).list()).toEqual([STORED]);
+
+    rmSync(`${path}.${process.pid}.tmp`);
+    mkdirSync(`${path}.${process.pid}.tmp`);
+    expect(() => store.add({ ...STORED, model: 'deepseek-reasoner' })).toThrow();
+    expect(readFileSync(path, 'utf8')).toBe(before);
     expect(storeAt(dir).list()).toEqual([STORED]);
   });
 
