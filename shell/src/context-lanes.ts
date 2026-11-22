@@ -116,7 +116,6 @@ export class ContextLanes {
     }
   }
 
-  /** The open loops that must survive a restart, the dossiers this turn names or calls, and the cross-channel recap. */
   laneOpenLoops(query?: string, toolNames: readonly string[] = [], runId?: string): SessionContextItem[] {
     const items: SessionContextItem[] = [];
     const assignment = this.shell.machine.runtime.openAssignment;
