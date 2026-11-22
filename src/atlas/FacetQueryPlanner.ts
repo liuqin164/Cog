@@ -1,5 +1,6 @@
 import { extractEntityCues, normalizeEntityCueId } from '../utils/EntityCueExtractor.js';
 import { localDateFor, localDateRange, nextCivilDate, resolveTimeZone } from '../utils/LocalDateContext.js';
+import { inferYearForMonth } from '../temporal/RelativeDateRange.js';
 import { pad2 } from '../utils/Values.js';
 import { DEFAULT_TAXONOMY, type MemoryTaxonomy } from '../config/MemoryTaxonomy.js';
 
@@ -247,7 +248,7 @@ function parseTimeFacet(query: string, options: FacetQueryPlannerOptions): Plann
   const isoDay = query.match(/(20\d{2})[-年\/.](\d{1,2})[-月\/.](\d{1,2})日?/);
   if (isoDay) return dayFacet(Number(isoDay[1]), Number(isoDay[2]), Number(isoDay[3]), options.timeZone);
   const cnDay = query.match(/(?:(20\d{2})年)?(\d{1,2})月(\d{1,2})(?:号|日)?/);
-  if (cnDay) return dayFacet(cnDay[1] ? Number(cnDay[1]) : currentYear, Number(cnDay[2]), Number(cnDay[3]), options.timeZone);
+  if (cnDay) return dayFacet(cnDay[1] ? Number(cnDay[1]) : inferYearForMonth(Number(cnDay[2]), options), Number(cnDay[2]), Number(cnDay[3]), options.timeZone);
   const isoMonth = query.match(/(20\d{2})[-年\/.](\d{1,2})月?/);
   if (isoMonth) return monthFacet(Number(isoMonth[1]), Number(isoMonth[2]), options.timeZone);
   const year = query.match(/\b(20\d{2})\b|((20\d{2})年)/);

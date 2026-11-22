@@ -49,5 +49,20 @@ export function relativeDateRange(
     const endMonth = startMonth === 12 ? 1 : startMonth + 1;
     return { ...localDateRange(startYear, startMonth, 1, endYear, endMonth, 1, options.timeZone), expression: relative };
   }
+  if (relative === 'this_year' || relative === 'last_year') {
+    const startYear = relative === 'last_year' ? year! - 1 : year!;
+    return { ...localDateRange(startYear, 1, 1, startYear + 1, 1, 1, options.timeZone), expression: relative };
+  }
+  if (relative === 'past_six_months' || relative === 'past_year') {
+    const days = relative === 'past_six_months' ? -183 : -365;
+    const start = nextCivilDate(year!, month!, day!, days, options.timeZone);
+    const end = nextCivilDate(year!, month!, day!, 1, options.timeZone);
+    return { ...localDateRange(start[0], start[1], start[2], end[0], end[1], end[2], options.timeZone), expression: relative };
+  }
+  if (relative === 'around_half_year_ago') {
+    const start = nextCivilDate(year!, month!, day!, -200, options.timeZone);
+    const end = nextCivilDate(year!, month!, day!, -160, options.timeZone);
+    return { ...localDateRange(start[0], start[1], start[2], end[0], end[1], end[2], options.timeZone), expression: relative };
+  }
   return undefined;
 }
