@@ -119,4 +119,22 @@ describe('system prompt sections: a stable pinned zone and a variable tail', () 
       await shell.stop();
     }
   }, 30_000);
+
+  test('the pinned tool sentence names every registered tool and holds still', async () => {
+    const dir = makeTempDir();
+    const shell = makeShell(dir, new ScriptedProvider([{ text: 'ok', toolCalls: [] }]));
+    await shell.start();
+    try {
+      const first = shell.systemPromptSections().pinned;
+      const cited = [...new Set(shell.host.tools.list().map((tool) => tool.name))]
+        .sort()
+        .map((name) => `\`${name}\``)
+        .join(', ');
+      expect(first).toContain(`You have these tools: ${cited}.`);
+      expect(first).not.toContain('four basic tools');
+      expect(shell.systemPromptSections().pinned).toBe(first);
+    } finally {
+      await shell.stop();
+    }
+  }, 30_000);
 });
