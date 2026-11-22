@@ -37,7 +37,7 @@ export function buildInnerProvider(settings: RemoteEmbeddingSettings): Embedding
   // allowed to wait, while the synchronous recall lane keeps its own 15 s bound.
   const timeoutMs = 30_000;
   if (settings.kind === 'ollama') {
-    return new OllamaEmbeddingProvider({ baseUrl: settings.baseUrl, model: settings.model, timeoutMs });
+    return new OllamaEmbeddingProvider({ baseUrl: settings.baseUrl, model: settings.model, dimensions: settings.dimensions, timeoutMs });
   }
   return new QwenAPIEmbeddingProvider({
     apiKey: settings.apiKey,

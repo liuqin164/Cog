@@ -3,6 +3,7 @@ import { EmbeddingUnavailableError, embedOne, type EmbeddingProvider } from './E
 export interface OllamaEmbeddingConfig {
   baseUrl?: string;
   model?: string;
+  dimensions?: number;
   batchSize?: number;
   timeoutMs?: number;
 }
@@ -17,19 +18,17 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
   readonly modelId: string;
   private readonly baseUrl: string;
   private readonly model: string;
+  readonly dimensions: number;
   private readonly batchSize: number;
   private readonly timeoutMs: number;
 
   constructor(config: OllamaEmbeddingConfig = {}) {
     this.baseUrl = (config.baseUrl || 'http://localhost:11434').replace(/\/+$/, '');
     this.model = config.model || 'qwen3-embedding:0.6b';
+    this.dimensions = config.dimensions ?? OllamaEmbeddingProvider.MODEL_DIMENSIONS[this.model] ?? 1024;
     this.batchSize = config.batchSize ?? 32;
     this.timeoutMs = config.timeoutMs ?? 10_000;
     this.modelId = `ollama/${this.model}`;
-  }
-
-  get dimensions(): number {
-    return OllamaEmbeddingProvider.MODEL_DIMENSIONS[this.model] ?? 1024;
   }
 
   async embedBatch(texts: string[]): Promise<Float32Array[]> {
