@@ -87,7 +87,7 @@ export class DreamService {
         reason: 'night_failed', episodeIds: [], candidateIds: [], status: 'failed', durationMs: 0, error: kernelNightSkippedReason ?? 'night_failed', createdAt: now,
       });
       return {
-        localDate, eventCount: events.length, sourceRefs: refs, summary, kernelNightRan, kernelNightFailed,
+        localDate, eventCount: events.length, candidateCount, sourceRefs: refs, summary, kernelNightRan, kernelNightFailed,
         memoryModelUsed, memoryModelDegraded, ...(kernelNightSkippedReason === undefined ? {} : { kernelNightSkippedReason }),
       };
     }
