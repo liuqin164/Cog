@@ -51,6 +51,20 @@ export const RESERVED_CORE_COMMANDS: readonly string[] = [
   'unpin',
 ];
 
+export const RESERVED_PLUGIN_SERVICES: readonly string[] = [
+  'shell',
+  'credentials',
+  'proposals',
+  'commands',
+  'cage',
+  'kernel',
+  'memory',
+  'eventBus',
+  'stateMachine',
+  'trace',
+  'channelRegistry',
+];
+
 export class ToolNameConflictError extends Error {
   readonly code = 'tool_name_conflict';
   constructor(readonly toolName: string, readonly existingSource: string, readonly nextSource: string, readonly existingBuiltin = false) {
@@ -266,6 +280,7 @@ export interface NativePlugin {
 interface PluginRecord {
   plugin: NativePlugin;
   config: unknown;
+  trusted: boolean;
   status: 'registered' | 'started' | 'failed' | 'stopped';
   provided: string[];
   disposers: Array<() => void | Promise<void>>;
@@ -312,7 +327,7 @@ export class PluginHost {
     return entry.value as T;
   }
 
-  register(plugin: NativePlugin, config: unknown = {}, options: { fatal?: boolean } = {}): void {
+  register(plugin: NativePlugin, config: unknown = {}, options: { fatal?: boolean; trusted?: boolean } = {}): void {
     if (this.started) throw new Error('plugin_host_started: register plugins before start()');
     if (this.plugins.has(plugin.name)) throw new Error(`plugin_name_conflict: "${plugin.name}" is registered twice`);
     for (const name of plugin.provide ?? []) {
@@ -322,6 +337,7 @@ export class PluginHost {
     this.plugins.set(plugin.name, {
       plugin,
       config,
+      trusted: options.trusted !== false,
       status: 'registered',
       provided: plugin.provide ?? [],
       disposers: [],
@@ -449,6 +465,12 @@ export class PluginHost {
         callback(scoped as PluginContext);
       },
       getService<T = unknown>(service: string): T {
+        if (!record.trusted && RESERVED_PLUGIN_SERVICES.includes(service)) {
+          throw new PluginDependencyError(`plugin_service_reserved: plugin "${name}" may not take reserved service "${service}"`);
+        }
+        if (!(record.plugin.inject ?? []).includes(service)) {
+          throw new PluginDependencyError(`plugin_service_not_injected: plugin "${name}" did not declare "${service}" in inject`);
+        }
         return host.getService<T>(service);
       },
       on(event: string, handler: BusHandler) {

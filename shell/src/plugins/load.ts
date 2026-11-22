@@ -9,7 +9,7 @@
  */
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, extname, join, resolve } from 'node:path';
+import { dirname, extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { countSecretFindings } from 'cogmem';
 import { insideWorkspace } from './builtin-tools.ts';
@@ -29,6 +29,7 @@ export interface PluginLoadResult {
 
 interface LoadOptions {
   cwd: string;
+  pluginWorkspaceRoot?: string;
   trace?: { append(kind: string, record?: Record<string, unknown>, now?: number): void };
 }
 
@@ -167,7 +168,10 @@ export async function loadNativePlugins(host: PluginHost, specs: readonly string
       if (!isNativePlugin(module.default)) {
         throw new Error('plugin_invalid: the default export must be a NativePlugin with name and apply');
       }
-      host.register(module.default, {}, { fatal: false });
+      const root = options.pluginWorkspaceRoot === undefined ? undefined : resolve(options.pluginWorkspaceRoot);
+      const entry = url.startsWith('file:') ? resolve(fileURLToPath(url)) : undefined;
+      const untrusted = !pathish || (root !== undefined && entry !== undefined && (entry === root || entry.startsWith(root + sep)));
+      host.register(module.default, {}, { fatal: false, trusted: !untrusted });
       results.push({
         spec,
         status: 'loaded',

@@ -50,6 +50,65 @@ describe('native plugin host (Cordis-style)', () => {
     await expect(cyclic.start()).rejects.toThrow('plugin_dependency_cycle');
   });
 
+  test('getService only returns a service the plugin declared in inject', async () => {
+    const host = new PluginHost();
+    host.seedService('credentials', { secret: 'x' });
+    let error: unknown;
+    host.register({
+      name: 'undeclared',
+      apply(ctx) {
+        try {
+          ctx.getService('credentials');
+        } catch (caught) {
+          error = caught;
+        }
+      },
+    });
+    await host.start();
+    expect(String(error)).toContain('plugin_service_not_injected');
+  });
+
+  test('an untrusted plugin cannot reach confirmProposal or the vault, and a factory plugin still can', async () => {
+    const host = new PluginHost();
+    const shell = { confirmProposal: (_id: string) => 'confirmed' };
+    const credentials = { use: (_ref: string) => ({ password: 'x' }) };
+    host.seedService('shell', shell);
+    host.seedService('credentials', credentials);
+    const seen: unknown[] = [];
+    host.register({
+      name: 'untrusted',
+      inject: ['shell', 'credentials'],
+      apply(ctx) {
+        try {
+          (ctx.getService<typeof shell>('shell')).confirmProposal('p1');
+          seen.push('shell:reachable');
+        } catch (error) {
+          seen.push(String(error));
+        }
+        try {
+          ctx.getService<typeof credentials>('credentials').use('demo');
+          seen.push('credentials:reachable');
+        } catch (error) {
+          seen.push(String(error));
+        }
+      },
+    }, {}, { trusted: false });
+    host.register({
+      name: 'factory',
+      inject: ['shell', 'credentials'],
+      apply(ctx) {
+        seen.push(ctx.getService<typeof shell>('shell').confirmProposal('p1'));
+        seen.push(ctx.getService<typeof credentials>('credentials').use('demo'));
+      },
+    });
+    await host.start();
+    expect(seen.slice(0, 2).map(String)).toEqual([
+      expect.stringContaining('plugin_service_reserved: plugin "untrusted" may not take reserved service "shell"'),
+      expect.stringContaining('plugin_service_reserved: plugin "untrusted" may not take reserved service "credentials"'),
+    ]);
+    expect(seen.slice(2)).toEqual(['confirmed', { password: 'x' }]);
+  });
+
   test('a duplicate service is a loud conflict', async () => {
     const host = new PluginHost();
     host.register({ name: 'one', provide: ['shared'], apply(ctx) { ctx.provide('shared', 1); } });
@@ -178,7 +237,7 @@ describe('native plugin host (Cordis-style)', () => {
     await host.start();
     // The injected reference is the provider's own value, and the host serves that same object.
     expect(injected).toEqual([provided]);
-    expect(host.getService('memory-x')).toBe(provided);
+    expect(host.getService<typeof provided>('memory-x')).toBe(provided);
 
     await host.unload('provider');
     // The service is retired, not answered from a dead plugin's value...

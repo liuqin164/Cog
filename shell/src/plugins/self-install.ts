@@ -6,7 +6,7 @@ import type { PluginsAdmin } from '../plugins-admin.ts';
 import type { CommandProposal } from '../proposals.ts';
 import { checkPluginSpec } from './load.ts';
 import { readPluginRegistry } from './registry.ts';
-import { RESERVED_BUILTIN_TOOLS, RESERVED_CORE_COMMANDS, type NativePlugin, type ToolOutcome } from './host.ts';
+import { RESERVED_BUILTIN_TOOLS, RESERVED_CORE_COMMANDS, RESERVED_PLUGIN_SERVICES, type NativePlugin, type ToolOutcome } from './host.ts';
 
 export const PLUGIN_WORKSPACE_DIR = 'plugin-workspace';
 
@@ -98,6 +98,18 @@ function reservedNameInSource(source: string): string | undefined {
   return undefined;
 }
 
+const SENSITIVE_APIS: ReadonlyArray<{ name: string; pattern: RegExp }> = [
+  { name: 'node:fs', pattern: /(?:from\s*|require\s*\(\s*)['"]node:fs['"]/u },
+  { name: 'process.env', pattern: /\bprocess\.env\b/u },
+  { name: 'credentials', pattern: /\bcredentials\b/u },
+  { name: 'Bun.spawn', pattern: /\bBun\.spawn\b/u },
+  { name: 'fetch', pattern: /\bfetch\s*\(/u },
+];
+
+function sensitiveApisInSource(source: string): string[] {
+  return SENSITIVE_APIS.filter((entry) => entry.pattern.test(source)).map((entry) => entry.name);
+}
+
 export class PluginProposals {
   private readonly byId = new Map<string, PluginProposal>();
   private seq = 0;
@@ -154,6 +166,7 @@ export class PluginProposals {
       return reject('plugin_limitations_invalid: limitations 必须是字符串数组');
     }
     for (const service of inject) {
+      if (RESERVED_PLUGIN_SERVICES.includes(service)) return reject(`plugin_service_reserved: ${service} 是保留服务，自写插件不可声明`);
       if (!this.options.serviceExists(service)) return reject(`plugin_service_missing: ${service} 不是当前可注入的服务`);
     }
     for (const service of provide) {
@@ -227,6 +240,7 @@ export class PluginProposals {
     if (refused) return reject(refused);
     const sourceBytes = Buffer.byteLength(source, 'utf8');
     const sourceSha256 = createHash('sha256').update(source).digest('hex');
+    const sensitive = sensitiveApisInSource(source);
     const removal = `/plugins remove ${entry}`;
     const proposal: PluginProposal = {
       id,
@@ -247,6 +261,8 @@ export class PluginProposals {
       detail: [
         `源码：${entry}（${sourceBytes} 字节，sha256 ${sourceSha256.slice(0, 12)}）`,
         `权限：provide=[${permissions.provide.join(', ')}] inject=[${permissions.inject.join(', ')}] data=[${permissions.data.join(', ')}]`,
+        '运行面：常驻进程内，文件与网络可及；权限面是声明，不是沙箱',
+        `静态扫描：${sensitive.length > 0 ? sensitive.join(', ') : '未命中 node:fs/process.env/credentials/Bun.spawn/fetch'}`,
         `摘除：${removal}`,
       ],
     };
@@ -260,6 +276,7 @@ export class PluginProposals {
       sourceBytes,
       sourceSha256,
       permissions,
+      sensitiveApis: sensitive,
       ...(limitations ? { limitations } : {}),
       removal,
     }, at);
