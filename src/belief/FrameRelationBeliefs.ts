@@ -1,6 +1,7 @@
 import type { MemoryFrameV1 } from '../semantic/MemoryFrameTypes.js';
 import type { DeepWriteCandidateInput, DeepWriteCandidateRecord, DeepWriteCandidateStore } from '../store/DeepWriteCandidateStore.js';
 import type { BeliefStore } from './BeliefStore.js';
+import type { BeliefCandidate } from '../types/index.js';
 
 const PROJECTED_RELATIONS = new Set(['LIKES', 'FRIEND_OF', 'FAMILY_OF', 'RELATED_TO']);
 
@@ -96,18 +97,36 @@ export function upsertFrameRelationBelief(
   if (!subject || !value || (!eventId && provenance.neuronIds.length === 0)) {
     return { reason: 'relation_missing_required_fields' };
   }
+  const predicate = relationType === 'LIKES' ? 'preference.LIKES' : relationType;
+  const validFrom = eventId ? beliefStore.eventOccurredAt(eventId) ?? candidate.createdAt : candidate.createdAt;
+  const correctionProbe: BeliefCandidate = {
+    projectId: provenance.projectId,
+    scope: 'project',
+    subject,
+    predicate,
+    objectValue: { raw: value, type: 'string' },
+    confidence: candidate.confidence,
+    sourceType: 'llm_inference',
+    validFrom,
+    extractionReason: relationType === 'LIKES' ? 'preference_signal' : 'explicit_user_statement',
+    ...(relationType === 'LIKES' ? {} : { canonicalKeyDiscriminator: value }),
+  };
+  if (beliefStore.hasNewerOwnerCorrection(correctionProbe)) {
+    return { reason: 'owner_corrected' };
+  }
+
   const result = beliefStore.upsert({
     projectId: provenance.projectId,
     scope: 'project',
     subject,
-    predicate: relationType === 'LIKES' ? 'preference.LIKES' : relationType,
+    predicate,
     objectValue: { raw: value, type: 'string' },
     confidence: candidate.confidence,
     trustScore: Math.max(0.55, candidate.confidence),
     sourceNeuronId: provenance.neuronIds[0] ?? eventId,
     ...(eventId && beliefStore.eventInProject(eventId, provenance.projectId) ? { sourceEventId: eventId } : {}),
     sourceType: 'llm_inference',
-    validFrom: eventId ? beliefStore.eventOccurredAt(eventId) ?? candidate.createdAt : candidate.createdAt,
+    validFrom,
     extractionReason: relationType === 'LIKES' ? 'preference_signal' : 'explicit_user_statement',
     explanation: `frame relation in ${text(['episodeId']) ?? ''}`,
     metadata: {

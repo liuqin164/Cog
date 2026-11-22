@@ -207,6 +207,7 @@ export interface ProfileCompilerPorts {
   sourceEventOfNeuron: (neuronId: string | undefined) => string | undefined;
   /** Every prospective memory in the project; this face applies the status rule itself. */
   listOngoing: (projectId: string) => ProspectiveMemoryRecord[];
+  supersedeFrames?: (projectId: string, eventIds: string[], now: number) => number;
 }
 
 interface Candidate {
@@ -267,6 +268,7 @@ export class ProfileCompiler {
   private readonly entities: EntityStore;
   private readonly sourceEventOfNeuron: ProfileCompilerPorts['sourceEventOfNeuron'];
   private readonly listOngoing: ProfileCompilerPorts['listOngoing'];
+  private readonly supersedeFrames?: ProfileCompilerPorts['supersedeFrames'];
 
   constructor(ports: ProfileCompilerPorts) {
     this.events = ports.events;
@@ -275,6 +277,7 @@ export class ProfileCompiler {
     this.entities = ports.entities;
     this.sourceEventOfNeuron = ports.sourceEventOfNeuron;
     this.listOngoing = ports.listOngoing;
+    this.supersedeFrames = ports.supersedeFrames;
   }
 
   compile(input: ProfileCompileInput): ProfileCompileResult {
@@ -742,14 +745,6 @@ export class ProfileCompiler {
     return current ? { ...current, status: 'current' } : null;
   }
 
-  /**
-   * Carry the owner's correction into the governed evidence the profile was compiled from.
-   *
-   * A fact or preference entry came from a belief, a fact, or both. The old evidence is superseded
-   * through its own store (an update of a derived table, never a rewrite of a ledger row), and a
-   * correction belief is appended so the Atlas projection and the default belief lane read the new
-   * value. The profile correction row remains the audit of the owner's act.
-   */
   private propagateCorrection(
     projectId: string,
     current: ProfileEntry,
@@ -816,6 +811,8 @@ export class ProfileCompiler {
         },
       });
     }
+
+    if (sourceIds.size > 0) this.supersedeFrames?.(projectId, [...sourceIds], now);
   }
 
   /** entryId → its versions oldest first, plus how the newest row left it. */

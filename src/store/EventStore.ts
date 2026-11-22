@@ -1008,15 +1008,6 @@ export class EventStore {
       startTime?: number;
       endTime?: number;
       limit?: number;
-      /**
-       * How to order the events a query matched.
-       *
-       * Chronological is for replay and audit: reading a thread back, the order is
-       * the point. Relevance is for recall, where the caller wants the event that
-       * answers the question and the sequence it sat in is incidental. Ordering
-       * every match by `global_seq` made the oldest hit the best hit, so the
-       * newest and most apt answer never reached the caller.
-       */
       orderBy?: RawEventOrder;
     } = {},
   ): MemoryEvent[] {
@@ -1027,27 +1018,21 @@ export class EventStore {
     const columns = MEMORY_EVENT_COLUMNS.split(',').map((column) => `e.${column.trim()}`).join(', ');
     const scope = this.rawEventScopeConditions(options);
 
-    // A two-character Chinese word is one indexed term here, not a run the
-    // FTS tokenizer merges into a sentence (#100). The term index is ordered by
-    // `global_seq`, which is the order the LIKE fallback would produce for a
-    // single token, so this path returns the same rows without the scan.
+    const newestFirst = options.orderBy === 'relevance';
     const cjkTerm = this.cjkQueryTerm(query);
     if (cjkTerm) {
+      const order = newestFirst ? 'DESC' : 'ASC';
       const rows = this.db.prepare(`
         SELECT ${columns}
         FROM memory_event_cjk_terms t
         JOIN memory_events e ON e.event_id = t.event_id
         WHERE t.term = ?${scope.sql}
-        ORDER BY t.global_seq ASC, t.event_id ASC
+        ORDER BY t.global_seq ${order}, t.event_id ${order}
         LIMIT ?
       `).all(cjkTerm, ...scope.params, limit) as any[];
-      // An empty answer from a complete index is the answer; only an
-      // incomplete index has to ask the scan.
       if (rows.length > 0 || this.cjkIndexComplete()) return rows.map((row) => this.mapRow(row));
     }
 
-    // An event holding every word of the query is the best answer there is, and
-    // keeping this first attempt means the looser one below can never displace it.
     const exactOrder = options.orderBy === 'relevance'
       ? 'bm25(memory_events_fts) ASC, COALESCE(e.global_seq, 0) ASC, e.event_id ASC'
       : `COALESCE(e.global_seq, 0) ASC,
@@ -1064,20 +1049,15 @@ export class EventStore {
     `).all(ftsQuery, ...scope.params, limit) as any[];
     if (exact.length > 0) return exact.map((row) => this.mapRow(row));
 
-    // Nothing held every word. The query may still be a question about a
-    // statement — see toRawEventFtsOrQuery — so match any word and rank by how
-    // much of the query each event actually carries. A single OR over every
-    // word is not bounded: one word held by most of the ledger (a document
-    // number prefix, a project name) makes SQLite rank the whole table before
-    // the LIMIT can apply (#243). Each word is therefore read with its own
-    // capped candidate list, and the lists are merged here.
     const loose = this.boundedRawEventCandidates(query, options, limit);
     if (loose.length > 0) return loose.map((row) => this.mapRow(row));
+
+    const indexed = this.cjkPostingSearch(query, options, limit);
+    if (indexed) return indexed.map((row) => this.mapRow(row));
 
     return this.fallbackRawTextSearch(query, options, limit);
   }
 
-  /** The scope filters shared by the raw-event searches. */
   private rawEventScopeConditions(options: {
     projectId?: string;
     workspaceId?: string;
@@ -1329,13 +1309,11 @@ export class EventStore {
     return '';
   }
 
-  /** A query that is exactly one two-character CJK word, the #100 lookup case. */
   private cjkQueryTerm(query: string): string | null {
     const term = query.trim();
     return /^[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]{2}$/.test(term) ? term : null;
   }
 
-  /** Every overlapping two-character CJK term in a piece of text, once each. */
   private cjkTermKeys(text: string): string[] {
     const terms = new Set<string>();
     for (const run of text.match(/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]+/gu) ?? []) {
@@ -1375,13 +1353,6 @@ export class EventStore {
     return Boolean(state && state.rowid >= maxRowid);
   }
 
-  /**
-   * Fills the CJK term table for events written before it existed.
-   *
-   * The text is read from the raw-event FTS row rather than by parsing every
-   * payload again: the two indexes describe the same text, and this corpus is
-   * 200k events. The watermark makes it one pass per new batch, not per open.
-   */
   private rebuildCjkTermsIfNeeded(): void {
     if (this.encryptionProvider) {
       this.db.prepare(`DELETE FROM memory_event_cjk_terms`).run();
@@ -1426,6 +1397,10 @@ export class EventStore {
       `).all(cjkTerm, ...scope.params, cap) as any[];
       if (rows.length > 0 || this.cjkIndexComplete()) return rows.length;
     }
+    if (/^[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]{2,}$/u.test(token)) {
+      const rows = this.cjkPostingRows(this.rawTextSearchTokens(token), { ...options, orderBy: 'relevance' }, cap);
+      if (rows) return rows.length;
+    }
     // Only the cap matters: whether a word is held by three events or by the
     // whole ledger is a frequency question, not a ranking one. Asking the
     // ranked search answered it by sorting every match, which is exactly the
@@ -1453,32 +1428,12 @@ export class EventStore {
       .join(' ');
   }
 
-  /**
-   * The same tokens, any of which may match.
-   *
-   * A question is not a query its answer can satisfy. "when does the pelican
-   * migration window open" asks about "the pelican migration window opens in
-   * October": every question word the statement lacks ("when", "does", "the",
-   * and "open" against "opens") is one the statement may never contain, so
-   * requiring all of them returns nothing while the answer sits in the ledger.
-   * A question therefore falls back to matching any of its words and lets BM25
-   * rank the event that shares the most of them.
-   */
   private rawEventFtsOrTokens(query: string): string[] {
     const meaningful = this.rawEventFtsTokens(query).filter((token) => !QUERY_STOP_WORDS.has(token));
     // Every word was a question word; the query still has to search for them.
     return meaningful.length > 0 ? meaningful : this.rawEventFtsTokens(query);
   }
 
-  /**
-   * The match-any-word candidates, with a hard cap on what one word may cost.
-   *
-   * One word per candidate list, never one OR across every word: `bm25` has to
-   * sort every row it sees before `LIMIT` can drop any, so a word present in
-   * most of the ledger turns "find the rare code" into a full-table sort. Each
-   * list is capped instead, which also makes a word's rarity visible: a list
-   * shorter than the cap is the whole posting list.
-   */
   private boundedRawEventCandidates(
     query: string,
     options: {
@@ -1489,12 +1444,14 @@ export class EventStore {
       localDate?: string;
       startTime?: number;
       endTime?: number;
+      orderBy?: RawEventOrder;
     },
     limit: number,
   ): any[] {
     const tokens = [...new Set(this.rawEventFtsOrTokens(query))].slice(0, 12);
     if (tokens.length === 0) return [];
     const cap = Math.max(limit * 8, 64);
+    const order = options.orderBy === 'relevance' ? 'DESC' : 'ASC';
     const columns = MEMORY_EVENT_COLUMNS.split(',').map((column) => `e.${column.trim()}`).join(', ');
     const scope = this.rawEventScopeConditions(options);
     const statement = this.db.prepare(`
@@ -1502,7 +1459,7 @@ export class EventStore {
       FROM memory_events_fts
       JOIN memory_events e ON e.event_id = memory_events_fts.event_id
       WHERE memory_events_fts MATCH ?${scope.sql}
-      ORDER BY rank ASC, COALESCE(e.global_seq, 0) ASC, e.event_id ASC
+      ORDER BY rank ASC, COALESCE(e.global_seq, 0) ${order}, e.event_id ${order}
       LIMIT ?
     `);
     const candidates = new Map<string, { row: any; matched: number; rarest: number; rank: number }>();
@@ -1524,8 +1481,12 @@ export class EventStore {
         right.matched - left.matched
         || left.rarest - right.rarest
         || left.rank - right.rank
-        || (left.row.global_seq ?? 0) - (right.row.global_seq ?? 0)
-        || String(left.row.event_id).localeCompare(String(right.row.event_id)))
+        || (options.orderBy === 'relevance'
+          ? (right.row.global_seq ?? 0) - (left.row.global_seq ?? 0)
+          : (left.row.global_seq ?? 0) - (right.row.global_seq ?? 0))
+        || (options.orderBy === 'relevance'
+          ? String(right.row.event_id).localeCompare(String(left.row.event_id))
+          : String(left.row.event_id).localeCompare(String(right.row.event_id))))
       .slice(0, limit)
       .map((candidate) => candidate.row);
   }
@@ -1551,6 +1512,7 @@ export class EventStore {
       localDate?: string;
       startTime?: number;
       endTime?: number;
+      orderBy?: RawEventOrder;
     },
     limit: number,
   ): MemoryEvent[] {
@@ -1558,17 +1520,13 @@ export class EventStore {
     const tokens = this.rawTextSearchTokens(query);
     if (tokens.length === 0) return [];
 
-    // Any word may carry the answer: a question about a statement shares only
-    // some of its words, and requiring all of them is what made the question
-    // return nothing. Relevance is decided below, by how many words matched.
     const likeConditions = tokens.map(() => `LOWER(memory_events_fts.text) LIKE ? ESCAPE '\\'`);
     const likeParams: Array<string | number> = tokens.map((token) => `%${escapeSqlLike(token)}%`);
     const scope = this.rawEventScopeConditions(options);
-    // Count how many of the query's words this event carries, so the event that
-    // answers the question outranks one that merely shares a common word.
     const score = likeConditions
       .map((condition) => `CASE WHEN ${condition} THEN 1 ELSE 0 END`)
       .join(' + ');
+    const order = options.orderBy === 'relevance' ? 'DESC' : 'ASC';
 
     const rows = this.db.prepare(`
       SELECT ${MEMORY_EVENT_COLUMNS.split(',').map((column) => `e.${column.trim()}`).join(', ')},
@@ -1576,21 +1534,79 @@ export class EventStore {
       FROM memory_events_fts
       JOIN memory_events e ON e.event_id = memory_events_fts.event_id
       WHERE (${likeConditions.join(' OR ')})${scope.sql}
-      ORDER BY matched DESC, COALESCE(e.global_seq, 0) ASC, e.event_id ASC
+      ORDER BY matched DESC, COALESCE(e.global_seq, 0) ${order}, e.event_id ${order}
       LIMIT ?
     `).all(...likeParams, ...likeParams, ...scope.params, limit) as any[];
     return rows.map((row) => this.mapRow(row));
   }
 
-  /**
-   * Words to look for when the index cannot split the text.
-   *
-   * `unicode61` treats a run of Chinese characters as one word, so "我什么时候
-   * 去的北京" is a single token that no event contains, while the event says
-   * "我今天下午去了北京出差". Splitting CJK runs into overlapping bigrams keeps
-   * a word that appears inside the run findable, which is what a person expects
-   * when they ask about something they said.
-   */
+  private cjkPostingRows(
+    tokens: readonly string[],
+    options: {
+      projectId?: string;
+      workspaceId?: string;
+      threadId?: string;
+      sessionId?: string;
+      localDate?: string;
+      startTime?: number;
+      endTime?: number;
+      orderBy?: RawEventOrder;
+    },
+    limit: number,
+  ): any[] | null {
+    if (tokens.length === 0) return null;
+    const cjk = /^[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]{2,}$/u;
+    if (!tokens.every((token) => cjk.test(token)) || !this.cjkIndexComplete()) return null;
+    const scope = this.rawEventScopeConditions(options);
+    const cap = Math.max(limit * 8, 64);
+    const statement = this.db.query(`
+      SELECT t.event_id AS event_id, t.global_seq AS global_seq
+      FROM memory_event_cjk_terms t
+      JOIN memory_events e ON e.event_id = t.event_id
+      WHERE t.term = ?${scope.sql}
+      LIMIT ?
+    `);
+    const candidates = new Map<string, { eventId: string; globalSeq: number; matched: number }>();
+    for (const token of new Set(tokens)) {
+      for (const row of statement.all(token, ...scope.params, cap) as Array<{ event_id: string; global_seq: number | null }>) {
+        const existing = candidates.get(row.event_id);
+        if (existing) existing.matched += 1;
+        else candidates.set(row.event_id, { eventId: row.event_id, globalSeq: row.global_seq ?? 0, matched: 1 });
+      }
+    }
+    const relevance = options.orderBy === 'relevance';
+    const ordered = [...candidates.values()]
+      .sort((left, right) =>
+        right.matched - left.matched
+        || (relevance ? right.globalSeq - left.globalSeq : left.globalSeq - right.globalSeq)
+        || (relevance ? right.eventId.localeCompare(left.eventId) : left.eventId.localeCompare(right.eventId)))
+      .slice(0, limit);
+    if (ordered.length === 0) return [];
+    const columns = MEMORY_EVENT_COLUMNS.split(',').map((column) => `e.${column.trim()}`).join(', ');
+    const rows = this.db.query(`SELECT ${columns} FROM memory_events e WHERE e.event_id IN (${ordered.map(() => '?').join(',')})`)
+      .all(...ordered.map((candidate) => candidate.eventId)) as any[];
+    const byId = new Map(rows.map((row) => [row.event_id, row]));
+    return ordered.map((candidate) => byId.get(candidate.eventId)).filter((row): row is any => Boolean(row));
+  }
+
+  private cjkPostingSearch(
+    query: string,
+    options: {
+      projectId?: string;
+      workspaceId?: string;
+      threadId?: string;
+      sessionId?: string;
+      localDate?: string;
+      startTime?: number;
+      endTime?: number;
+      orderBy?: RawEventOrder;
+    },
+    limit: number,
+  ): any[] | null {
+    if (this.encryptionProvider) return null;
+    return this.cjkPostingRows(this.rawTextSearchTokens(query), options, limit);
+  }
+
   private rawTextSearchTokens(query: string): string[] {
     const tokens: string[] = [];
     for (const part of query.split(/[^\p{L}\p{N}_-]+/u)) {
@@ -1602,8 +1618,6 @@ export class EventStore {
           tokens.push(token);
           continue;
         }
-        // The bigrams of a question word are as common as the word itself, so
-        // they are dropped too — "什么时候" must not match every Chinese event.
         for (let i = 0; i + 2 <= token.length; i += 1) {
           const bigram = token.slice(i, i + 2);
           if (!QUERY_STOP_WORDS.has(bigram)) tokens.push(bigram);
@@ -1612,12 +1626,6 @@ export class EventStore {
       }
       tokens.push(token);
     }
-    // The cap bounds how many LIKE clauses the scan carries, which is why a cap
-    // belongs here at all. It has to count the *expansion*, not the words: a
-    // Chinese run becomes one bigram per character, so a cap of twelve kept only
-    // the first twelve characters of the question and dropped its end. "我今天
-    // 下午去了北京出差见了张伟" then matched nothing, while the memory it was
-    // asking about held 张伟 and nothing else the question said.
     return [...new Set(tokens)].slice(0, 48);
   }
 
