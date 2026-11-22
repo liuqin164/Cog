@@ -36,6 +36,7 @@ export interface DreamResult {
   dreamEventId?: string;
   kernelNightRan: boolean;
   kernelNightSkippedReason?: string;
+  processedEpisodeCount: number;
   memoryModelUsed: boolean;
   memoryModelDegraded?: string;
 }
@@ -51,6 +52,7 @@ export class DreamService {
     const refs = dedupeRefs(events);
     let kernelNightRan = false;
     let kernelNightSkippedReason: string | undefined;
+    let processedEpisodeCount = 0;
     let memoryModelUsed = false;
     let memoryModelDegraded: string | undefined;
     if (this.options.runKernelNight) {
@@ -59,6 +61,7 @@ export class DreamService {
         const night = await kernel.runNight({ projectId, maxEpisodes: this.options.maxEpisodes, now });
         kernelNightRan = true;
         kernelNightSkippedReason = night.dream.skipped ? night.dream.reason : undefined;
+        processedEpisodeCount = night.dream.processedEpisodeCount;
         if (night.dream.semanticProcessorReason) {
           memoryModelDegraded = night.dream.semanticProcessorReason;
           this.options.trace?.append('dream_model_degraded', {
@@ -87,7 +90,10 @@ export class DreamService {
       kernelNightSkippedReason = 'disabled_by_config';
     }
     const summary = summarize(localDate, events, kernelNightSkippedReason);
-    const dreamEvent = await backend.ingestTaskEvent({
+    const existing = kernel
+      .getThreadEvents(`companion-dream:${localDate}`, { projectId, limit: 50 })
+      .find((event) => isDreamProduct(event));
+    const dreamEvent = existing ?? await backend.ingestTaskEvent({
       agentId,
       projectId,
       workspaceId: projectId,
@@ -111,6 +117,7 @@ export class DreamService {
       sourceRefCount: refs.length,
       dreamEventId: dreamEvent.eventId,
       kernelNightRan,
+      reused: existing !== undefined,
     });
     return {
       localDate,
@@ -120,6 +127,7 @@ export class DreamService {
       dreamEventId: dreamEvent.eventId,
       kernelNightRan,
       kernelNightSkippedReason,
+      processedEpisodeCount,
       memoryModelUsed,
       memoryModelDegraded,
     };

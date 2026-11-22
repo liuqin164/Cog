@@ -617,7 +617,17 @@ export class ResidentTick {
       const result = await this.shell.dream!.integrate(localDate, `companion-day:${localDate}`, at);
       if (result.memoryModelDegraded === 'semantic_processor_failed') this.shell.memoryModelFailed = true;
       else if (result.memoryModelUsed) this.shell.memoryModelFailed = false;
-      this.shell.clock!.markDreamed(at);
+      const processed = result.processedEpisodeCount ?? 0;
+      const drained = !result.kernelNightRan
+        || result.kernelNightSkippedReason === 'no_sealed_episode_backlog'
+        || processed < this.shell.config.dream.maxEpisodes
+        || this.dreamBacklog(at).episodes === 0;
+      if (drained) this.shell.clock!.markDreamed(at);
+      else this.shell.trace.append('dream_backlog_remaining', {
+        localDate,
+        processedEpisodeCount: result.processedEpisodeCount,
+        maxEpisodes: this.shell.config.dream.maxEpisodes,
+      });
       try {
         const promotion = this.shell.kernel.promoteDreamCandidates({ projectId: this.shell.config.projectId, limit: 100 });
         this.shell.trace.append('dream_promotion', { promoted: promotion.promotedCandidates, decisions: promotion.decisions.length });
