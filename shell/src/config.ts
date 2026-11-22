@@ -9,6 +9,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readPluginRegistry } from './plugins/registry.ts';
 import { DEFAULT_MAX_IDLE_TURNS } from './state/agent-loop.ts';
+import { normalizeCompanionName } from './companion-name.ts';
 import {
   EMBEDDING_DIMENSIONS,
   EMBEDDING_MODEL,
@@ -41,6 +42,8 @@ export interface ShellConfig {
   projectId: string;
   /** The companion's own agent identity, used as `metadata.sourceAgent` on every write. */
   agentId: string;
+  /** The name the owner gave the companion at install time; the UI reads it for labels and avatars. */
+  companionName: string;
   /** Session id for this install; stable across restarts so the session lane survives a kill. */
   sessionId: string;
   /** Cogmem database file. `:memory:` is supported for tests. */
@@ -303,6 +306,7 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
     workspaceRoot,
     projectId: overrides.projectId ?? env('COG_PROJECT') ?? (typeof choices.projectId === 'string' ? choices.projectId : undefined) ?? 'companion',
     agentId: overrides.agentId ?? env('COG_AGENT') ?? (typeof choices.agentId === 'string' ? choices.agentId : undefined) ?? 'cogmem-companion',
+    companionName: overrides.companionName ?? normalizeCompanionName(choices.companionName),
     // The installer writes this once per install and never overwrites it. A hand-run shell that was
     // never installed keeps one fixed id instead of minting a new lane each process start.
     sessionId: overrides.sessionId ?? env('COG_SESSION') ?? 'session-default',

@@ -9,9 +9,8 @@ const TOKEN_MODULE = SOURCE_LAYOUT ? '../../../src/observatory/token.ts' : '../.
 
 const PREFIX = '/channel/web';
 const STATIC_FILES: Record<string, { file: string; type: string }> = {
-  [PREFIX]: { file: 'index.html', type: 'text/html; charset=utf-8' },
-  [`${PREFIX}/`]: { file: 'index.html', type: 'text/html; charset=utf-8' },
   [`${PREFIX}/app.js`]: { file: 'app.js', type: 'text/javascript; charset=utf-8' },
+  [`${PREFIX}/view.css`]: { file: 'view.css', type: 'text/css; charset=utf-8' },
 };
 
 export interface WebChannelShell {
@@ -85,6 +84,9 @@ export class WebChannel {
     }
     if (!this.options.routes.isLocalAuthority(request.headers.get('host') ?? url.host)) {
       return new Response('forbidden: unexpected Host (loopback only)', { status: 403 });
+    }
+    if (url.pathname === PREFIX || url.pathname === `${PREFIX}/`) {
+      return new Response(null, { status: 302, headers: { location: '/observatory/#chat' } });
     }
 
     const staticFile = STATIC_FILES[url.pathname];
@@ -161,6 +163,10 @@ export class WebChannel {
     try {
       this.options.contract.presence(this.session, { reachability: 'offline', ownerActivity: 'away' });
     } catch {}
+  }
+
+  uiContribution(): { id: string; label: string; script: string; style: string } {
+    return { id: 'chat', label: '对话', script: `${PREFIX}/app.js`, style: `${PREFIX}/view.css` };
   }
 
   private methodNotAllowed(allow: string): Response {

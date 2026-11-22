@@ -97,11 +97,19 @@ describe('web channel plugin (F12)', () => {
     const base = shell.httpUrl!;
     const sse = new Sse((await fetch(`${base}/channel/web/events`)).body!.getReader());
     try {
-      expect((await fetch(`${base}/channel/web/`)).status).toBe(200);
-      const html = await (await fetch(`${base}/channel/web/`)).text();
-      expect(html).toContain('Cog 对话');
+      const page = await fetch(`${base}/channel/web/`, { redirect: 'manual' });
+      expect(page.status).toBe(302);
+      expect(page.headers.get('location')).toBe('/observatory/#chat');
       const script = await (await fetch(`${base}/channel/web/app.js`)).text();
       expect(script).toContain('/observatory/#credentials');
+      expect(script).toContain("document.getElementById('view-chat')");
+      expect(script).toContain('__COGMEM_COMPANION__');
+      const style = await fetch(`${base}/channel/web/view.css`);
+      expect(style.status).toBe(200);
+      expect(style.headers.get('content-type')).toBe('text/css; charset=utf-8');
+      const shellPage = await (await fetch(`${base}/observatory/`)).text();
+      expect(shellPage).toContain('id="tab-chat"');
+      expect(shellPage).toContain('window.__COGMEM_COMPANION__=');
 
       expect((await post(base, '/channel/web/send', { text: '你好' }, '')).status).toBe(403);
 
@@ -140,6 +148,9 @@ describe('web channel plugin (F12)', () => {
       const before = (shell.kernel as any).eventStore.queryEvents(1, 1, { projectId: [shell.config.projectId] }).total;
       await shell.pluginsAdmin.removePlugin('builtin:web-channel');
       expect((await fetch(`${base}/channel/web/`)).status).toBe(404);
+      const afterRemoval = await (await fetch(`${base}/observatory/`)).text();
+      expect(afterRemoval).not.toContain('id="tab-chat"');
+      expect(afterRemoval).toContain('id="tab-starmap"');
       expect((await fetch(`${base}/health`)).status).toBe(200);
       const after = (shell.kernel as any).eventStore.queryEvents(1, 1, { projectId: [shell.config.projectId] }).total;
       expect(after).toBe(before);

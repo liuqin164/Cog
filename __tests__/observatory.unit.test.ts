@@ -110,6 +110,9 @@ describe('the observatory read path writes nothing', () => {
     await get('/app.js');
     await get('/demo.json');
     expect(visited.length).toBe(8);
+    const font = await fetch(`${base}/fonts/noto-sans-sc-400-chinese-simplified.woff2`);
+    expect(font.status).toBe(200);
+    expect(font.headers.get('content-type')).toBe('font/woff2');
 
     const after = fingerprint(dbPath);
     expect(after).toBe(afterOpen);
@@ -213,6 +216,29 @@ describe('the page is served from beside the route module', () => {
     const slash = await fetch(`${base}/?project=companion`);
     expect(slash.status).toBe(200);
     expect(await slash.text()).toContain('src="./app.js"');
+  });
+
+  test('the shell mounts a plugin view only when the slot is contributed', async () => {
+    const { createObservatoryRoutes } = await import('../src/observatory/routes.js');
+    const readDb = new Database(dbPath, { readonly: true });
+    const observatory = new MemoryObservatory({ db: readDb });
+    const withSlot = createObservatoryRoutes(observatory, undefined, undefined, {
+      uiSlots: () => [{ id: 'chat', label: '对话', script: '/channel/web/app.js', style: '/channel/web/view.css' }],
+      companionName: () => '小海',
+      companionAvatar: () => '小海',
+    });
+    const page = await withSlot(new Request('http://127.0.0.1/observatory/'), '127.0.0.1');
+    const html = await page!.text();
+    expect(html).toContain('id="tab-chat"');
+    expect(html).toContain('id="view-chat"');
+    expect(html).toContain('/channel/web/app.js');
+    expect(html).toContain('window.__COGMEM_COMPANION__={"name":"小海","avatar":"小海"}');
+
+    const bare = createObservatoryRoutes(observatory);
+    const bareHtml = await (await bare(new Request('http://127.0.0.1/observatory/'), '127.0.0.1'))!.text();
+    expect(bareHtml).not.toContain('id="tab-chat"');
+    expect(bareHtml).toContain('id="tab-starmap"');
+    readDb.close();
   });
 
   test('only GET is answered, and only on loopback', async () => {

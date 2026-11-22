@@ -54,7 +54,12 @@ export interface HttpFaceOptions {
   /** The shell's trace file; the observatory reads its surfacing counts from it. */
   tracePath?: string;
   credentials?: HttpCredentialFace;
-  webChannel?: () => { handle(request: Request, remoteAddress?: string): Promise<Response | null> } | undefined;
+  companionName?: () => string;
+  companionAvatar?: () => string;
+  webChannel?: () => {
+    handle(request: Request, remoteAddress?: string): Promise<Response | null>;
+    uiContribution?(): { id: string; label: string; script: string; style?: string };
+  } | undefined;
 }
 
 export interface HttpCredentialFace {
@@ -84,6 +89,7 @@ async function openObservatory(
   connectedAgents?: () => string[],
   tracePath?: string,
   credentials?: HttpCredentialFace,
+  ui?: { slots: () => Array<{ id: string; label: string; script: string; style?: string }>; name: () => string; avatar: () => string },
 ): Promise<{ db: Database; handle: (request: Request, remoteAddress?: string) => Promise<Response | null> } | undefined> {
   if (!dbPath || dbPath === ':memory:' || dbPath.startsWith('file:')) return undefined;
   try {
@@ -111,6 +117,9 @@ async function openObservatory(
       handle: routesModule.createObservatoryRoutes(observatory, events, soul, {
         token: tokenModule.readObservatoryToken(dirname(dbPath)),
         credentials,
+        uiSlots: ui?.slots,
+        companionName: ui?.name,
+        companionAvatar: ui?.avatar,
       }),
     };
   } catch {
@@ -130,7 +139,14 @@ export async function startKernelHttpFace(kernel: unknown, options: HttpFaceOpti
     }
   };
 
-  const observatory = await openObservatory(kernel, kernelHealth().dbPath as string | undefined, options.connectedAgents, options.tracePath, options.credentials);
+  const observatory = await openObservatory(kernel, kernelHealth().dbPath as string | undefined, options.connectedAgents, options.tracePath, options.credentials, {
+    slots: () => {
+      const slot = options.webChannel?.()?.uiContribution?.();
+      return slot ? [slot] : [];
+    },
+    name: () => options.companionName?.() ?? 'Cog',
+    avatar: () => options.companionAvatar?.() ?? 'C',
+  });
 
   const httpServer = Bun.serve({
     port: options.port,
