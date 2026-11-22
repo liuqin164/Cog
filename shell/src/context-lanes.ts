@@ -9,11 +9,16 @@ import type { TraceRecord } from './trace.ts';
 const MAX_TASK_STUB_QUOTE_CHARS = 240;
 const MAX_TASK_STUBS = 20;
 const TASK_STUB_RETRY_MS = 60 * 60_000;
+const CHANNEL_RECAP_TURNS = 6;
+const CHANNEL_RECAP_TEXT_CHARS = 180;
+const CHANNEL_RECAP_TOOLS_PER_TURN = 3;
+const CHANNEL_RECAP_SCAN = 200;
 
 export class ContextLanes {
   private readonly redactor = new SecretRedactor();
   private soulFailureTraced = false;
   private pluginDossiers?: PluginDossier[];
+  private recapCache?: { runId: string; item?: SessionContextItem };
 
   constructor(private readonly shell: CompanionShell) {}
 
@@ -111,8 +116,8 @@ export class ContextLanes {
     }
   }
 
-  /** The open loops that must survive a restart, plus the dossiers this turn names or calls. */
-  laneOpenLoops(query?: string, toolNames: readonly string[] = []): SessionContextItem[] {
+  /** The open loops that must survive a restart, the dossiers this turn names or calls, and the cross-channel recap. */
+  laneOpenLoops(query?: string, toolNames: readonly string[] = [], runId?: string): SessionContextItem[] {
     const items: SessionContextItem[] = [];
     const assignment = this.shell.machine.runtime.openAssignment;
     const assignmentText = this.openAssignmentBlock();
@@ -120,6 +125,7 @@ export class ContextLanes {
       items.push({ id: `assignment:${assignment.id}`, text: assignmentText });
     }
     items.push(...this.lanePluginDossiers(query, toolNames));
+    items.push(...this.laneChannelRecap(runId));
     items.push(...this.laneProcedures());
     // A constraint the task-end exit retained is not task material (#255, #263). It was already
     // classified by the kernel's own markers during the last assembly; the shell only keeps the
@@ -136,6 +142,67 @@ export class ContextLanes {
       });
     }
     return items;
+  }
+
+  private laneChannelRecap(runId?: string): SessionContextItem[] {
+    if (runId && this.recapCache?.runId === runId) return this.recapCache.item ? [this.recapCache.item] : [];
+    const item = this.buildChannelRecap(runId);
+    if (runId) this.recapCache = { runId, item };
+    return item ? [item] : [];
+  }
+
+  private buildChannelRecap(runId?: string): SessionContextItem | undefined {
+    const channel = this.shell.currentChannel;
+    if (!channel) return undefined;
+    const currentTurnId = runId ? `${runId}:0` : undefined;
+    try {
+      const turns = this.shell.backend.sessionTurns({
+        projectId: this.shell.config.projectId,
+        agentId: this.shell.config.agentId,
+        sessionId: this.shell.config.sessionId,
+        limit: CHANNEL_RECAP_SCAN,
+      }).turns.filter((turn) =>
+        turn.turnId !== currentTurnId
+        && (turn.role === 'user' || turn.role === 'assistant')
+        && turn.text.trim() !== '');
+      const boundary = turns.findLastIndex((turn) => turn.role === 'user' && turn.channel === channel);
+      const cross = turns.slice(boundary + 1).filter((turn) => turn.channel !== '' && turn.channel !== channel);
+      if (cross.length === 0) return undefined;
+      const groups = new Map<string, SessionTurn[]>();
+      for (const turn of cross) {
+        const key = turn.turnId || turn.eventId;
+        groups.set(key, [...(groups.get(key) ?? []), turn]);
+      }
+      const selected = [...groups.values()].slice(-CHANNEL_RECAP_TURNS);
+      const turnIds = new Set(selected.flat().map((turn) => turn.turnId));
+      const calls = this.shell.backend.sessionToolCalls({
+        projectId: this.shell.config.projectId,
+        agentId: this.shell.config.agentId,
+        sessionId: this.shell.config.sessionId,
+        since: selected[0]![0]!.occurredAt,
+      }).filter((call) => turnIds.has(call.turnId) && call.toolName !== 'declare_task');
+      const callsByTurn = new Map<string, string[]>();
+      for (const call of calls) {
+        const input = compactToolInput(call.input);
+        callsByTurn.set(call.turnId, [...(callsByTurn.get(call.turnId) ?? []), input ? `工具 ${call.toolName}: ${input}` : `工具 ${call.toolName}`]);
+      }
+      const lines = [`<channel-recap channel="${channel}">`, '你在其他渠道的近期活动，只作背景；除非主人问起，不要逐条复述。'];
+      for (const group of selected) {
+        const first = group[0]!;
+        lines.push(`- ${first.channel} · ${new Date(first.occurredAt).toISOString()}`);
+        const toolLines = (callsByTurn.get(first.turnId) ?? []).slice(0, CHANNEL_RECAP_TOOLS_PER_TURN);
+        for (const turn of group) {
+          if (turn.role === 'assistant' && toolLines.length > 0) lines.push(...toolLines.splice(0));
+          lines.push(`${turn.role === 'user' ? '用户' : '同伴'}：${exactLinePrefix(turn.text, CHANNEL_RECAP_TEXT_CHARS)}`);
+        }
+        if (toolLines.length > 0) lines.push(...toolLines);
+      }
+      lines.push('</channel-recap>');
+      return { id: `channel-recap:${selected.at(-1)!.at(-1)!.eventId}`, text: lines.join('\n') };
+    } catch (error) {
+      this.shell.trace.append('channel_recap_failed', { message: error instanceof Error ? error.message : String(error) });
+      return undefined;
+    }
   }
 
   private lanePluginDossiers(query: string | undefined, toolNames: readonly string[]): SessionContextItem[] {

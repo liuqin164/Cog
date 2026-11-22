@@ -181,6 +181,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   /** The tier this process last started a run with; the work bar shows that tier's limits. */
   runTier: CageTier = 'autonomous';
   currentRunUserText = '';
+  currentChannel = 'terminal';
   /**
    * The provider's own prompt-cache account for the run in flight (#165 round 21): `hit` is what the
    * endpoint reported served from cache, `miss` the remainder of the prompt, `percent` their ratio.
@@ -750,7 +751,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.host.register(credentialPlugin());
     this.host.register(askPlugin());
     this.host.register(assignmentPlugin());
-    this.host.register(capturePlugin({ agentId: this.config.agentId, projectId: this.config.projectId, sessionId: this.config.sessionId, paused: () => this.capturePaused }));
+    this.host.register(capturePlugin({ agentId: this.config.agentId, projectId: this.config.projectId, sessionId: this.config.sessionId, channel: () => this.currentChannel, paused: () => this.capturePaused }));
     this.host.register(sessionContextPlugin({
       agentId: this.config.agentId,
       projectId: this.config.projectId,
@@ -759,7 +760,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       tailTurns: this.config.tailTurns,
       pinned: () => this.contextLanes.lanePinned(),
       profile: () => this.contextLanes.laneProfile(),
-      openLoops: (query, toolNames) => this.contextLanes.laneOpenLoops(query, toolNames),
+      openLoops: (query, toolNames, runId) => this.contextLanes.laneOpenLoops(query, toolNames, runId),
       digestStubs: () => this.contextLanes.laneDigestStubs(),
       ledgerSeq: () => this.backend.latestEventSeq(),
       variablePrompt: () => this.systemPromptSections().tail,
@@ -966,8 +967,8 @@ export class CompanionShell implements ShellControl, AttachShell {
     return this.contextLanes.targetTokens();
   }
 
-  async submit(text: string): Promise<RunSummary | undefined> {
-    return this.runLoop.submit(text);
+  async submit(text: string, channel = 'terminal'): Promise<RunSummary | undefined> {
+    return this.runLoop.submit(text, channel);
   }
 
   async tick(at = this.now()): Promise<void> {

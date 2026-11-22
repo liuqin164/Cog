@@ -26,20 +26,20 @@ function truncate(text: string, limit: number): string {
 export class RunLoop {
   constructor(private readonly shell: CompanionShell) {}
 
-  async submit(text: string): Promise<RunSummary | undefined> {
+  async submit(text: string, channel = 'terminal'): Promise<RunSummary | undefined> {
     if (this.shell.machine.state === 'RUNNING') {
       this.shell.runtime!.steer(text);
       this.shell.statusFace.emitSteering();
       return undefined;
     }
     if (this.shell.statusFace.dailyBudgetExceeded()) this.shell.statusFace.announceDailyBudget('user_message');
-    if (this.shell.machine.state === 'SUSPENDED') return this.submitWhileSuspended(text);
+    if (this.shell.machine.state === 'SUSPENDED') return this.submitWhileSuspended(text, channel);
     this.beginUserAssignment(text);
     this.shell.clock!.markInteraction(this.shell.now());
     this.shell.residentTick.observeSurfacingReply(text);
     await this.wakeIfNeeded('message_received');
     if (this.shell.machine.state !== 'IDLE') throw new Error(`submit_requires_idle: state is ${this.shell.machine.state}`);
-    return this.executeRun(text, 'message_received', 'user_message');
+    return this.executeRun(text, 'message_received', 'user_message', 'message_received', undefined, channel);
   }
 
   /**
@@ -49,18 +49,18 @@ export class RunLoop {
    * instruction: the paused task closes as budget_exceeded (traced) and the line starts fresh work.
    * There is no timeout for either kind — see `Suspension`'s comment.
    */
-  private async submitWhileSuspended(text: string): Promise<RunSummary | undefined> {
+  private async submitWhileSuspended(text: string, channel: string): Promise<RunSummary | undefined> {
     const suspension = this.shell.machine.runtime.suspension;
     this.shell.clock!.markInteraction(this.shell.now());
     this.shell.residentTick.observeSurfacingReply(text);
     if (suspension?.kind === 'question') {
       this.shell.machine.updateRuntime({ suspension: { ...suspension, answeredAt: this.shell.now() } });
       this.shell.trace.append('suspension_answered', { id: suspension.id, assignmentId: suspension.assignmentId, chars: text.trim().length });
-      return this.executeRun(text, 'message_received', 'question_answered', 'answer_received');
+      return this.executeRun(text, 'message_received', 'question_answered', 'answer_received', undefined, channel);
     }
     if (suspension) this.shell.proposalsHandlers.supersedeSuspension('new_input');
     this.beginUserAssignment(text);
-    return this.executeRun(text, 'message_received', 'user_message');
+    return this.executeRun(text, 'message_received', 'user_message', 'message_received', undefined, channel);
   }
 
   async wakeIfNeeded(trigger: 'message_received' | 'wake_intent_due' | 'emergence_due'): Promise<void> {
@@ -78,9 +78,11 @@ export class RunLoop {
     reason: string,
     dispatchTrigger: Trigger = trigger,
     grant?: { tokens: number; turns: number },
+    channel?: string,
   ): Promise<RunSummary> {
     const runId = `run-${this.shell.now().toString(36)}-${randomUUID().slice(0, 8)}`;
     const origin = trigger === 'emergence_due' ? 'emergence' : 'user';
+    this.shell.currentChannel = trigger === 'emergence_due' ? '' : channel ?? this.shell.currentChannel;
     const tier = this.budgetTier(trigger);
     this.shell.runTier = tier;
     this.shell.currentRunUserText = text;

@@ -11,7 +11,7 @@ import type { TraceLog } from '../trace.ts';
 import type { CommandReply } from '../commands.ts';
 
 export interface ShellControl {
-  submit(text: string): Promise<unknown>;
+  submit(text: string, channel?: string): Promise<unknown>;
   readonly state: string;
   runCommand(name: string, args?: string): Promise<CommandReply>;
 }
@@ -76,7 +76,7 @@ export class TerminalChannel {
       await this.options.captureTerminalRecord?.(`/${rawName} ${args}`);
       return;
     }
-    await this.options.shell.submit(line);
+    await this.options.shell.submit(line, this.options.session?.channelId ?? 'terminal');
   }
 
   /**

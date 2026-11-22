@@ -14,7 +14,7 @@ const STATIC_FILES: Record<string, { file: string; type: string }> = {
 };
 
 export interface WebChannelShell {
-  submit(text: string): Promise<unknown>;
+  submit(text: string, channel?: string): Promise<unknown>;
   runCommand(name: string, args?: string): Promise<{ text: string }>;
   confirmProposal(id: string): Promise<{ ok: boolean; reason?: string; proposal?: { resultText?: string } }>;
   discardProposal(id: string): unknown;
@@ -194,7 +194,7 @@ export class WebChannel {
       this.broadcast('notice', { text: reply.text });
       return this.options.routes.jsonResponse({ ok: true, command: name });
     }
-    void this.options.shell.submit(text).catch((error) => {
+    void this.options.shell.submit(text, 'web').catch((error) => {
       this.broadcast('notice', { text: `回复失败：${error instanceof Error ? error.message : String(error)}` });
     });
     return this.options.routes.jsonResponse({ ok: true }, 202);
