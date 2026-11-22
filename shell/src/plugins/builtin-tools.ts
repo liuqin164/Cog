@@ -9,6 +9,7 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync,
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import type { MemoryEvent, MemoryKernel } from 'cogmem';
+import { maskCredentialValues, type CredentialMask } from '../credentials.ts';
 import type { TraceLog } from '../trace.ts';
 import type { NativePlugin, ToolDefinition, ToolOutcome } from './host.ts';
 
@@ -36,7 +37,11 @@ export interface BuiltinToolsConfig {
   kernel?: MemoryKernel;
   /** One successful `mem:` read; the shell counts it for the context trace's drill metric (#268). */
   onMemoryRead?: (eventId: string) => void;
-  credentials?: { use(ref: string, caller: string): Record<string, string> };
+  credentials?: {
+    use(ref: string, caller: string, toolCallId?: string): Record<string, string>;
+    masksFor?(toolCallId: string): CredentialMask[];
+    forgetMasks?(toolCallId: string): void;
+  };
 }
 
 /**
@@ -353,7 +358,7 @@ function definitions(
   sandboxed: boolean,
   ledger: { kernel?: MemoryKernel; trace?: TraceLog; onMemoryRead?: (eventId: string) => void },
   cliConfigPath?: string,
-  credentials?: { use(ref: string, caller: string): Record<string, string> },
+  credentials?: BuiltinToolsConfig['credentials'],
 ): ToolDefinition[] {
   const sandbox = sandboxed && dataDir !== undefined ? { dataDir, trace: ledger.trace } : undefined;
   // The shell always has a data dir, so a bare test host without one is not a degradation to
@@ -432,16 +437,30 @@ function definitions(
         },
         required: ['command'],
       },
-      execute({ args, signal }) {
+      execute({ toolCallId, args, signal }) {
         const command = asString(args, 'command');
         const timeoutMs = resolveBashTimeoutMs(args);
         const env = bashEnv(sandbox !== undefined, cliConfigPath);
         const credential = credentialRef(args);
+        let masks: CredentialMask[] = [];
         if (credential !== undefined) {
           if (!credentials) throw new Error('credential_unavailable: this shell has no credential service');
-          const values = credentials.use(credential, 'bash');
+          const values = credentials.use(credential, 'bash', toolCallId);
           for (const [field, value] of Object.entries(values)) env[credentialEnvName(credential, field)] = value;
+          masks = credentials.masksFor?.(toolCallId) ?? [];
         }
+        const mask = (text: string): string => {
+          const result = maskCredentialValues(text, masks);
+          if (result.hits > 0) {
+            ledger.trace?.append('credential_value_masked', {
+              tool: 'bash',
+              ref: credential,
+              fields: result.fields,
+              replacements: result.hits,
+            });
+          }
+          return result.text;
+        };
         return new Promise<ToolOutcome>((resolvePromise, rejectPromise) => {
           const child = sandbox
             ? spawn('bwrap', sandboxArgs(workspaceRoot, sandbox.dataDir, command), { cwd: workspaceRoot, signal, stdio: ['ignore', 'pipe', 'pipe'], env })
@@ -462,10 +481,11 @@ function definitions(
                 dataDir: sandbox.dataDir,
               });
             }
-            const capped = capBashOutput(output, workspaceRoot);
+            const capped = capBashOutput(mask(output), workspaceRoot);
             const parts = [capped];
             if (note) parts.push(note);
             if (offNote) parts.push(offNote);
+            credentials?.forgetMasks?.(toolCallId);
             resolvePromise({ output: parts.join('\n\n'), isError });
           };
           timer = setTimeout(() => {
@@ -497,7 +517,8 @@ function definitions(
             settled = true;
             clearTimeout(timer);
             sandbox?.trace?.append('bash_sandbox_failed', { message: error.message });
-            rejectPromise(error);
+            credentials?.forgetMasks?.(toolCallId);
+            rejectPromise(new Error(mask(error.message)));
           });
           child.on('close', (code) => {
             if (code === null) settle('Command terminated without an exit code', true);
@@ -523,6 +544,22 @@ export function builtinToolsPlugin(): NativePlugin {
       for (const definition of definitions(workspaceRoot, dataDir, sandboxed, { kernel, trace, onMemoryRead }, cliConfigPath, credentials)) {
         ctx.registerTool(definition, { builtin: true });
       }
+      ctx.on('afterToolCall', (event: { tool?: { toolCallId?: string; toolName?: string }; result?: { output?: string } }) => {
+        const toolCallId = event?.tool?.toolCallId;
+        if (!toolCallId || typeof event.result?.output !== 'string' || !credentials?.masksFor) return undefined;
+        const masks = credentials.masksFor(toolCallId);
+        if (masks.length === 0) return undefined;
+        credentials.forgetMasks?.(toolCallId);
+        const masked = maskCredentialValues(event.result.output, masks);
+        if (masked.hits === 0) return undefined;
+        trace?.append('credential_value_masked', {
+          tool: event.tool?.toolName,
+          refs: [...new Set(masks.map((mask) => mask.ref))],
+          fields: masked.fields,
+          replacements: masked.hits,
+        });
+        return { result: { ...event.result, output: masked.text } };
+      });
       ctx.provide('builtinTools', { names: ['read', 'write', 'edit', 'bash'] });
     },
   };

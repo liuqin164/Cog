@@ -152,6 +152,7 @@ export function estimateBudgetGrant(input: { tokens: number; turns: number; limi
 export function cagePlugin(config: CageConfig, trace?: TraceLog, work?: CageConfig): NativePlugin {
   return {
     name: 'cage',
+    inject: ['eventBus'],
     provide: ['cage'],
     apply(ctx) {
       const cage = new RunCage(config, trace, work);

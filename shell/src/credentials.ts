@@ -29,6 +29,32 @@ export interface CredentialPending {
 export type CredentialOutcome = { outcome: 'saved'; ref: string } | { outcome: 'cancelled' };
 export type CredentialSubmission = { ok: true; ref: string } | { ok: false; reason: string };
 
+export interface CredentialMask {
+  ref: string;
+  field: string;
+  value: string;
+}
+
+export function maskCredentialValues(text: string, masks: readonly CredentialMask[]): { text: string; hits: number; fields: string[] } {
+  let masked = text;
+  let hits = 0;
+  const fields = new Set<string>();
+  const ordered = [...masks].sort((a, b) => b.value.length - a.value.length);
+  for (const mask of ordered) {
+    if (mask.value.length < 4) continue;
+    const variants = [...new Set([mask.value, Buffer.from(mask.value, 'utf8').toString('base64'), encodeURIComponent(mask.value)])]
+      .sort((a, b) => b.length - a.length);
+    for (const variant of variants) {
+      const parts = masked.split(variant);
+      if (parts.length === 1) continue;
+      hits += parts.length - 1;
+      fields.add(mask.field);
+      masked = parts.join(`«credential:${mask.ref}.${mask.field}»`);
+    }
+  }
+  return { text: masked, hits, fields: [...fields] };
+}
+
 interface CredentialRecord extends CredentialRef {
   values: Record<string, string>;
 }
@@ -156,6 +182,7 @@ export class CredentialVault {
 export class CredentialService {
   private readonly vault: CredentialVault;
   private readonly waiting = new Map<string, PendingCredential>();
+  private readonly masksByCall = new Map<string, CredentialMask[]>();
   private seq = 0;
 
   constructor(
@@ -292,8 +319,23 @@ export class CredentialService {
     return this.vault.revoke(ref);
   }
 
-  use(ref: string, caller: string): Record<string, string> {
-    return this.vault.use(ref, caller);
+  use(ref: string, caller: string, toolCallId?: string): Record<string, string> {
+    const values = this.vault.use(ref, caller);
+    if (toolCallId !== undefined) {
+      const masks = Object.entries(values)
+        .filter(([, value]) => value.length >= 4)
+        .map(([field, value]) => ({ ref, field, value }));
+      this.masksByCall.set(toolCallId, [...(this.masksByCall.get(toolCallId) ?? []), ...masks]);
+    }
+    return values;
+  }
+
+  masksFor(toolCallId: string): CredentialMask[] {
+    return this.masksByCall.get(toolCallId) ?? [];
+  }
+
+  forgetMasks(toolCallId: string): void {
+    this.masksByCall.delete(toolCallId);
   }
 
   private settle(pending: PendingCredential, outcome: CredentialOutcome): void {

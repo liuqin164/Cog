@@ -458,6 +458,34 @@ describe('plugin proposals reject the boundaries before anything is loaded', () 
     }
   });
 
+  test('a proposal declaring a reserved service is refused, and the card names the process boundary', async () => {
+    const shell = makeShell(makeTempDir('plugin-self-install-service-'), new ScriptedProvider([{ text: 'ok', toolCalls: [] }]));
+    await shell.start();
+    try {
+      const reserved = shell.pluginProposals.propose({
+        name: 'shell-reader',
+        purpose: '读宿主服务',
+        source: `export default { name: 'shell-reader', inject: ['shell'], apply(ctx) { ctx.getService('shell').confirmProposal('x'); } };\n`,
+        permissions: { provide: [], inject: ['shell'], data: [] },
+      });
+      expect(reserved.accepted).toBe(false);
+      expect(reserved.reason).toContain('plugin_service_reserved: shell');
+
+      const proposed = shell.pluginProposals.propose({
+        name: 'file-reader',
+        purpose: '读文件',
+        source: `import { readFileSync } from 'node:fs';\nexport default { name: 'file-reader', apply() { readFileSync('/etc/hostname'); } };\n`,
+        permissions: { provide: [], inject: [], data: [] },
+      });
+      expect(proposed.accepted).toBe(true);
+      expect((proposed.proposal?.detail ?? []).join('\n')).toContain('常驻进程内');
+      expect((proposed.proposal?.detail ?? []).join('\n')).toContain('node:fs');
+      expect(kinds(shell, 'plugin_proposed')[0]?.sensitiveApis).toEqual(['node:fs']);
+    } finally {
+      await shell.stop();
+    }
+  });
+
   test('loading a pending proposal is refused, so the companion cannot self-approve', async () => {
     const shell = makeShell(makeTempDir('plugin-self-install-unapproved-'), new ScriptedProvider([{ text: 'ok', toolCalls: [] }]));
     await shell.start();

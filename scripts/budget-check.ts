@@ -77,6 +77,7 @@ function toolCount(): number {
     getService() {
       return {};
     },
+    on() {},
     provide() {},
   };
   const plugins = [

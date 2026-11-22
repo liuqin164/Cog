@@ -34,7 +34,7 @@ import { sessionContextPlugin } from './plugins/session-context.ts';
 import { assignmentPlugin } from './plugins/assignment.ts';
 import { memoryToolPlugin } from './plugins/memory-tool.ts';
 import { soulEditPlugin } from './plugins/soul-edit.ts';
-import { PluginProposals, selfInstallPlugin } from './plugins/self-install.ts';
+import { PluginProposals, pluginWorkspaceDir, selfInstallPlugin } from './plugins/self-install.ts';
 import { dreamPlugin } from './plugins/dream.ts';
 import { emergencePlugin } from './plugins/emergence.ts';
 import { terminalPlugin, TerminalChannel, type ShellControl } from './channels/terminal.ts';
@@ -850,6 +850,7 @@ export class CompanionShell implements ShellControl, AttachShell {
     }
     this.pluginResults.push(...(await loadNativePlugins(this.host, this.config.plugins.filter((spec) => !isOfficialPluginSpec(spec)), {
       cwd: this.config.workspaceRoot,
+      pluginWorkspaceRoot: pluginWorkspaceDir(this.config.dataDir),
       trace: this.trace,
     })));
     await this.host.start();

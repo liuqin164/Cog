@@ -445,7 +445,7 @@ export interface CapturePluginConfig {
 export function capturePlugin(config: CapturePluginConfig): NativePlugin {
   return {
     name: 'capture',
-    inject: ['eventBus', 'memory', 'clock'],
+    inject: ['eventBus', 'memory', 'kernel', 'clock', 'trace'],
     provide: ['capture'],
     apply(ctx) {
       const backend = ctx.getService<KernelAgentMemoryBackend>('memory');

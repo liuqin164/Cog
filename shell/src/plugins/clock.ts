@@ -172,6 +172,7 @@ function formatDuration(ms: number): string {
 export function clockPlugin(config: ClockConfig): NativePlugin {
   return {
     name: 'clock',
+    inject: ['stateMachine'],
     provide: ['clock'],
     apply(ctx) {
       const machine = ctx.getService<StateMachine>('stateMachine');

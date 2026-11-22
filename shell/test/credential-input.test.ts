@@ -1,8 +1,8 @@
 import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { CredentialService } from '../src/credentials.ts';
+import { CredentialService, maskCredentialValues } from '../src/credentials.ts';
 import { TraceLog } from '../src/trace.ts';
 import { ScriptedProvider, makeShell, makeTempDir, waitUntil } from './helpers.ts';
 
@@ -100,6 +100,79 @@ describe('the credential input surface', () => {
     expect(await run).toEqual({ outcome: 'cancelled' });
   });
 
+  test('echoed credential values are masked in the result, ledger, FTS, trace and the overflow file', async () => {
+    const dir = makeTempDir('credential-echo-');
+    const provider = new ScriptedProvider([
+      {
+        text: '',
+        toolCalls: [{
+          toolCallId: 'c1',
+          toolName: 'request_credential',
+          input: {
+            service: 'demo-api',
+            purpose: '验证输出抹除',
+            fields: [{ name: 'account' }, { name: 'password', secret: true }],
+          },
+        }],
+      },
+      {
+        text: '',
+        toolCalls: [
+          {
+            toolCallId: 'c2',
+            toolName: 'bash',
+            input: { credential: 'demo-api', command: 'printf "%s\\n" "$COGMEM_CRED_DEMO_API_PASSWORD" "$COGMEM_CRED_DEMO_API_ACCOUNT"' },
+          },
+          {
+            toolCallId: 'c3',
+            toolName: 'bash',
+            input: {
+              credential: 'demo-api',
+              command: 'for i in $(seq 1 2000); do printf "%s-%s-padding-padding-padding\\n" "$COGMEM_CRED_DEMO_API_PASSWORD" "$i"; done',
+            },
+          },
+        ],
+      },
+      { text: '已检查。', toolCalls: [] },
+    ]);
+    const shell = makeShell(dir, provider, { dream: NO_DREAM });
+    await shell.start();
+    try {
+      const run = shell.submit('回显凭据做检查');
+      await waitUntil(() => shell.credentials.pending().length === 1);
+      const request = shell.credentials.pending()[0]!;
+      expect(shell.submitCredential(request.id, { account: ACCOUNT, password: PASSWORD }, 'terminal')).toEqual({ ok: true, ref: 'demo-api' });
+      await run;
+
+      const model = JSON.stringify(provider.calls);
+      expect(model).toContain('«credential:demo-api.password»');
+      expect(model).toContain('«credential:demo-api.account»');
+
+      const trace = readFileSync(shell.trace.path, 'utf8');
+      expect(trace).toContain('credential_value_masked');
+
+      const db = new Database(shell.config.dbPath, { readonly: true });
+      const ledger = (db.query('SELECT payload_json FROM memory_events').all() as Array<{ payload_json: string }>)
+        .map((row) => row.payload_json)
+        .join('\n');
+      const fts = (db.query('SELECT text FROM memory_events_fts').all() as Array<{ text: string }>)
+        .map((row) => row.text)
+        .join('\n');
+      db.close();
+
+      const overflowDir = join(shell.config.workspaceRoot, '.cogmem-shell', 'bash-output');
+      const overflow = readdirSync(overflowDir).map((name) => readFileSync(join(overflowDir, name), 'utf8')).join('\n');
+      expect(overflow).toContain('«credential:demo-api.password»');
+
+      for (const surface of [model, trace, ledger, fts, overflow]) {
+        expect(surface).not.toContain(PASSWORD);
+        expect(surface).not.toContain(ACCOUNT);
+      }
+    } finally {
+      await shell.stop();
+    }
+  }, 30_000);
+
   test('revocation makes the next use fail immediately and records the refusal', async () => {
     const dir = makeTempDir('credential-revoke-');
     const trace = new TraceLog(dir);
@@ -118,5 +191,15 @@ describe('the credential input surface', () => {
     const refusals = trace.read().filter((record) => record.kind === 'credential_use_refused');
     expect(refusals).toEqual([expect.objectContaining({ ref: 'revoke-demo', caller: 'bash', reason: 'not_found' })]);
     expect(JSON.stringify(trace.read())).not.toContain('token-before-revoke');
+  });
+
+  test('masking covers base64 and URL encodings and leaves short values alone', () => {
+    const value = 'p@ss word!';
+    const masked = maskCredentialValues(`a=${value} b=${Buffer.from(value).toString('base64')} c=${encodeURIComponent(value)}`, [
+      { ref: 'demo', field: 'password', value },
+    ]);
+    expect(masked.hits).toBe(3);
+    expect(masked.text).toBe('a=«credential:demo.password» b=«credential:demo.password» c=«credential:demo.password»');
+    expect(maskCredentialValues('pin 1234', [{ ref: 'demo', field: 'pin', value: '123' }]).text).toBe('pin 1234');
   });
 });
