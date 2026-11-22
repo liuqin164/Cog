@@ -1,25 +1,3 @@
-/**
- * Profile compilation (#159, F5): the long-term understanding of the owner, as a formal compiled
- * product.
- *
- * Existing compilation produces generic products — facts, beliefs, frames, an Atlas. A companion
- * needs a specific form instead: the owner's **four ledgers** (facts / preferences / relations /
- * ongoing items), every entry carrying its `sourceRefs`, correctable by the owner, and ranked in
- * recall by its own priority and decay rather than mixed into the compiled-memory ranking.
- *
- * Storage is the ledger and nothing else, the way F2 stored a wake intention: every version of an
- * entry is an immutable `memory_events` row on a per-entry stream
- * (`profile-entry:<entryId>`), so the current value is the newest row, history is the older rows,
- * and a correction is another row rather than an update. **No table, no column, no migration.**
- *
- * The compiler is deterministic: it derives from evidence that is already governed and
- * evidence-bound (live `facts`, active `beliefs`, declared person `relations`, owner-confirmed
- * `prospective` items). A model may have produced that evidence offline; nothing here calls one, and
- * no rule reads free text.
- *
- * The written contract is `docs/profile-compilation.md`, held by
- * `__tests__/profile-compilation.contract.test.ts`. Version: `PROFILE_CONTRACT_VERSION`.
- */
 import { createHash } from 'node:crypto';
 
 import type { EventStore } from '../store/EventStore.js';
@@ -122,6 +100,9 @@ export const PROFILE_TRANSIENT_PREDICATES = ['has_issue', 'issue_correction'] as
 
 /** A fact row means something current only in these statuses. */
 export const PROFILE_LIVE_FACT_STATUSES = ['verified', 'provisional', 'provisional_enriched'] as const;
+
+const PROFILE_INVALID_FACT_STATUSES = ['superseded', 'archived', 'rejected'] as const;
+const PROFILE_INVALID_BELIEF_STATUSES = ['superseded', 'revoked', 'expired'] as const;
 
 /**
  * An ongoing item is the owner's, so a machine's candidate (`pending`) and every terminal status are
@@ -296,13 +277,6 @@ export class ProfileCompiler {
     this.listOngoing = ports.listOngoing;
   }
 
-  /**
-   * Derive every ledger from its governed evidence and append a version for each entry whose value
-   * changed. Idempotent: compiling twice with unchanged evidence writes no second version.
-   *
-   * A source-derived version never overwrites a newer correction — the owner's word stands until
-   * evidence newer than the correction says otherwise (the "correction reaches the source" rule).
-   */
   compile(input: ProfileCompileInput): ProfileCompileResult {
     const projectId = requiredText(input.projectId, 'project_id_required');
     const now = input.now ?? Date.now();
@@ -313,6 +287,9 @@ export class ProfileCompiler {
 
   private compileLedgers(projectId: string, ledgers: ProfileLedger[], now: number): { written: number; entries: number } {
     const candidates = this.derive(projectId, ledgers);
+    const invalidated = ledgers.some((ledger) => ledger === 'facts' || ledger === 'preferences')
+      ? this.invalidatedEvidenceKeys(projectId)
+      : undefined;
     const index = this.entryGroups(projectId);
     let written = 0;
     this.events.getDatabase().transaction(() => {
@@ -322,7 +299,9 @@ export class ProfileCompiler {
         for (const candidate of forLedger) {
           if (this.writeIfChanged(index, projectId, candidate, now)) ledgerWritten += 1;
         }
-        ledgerWritten += this.retireAbsent(index, projectId, ledger, new Set(forLedger.map((candidate) => candidate.key)), now);
+        ledgerWritten += this.retireAbsent(
+          index, projectId, ledger, new Set(forLedger.map((candidate) => candidate.key)), invalidated?.get(ledger), now
+        );
         written += ledgerWritten;
         if (ledgerWritten > 0) this.appendReceipt(projectId, ledger, now, forLedger.length, ledgerWritten);
       }
@@ -330,7 +309,6 @@ export class ProfileCompiler {
     return { written, entries: candidates.length };
   }
 
-  /** Current value per key, one per (ledger, key). Older versions are history. */
   entries(input: ProfileEntriesInput): ProfileEntry[] {
     const projectId = requiredText(input.projectId, 'project_id_required');
     const ledger = input.ledger === undefined ? undefined : this.requireLedger(input.ledger);
@@ -339,7 +317,6 @@ export class ProfileCompiler {
       .sort((a, b) => PROFILE_LEDGERS.indexOf(a.ledger) - PROFILE_LEDGERS.indexOf(b.ledger) || a.key.localeCompare(b.key));
   }
 
-  /** Every version of one entry, newest first. The oldest entry is the value that was replaced. */
   history(input: ProfileHistoryInput): ProfileEntry[] {
     const projectId = requiredText(input.projectId, 'project_id_required');
     const entryId = requiredText(input.entryId, 'profile_key_required');
@@ -354,10 +331,6 @@ export class ProfileCompiler {
       .reverse();
   }
 
-  /**
-   * The profile lane's read: current entries, matched against the cue and ranked by the frozen
-   * profile score — never by the compiled lane's rules. An empty cue matches everything.
-   */
   recall(input: ProfileRecallInput): ProfileRecallEntry[] {
     const projectId = requiredText(input.projectId, 'project_id_required');
     const limit = input.limit ?? PROFILE_RECALL_LIMIT;
@@ -458,8 +431,6 @@ export class ProfileCompiler {
     if (wanted.has('facts') || wanted.has('preferences')) candidates.push(...this.deriveFactsAndPreferences(projectId));
     if (wanted.has('relations')) candidates.push(...this.deriveRelations(projectId));
     if (wanted.has('ongoing')) candidates.push(...this.deriveOngoing(projectId));
-    // One entry per (ledger, key): the newest evidence wins, so a newer fact is not shadowed by an
-    // older belief about the same claim.
     const byKey = new Map<string, Candidate>();
     for (const candidate of candidates) {
       const id = `${candidate.ledger}\u0000${candidate.key}`;
@@ -471,28 +442,70 @@ export class ProfileCompiler {
 
   private deriveFactsAndPreferences(projectId: string): Candidate[] {
     const out: Candidate[] = [];
-    for (const fact of this.facts.listFactsByTimeRange(0, MAX_TIME, { projectId, limit: PROFILE_EVIDENCE_LIMIT })) {
-      if (!(PROFILE_LIVE_FACT_STATUSES as readonly string[]).includes(fact.status)) continue;
-      const family = String(fact.predicateFamily ?? '').trim();
-      if (!family || (PROFILE_TRANSIENT_PREDICATES as readonly string[]).includes(family)) continue;
+    for (const fact of this.facts.listFactsByTimeRange(0, MAX_TIME, {
+      projectId, limit: PROFILE_EVIDENCE_LIMIT, statuses: [...PROFILE_LIVE_FACT_STATUSES],
+    })) {
+      const mapped = this.factProfileKey(fact);
+      if (!mapped) continue;
       const value = String(fact.object ?? fact.predicateValue ?? '').trim();
       if (!value) continue;
-      const ledger: ProfileLedger = (PROFILE_PREFERENCE_PREDICATES as readonly string[]).includes(family) ? 'preferences' : 'facts';
-      const candidate = this.candidate(ledger, `${String(fact.subject).trim()}.${family}`, value, this.refsForNeuron(fact.neuronId), fact.validFrom);
+      const candidate = this.candidate(mapped.ledger, mapped.key, value, this.refsForNeuron(fact.neuronId), fact.validFrom);
       if (candidate) out.push(candidate);
     }
-    for (const belief of this.beliefs.listByTimeRange(0, MAX_TIME, { projectId, limit: PROFILE_EVIDENCE_LIMIT })) {
-      if (belief.status !== 'active') continue;
-      const predicate = String(belief.predicate ?? '').trim();
-      if (!predicate || (PROFILE_TRANSIENT_PREDICATES as readonly string[]).includes(predicate)) continue;
+    for (const belief of this.beliefs.listByTimeRange(0, MAX_TIME, {
+      projectId, limit: PROFILE_EVIDENCE_LIMIT, statuses: ['active'],
+    })) {
+      const mapped = this.beliefProfileKey(belief);
+      if (!mapped) continue;
       const value = String(belief.objectValue?.normalized || belief.objectValue?.raw || '').trim();
       if (!value) continue;
-      const ledger: ProfileLedger = (PROFILE_PREFERENCE_PREDICATES as readonly string[]).includes(predicate) ? 'preferences' : 'facts';
-      const key = String(belief.canonicalKey || `${belief.subject}.${predicate}`).trim();
-      const candidate = this.candidate(ledger, key, value, this.refsForEvent(belief.sourceEventId), belief.validFrom);
+      const candidate = this.candidate(mapped.ledger, mapped.key, value, this.refsForEvent(belief.sourceEventId), belief.validFrom);
       if (candidate) out.push(candidate);
     }
     return out;
+  }
+
+  private invalidatedEvidenceKeys(projectId: string): Map<ProfileLedger, Set<string>> {
+    const keys = new Map<ProfileLedger, Set<string>>([
+      ['facts', new Set<string>()],
+      ['preferences', new Set<string>()],
+    ]);
+    const qualified = (entry: { ledger: ProfileLedger; key: string }): string => `${entry.ledger}\u0000${entry.key}`;
+    const live = new Set<string>();
+    for (const fact of this.facts.listFactKeysByStatus({ projectId, statuses: [...PROFILE_LIVE_FACT_STATUSES] })) {
+      const entry = this.factProfileKey(fact);
+      if (entry) live.add(qualified(entry));
+    }
+    for (const belief of this.beliefs.listBeliefKeysByStatus({ projectId, statuses: ['active'] })) {
+      const entry = this.beliefProfileKey(belief);
+      if (entry) live.add(qualified(entry));
+    }
+    const add = (entry: { ledger: ProfileLedger; key: string } | null): void => {
+      if (entry && !live.has(qualified(entry))) keys.get(entry.ledger)!.add(entry.key);
+    };
+    for (const fact of this.facts.listFactKeysByStatus({ projectId, statuses: [...PROFILE_INVALID_FACT_STATUSES] })) {
+      add(this.factProfileKey(fact));
+    }
+    for (const belief of this.beliefs.listBeliefKeysByStatus({ projectId, statuses: [...PROFILE_INVALID_BELIEF_STATUSES] })) {
+      add(this.beliefProfileKey(belief));
+    }
+    return keys;
+  }
+
+  private factProfileKey(fact: { subject: string; predicateFamily: string }): { ledger: ProfileLedger; key: string } | null {
+    const family = String(fact.predicateFamily ?? '').trim();
+    if (!family || (PROFILE_TRANSIENT_PREDICATES as readonly string[]).includes(family)) return null;
+    const ledger: ProfileLedger = (PROFILE_PREFERENCE_PREDICATES as readonly string[]).includes(family) ? 'preferences' : 'facts';
+    return { ledger, key: `${String(fact.subject).trim()}.${family}` };
+  }
+
+  private beliefProfileKey(
+    belief: { subject: string; predicate: string; canonicalKey: string }
+  ): { ledger: ProfileLedger; key: string } | null {
+    const predicate = String(belief.predicate ?? '').trim();
+    if (!predicate || (PROFILE_TRANSIENT_PREDICATES as readonly string[]).includes(predicate)) return null;
+    const ledger: ProfileLedger = (PROFILE_PREFERENCE_PREDICATES as readonly string[]).includes(predicate) ? 'preferences' : 'facts';
+    return { ledger, key: String(belief.canonicalKey || `${belief.subject}.${predicate}`).trim() };
   }
 
   private deriveRelations(projectId: string): Candidate[] {
@@ -607,13 +620,16 @@ export class ProfileCompiler {
     return true;
   }
 
-  /** Retire every current entry of one ledger whose key the evidence no longer derives. */
-  private retireAbsent(index: Map<string, EntryGroup>, projectId: string, ledger: ProfileLedger, derivedKeys: Set<string>, now: number): number {
+  private retireAbsent(
+    index: Map<string, EntryGroup>, projectId: string, ledger: ProfileLedger,
+    derivedKeys: Set<string>, invalidatedKeys: Set<string> | undefined, now: number
+  ): number {
     let retired = 0;
     for (const group of index.values()) {
       const current = group.versions[group.versions.length - 1];
       if (!current || group.retired || current.ledger !== ledger) continue;
       if (derivedKeys.has(current.key) || group.lastEventType === 'PROFILE_ENTRY_CORRECTED') continue;
+      if (invalidatedKeys && !invalidatedKeys.has(current.key)) continue;
       this.applyVersion(index, projectId, {
         entryId: current.entryId,
         ledger,
@@ -630,7 +646,6 @@ export class ProfileCompiler {
     return retired;
   }
 
-  /** Append a version and fold it into the in-memory index, so one compile reads the ledger once. */
   private applyVersion(index: Map<string, EntryGroup>, projectId: string, input: {
     entryId: string;
     ledger: ProfileLedger;

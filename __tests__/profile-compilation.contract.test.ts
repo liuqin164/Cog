@@ -387,3 +387,62 @@ describe('a corrected ledger stops writing receipts on empty ticks', () => {
     expect(kernel.profile.audit({ projectId }).filter((row) => row.eventType === 'PROFILE_LEDGER_RECOMPILED')).toHaveLength(receipts + 1);
   }, 30_000);
 });
+
+describe('the evidence window is a read bound, not a retirement signal (#434)', () => {
+  test('死行占满旧窗口不再把 live 老事实挤退役，确已失效的证据仍退役', () => {
+    const projectId = 'profile-window-aging';
+    const now = Date.now();
+    const DAY = 24 * 60 * 60 * 1000;
+    const home = kernel.recordRawEvent({
+      projectId, threadId: 't-window', role: 'user', content: '我住在东京。', occurredAt: now - 900 * DAY,
+    });
+    const pet = kernel.recordRawEvent({
+      projectId, threadId: 't-window', role: 'user', content: '我养了一只猫。', occurredAt: now - 899 * DAY,
+    });
+    const seeded = kernel.factStore.insertFacts([
+      {
+        neuronId: home.eventId, subject: 'owner', predicateFamily: 'lives_in', object: '东京',
+        validFrom: now - 900 * DAY, certaintyLevel: 'certain', confidence: 0.95, status: 'verified',
+        sourceText: '我住在东京。',
+      },
+      {
+        neuronId: pet.eventId, subject: 'owner', predicateFamily: 'has_pet', object: '猫',
+        validFrom: now - 899 * DAY, certaintyLevel: 'certain', confidence: 0.95, status: 'verified',
+        sourceText: '我养了一只猫。',
+      },
+      {
+        neuronId: home.eventId, subject: 'owner', predicateFamily: 'lives_in', object: '大阪',
+        validFrom: now - 950 * DAY, certaintyLevel: 'certain', confidence: 0.9, status: 'superseded',
+        sourceText: '我曾住在大阪。',
+      },
+    ]);
+    kernel.profile.compile({ projectId, now });
+    const before = kernel.profile.entries({ projectId, ledger: 'facts' });
+    expect(before.map((entry) => entry.key).sort()).toEqual(['owner.has_pet', 'owner.lives_in']);
+    kernel.factStore.updateFactStatus(seeded[1]!.factId, 'superseded');
+
+    const filler = kernel.recordRawEvent({
+      projectId, threadId: 't-window', role: 'user', content: '填充。', occurredAt: now - 800 * DAY,
+    });
+    const rows = [];
+    for (let index = 0; index < 600; index += 1) {
+      rows.push({
+        neuronId: filler.eventId, subject: 'owner', predicateFamily: `live_${index}`, object: '值',
+        validFrom: now - 700 * DAY + index, certaintyLevel: 'probable' as const, confidence: 0.8,
+        status: 'provisional' as const, sourceText: '填充。',
+      });
+      rows.push({
+        neuronId: filler.eventId, subject: 'owner', predicateFamily: `dead_${index}`, object: '值',
+        validFrom: now - 600 * DAY + index, certaintyLevel: 'probable' as const, confidence: 0.8,
+        status: 'superseded' as const, sourceText: '填充。',
+      });
+    }
+    kernel.factStore.insertFacts(rows);
+    kernel.profile.compile({ projectId, now });
+
+    const liveHistory = kernel.profile.history({ projectId, entryId: before.find((entry) => entry.key === 'owner.lives_in')!.entryId });
+    expect(liveHistory[0]!.status).toBe('current');
+    const deadHistory = kernel.profile.history({ projectId, entryId: before.find((entry) => entry.key === 'owner.has_pet')!.entryId });
+    expect(deadHistory[0]!.status).toBe('retired');
+  }, 30_000);
+});

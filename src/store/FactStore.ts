@@ -212,6 +212,27 @@ export class FactStore {
     return rows.map((row) => this.mapFact(row));
   }
 
+  listFactKeysByStatus(options: {
+    statuses: FactRecord['status'][];
+    projectId?: string;
+  }): Array<{ subject: string; predicateFamily: string }> {
+    if (options.statuses.length === 0) return [];
+    const params: Array<string | number> = [...options.statuses];
+    let sql = `
+      SELECT DISTINCT f.subject, f.predicate_family
+      FROM facts f
+      JOIN memory_events n ON n.event_id = f.neuron_id
+      WHERE f.status IN (${options.statuses.map(() => '?').join(', ')})
+    `;
+    if (options.projectId !== undefined) {
+      sql += ` AND COALESCE(n.project_id,'') = ?`;
+      params.push(options.projectId);
+    }
+    sql += ` ORDER BY f.subject ASC, f.predicate_family ASC`;
+    const rows = this.db.prepare(sql).all(...params) as Array<{ subject: string; predicate_family: string }>;
+    return rows.map((row) => ({ subject: row.subject, predicateFamily: row.predicate_family }));
+  }
+
   listFactsByNeuronIds(neuronIds: string[], limit: number = 50): FactRecord[] {
     if (neuronIds.length === 0) return [];
 
