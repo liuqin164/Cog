@@ -266,6 +266,7 @@ and the registration values. No kernel or shell change is needed.
 `shell/src/channels/web.ts` is an official preinstalled plugin (`builtin:web-channel`). It serves
 `/channel/web` from the shell's loopback HTTP face, registers `web` as a `private` channel with one
 `web-owner` account, and runs every inbound line through `ingest` before `shell.submit`. Replies
-stream over SSE from the shell's bus; history is read from the ledger's current-day thread, not kept
-in the plugin. It reuses the observatory's write token and loopback/Host checks, and the credential
-card opens the observatory's `#credentials` form instead of collecting values itself.
+stream over SSE from the shell's bus; history is read from the session's conversation lane (newest
+window plus a `before` cursor), not kept in the plugin. It reuses the observatory's write token and
+loopback/Host checks, and the credential card opens the observatory's `#credentials` form instead of
+collecting values itself.
