@@ -13,6 +13,8 @@ const DREAM_DAY_IDLE_MS = 60 * 60_000;
 const DREAM_NIGHT_BACKLOG = 1;
 const DREAM_DAY_BACKLOG = 2;
 const SNAPSHOT_INTERVAL_MS = 24 * 60 * 60_000;
+const SNAPSHOT_RETRY_BASE_MS = 5 * 60_000;
+const SNAPSHOT_RETRY_CAP_MS = 30 * 60_000;
 
 const EMERGENCE_DAILY_LIMIT = 8;
 const MAX_EMERGENCE_CONSUMED = 500;
@@ -462,18 +464,30 @@ export class ResidentTick {
   private async maybeSnapshot(at: number): Promise<void> {
     const last = this.shell.machine.runtime.lastSnapshotAt;
     if (last !== undefined && at - last < SNAPSHOT_INTERVAL_MS) return;
-    this.shell.machine.updateRuntime({ lastSnapshotAt: at });
+    const retry = this.shell.machine.runtime.snapshotRetry;
+    if (retry && at < retry.nextAt) return;
     try {
       const manifest = await this.shell.kernel.backup.snapshot();
-      if (manifest) {
-        this.shell.trace.append('snapshot_taken', {
-          file: manifest.snapshot.file,
-          createdAt: manifest.createdAt,
-          verification: manifest.verification.ok,
-        });
+      if (!manifest) {
+        this.shell.machine.updateRuntime({ lastSnapshotAt: at });
+        return;
       }
+      if (!manifest.verification.ok) throw new Error(manifest.verification.detail ?? 'snapshot verification failed');
+      this.shell.machine.updateRuntime({ lastSnapshotAt: at, snapshotRetry: undefined });
+      this.shell.trace.append('snapshot_taken', {
+        file: manifest.snapshot.file,
+        createdAt: manifest.createdAt,
+        verification: manifest.verification.ok,
+      });
     } catch (error) {
-      this.shell.trace.append('snapshot_failed', { message: error instanceof Error ? error.message : String(error) });
+      const attempts = (retry?.attempts ?? 0) + 1;
+      const nextAt = at + Math.min(SNAPSHOT_RETRY_BASE_MS * 2 ** (attempts - 1), SNAPSHOT_RETRY_CAP_MS);
+      this.shell.machine.updateRuntime({ lastSnapshotFailureAt: at, snapshotRetry: { attempts, nextAt } });
+      this.shell.trace.append('snapshot_failed', {
+        message: error instanceof Error ? error.message : String(error),
+        attempts,
+        nextAt,
+      });
     }
   }
 

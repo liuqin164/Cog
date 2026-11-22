@@ -92,6 +92,8 @@ export interface ShellRuntimeState {
   lastDreamDate?: string;
   dreamRetry?: { night: string; attempts: number; nextAt: number; gaveUp?: boolean };
   lastSnapshotAt?: number;
+  lastSnapshotFailureAt?: number;
+  snapshotRetry?: { attempts: number; nextAt: number };
   lastInteractionAt?: number;
   /**
    * The tool loadout the transcript declared (Pi's `declareToolChanges`). Recovery compares it with
@@ -280,6 +282,8 @@ const RUNTIME_KEYS: Record<keyof ShellRuntimeState, true> = {
   lastDreamDate: true,
   dreamRetry: true,
   lastSnapshotAt: true,
+  lastSnapshotFailureAt: true,
+  snapshotRetry: true,
   lastInteractionAt: true,
   declaredTools: true,
   inFlightToolCalls: true,
