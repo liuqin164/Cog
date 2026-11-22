@@ -312,7 +312,7 @@ export class EventStore {
       const message = error instanceof Error ? error.message : String(error);
       const streamConflict = /UNIQUE constraint failed: memory_events\.(?:project_scope, memory_events\.)?stream_id(?:, memory_events\.event_version)?/.test(message);
       const anchorConflict = message === 'import_anchor_already_exists';
-      if ((streamConflict || message.includes('database is locked')) && input.eventVersion === undefined && retry < 5) {
+      if (streamConflict && input.eventVersion === undefined && retry < 5) {
         return this.append(input, retry + 1);
       }
       if (!anchorConflict) throw error;

@@ -78,7 +78,7 @@ import {
  * Per backend instance, never global: document frequency describes one database, and a daemon serving
  * two of them must not answer the second with the first one's counts.
  */
-const RAW_TERM_DF_CACHE = new WeakMap<object, Map<string, number>>();
+const RAW_TERM_DF_CACHE = new WeakMap<object, { watermark: number; counts: Map<string, number> }>();
 const PRIVATE_CHECKED_ITEMS = new WeakMap<object, WeakSet<AgentRecallItem>>();
 const FREQUENT_TERM_MIN = 3;
 const DISCRIMINATIVE_TERM_BUDGET = 8;
@@ -717,20 +717,18 @@ export class AgentRecallEngine {
     const frequent = new Set<string>(); const rare = new Set<string>();
     if (!text.trim()) return { frequent, rare };
     const scopeKey = query.projectId ?? '*';
+    const watermark = this.kernel.eventStore.getLatestGlobalSeq();
+    let cache = RAW_TERM_DF_CACHE.get(this);
+    if (!cache || cache.watermark !== watermark) RAW_TERM_DF_CACHE.set(this, cache = { watermark, counts: new Map() });
     let probes = 0;
     for (const probe of discriminativeProbes(text)) {
       if (probes >= DISCRIMINATIVE_TERM_BUDGET) break;
       probes += 1;
       const key = `${scopeKey}\u0000${probe}`;
-      let cache = RAW_TERM_DF_CACHE.get(this);
-      if (!cache) {
-        cache = new Map<string, number>();
-        RAW_TERM_DF_CACHE.set(this, cache);
-      }
-      let count = cache.get(key);
+      let count = cache.counts.get(key);
       if (count === undefined) {
         count = this.kernel.countRawEventMatches(probe, { projectId: query.projectId, cap: FREQUENT_TERM_MIN });
-        cache.set(key, count);
+        cache.counts.set(key, count);
       }
       (count >= FREQUENT_TERM_MIN ? frequent : rare).add(probe);
     }
