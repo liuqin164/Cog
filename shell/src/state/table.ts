@@ -25,6 +25,7 @@ export const TRIGGERS = [
   'answer_received',
   'dream_window_open',
   'dream_complete',
+  'dream_failed',
   'recovered_run',
   'shutdown',
 ] as const;
@@ -66,6 +67,7 @@ export const TRANSITION_TABLE: readonly TransitionEdge[] = [
   { from: 'DREAMING', trigger: 'dream_complete', to: 'IDLE', note: 'the night integration is written' },
   { from: 'DREAMING', trigger: 'message_received', to: 'WAKING', note: 'a message during the night wakes the shell' },
   { from: 'DREAMING', trigger: 'run_error', to: 'IDLE', note: 'night consolidation failed; standby with the trace' },
+  { from: 'DREAMING', trigger: 'dream_failed', to: 'IDLE', note: 'night consolidation failed while still dreaming' },
   { from: 'DREAMING', trigger: 'recovered_run', to: 'IDLE', note: 'a killed dream resumes at idle' },
   { from: 'DREAMING', trigger: 'shutdown', to: 'DORMANT', note: 'shutdown during the night' },
 ] as const;

@@ -102,32 +102,50 @@ export class RunLoop {
     }
     await this.shell.machine.dispatch(dispatchTrigger, { runId, reason });
 
-    let summary: RunSummary;
     try {
-      summary = await this.shell.runtime!.run({
-        runId,
-        sessionId: this.shell.config.sessionId,
-        userText: text,
-        origin,
-      });
+      let summary: RunSummary;
+      try {
+        summary = await this.shell.runtime!.run({
+          runId,
+          sessionId: this.shell.config.sessionId,
+          userText: text,
+          origin,
+        });
+      } finally {
+        this.shell.hideAssignmentContext = false;
+      }
+      const outcome = this.settleAssignment(summary, tier, trigger);
+      // `agent_end` capture has written this run's rows by the time `run()` returns, so the declared
+      // task end's procedure (#262) and stub (#263) can read them here instead of waiting for the
+      // next request.
+      this.shell.contextLanes.materializeTaskProcedure(true);
+      this.shell.contextLanes.materializeTaskEndStub(summary.turnId, summary.runId);
+      if (summary.stopReason === 'run_error' && summary.error?.startsWith('model_timeout:')) this.announceModelTimeout(summary);
+      if (summary.stopReason === 'run_error' && summary.error?.startsWith('no_progress:')) this.announceNoProgress(summary);
+      if (summary.stopReason === 'run_error' && summary.error?.startsWith('mg_gateway_error:')) this.announceProviderFailure(summary);
+      await this.shell.machine.dispatch(outcome, { reason: summary.error ?? reason, runId });
+      if (this.shell.machine.state === 'SUSPENDED' && this.shell.machine.runtime.suspension?.kind === 'budget') {
+        this.shell.proposalsHandlers.offerResume(this.shell.machine.runtime.suspension.id);
+      }
+      if (!this.shell.clock!.nextPendingIntent()) this.shell.clock!.scheduleIdleWake();
+      return summary;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.shell.trace.append('run_execute_failed', { runId, message });
+      if (this.shell.machine.state === 'RUNNING') {
+        try {
+          await this.shell.machine.dispatch('run_error', { reason: `execute_failed:${message}`, runId });
+        } catch (dispatchError) {
+          this.shell.trace.append('run_execute_failed_leave_failed', {
+            runId,
+            message: dispatchError instanceof Error ? dispatchError.message : String(dispatchError),
+          });
+        }
+      }
+      throw error;
     } finally {
       this.shell.hideAssignmentContext = false;
     }
-    const outcome = this.settleAssignment(summary, tier, trigger);
-    // `agent_end` capture has written this run's rows by the time `run()` returns, so the declared
-    // task end's procedure (#262) and stub (#263) can read them here instead of waiting for the
-    // next request.
-    this.shell.contextLanes.materializeTaskProcedure(true);
-    this.shell.contextLanes.materializeTaskEndStub(summary.turnId, summary.runId);
-    if (summary.stopReason === 'run_error' && summary.error?.startsWith('model_timeout:')) this.announceModelTimeout(summary);
-    if (summary.stopReason === 'run_error' && summary.error?.startsWith('no_progress:')) this.announceNoProgress(summary);
-    if (summary.stopReason === 'run_error' && summary.error?.startsWith('mg_gateway_error:')) this.announceProviderFailure(summary);
-    await this.shell.machine.dispatch(outcome, { reason: summary.error ?? reason, runId });
-    if (this.shell.machine.state === 'SUSPENDED' && this.shell.machine.runtime.suspension?.kind === 'budget') {
-      this.shell.proposalsHandlers.offerResume(this.shell.machine.runtime.suspension.id);
-    }
-    if (!this.shell.clock!.nextPendingIntent()) this.shell.clock!.scheduleIdleWake();
-    return summary;
   }
 
   /**
