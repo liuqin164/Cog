@@ -31,6 +31,7 @@ import {
 
 export interface BrainBackupOptions {
   dbPath: string;
+  db?: Database;
   /** Unset means "this kernel does not take nightly snapshots" (a bare test kernel). */
   snapshotsDir?: string;
   embeddingDimension: number;
@@ -177,25 +178,23 @@ export class BrainBackup {
   }
 
   private recordLast(manifest: BrainManifest, manifestFile: string): void {
+    const write = (db: Database): void => {
+      db.prepare('INSERT OR REPLACE INTO _meta (key, value) VALUES (?, ?)').run(
+        'brain_snapshot_last',
+        JSON.stringify({
+          file: manifestFile,
+          createdAt: manifest.createdAt,
+          ok: manifest.verification.ok,
+          checks: manifest.verification.checks,
+          checkedAt: manifest.verification.checkedAt,
+        }),
+      );
+    };
     try {
+      if (this.options.db) return write(this.options.db);
       const db = new Database(this.options.dbPath);
-      try {
-        db.prepare('INSERT OR REPLACE INTO _meta (key, value) VALUES (?, ?)').run(
-          'brain_snapshot_last',
-          JSON.stringify({
-            file: manifestFile,
-            createdAt: manifest.createdAt,
-            ok: manifest.verification.ok,
-            checks: manifest.verification.checks,
-            checkedAt: manifest.verification.checkedAt,
-          }),
-        );
-      } finally {
-        db.close();
-      }
-    } catch {
-      // A read-only database cannot record the mark; the manifest on disk is still the record.
-    }
+      try { write(db); } finally { db.close(); }
+    } catch {}
   }
 
   private rotate(dir: string): void {

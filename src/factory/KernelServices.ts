@@ -570,6 +570,7 @@ export abstract class KernelServices {
     });
     this.backup = new BrainBackup({
       dbPath: this.dbPath,
+      db,
       snapshotsDir: options.snapshotsDir,
       embeddingDimension: vectorDimension,
       coreVersion: CORE_VERSION,
