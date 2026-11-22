@@ -27,9 +27,6 @@ export interface ProfileCorrectionSignal {
 }
 
 const LEDGER_PAGE_SIZE = 500;
-// ponytail: a project reads up to 4000 correction rows; page the rest when a companion has years of
-// corrections.
-const MAX_CORRECTION_ROWS = 4000;
 
 /** Every correction in one project, oldest first. */
 export function profileCorrectionSignals(events: EventStore, projectId: string): ProfileCorrectionSignal[] {
@@ -39,7 +36,7 @@ export function profileCorrectionSignals(events: EventStore, projectId: string):
     eventType: ['PROFILE_ENTRY_CORRECTED' as const],
     order: 'asc' as const,
   };
-  for (let page = 1; rows.length < MAX_CORRECTION_ROWS; page += 1) {
+  for (let page = 1; ; page += 1) {
     const result = events.queryEvents(page, LEDGER_PAGE_SIZE, filters);
     if (result.records.length === 0) break;
     for (const event of result.records) {
@@ -68,7 +65,7 @@ export function profileCorrectionSignals(events: EventStore, projectId: string):
     }
     if (rows.length >= result.total) break;
   }
-  return rows.slice(0, MAX_CORRECTION_ROWS);
+  return rows;
 }
 
 /** The raw evidence a correction replaced. A derived item anchored there is not current. */

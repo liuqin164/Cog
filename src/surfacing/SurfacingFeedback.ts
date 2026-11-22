@@ -180,9 +180,6 @@ export interface SurfacingFeedbackPorts {
 }
 
 const LEDGER_PAGE_SIZE = 500;
-// ponytail: a project with more than 4000 feedback rows reads the newest 4000; page the rest or
-// add an event_type index when a companion has years of them.
-const MAX_FEEDBACK_ROWS = 4000;
 
 function feedbackError(code: SurfacingFeedbackErrorCode, detail?: string): Error {
   return new Error(detail ? `${code}: ${detail}` : code);
@@ -417,13 +414,13 @@ export class SurfacingFeedback {
       eventType: [...SURFACING_FEEDBACK_EVENT_TYPES] as MemoryEvent['eventType'][],
       order: 'asc' as const,
     };
-    for (let page = 1; rows.length < MAX_FEEDBACK_ROWS; page += 1) {
+    for (let page = 1; ; page += 1) {
       const result = this.events.queryEvents(page, LEDGER_PAGE_SIZE, filters);
       if (result.records.length === 0) break;
       for (const event of result.records) rows.push(rowOf(event));
       if (rows.length >= result.total) break;
     }
-    return rows.slice(0, MAX_FEEDBACK_ROWS);
+    return rows;
   }
 }
 

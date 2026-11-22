@@ -505,3 +505,25 @@ describe("the agent's own promise arrives in its wake assembly", () => {
     expect(assembly.lanes.map((lane) => lane.lane)).toEqual(['pinned', 'profile', 'digest', 'working_set', 'recall', 'tail']);
   });
 });
+
+describe('a busy ledger still sees its newest turn', () => {
+  test('5000 条 tool 事件之后的新承诺仍入册，并只提醒一次', () => {
+    const projectId = 'commitment-aging';
+    const now = Date.UTC(2026, 10, 15, 9);
+    kernel.eventStore.getDatabase().transaction(() => {
+      for (let index = 0; index < 5000; index += 1) {
+        kernel.recordTaskEvent({
+          projectId, threadId: 't-aging', content: `tool ${index}`, rawEventType: 'tool_call', occurredAt: now + index,
+        });
+      }
+    })();
+    say({ projectId, text: '我明天把文件发你。', occurredAt: now + 5000 });
+    const compiledAt = now + 6000;
+    expect(kernel.commitments.compile({ projectId, now: compiledAt }).opened).toBe(1);
+    const entries = kernel.commitments.list({ projectId, now: compiledAt });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.content).toContain('文件');
+    expect(kernel.commitments.surfaceDue({ projectId, now: entries[0]!.dueAt! })).toHaveLength(1);
+    expect(kernel.commitments.surfaceDue({ projectId, now: entries[0]!.dueAt! })).toHaveLength(0);
+  }, 30_000);
+});

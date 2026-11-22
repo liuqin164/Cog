@@ -16,8 +16,8 @@ fails when code and contract disagree. Version: `PROFILE_CONTRACT_VERSION = 1`.
 It adds no storage. Every version of an entry is a `memory_events` row on a per-entry stream
 (`profile-entry:<entryId>`), a correction is another row on the same stream, and a ledger's recompile
 leaves a `PROFILE_LEDGER_RECOMPILED` receipt when it wrote or carries a correction — so the ledger is
-the state, the history and the audit, the way F2 stored a wake intention. **No table, no column, no
-migration.**
+the state, the history and the audit, the way F2 stored a wake intention. A compile writes a receipt
+only when it wrote; `correct` writes one for its own recompile. **No table, no column, no migration.**
 
 It does not call a model and it does not read free text. The compiler derives from evidence that is
 already governed and evidence-bound: live `facts`, active `beliefs`, declared person `relations`, and
@@ -97,7 +97,7 @@ Adding a method is an additive change and does not bump the constant. Removing o
 | `PROFILE_ENTRY_COMPILED` | A compile derives a value for a key that changed. | `entryId`, `projectId`, `ledger`, `key`, `value`, `sourceRefs`, `recordedAt`, `compiledAt`, `version` |
 | `PROFILE_ENTRY_CORRECTED` | The owner corrects an entry. | The same, with the correction turn among `sourceRefs`. |
 | `PROFILE_ENTRY_RETIRED` | A full recompile no longer derives the key. | The same, carrying the value the entry had. |
-| `PROFILE_LEDGER_RECOMPILED` | A ledger wrote an entry or carries a correction. | `projectId`, `ledger`, `entries`, `written`, `compiledAt` |
+| `PROFILE_LEDGER_RECOMPILED` | A compile wrote an entry, or `correct` recompiled the ledger. | `projectId`, `ledger`, `entries`, `written`, `compiledAt` |
 
 ## Errors (frozen)
 
@@ -159,7 +159,7 @@ compiled from is not broken by the correction. The correction is appended **afte
 sources, so the entry's first source ref — the event a recall item anchors, and therefore the one the
 identity rule reads — stays the event the entry was compiled from; a correction cannot widen an owned
 entry to another identity. Then it recompiles the whole ledger — the ticket's "该册重编译", and the
-`PROFILE_LEDGER_RECOMPILED` receipt is its evidence.
+`PROFILE_LEDGER_RECOMPILED` receipt it writes is its evidence.
 
 A source-derived version never overwrites a newer correction: a compile writes a version only when the
 value changed **and** the derived evidence is newer than the current version's `recordedAt`, so the
@@ -229,5 +229,6 @@ The classification is a closed vocabulary, so a typo cannot move an entry into t
 The compiler is in-process and synchronous. Two processes holding one database can both compile; each
 reads the same evidence and appends its own receipt, and the ledger append is the only arbiter. The
 intended holder is the one resident process that already holds the kernel, the same ceiling F2's wake
-tick states. Beyond `PROFILE_EVIDENCE_LIMIT` (500) evidence rows and `MAX_PROFILE_LEDGER_ROWS` (4000)
-profile rows, the compiler reads the newest and the caller must raise or page the bound.
+tick states. Beyond `PROFILE_EVIDENCE_LIMIT` (500) evidence rows the compiler reads the newest and the
+caller must raise the bound; ledger rows are read in full, so a stable entry cannot be pushed out by
+newer versions.

@@ -51,6 +51,7 @@ intention from an agent/assistant clause that has a first person, a plan marker 
 `决定`, `安排`) and an action, and that F16's recognizer does not claim. Questions, requests,
 hypotheticals, hedges, habits, the past, negation and wishes are refused, as they are for promises.
 A miss is silent. The same clause yields its content and any due instant the clause names.
+The due instant follows the project time zone through the shared commitment parser.
 
 **Dream boundary — experience.** `propose` accepts candidate text, the agent it belongs to, and at
 least one existing event as `sourceRefs`. The caller may have used a model offline; this face

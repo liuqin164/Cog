@@ -75,8 +75,6 @@ export interface ClaimDueWakeIntentionsInput {
   limit?: number;
 }
 
-/** The most intention rows one read walks; beyond it the caller pages, the way the ledger reads do. */
-const MAX_INTENTION_LEDGER_ROWS = 2000;
 const LEDGER_PAGE_SIZE = 500;
 
 export class WakeIntentionService {
@@ -244,14 +242,12 @@ export class WakeIntentionService {
     const eventTypes = [...WAKE_INTENTION_EVENT_TYPES];
     const filters = { projectId: [projectId], eventType: eventTypes, order: 'asc' as const };
     const rows: MemoryEvent[] = [];
-    for (let page = 1; rows.length < MAX_INTENTION_LEDGER_ROWS; page += 1) {
+    for (let page = 1; ; page += 1) {
       const result = this.eventStore.queryEvents(page, LEDGER_PAGE_SIZE, filters);
       rows.push(...result.records);
       if (result.records.length === 0 || rows.length >= result.total) break;
     }
-    // ponytail: a project with more than 2000 intention rows reads the newest 2000; page the rest
-    // or add an index on event_type when a companion has years of them.
-    return rows.slice(0, MAX_INTENTION_LEDGER_ROWS);
+    return rows;
   }
 }
 

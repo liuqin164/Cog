@@ -276,7 +276,7 @@ const MAX_TIME = 8_640_000_000_000_000;
 const LEDGER_PAGE_SIZE = 500;
 // ponytail: a project with more than 4000 procedure rows reads the newest 4000; page the rest or add
 // an event_type index when a project has years of books.
-const MAX_PROCEDURE_ROWS = 4000;
+const RAW_EVENT_WINDOW = 4000;
 const MAX_STEPS = 16;
 const MAX_TOOLS = 8;
 
@@ -713,14 +713,14 @@ export class ProcedureCompiler {
 
   private projectEvidence(projectId: string): MemoryEvent[] {
     const out: MemoryEvent[] = [];
-    const filters = { projectId: [projectId], eventType: ['RAW_EVENT_RECORDED' as const], order: 'asc' as const };
-    for (let page = 1; out.length < MAX_PROCEDURE_ROWS; page += 1) {
+    const filters = { projectId: [projectId], eventType: ['RAW_EVENT_RECORDED' as const], order: 'desc' as const };
+    for (let page = 1; out.length < RAW_EVENT_WINDOW; page += 1) {
       const result = this.events.queryEvents(page, LEDGER_PAGE_SIZE, filters);
       if (result.records.length === 0) break;
       out.push(...result.records);
       if (out.length >= result.total) break;
     }
-    return out.slice(0, MAX_PROCEDURE_ROWS);
+    return out.reverse();
   }
 
   private writeIfChanged(index: Map<string, EntryGroup>, projectId: string, candidate: Candidate, now: number): boolean {
@@ -810,13 +810,13 @@ export class ProcedureCompiler {
   private loadProjectRows(projectId: string): Array<{ event: MemoryEvent; payload: Record<string, unknown> }> {
     const rows: Array<{ event: MemoryEvent; payload: Record<string, unknown> }> = [];
     const filters = { projectId: [projectId], eventType: [...PROCEDURE_EVENT_TYPES], order: 'asc' as const };
-    for (let page = 1; rows.length < MAX_PROCEDURE_ROWS; page += 1) {
+    for (let page = 1; ; page += 1) {
       const result = this.events.queryEvents(page, LEDGER_PAGE_SIZE, filters);
       if (result.records.length === 0) break;
       for (const event of result.records) rows.push({ event, payload: (event.payload ?? {}) as Record<string, unknown> });
       if (rows.length >= result.total) break;
     }
-    return rows.slice(0, MAX_PROCEDURE_ROWS);
+    return rows;
   }
 }
 

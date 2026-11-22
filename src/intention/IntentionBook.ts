@@ -240,10 +240,7 @@ interface DerivedIntention extends BaseIntention {
 
 const MAX_TIME = 8_640_000_000_000_000;
 const LEDGER_PAGE_SIZE = 500;
-// ponytail: a project with more than 4000 intention rows reads the newest 4000; page the rest or
-// add an event_type index when a project has years of plans.
-const MAX_INTENTION_ROWS = 4000;
-const MAX_RAW_EVENTS = 4000;
+const RAW_EVENT_WINDOW = 4000;
 
 function intentionError(code: IntentionErrorCode, detail?: string): Error {
   return new Error(detail ? `${code}: ${detail}` : code);
@@ -366,8 +363,8 @@ export class IntentionBook {
   compile(input: IntentionCompileInput): IntentionCompileResult {
     const projectId = requiredText(input.projectId, 'project_id_required');
     const now = input.now ?? Date.now();
-    const derived = this.derive(projectId);
     const stored = this.states(projectId);
+    const derived = this.derive(projectId, stored);
     let opened = 0;
     let closed = 0;
     for (const intention of derived) {
@@ -630,9 +627,14 @@ export class IntentionBook {
    * Re-derive conversation intentions from the raw turns, in order. Closing is evaluated before
    * opening, so a turn that reports a finished plan cannot also be read as its opening.
    */
-  private derive(projectId: string): DerivedIntention[] {
+  private derive(projectId: string, stored: Map<string, StoredIntention> = new Map()): DerivedIntention[] {
     const derived: DerivedIntention[] = [];
     const byId = new Map<string, DerivedIntention>();
+    for (const state of stored.values()) {
+      if (!state.base || state.closed) continue;
+      derived.push(state.base);
+      byId.set(state.base.intentionId, state.base);
+    }
     for (const event of this.messageEvents(projectId)) {
       const text = textOf(event).trim();
       if (!text) continue;
@@ -659,7 +661,7 @@ export class IntentionBook {
           };
         }
       }
-      const signals = recognizeIntentions({ text, role: event.role ?? 'user', occurredAt: event.occurredAt });
+      const signals = recognizeIntentions({ text, role: event.role ?? 'user', occurredAt: event.occurredAt, timeZone: this.events.getProjectTimeZone() });
       signals.forEach((signal, index) => {
         const intentionId = intentionIdOfConversation(projectId, event.eventId, index);
         if (byId.has(intentionId)) return;
@@ -707,20 +709,18 @@ export class IntentionBook {
 
   private messageEvents(projectId: string): MemoryEvent[] {
     const out: MemoryEvent[] = [];
-    const filters = { projectId: [projectId], eventType: ['RAW_EVENT_RECORDED' as const], order: 'asc' as const };
-    for (let page = 1; out.length < MAX_RAW_EVENTS; page += 1) {
+    const filters = { projectId: [projectId], eventType: ['RAW_EVENT_RECORDED' as const], order: 'desc' as const };
+    for (let page = 1; out.length < RAW_EVENT_WINDOW; page += 1) {
       const result = this.events.queryEvents(page, LEDGER_PAGE_SIZE, filters);
       if (result.records.length === 0) break;
       out.push(...result.records);
       if (out.length >= result.total) break;
     }
-    return out
-      .filter((event) => event.rawEventType === undefined
+    return out.reverse().filter((event) => event.rawEventType === undefined
         || event.rawEventType === 'message'
         || event.rawEventType === 'task_event'
         // An artifact row may close a plan by naming it, and that rule must see the row.
-        || typeof metadataOf(event).completesIntention === 'string')
-      .slice(0, MAX_RAW_EVENTS);
+        || typeof metadataOf(event).completesIntention === 'string');
   }
 
   private states(projectId: string): Map<string, StoredIntention> {
@@ -823,13 +823,13 @@ export class IntentionBook {
   private loadProjectRows(projectId: string): Array<{ event: MemoryEvent; payload: Record<string, unknown> }> {
     const rows: Array<{ event: MemoryEvent; payload: Record<string, unknown> }> = [];
     const filters = { projectId: [projectId], eventType: [...INTENTION_EVENT_TYPES], order: 'asc' as const };
-    for (let page = 1; rows.length < MAX_INTENTION_ROWS; page += 1) {
+    for (let page = 1; ; page += 1) {
       const result = this.events.queryEvents(page, LEDGER_PAGE_SIZE, filters);
       if (result.records.length === 0) break;
       for (const event of result.records) rows.push({ event, payload: (event.payload ?? {}) as Record<string, unknown> });
       if (rows.length >= result.total) break;
     }
-    return rows.slice(0, MAX_INTENTION_ROWS);
+    return rows;
   }
 }
 

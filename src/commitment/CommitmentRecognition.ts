@@ -13,6 +13,7 @@
 
 import { profileCues } from '../profile/ProfileCompiler.js';
 import type { MemoryEventRole } from '../types/index.js';
+import { localDateFor, nextCivilDate, resolveTimeZone, zonedTime } from '../utils/LocalDateContext.js';
 
 export const COMMITMENT_OWNERS = ['user', 'agent', 'third-party'] as const;
 export type CommitmentOwner = (typeof COMMITMENT_OWNERS)[number];
@@ -90,9 +91,14 @@ function ownerFor(role: MemoryEventRole): CommitmentOwner {
 /** The soft deadline the vague markers get; the document freezes this horizon. */
 export const COMMITMENT_SOFT_DUE_MS = DAY_MS;
 
-function startOfUtcDay(now: number): number {
-  const date = new Date(now);
-  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+function localDay(now: number, timeZone: string): { year: number; month: number; day: number; weekday: number } {
+  const [year, month, day] = localDateFor(now, timeZone).split('-').map(Number) as [number, number, number];
+  return { year, month, day, weekday: new Date(Date.UTC(year, month - 1, day)).getUTCDay() };
+}
+
+function localClock(today: { year: number; month: number; day: number }, days: number, hour: number, timeZone: string): number {
+  const [year, month, day] = nextCivilDate(today.year, today.month, today.day, days, timeZone);
+  return zonedTime(year, month, day, hour, 0, timeZone);
 }
 
 function weekdayIndex(token: string): number {
@@ -115,12 +121,14 @@ function chineseNumber(token: string): number {
  * The due instant or event condition a clause names. Explicit dates win over vague ones; an event
  * condition (`发货后`) yields no instant, because only the event can start its clock.
  */
-export function parseCommitmentDue(text: string, now: number): { dueAt?: number; dueCondition?: string } {
+export function parseCommitmentDue(text: string, now: number, timeZone?: string): { dueAt?: number; dueCondition?: string } {
   const condition = CONDITION.exec(text);
   if (condition) return { dueCondition: condition[0] };
 
+  const zone = resolveTimeZone(timeZone);
   const clock = (value: number): { dueAt: number } => ({ dueAt: value });
-  const dayStart = startOfUtcDay(now);
+  const today = localDay(now, zone);
+  const at = (days: number, hour = 18): { dueAt: number } => clock(localClock(today, days, hour, zone));
 
   let match = /([\d一二三四五六七八九十两]+)\s*(天|日)(?:之?后|之内|以内)/u.exec(text);
   if (match) return clock(now + chineseNumber(match[1]!) * DAY_MS);
@@ -132,57 +140,46 @@ export function parseCommitmentDue(text: string, now: number): { dueAt?: number;
   if (match) return clock(now + chineseNumber(match[1]!) * 30 * DAY_MS);
 
   match = /(\d{4})-(\d{2})-(\d{2})/u.exec(text);
-  if (match) return clock(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 18));
+  if (match) return clock(zonedTime(Number(match[1]), Number(match[2]), Number(match[3]), 18, 0, zone));
 
-  if (/大后天/u.test(text)) return clock(dayStart + 3 * DAY_MS + 18 * HOUR_MS);
-  if (/后天/u.test(text)) return clock(dayStart + 2 * DAY_MS + 18 * HOUR_MS);
-  if (/明天/u.test(text)) return clock(dayStart + DAY_MS + 18 * HOUR_MS);
-  if (/今晚/u.test(text)) return clock(dayStart + 22 * HOUR_MS);
+  if (/大后天/u.test(text)) return at(3);
+  if (/后天/u.test(text)) return at(2);
+  if (/明天/u.test(text)) return at(1);
+  if (/今晚/u.test(text)) return at(0, 22);
   if (/今天/u.test(text)) return clock(now + 8 * HOUR_MS);
 
   match = /下周([一二三四五六日天])/u.exec(text);
-  if (match) {
-    const current = new Date(dayStart).getUTCDay();
-    const target = weekdayIndex(match[1]!);
-    return clock(dayStart + (((target - current + 7) % 7) + 7) * DAY_MS + 18 * HOUR_MS);
-  }
+  if (match) return at(((weekdayIndex(match[1]!) - today.weekday + 7) % 7) + 7);
   match = /(?:周|星期)([一二三四五六日天])/u.exec(text);
-  if (match) {
-    const current = new Date(dayStart).getUTCDay();
-    const target = weekdayIndex(match[1]!);
-    return clock(dayStart + ((target - current + 7) % 7) * DAY_MS + 18 * HOUR_MS);
-  }
+  if (match) return at((weekdayIndex(match[1]!) - today.weekday + 7) % 7);
   if (/下周/u.test(text)) return clock(now + 7 * DAY_MS);
   if (/这周|本周/u.test(text)) {
-    const current = new Date(dayStart).getUTCDay();
-    const end = dayStart + (7 - current) * DAY_MS + 18 * HOUR_MS;
+    const end = at(7 - today.weekday).dueAt;
     return clock(end > now ? end : now + DAY_MS);
   }
   if (/月底/u.test(text)) {
-    const date = new Date(now);
-    return clock(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0, 18));
+    const last = new Date(Date.UTC(today.year, today.month, 0)).getUTCDate();
+    return clock(zonedTime(today.year, today.month, last, 18, 0, zone));
   }
   if (/下个?月/u.test(text)) return clock(now + 30 * DAY_MS);
 
   match = /(\d{1,2})月(\d{1,2})[日号]/u.exec(text);
   if (match) {
-    const date = new Date(now);
-    let due = Date.UTC(date.getUTCFullYear(), Number(match[1]) - 1, Number(match[2]), 18);
-    if (due <= now) due = Date.UTC(date.getUTCFullYear() + 1, Number(match[1]) - 1, Number(match[2]), 18);
+    let due = zonedTime(today.year, Number(match[1]), Number(match[2]), 18, 0, zone);
+    if (due <= now) due = zonedTime(today.year + 1, Number(match[1]), Number(match[2]), 18, 0, zone);
     return clock(due);
   }
 
   if (/稍后|晚点|回头|等会|一会儿|马上|尽快|soon|later/u.test(text)) return clock(now + COMMITMENT_SOFT_DUE_MS);
-  if (/tomorrow/u.test(text)) return clock(dayStart + DAY_MS + 18 * HOUR_MS);
-  if (/tonight|today/u.test(text)) return clock(now + 8 * HOUR_MS);
+  if (/tomorrow/u.test(text)) return at(1);
+  if (/tonight|today/u.test(text)) return /tonight/u.test(text) ? at(0, 22) : clock(now + 8 * HOUR_MS);
   if (/next\s+week/u.test(text)) return clock(now + 7 * DAY_MS);
   if (/next\s+month/u.test(text)) return clock(now + 30 * DAY_MS);
   match = /(?:by|on)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i.exec(text);
   if (match) {
     const names = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-    const current = new Date(dayStart).getUTCDay();
     const target = names.indexOf(match[1]!.toLowerCase());
-    return clock(dayStart + ((target - current + 7) % 7) * DAY_MS + 18 * HOUR_MS);
+    return at((target - today.weekday + 7) % 7);
   }
   return {};
 }
@@ -202,6 +199,7 @@ export function recognizeCommitments(input: {
   text: string;
   role: MemoryEventRole;
   occurredAt: number;
+  timeZone?: string;
 }): CommitmentSignal[] {
   const out: CommitmentSignal[] = [];
   const roleOwner = ownerFor(input.role);
@@ -211,7 +209,7 @@ export function recognizeCommitments(input: {
     // A third party's promise to the owner. Checked before the first-person rule because the owner
     // (`我`) is the recipient here, not the promiser.
     if (THIRD_PARTY.test(clause) && THIRD_PARTY_RECIPIENT.test(clause) && (FUTURE.test(clause) || CONDITION.test(clause))) {
-      const due = parseCommitmentDue(clause, input.occurredAt);
+      const due = parseCommitmentDue(clause, input.occurredAt, input.timeZone);
       out.push({
         owner: 'third-party',
         content: contentOf(clause),
@@ -225,7 +223,7 @@ export function recognizeCommitments(input: {
 
     const firstPerson = FIRST_PERSON.test(clause) || FIRST_PERSON_PLURAL.test(clause) || FIRST_PERSON_ENGLISH.test(clause);
     if (firstPerson && (FUTURE.test(clause) || CONDITION.test(clause)) && ACTION.test(clause)) {
-      const due = parseCommitmentDue(clause, input.occurredAt);
+      const due = parseCommitmentDue(clause, input.occurredAt, input.timeZone);
       out.push({
         owner: roleOwner,
         content: contentOf(clause),
