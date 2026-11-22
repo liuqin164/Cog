@@ -3,14 +3,7 @@ import { extname, join, relative } from 'node:path';
 import * as ts from 'typescript';
 import { FINAL_AUXILIARY_OBJECTS, FINAL_TABLES } from '../src/migrations/v3_7_4/FinalSchemaDefinition.ts';
 import { STATES } from '../shell/src/state/table.ts';
-import { assignmentPlugin } from '../shell/src/plugins/assignment.ts';
-import { askPlugin } from '../shell/src/plugins/ask.ts';
-import { builtinToolsPlugin } from '../shell/src/plugins/builtin-tools.ts';
-import { credentialPlugin } from '../shell/src/plugins/credential.ts';
-import { memoryToolPlugin } from '../shell/src/plugins/memory-tool.ts';
-import { proposalPlugin } from '../shell/src/plugins/proposal.ts';
-import { selfInstallPlugin } from '../shell/src/plugins/self-install.ts';
-import { soulEditPlugin } from '../shell/src/plugins/soul-edit.ts';
+import { defaultPlugins } from '../shell/src/app.ts';
 
 const ROOT = process.cwd();
 const SOURCE_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.mjs', '.cjs', '.html']);
@@ -80,17 +73,11 @@ function toolCount(): number {
     on() {},
     provide() {},
   };
-  const plugins = [
-    builtinToolsPlugin(),
-    credentialPlugin(),
-    proposalPlugin(),
-    askPlugin(),
-    assignmentPlugin(),
-    memoryToolPlugin({ agentId: 'budget', projectId: 'budget', sessionId: 'budget' }),
-    soulEditPlugin(),
-    selfInstallPlugin({ proposals: undefined as never, admin: undefined as never, trace: undefined as never }),
-  ];
-  for (const plugin of plugins) plugin.apply(context as never, { workspaceRoot: ROOT });
+  for (const { plugin, hostConfig } of defaultPlugins({
+    builtin: { workspaceRoot: ROOT },
+    memory: { agentId: 'budget', projectId: 'budget', sessionId: 'budget' },
+    selfInstall: { proposals: undefined as never, admin: undefined as never, trace: undefined as never },
+  })) plugin.apply(context as never, hostConfig ?? { workspaceRoot: ROOT });
   return names.size;
 }
 
