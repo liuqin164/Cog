@@ -1227,8 +1227,8 @@ export class AgentRecallEngine {
   }
 
   private graphRecallTextScore(item: AgentRecallItem, query: AgentRecallQuery): number {
-    const queryTerms = uniqueNonEmpty(query.query.toLowerCase().split(/[^a-z0-9\u4e00-\u9fff_-]+/))
-      .filter((term) => term.length >= 2 && !/^(cogmem|memory|project|之前|什么|问题|why|did|say)$/i.test(term));
+    const queryTerms = discriminativeProbes(query.query)
+      .filter((term) => !/^(cogmem|memory|project|之前|什么|问题|why|did|say)$/i.test(term));
     const haystack = this.itemSearchableText(item).toLowerCase();
     const overlap = queryTerms.filter((term) => haystack.includes(term)).length;
     return overlap + (item.confidence || 0);
@@ -1302,9 +1302,9 @@ export class AgentRecallEngine {
   private recallCueTerms(queryPlan: AgentRecallQueryPlan): string[] {
     const terms = [
       ...queryPlan.keywords,
-      ...queryPlan.semanticCuePhrases.flatMap((phrase) => phrase.split(/\s+/)),
+      ...queryPlan.semanticCuePhrases,
     ]
-      .map((term) => term.trim())
+      .flatMap(discriminativeProbes)
       .filter((term) => term.length >= 2 && !/^(hermes|openclaw|cogmem)$/i.test(term));
     return uniqueNonEmpty(terms);
   }
@@ -1485,6 +1485,9 @@ export class AgentRecallEngine {
         byTurn.set(key, event);
         continue;
       }
+      const eventUnusable = isToolObservationEvent(event) && !isPromotedToolObservation(event);
+      const existingUnusable = isToolObservationEvent(existing) && !isPromotedToolObservation(existing);
+      if (eventUnusable !== existingUnusable) { if (!eventUnusable) byTurn.set(key, event); continue; }
       const eventScore = this.rawEventCueScore(event, queryPlan);
       const existingScore = this.rawEventCueScore(existing, queryPlan);
       const rolePriority = this.quoteEventPriority(event) - this.quoteEventPriority(existing);

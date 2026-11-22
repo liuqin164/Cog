@@ -907,3 +907,35 @@ test('equal text under two turn ids is two turns (#113)', async () => {
     kernel.close();
   }
 });
+
+test('a Chinese sentence ranks the graph lane by its own words, not by confidence (#446)', async () => {
+  const dir = makeTempDir('agent-backend-graph-chinese-');
+  const kernel = createMemoryKernel({ dbPath: join(dir, 'brain.db'), vectorBackend: 'sqlite-vec' });
+  const backend = new KernelAgentMemoryBackend(kernel);
+  try {
+    await backend.rememberTurnWithResult({
+      agentId: 'a', projectId: 'p', sessionId: 's1',
+      userText: 'Cogmem 部署窗口固定在周二凌晨两点',
+      assistantText: '记下了。',
+      timestamp: Date.parse('2026-11-01T00:00:00.000Z'),
+      ingestMode: 'raw_archive_only',
+    });
+    await backend.rememberTurnWithResult({
+      agentId: 'a', projectId: 'p', sessionId: 's2',
+      userText: 'Cogmem 的内存部署是在周四',
+      assistantText: '记下了。',
+      timestamp: Date.parse('2026-11-10T00:00:00.000Z'),
+      ingestMode: 'raw_archive_only',
+    });
+    kernel.bindRawEvents({ projectId: 'p' });
+
+    const recalled = backend.recall({ query: 'Cogmem 部署窗口是什么时候', projectId: 'p', agentId: 'a', limit: 5 });
+    const graphTexts = recalled.items
+      .filter((item) => item.whyMatched === 'memory_binding_graph')
+      .map((item) => item.text);
+    expect(graphTexts).toHaveLength(2);
+    expect(graphTexts[0]).toContain('部署窗口固定在周二');
+  } finally {
+    kernel.close();
+  }
+});
