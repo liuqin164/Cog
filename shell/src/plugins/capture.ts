@@ -24,6 +24,7 @@ export interface CaptureServiceOptions {
   agentId: string;
   projectId: string;
   sessionId: string;
+  channel?: () => string;
   redactor?: SecretRedactor;
   trace?: TraceLog;
   /**
@@ -77,6 +78,7 @@ export class CaptureService {
   }): { event: MemoryEvent; redactions: number; turnSeq: number } | undefined {
     if (this.paused()) return undefined;
     const { kernel, agentId, projectId, sessionId } = this.options;
+    const channel = this.options.channel?.();
     const marked = this.redactor.mark(input.content);
     const turnSeq = input.turnSeq ?? this.options.backend.nextTurnSeq(input.threadId, projectId);
     const event = kernel.recordRawEvent({
@@ -93,7 +95,7 @@ export class CaptureService {
       prevEventId: input.prevEventId,
       causalityType: input.causalityType,
       sourceId: `${agentId}:${sessionId}`,
-      metadata: { sourceAgent: agentId, source: 'companion-shell', kind: 'turn', captureLane: CONVERSATION_CAPTURE_LANE, ...marked.metadata },
+      metadata: { sourceAgent: agentId, source: 'companion-shell', kind: 'turn', captureLane: CONVERSATION_CAPTURE_LANE, ...(channel ? { channel } : {}), ...marked.metadata },
     });
     return { event, redactions: markTotal(marked.metadata), turnSeq };
   }
@@ -181,6 +183,7 @@ export class CaptureService {
       return { turnId: summary.turnId, toolCallEventIds: [], toolResultEventIds: [], redactionCount: 0 };
     }
     const { backend, agentId, projectId, sessionId } = this.options;
+    const channel = this.options.channel?.();
     const assistantEventId = captured.assistantEventIds.at(-1);
     await backend.rememberTurnWithResult({
       agentId,
@@ -192,7 +195,7 @@ export class CaptureService {
       userText: captured.userText,
       assistantText: summary.assistantText || undefined,
       ingestMode: 'selective_compile',
-      metadata: { sourceAgent: agentId, source: 'companion-shell', kind: 'turn', captureLane: CONVERSATION_CAPTURE_LANE },
+      metadata: { sourceAgent: agentId, source: 'companion-shell', kind: 'turn', captureLane: CONVERSATION_CAPTURE_LANE, ...(channel ? { channel } : {}) },
       prewritten: { userEventId: captured.userEventId, assistantEventIds: captured.assistantEventIds },
     });
     this.options.trace?.append('capture_run', {
@@ -227,6 +230,7 @@ export class CaptureService {
     }
     if (summary.origin === 'emergence') return this.captureAutonomousRun(summary, threadId);
     const { backend, agentId, projectId, sessionId } = this.options;
+    const channel = this.options.channel?.();
     const user = this.redactor.mark(summary.userText);
     const assistant = this.redactor.mark(summary.assistantText);
     const marks = mergeMarks([user.metadata, assistant.metadata]);
@@ -241,7 +245,7 @@ export class CaptureService {
       userText: user.value,
       assistantText: assistant.value || undefined,
       ingestMode: 'selective_compile',
-      metadata: { sourceAgent: agentId, source: 'companion-shell', kind: 'turn', captureLane: CONVERSATION_CAPTURE_LANE, ...marks },
+      metadata: { sourceAgent: agentId, source: 'companion-shell', kind: 'turn', captureLane: CONVERSATION_CAPTURE_LANE, ...(channel ? { channel } : {}), ...marks },
     });
     const assistantEventId = result.rawEventIds[1];
     const toolCallEventIds: string[] = [];
@@ -425,6 +429,7 @@ export interface CapturePluginConfig {
   agentId: string;
   projectId: string;
   sessionId: string;
+  channel?: () => string;
   /** The shell's `/pause` gate; see {@link CaptureServiceOptions.paused}. */
   paused?: () => boolean;
 }
@@ -453,6 +458,7 @@ export function capturePlugin(config: CapturePluginConfig): NativePlugin {
         agentId: config.agentId,
         projectId: config.projectId,
         sessionId: config.sessionId,
+        channel: config.channel,
         trace,
         paused: config.paused,
       });

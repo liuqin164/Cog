@@ -29,7 +29,7 @@ export interface SessionContextPluginConfig {
   profile: () => string[];
   workingSet?: () => string[];
   /** Wake intents and the open assignment; the kernel merges these into `working_set`. */
-  openLoops?: (query?: string, toolNames?: readonly string[]) => SessionContextItem[];
+  openLoops?: (query?: string, toolNames?: readonly string[], runId?: string) => SessionContextItem[];
   /** The per-turn part of the system prompt: time context and a pending question. */
   variablePrompt: () => string;
   /** Finished tasks' digest stubs (#263), built from ledger rows and kept across restarts. */
@@ -63,7 +63,7 @@ export function sessionContextPlugin(config: SessionContextPluginConfig): Native
           pinned: config.pinned(),
           profile: config.profile(),
           workingSet: config.workingSet?.() ?? [],
-          openLoops: config.openLoops?.(query, toolNames) ?? [],
+          openLoops: config.openLoops?.(query, toolNames, runId) ?? [],
           recall,
           digestStubs: config.digestStubs?.() ?? [],
           recentText: recent,
