@@ -1,12 +1,12 @@
 import * as THREE from './three.bundle.js';
 
 const STAR_ROLES = [
-  { id: 'rule', label: '规矩', color: '#e0b25e' },
-  { id: 'soul', label: '灵魂', color: '#c9a7f0' },
-  { id: 'promise', label: '承诺', color: '#e5857e' },
-  { id: 'intent', label: '意图', color: '#7fd6a8' },
-  { id: 'experience', label: '经历', color: '#6ea8fe' },
-  { id: 'ordinary', label: '普通', color: '#9aa8bd' },
+  { id: 'rule', label: '规矩', color: '#e0655f' },
+  { id: 'soul', label: '灵魂', color: '#e6c26e' },
+  { id: 'promise', label: '承诺', color: '#4fb286' },
+  { id: 'intent', label: '意图', color: '#6aa8d8' },
+  { id: 'experience', label: '经历', color: '#8fa3b8' },
+  { id: 'ordinary', label: '普通', color: '#b08fd4' },
 ];
 const ROLE_COLOR = Object.fromEntries(STAR_ROLES.map((role) => [role.id, role.color]));
 const ROLE_LABEL = Object.fromEntries(STAR_ROLES.map((role) => [role.id, role.label]));
@@ -28,7 +28,7 @@ function roleOf(node) {
 }
 
 const colorFor = (node) => ROLE_COLOR[roleOf(node)];
-const SERIES_COLORS = ['#6ea8fe', '#5fd0b4', '#e0b25e', '#e5857e', '#9b8cf0', '#7fc7cf', '#b8c9a0', '#f0a3c8'];
+const SERIES_COLORS = ['#e6c26e', '#4fb286', '#6aa8d8', '#e0655f', '#b08fd4', '#8fa3b8', '#d9a441', '#7fc7cf'];
 const DEMO_SOURCE = 'demo';
 const MOBILE_L1_LIMIT = 3000;
 
@@ -159,7 +159,7 @@ function ringTexture() {
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = size;
   const ctx = canvas.getContext('2d');
-  ctx.strokeStyle = 'rgba(242,193,78,0.95)';
+  ctx.strokeStyle = 'rgba(230,194,110,0.95)';
   ctx.lineWidth = 5;
   ctx.beginPath();
   ctx.arc(size / 2, size / 2, size / 2 - 7, 0, Math.PI * 2);
@@ -191,7 +191,7 @@ const POINT_FRAGMENT = `
   void main() {
     float alpha = texture2D(uSprite, gl_PointCoord).a;
     float fog = exp(-uFogDensity * uFogDensity * vDepth * vDepth);
-    gl_FragColor = vec4(vColor, alpha * vWeight * uFade * fog);
+    gl_FragColor = vec4(vColor, clamp(alpha * vWeight * uFade * fog * 2.4, 0.0, 1.0));
   }`;
 
 function lodBands() {
@@ -227,7 +227,7 @@ function initMap() {
   }
   map.renderer.setClearAlpha(0);
   map.scene = new THREE.Scene();
-  map.scene.fog = new THREE.FogExp2(0x05070d, 0.0016);
+  map.scene.fog = new THREE.FogExp2(0xf7f4ec, 0.0012);
   map.camera = new THREE.PerspectiveCamera(55, 1, 1, 4000);
   map.camera.position.set(0, 132, 138);
   map.sprite = spriteTexture(0.9, 0);
@@ -255,13 +255,13 @@ function initMap() {
   map.scene.add(map.marker);
   map.edges = new THREE.LineSegments(
     new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3)),
-    new THREE.LineBasicMaterial({ color: 0x607a9b, transparent: true, opacity: 0.16, depthWrite: false }),
+    new THREE.LineBasicMaterial({ color: 0xb6c4d6, transparent: true, opacity: 0.22, depthWrite: false }),
   );
   map.edges.frustumCulled = false;
   map.scene.add(map.edges);
   map.edgeHighlight = new THREE.LineSegments(
     new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3)),
-    new THREE.LineBasicMaterial({ color: 0xf2c14e, transparent: true, opacity: 0.95, depthWrite: false }),
+    new THREE.LineBasicMaterial({ color: 0xe6c26e, transparent: true, opacity: 0.95, depthWrite: false }),
   );
   map.edgeHighlight.frustumCulled = false;
   map.scene.add(map.edgeHighlight);
@@ -283,15 +283,15 @@ function bindMapEvents(canvas) {
 
 function nebulaClouds() {
   const group = new THREE.Group();
-  const colors = [0x315c8a, 0x5b3f8a, 0x1f6f78];
+  const colors = [0xf0d9a6, 0xddc9ef, 0xc4dfe6];
   for (let index = 0; index < colors.length; index += 1) {
     const material = new THREE.SpriteMaterial({
       map: spriteTexture(0.12, 0),
       color: colors[index],
       transparent: true,
-      opacity: 0.16,
+      opacity: 0.22,
       depthWrite: false,
-      blending: THREE.AdditiveBlending,
+      blending: THREE.NormalBlending,
     });
     const cloud = new THREE.Sprite(material);
     const angle = (index / colors.length) * Math.PI * 2;
@@ -318,8 +318,8 @@ function dustPoints() {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   return new THREE.Points(geometry, new THREE.PointsMaterial({
-    color: 0x8fa6c8, size: 1.6, sizeAttenuation: true, transparent: true, opacity: 0.45,
-    depthWrite: false, blending: THREE.AdditiveBlending,
+    color: 0xc9b58b, size: 1.5, sizeAttenuation: true, transparent: true, opacity: 0.55,
+    depthWrite: false, blending: THREE.NormalBlending,
   }));
 }
 
@@ -472,14 +472,14 @@ function draw2d() {
   const ctx = view.ctx;
   ctx.clearRect(0, 0, view.width, view.height);
   const glow = ctx.createRadialGradient(view.width * 0.55, view.height * 0.45, 10, view.width * 0.55, view.height * 0.45, Math.max(view.width, view.height) * 0.8);
-  glow.addColorStop(0, 'rgba(37,58,92,0.28)');
-  glow.addColorStop(0.45, 'rgba(28,34,66,0.16)');
-  glow.addColorStop(1, 'rgba(5,7,13,0)');
+  glow.addColorStop(0, 'rgba(243,220,166,0.34)');
+  glow.addColorStop(0.45, 'rgba(210,224,238,0.22)');
+  glow.addColorStop(1, 'rgba(247,244,236,0)');
   ctx.fillStyle = glow;
   ctx.fillRect(0, 0, view.width, view.height);
   for (const star of view.stars) {
     ctx.globalAlpha = star.alpha;
-    ctx.fillStyle = '#8fa6c8';
+    ctx.fillStyle = '#c3b393';
     ctx.fillRect(star.x * view.width, star.y * view.height, star.size, star.size);
   }
   ctx.globalAlpha = 1;
@@ -491,7 +491,7 @@ function draw2d() {
     ctx.moveTo(source.x, source.y);
     ctx.lineTo(target.x, target.y);
   }
-  ctx.strokeStyle = state.selectedNode ? 'rgba(96,122,155,0.05)' : 'rgba(96,122,155,0.18)';
+  ctx.strokeStyle = state.selectedNode ? 'rgba(150,168,190,0.08)' : 'rgba(150,168,190,0.28)';
   ctx.lineWidth = 1;
   ctx.stroke();
 
@@ -504,7 +504,7 @@ function draw2d() {
       ctx.moveTo(source.x, source.y);
       ctx.lineTo(target.x, target.y);
     }
-    ctx.strokeStyle = 'rgba(242,193,78,0.8)';
+    ctx.strokeStyle = 'rgba(230,194,110,0.9)';
     ctx.lineWidth = 1.4;
     ctx.stroke();
   }
@@ -524,14 +524,14 @@ function draw2d() {
     ctx.fill();
     if (state.selectedNode?.id === node.id) {
       ctx.globalAlpha = 1;
-      ctx.strokeStyle = '#f2c14e';
+      ctx.strokeStyle = '#e6c26e';
       ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.arc(screen.x, screen.y, radius + 5, 0, Math.PI * 2);
       ctx.stroke();
     } else if (state.selectedNeighbors.has(node.id)) {
       ctx.globalAlpha = 0.8;
-      ctx.strokeStyle = 'rgba(242,193,78,0.55)';
+      ctx.strokeStyle = 'rgba(230,194,110,0.55)';
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.arc(screen.x, screen.y, radius + 2.5, 0, Math.PI * 2);
@@ -620,7 +620,7 @@ function buildMap(snapshot) {
       fragmentShader: POINT_FRAGMENT,
       transparent: true,
       depthWrite: false,
-      blending: THREE.AdditiveBlending,
+      blending: THREE.NormalBlending,
       vertexColors: true,
     });
     const points = new THREE.Points(geometry, material);
@@ -717,7 +717,7 @@ function applyWeights() {
     });
     weights.needsUpdate = true;
   }
-  if (map.edges) map.edges.material.opacity = state.selectedNode ? 0.04 : 0.16;
+  if (map.edges) map.edges.material.opacity = state.selectedNode ? 0.06 : 0.22;
   map.needsFrame = true;
 }
 
@@ -1225,6 +1225,169 @@ function renderRecallDetail(host, detail) {
   host.append(el('pre', { class: 'json', text: JSON.stringify(payload, null, 2) }));
 }
 
+function roleTotals() {
+  const totals = Object.fromEntries(STAR_ROLES.map((role) => [role.id, 0]));
+  for (const node of state.snapshot?.nodes ?? []) totals[roleOf(node)] += 1;
+  return totals;
+}
+
+function roleTypes() {
+  const result = Object.fromEntries(STAR_ROLES.map((role) => [role.id, new Map()]));
+  for (const node of state.snapshot?.nodes ?? []) {
+    const types = result[roleOf(node)];
+    types.set(node.type, (types.get(node.type) ?? 0) + 1);
+  }
+  return result;
+}
+
+function filterRole(roleId) {
+  state.hiddenRoles = new Set(STAR_ROLES.filter((role) => role.id !== roleId).map((role) => role.id));
+  showView('starmap');
+  applyWeights();
+  renderLegend();
+  map.needsFrame = true;
+  updateMapStats();
+}
+
+function renderClassification() {
+  const host = $('view-classification');
+  host.innerHTML = '';
+  if (!state.snapshot) {
+    host.append(emptyState('还没有快照', '等星图加载完再来看分类审计。'));
+    return;
+  }
+  const totals = roleTotals();
+  const types = roleTypes();
+  const total = Math.max(1, state.snapshot.nodes.length);
+  const audit = el('div', { class: 'audit' });
+  audit.append(el('div', { class: 'audit-head' }, [
+    el('h2', { text: '分类审计' }),
+    el('p', { class: 'dim', text: `六类角色与类型映射的只读对照。本视图 ${num(state.snapshot.nodes.length)} 个节点，来自水位线 #${num(state.snapshot.watermark)}。` }),
+  ]));
+  const grid = el('div', { class: 'role-grid' });
+  for (const role of STAR_ROLES) {
+    const roleCount = totals[role.id];
+    const share = Math.round((roleCount / total) * 100);
+    const topTypes = [...types[role.id].entries()].sort((left, right) => right[1] - left[1]).slice(0, 4);
+    const card = el('div', { class: 'role-card' });
+    card.append(el('header', {}, [
+      el('span', { class: 'swatch', style: `color:${role.color}` }),
+      el('span', { class: 'role-name', text: role.label }),
+      el('span', { class: 'role-count', text: `${num(roleCount)} · ${share}%` }),
+    ]));
+    card.append(el('div', { class: 'role-bar', style: `color:${role.color}` }, [
+      el('span', { style: `width:${share}%` }),
+    ]));
+    card.append(topTypes.length
+      ? el('div', { class: 'role-types' }, topTypes.map(([type, count]) => el('span', { text: `${type} ${num(count)}` })))
+      : el('p', { class: 'hint', text: '本视图没有这一类的节点。' }));
+    card.append(el('button', {
+      class: 'chip', type: 'button', text: '在星图中只看这类', onclick: () => filterRole(role.id),
+    }));
+    grid.append(card);
+  }
+  audit.append(grid);
+  const byType = Object.entries(state.snapshot.counts.nodesByType).sort((left, right) => right[1] - left[1]);
+  const table = el('table', { class: 'audit-table' }, [
+    el('thead', {}, [el('tr', {}, [
+      el('th', { text: '类型' }), el('th', { text: '节点' }), el('th', { text: '主要角色' }),
+    ])]),
+    el('tbody', {}, byType.map(([type, count]) => {
+      const roleCounts = STAR_ROLES.map((role) => ({
+        role,
+        count: (state.snapshot.nodes ?? []).filter((node) => node.type === type && roleOf(node) === role.id).length,
+      })).sort((left, right) => right.count - left.count);
+      const dominant = roleCounts[0];
+      return el('tr', {}, [
+        el('td', { text: type }),
+        el('td', { class: 'num', text: num(count) }),
+        el('td', {}, [el('span', { class: 'role-tag', style: `color:${dominant.role.color}` }, [
+          el('i'), `${dominant.role.label} ${num(dominant.count)}`,
+        ])]),
+      ]);
+    })),
+  ]);
+  audit.append(table);
+  host.append(audit);
+}
+
+function roundDetail(node) {
+  const block = el('div');
+  block.append(el('h3', { text: node.label || node.id }));
+  block.append(el('dl', { class: 'kv' }, [
+    el('dt', { text: '角色' }), el('dd', {}, [el('span', { class: 'role-tag', style: `color:${colorFor(node)}` }, [el('i'), ROLE_LABEL[roleOf(node)]])]),
+    el('dt', { text: '类型' }), el('dd', { text: node.type }),
+    el('dt', { text: '时间' }), el('dd', { text: stamp(node.occurredAt) }),
+    el('dt', { text: 'support' }), el('dd', { text: num(node.support) }),
+    el('dt', { text: 'activation' }), el('dd', { text: (node.activation ?? 0).toFixed(3) }),
+    el('dt', { text: 'id' }), el('dd', { text: node.id }),
+  ]));
+  block.append(el('p', { class: 'hint', text: '原文与证据在星图详情面读取，本页不新开写路径。' }));
+  block.append(el('button', {
+    class: 'chip', type: 'button', text: '在星图中打开',
+    onclick: () => { showView('starmap'); selectNode(node, { fromSnapshot: true }); },
+  }));
+  return block;
+}
+
+function renderRound() {
+  const host = $('view-round');
+  host.innerHTML = '';
+  if (!state.snapshot) {
+    host.append(emptyState('还没有快照', '等星图加载完再来看本轮记忆。'));
+    return;
+  }
+  const nodes = [...state.snapshot.nodes]
+    .filter((node) => node.occurredAt)
+    .sort((left, right) => right.occurredAt - left.occurredAt)
+    .slice(0, 60);
+  const grid = el('div', { class: 'round-grid' });
+  const list = el('div', { class: 'round-list' });
+  const side = el('div', { class: 'round-side' });
+  list.append(el('h2', { class: 'head', text: '本轮记忆 · inspector' }));
+  list.append(el('p', {
+    class: 'dim',
+    text: '按 occurredAt 倒序的最近写入，来自当前只读快照；不推断对话轮次，也不新增写路径。',
+  }));
+  if (!nodes.length) {
+    list.append(el('p', { class: 'hint', text: '快照里没有带时间的节点。' }));
+    side.append(emptyState('没有可查看的节点', '这个项目的节点都没有 occurredAt。'));
+    grid.append(list, side);
+    host.append(grid);
+    return;
+  }
+  let activeButton = null;
+  const open = (node, button) => {
+    if (activeButton) activeButton.removeAttribute('aria-current');
+    button.setAttribute('aria-current', 'true');
+    activeButton = button;
+    side.innerHTML = '';
+    side.append(roundDetail(node));
+    const recalls = (state.recalls?.recalls ?? []).slice(0, 4);
+    if (recalls.length) {
+      side.append(el('h2', { class: 'head', text: '最近召回', style: 'margin-top:1.25rem' }));
+      side.append(el('ul', { class: 'plain' }, recalls.map((recall) => el('li', {}, [
+        el('span', { text: recall.query || '(无查询文本)' }),
+        el('span', { class: 'dim', text: stamp(recall.startedAt) }),
+      ]))));
+    }
+  };
+  for (const node of nodes) {
+    const button = el('button', { class: 'round-item', type: 'button' }, [
+      el('span', { class: 'r' }, [
+        el('b', { text: node.label || node.id }),
+        el('span', { class: 'role-tag', style: `color:${colorFor(node)}` }, [el('i'), ROLE_LABEL[roleOf(node)]]),
+      ]),
+      el('span', { class: 'm', text: `${stamp(node.occurredAt)} · ${node.type} · support ${num(node.support)}` }),
+    ]);
+    button.addEventListener('click', () => open(node, button));
+    list.append(button);
+  }
+  grid.append(list, side);
+  host.append(grid);
+  open(nodes[0], list.querySelector('.round-item'));
+}
+
 /* ------------------------------------------------------------------- panel */
 
 function emptyState(title, body) {
@@ -1240,6 +1403,8 @@ function renderPanel(options = {}) {
   panel.innerHTML = '';
   if (state.view === 'recalls') { renderRecallsPanel(panel); return; }
   if (state.view === 'timeline') { renderTimelinePanel(panel); return; }
+  if (state.view === 'classification') { renderClassificationPanel(panel); return; }
+  if (state.view === 'round') { renderRoundPanel(panel); return; }
   if (state.view === 'soul') { renderSoulPanel(panel); return; }
   if (state.view === 'credentials') { renderCredentialsPanel(panel); return; }
   if (state.view === 'health') { renderHealthPanel(panel); return; }
@@ -1917,6 +2082,51 @@ function renderRecallsPanel(panel) {
   panel.append(section);
 }
 
+function renderClassificationPanel(panel) {
+  panel.append(panelHeader('分类审计', '六类角色来自快照的只读映射；点击角色卡片可在星图中单独查看。'));
+  if (!state.snapshot) { panel.append(loadingPanel()); return; }
+  const totals = roleTotals();
+  const section = el('div', { class: 'section' });
+  section.append(el('h2', { class: 'head', text: '角色计数' }));
+  section.append(el('ul', { class: 'plain' }, STAR_ROLES.map((role) => el('li', {}, [
+    el('span', {}, [el('span', { class: 'swatch', style: `color:${role.color};margin-right:0.375rem` }), role.label]),
+    el('span', { class: 'num', text: num(totals[role.id]) }),
+  ]))));
+  panel.append(section);
+  const types = Object.entries(state.snapshot.counts.nodesByType).sort((left, right) => right[1] - left[1]).slice(0, 12);
+  const typeSection = el('div', { class: 'section' });
+  typeSection.append(el('h2', { class: 'head', text: '类型计数' }));
+  typeSection.append(el('ul', { class: 'plain' }, types.map(([type, count]) => el('li', {}, [
+    el('span', { text: type }), el('span', { class: 'num', text: num(count) }),
+  ]))));
+  panel.append(typeSection);
+}
+
+function renderRoundPanel(panel) {
+  panel.append(panelHeader('本轮记忆', '最近写入的节点按时间倒序；点选后看右侧 inspector 或到星图读原文。'));
+  if (!state.snapshot) { panel.append(loadingPanel()); return; }
+  const latest = [...state.snapshot.nodes]
+    .filter((node) => node.occurredAt)
+    .sort((left, right) => right.occurredAt - left.occurredAt)
+    .slice(0, 5);
+  const section = el('div', { class: 'section' });
+  section.append(el('h2', { class: 'head', text: '最近 5 条' }));
+  section.append(latest.length
+    ? el('ul', { class: 'plain' }, latest.map((node) => el('li', {}, [
+      el('span', { text: node.label || node.id }),
+      el('span', { class: 'dim', text: stamp(node.occurredAt) }),
+    ])))
+    : el('p', { class: 'dim', text: '没有带时间的节点。' }));
+  panel.append(section);
+  const scope = el('div', { class: 'section' });
+  scope.append(el('dl', { class: 'kv' }, [
+    el('dt', { text: '视图节点' }), el('dd', { text: num(state.snapshot.nodes.length) }),
+    el('dt', { text: '水位线' }), el('dd', { text: `#${num(state.snapshot.watermark)}` }),
+    el('dt', { text: '范围' }), el('dd', { text: state.agent ?? '全部' }),
+  ]));
+  panel.append(scope);
+}
+
 function loadingPanel() {
   return el('div', { class: 'section' }, [
     el('div', { class: 'skeleton w60' }), el('div', { class: 'skeleton' }),
@@ -2003,12 +2213,14 @@ function renderLegend() {
 
 function showView(view) {
   state.view = view;
-  for (const name of ['starmap', 'timeline', 'recalls', 'soul', 'credentials', 'health']) {
+  for (const name of ['starmap', 'timeline', 'recalls', 'classification', 'round', 'soul', 'credentials', 'health']) {
     $(`tab-${name}`).setAttribute('aria-selected', String(name === view));
     $(`view-${name}`).classList.toggle('on', name === view);
   }
   if (view === 'recalls') renderRecalls();
   if (view === 'timeline') renderTimeline();
+  if (view === 'classification') renderClassification();
+  if (view === 'round') renderRound();
   if (view === 'soul') void loadSoul();
   if (view === 'credentials') void loadCredentials();
   if (view === 'health') void loadHealth();
@@ -2048,6 +2260,8 @@ function applyLoaded() {
   buildMap(state.snapshot);
   renderTimeline();
   renderRecalls();
+  if (state.view === 'classification') renderClassification();
+  if (state.view === 'round') renderRound();
   if (state.view === 'soul') void loadSoul();
   if (state.view === 'credentials') void loadCredentials();
   if (state.view === 'health') void loadHealth();
@@ -2094,6 +2308,8 @@ async function boot() {
 $('tab-starmap').addEventListener('click', () => showView('starmap'));
 $('tab-timeline').addEventListener('click', () => showView('timeline'));
 $('tab-recalls').addEventListener('click', () => showView('recalls'));
+$('tab-classification').addEventListener('click', () => showView('classification'));
+$('tab-round').addEventListener('click', () => showView('round'));
 $('tab-soul').addEventListener('click', () => showView('soul'));
 $('tab-credentials').addEventListener('click', () => showView('credentials'));
 $('tab-health').addEventListener('click', () => showView('health'));

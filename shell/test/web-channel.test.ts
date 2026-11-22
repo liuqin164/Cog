@@ -100,6 +100,9 @@ describe('web channel plugin (F12)', () => {
       expect(html).toContain('Cog 对话');
       const script = await (await fetch(`${base}/channel/web/app.js`)).text();
       expect(script).toContain('/observatory/#credentials');
+      const font = await fetch(`${base}/channel/web/fonts/noto-sans-sc-400-chinese-simplified.woff2`);
+      expect(font.status).toBe(200);
+      expect(font.headers.get('content-type')).toBe('font/woff2');
 
       expect((await post(base, '/channel/web/send', { text: '你好' }, '')).status).toBe(403);
 

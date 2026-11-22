@@ -50,7 +50,7 @@ process memory per `(project, watermark, max(updated_at))` and recomputed when e
 
 ## Soul editor
 
-The fourth tab edits one agent's soul. It reads `GET /observatory/soul`, shows the live token estimate
+The Soul tab edits one agent's soul. It reads `GET /observatory/soul`, shows the live token estimate
 beside the text area, and writes only when the owner presses save or rollback. The kernel's
 `soul_versions` table is append-only: a save adds a version with `supersedes`, a rollback copies an
 older version into a new row, and both land a `governance_audit_log` row. An agent's proposal is

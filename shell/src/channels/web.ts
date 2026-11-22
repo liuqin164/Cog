@@ -12,6 +12,12 @@ const STATIC_FILES: Record<string, { file: string; type: string }> = {
   [PREFIX]: { file: 'index.html', type: 'text/html; charset=utf-8' },
   [`${PREFIX}/`]: { file: 'index.html', type: 'text/html; charset=utf-8' },
   [`${PREFIX}/app.js`]: { file: 'app.js', type: 'text/javascript; charset=utf-8' },
+  [`${PREFIX}/fonts/noto-sans-sc-400-latin.woff2`]: { file: 'fonts/noto-sans-sc-400-latin.woff2', type: 'font/woff2' },
+  [`${PREFIX}/fonts/noto-sans-sc-400-chinese-simplified.woff2`]: { file: 'fonts/noto-sans-sc-400-chinese-simplified.woff2', type: 'font/woff2' },
+  [`${PREFIX}/fonts/noto-sans-sc-600-latin.woff2`]: { file: 'fonts/noto-sans-sc-600-latin.woff2', type: 'font/woff2' },
+  [`${PREFIX}/fonts/noto-sans-sc-600-chinese-simplified.woff2`]: { file: 'fonts/noto-sans-sc-600-chinese-simplified.woff2', type: 'font/woff2' },
+  [`${PREFIX}/fonts/noto-serif-sc-600-latin.woff2`]: { file: 'fonts/noto-serif-sc-600-latin.woff2', type: 'font/woff2' },
+  [`${PREFIX}/fonts/noto-serif-sc-600-chinese-simplified.woff2`]: { file: 'fonts/noto-serif-sc-600-chinese-simplified.woff2', type: 'font/woff2' },
 };
 
 export interface WebChannelShell {

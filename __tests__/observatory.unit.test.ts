@@ -110,6 +110,9 @@ describe('the observatory read path writes nothing', () => {
     await get('/app.js');
     await get('/demo.json');
     expect(visited.length).toBe(8);
+    const font = await fetch(`${base}/fonts/noto-sans-sc-400-chinese-simplified.woff2`);
+    expect(font.status).toBe(200);
+    expect(font.headers.get('content-type')).toBe('font/woff2');
 
     const after = fingerprint(dbPath);
     expect(after).toBe(afterOpen);

@@ -66,6 +66,12 @@ const STATIC_FILES: Record<string, { file: string; type: string }> = {
   '/observatory/three.bundle.js': { file: 'three.bundle.js', type: 'text/javascript; charset=utf-8' },
   '/observatory/three.LICENSE': { file: 'three.LICENSE', type: 'text/plain; charset=utf-8' },
   '/observatory/demo.json': { file: 'demo.json', type: 'application/json; charset=utf-8' },
+  '/observatory/fonts/noto-sans-sc-400-latin.woff2': { file: 'fonts/noto-sans-sc-400-latin.woff2', type: 'font/woff2' },
+  '/observatory/fonts/noto-sans-sc-400-chinese-simplified.woff2': { file: 'fonts/noto-sans-sc-400-chinese-simplified.woff2', type: 'font/woff2' },
+  '/observatory/fonts/noto-sans-sc-600-latin.woff2': { file: 'fonts/noto-sans-sc-600-latin.woff2', type: 'font/woff2' },
+  '/observatory/fonts/noto-sans-sc-600-chinese-simplified.woff2': { file: 'fonts/noto-sans-sc-600-chinese-simplified.woff2', type: 'font/woff2' },
+  '/observatory/fonts/noto-serif-sc-600-latin.woff2': { file: 'fonts/noto-serif-sc-600-latin.woff2', type: 'font/woff2' },
+  '/observatory/fonts/noto-serif-sc-600-chinese-simplified.woff2': { file: 'fonts/noto-serif-sc-600-chinese-simplified.woff2', type: 'font/woff2' },
 };
 
 function defaultWebRoot(): string {

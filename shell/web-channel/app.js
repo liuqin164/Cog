@@ -29,8 +29,11 @@ function scroll() {
 
 function addMessage(role, textContent) {
   const row = el('div', `msg ${role}`);
+  const body = el('div', 'msg-body');
   const bubble = el('div', 'bubble', textContent);
-  row.append(bubble);
+  if (role === 'assistant') row.append(el('span', 'avatar', '✦'));
+  body.append(bubble);
+  row.append(body);
   messages.append(row);
   scroll();
   return row;
@@ -50,7 +53,7 @@ function addProvenance(row, provenance) {
     chip.rel = 'noopener';
     chips.append(chip);
   }
-  row.append(chips);
+  (row.querySelector('.msg-body') || row).append(chips);
 }
 
 function addCard(title, body, actions) {
