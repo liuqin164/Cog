@@ -206,7 +206,6 @@ export class BrainBackup {
         const manifest = JSON.parse(readFileSync(join(dir, file), 'utf8')) as BrainManifest;
         if (manifest.verification?.ok) verified.push(file);
       } catch {
-        // A half-written manifest is not a snapshot; it is left on disk for the operator.
       }
     }
     for (const manifestFile of verified.sort().reverse().slice(SNAPSHOT_RETENTION)) {
