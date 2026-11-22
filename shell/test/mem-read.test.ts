@@ -9,6 +9,7 @@ import { describe, expect, test } from 'bun:test';
 import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CompanionShell } from '../src/app.ts';
+import { readMemoryEvent } from '../src/plugins/builtin-tools.ts';
 import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
 
 const NO_DREAM = { runKernelNight: false, maxEpisodes: 5, windowStartHour: 0, windowEndHour: 1 };
@@ -136,6 +137,42 @@ describe('read mem:<eventId>', () => {
       const result = await shell.host.tools.invoke('read', { toolCallId: 'c1', input: { path: 'notes.txt' } }, { runId: 'r' });
       expect(result.isError).toBe(false);
       expect(result.output).toBe('plain file\n');
+    } finally {
+      await shell.stop();
+    }
+  });
+
+  test('an event from another project is refused by id', async () => {
+    const shell = makeShell(makeTempDir('mem-read-other-project-'), new ScriptedProvider([{ text: 'idle', toolCalls: [] }]), { dream: NO_DREAM });
+    await shell.start();
+    try {
+      const event = shell.kernel.recordRawEvent({ projectId: 'another-project', threadId: 'elsewhere', role: 'user', content: '别的项目' });
+      const result = await shell.host.tools.invoke('read', { toolCallId: 'c1', input: { path: `mem:${event.eventId}` } }, { runId: 'r' });
+      expect(result.isError).toBe(true);
+      expect(result.output).toContain('memory_event_out_of_scope');
+    } finally {
+      await shell.stop();
+    }
+  });
+
+  test('a non-private occasion withholds third-party material that a private one allows', async () => {
+    const shell = makeShell(makeTempDir('mem-read-occasion-'), new ScriptedProvider([{ text: 'idle', toolCalls: [] }]), { dream: NO_DREAM });
+    await shell.start();
+    try {
+      const event = shell.kernel.recordRawEvent({
+        projectId: shell.config.projectId,
+        threadId: 'group-chat',
+        role: 'other',
+        content: '别人在群里说的一句话',
+      });
+      expect(() => readMemoryEvent(event.eventId, shell.kernel, undefined, undefined, {
+        projectId: shell.config.projectId,
+        occasion: 'public',
+      })).toThrow('memory_event_withheld: occasion_third_party');
+      expect(readMemoryEvent(event.eventId, shell.kernel, undefined, undefined, {
+        projectId: shell.config.projectId,
+        occasion: 'private',
+      })).toBe('别人在群里说的一句话');
     } finally {
       await shell.stop();
     }

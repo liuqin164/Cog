@@ -44,13 +44,12 @@ export interface TelegramChannelStatus {
 interface TelegramConfig {
   credential?: string;
   ownerId?: string;
-  chatId?: string;
   apiBase: string;
 }
 
 interface TelegramMessage {
   text?: string;
-  chat?: { id?: number | string };
+  chat?: { id?: number | string; type?: string };
   from?: { id?: number | string };
 }
 
@@ -85,7 +84,6 @@ function readTelegramConfig(dataDir: string): TelegramConfig | undefined {
   return {
     ...(credential ? { credential } : {}),
     ...(ownerId ? { ownerId } : {}),
-    ...(ownerId ? { chatId: field(parsed.chatId) ?? ownerId } : {}),
     apiBase: (field(parsed.apiBase) ?? DEFAULT_API_BASE).replace(/\/+$/u, ''),
   };
 }
@@ -137,7 +135,6 @@ export class TelegramChannel {
   private poll?: AbortController;
   private disposed = false;
   private offset = 0;
-  private chatId?: string;
   private replyRuns = new Set<string>();
   private failures = 0;
   private lastError?: string;
@@ -149,7 +146,6 @@ export class TelegramChannel {
   ) {
     this.configPath = join(options.dataDir, 'telegram-channel.json');
     this.config = config ?? { apiBase: DEFAULT_API_BASE };
-    this.chatId = this.config.chatId;
     this.api = new TelegramApi(this.config, () => this.token());
     if (initialError) {
       this.state = 'error';
@@ -197,7 +193,6 @@ export class TelegramChannel {
     const previous = this.config.credential;
     if (previous && previous !== credential) this.options.credentials.revoke(previous);
     this.session = undefined;
-    this.chatId = undefined;
     this.replyRuns.clear();
     this.config = { apiBase: this.config.apiBase, credential };
     this.persist();
@@ -215,7 +210,6 @@ export class TelegramChannel {
     this.setOffline();
     if (this.config.credential) this.options.credentials.revoke(this.config.credential);
     this.session = undefined;
-    this.chatId = undefined;
     this.replyRuns.clear();
     this.pairingCode = undefined;
     this.pairingExpiresAt = 0;
@@ -267,21 +261,17 @@ export class TelegramChannel {
     mkdirSync(dirname(this.configPath), { recursive: true, mode: 0o700 });
     const data: Record<string, string> = { apiBase: this.config.apiBase };
     if (this.config.credential) data.credential = this.config.credential;
-    if (this.config.ownerId) {
-      data.ownerId = this.config.ownerId;
-      data.chatId = this.config.chatId ?? this.config.ownerId;
-    }
+    if (this.config.ownerId) data.ownerId = this.config.ownerId;
     writeFileSync(this.configPath, `${JSON.stringify(data)}\n`, { mode: 0o600 });
     chmodSync(this.configPath, 0o600);
   }
 
   private registerSession(): void {
     const ownerId = this.config.ownerId;
-    const chatId = this.config.chatId ?? ownerId;
-    if (!ownerId || !chatId) return;
+    if (!ownerId) return;
     this.session = this.options.contract.register({
-      channelId: `telegram:${chatId}`,
-      occasion: chatId.startsWith('-') ? 'group' : 'private',
+      channelId: `telegram:${ownerId}`,
+      occasion: 'private',
       accounts: [{ accountId: ownerId, role: 'owner' }],
       reachability: 'online',
       interruptibility: 'normal',
@@ -352,6 +342,11 @@ export class TelegramChannel {
     }
     const message = update.message;
     if (!message?.text || message.chat?.id === undefined || message.from?.id === undefined) return;
+    const chatId = String(message.chat.id);
+    if (message.chat.type !== 'private' || (this.state === 'connected' && chatId !== this.config.ownerId)) {
+      this.options.trace.append('telegram_chat_refused', { chatId, reason: message.chat.type !== 'private' ? 'not_private' : 'not_owner' });
+      return;
+    }
     if (this.state === 'pairing') {
       this.tryPair(message);
       return;
@@ -370,10 +365,9 @@ export class TelegramChannel {
       return;
     }
     if (ingress.role !== 'owner' || !ingress.text) {
-      this.options.trace.append('telegram_message_refused', { accountId, chatId: String(message.chat.id) });
+      this.options.trace.append('telegram_message_refused', { accountId, chatId });
       return;
     }
-    this.chatId = String(message.chat.id);
     this.options.contract.presence(this.session, { reachability: 'online', ownerActivity: 'active' });
     void this.options.shell.submit(ingress.text, this.session.channelId).catch((error) => {
       this.options.trace.append('telegram_submit_failed', { message: error instanceof Error ? error.message : String(error) });
@@ -397,9 +391,8 @@ export class TelegramChannel {
       this.options.trace.append('telegram_pairing_refused', { reason: 'code_mismatch', accountId: ownerId });
       return;
     }
-    this.config = { ...this.config, ownerId, chatId };
+    this.config = { ...this.config, ownerId };
     this.persist();
-    this.chatId = chatId;
     this.pairingCode = undefined;
     this.pairingExpiresAt = 0;
     this.state = 'connected';
@@ -415,9 +408,11 @@ export class TelegramChannel {
       void this.send(`凭据请求：${proposal.reason ?? proposal.id}\n请在终端或星海的保密输入面填写。`);
       return;
     }
-    const title = proposal.kind === 'plugin'
-      ? `插件提案：${proposal.name ?? proposal.id}`
-      : `提案：/${proposal.command ?? ''} ${proposal.args ?? ''}`.trim();
+    if (proposal.kind === 'plugin') {
+      void this.send(`插件提案：${proposal.name ?? proposal.id}\n${proposal.purpose ?? proposal.reason ?? ''}\n请到终端或星海批准。`);
+      return;
+    }
+    const title = `提案：/${proposal.command ?? ''} ${proposal.args ?? ''}`.trim();
     void this.send(
       `${title}\n${proposal.purpose ?? proposal.reason ?? ''}`,
       { inline_keyboard: [[
@@ -481,9 +476,9 @@ export class TelegramChannel {
   }
 
   private async send(text: string, replyMarkup?: unknown): Promise<void> {
-    if (this.disposed || this.state !== 'connected' || !this.chatId) return;
+    if (this.disposed || this.state !== 'connected' || !this.config.ownerId) return;
     try {
-      await this.api.sendMessage(this.chatId, text, replyMarkup);
+      await this.api.sendMessage(this.config.ownerId, text, replyMarkup);
     } catch (error) {
       this.options.trace.append('telegram_send_failed', { message: error instanceof Error ? error.message : String(error) });
     }

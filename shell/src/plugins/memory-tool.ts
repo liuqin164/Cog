@@ -1,4 +1,4 @@
-import type { AgentRecallItem, KernelAgentMemoryBackend, MemoryKernel } from 'cogmem';
+import type { AgentRecallItem, KernelAgentMemoryBackend, MemoryKernel, Occasion } from 'cogmem';
 import type { TraceLog } from '../trace.ts';
 import type { NativePlugin, ToolDefinition } from './host.ts';
 import { readMemoryEvent } from './builtin-tools.ts';
@@ -7,6 +7,7 @@ export interface MemoryToolConfig {
   agentId: string;
   projectId: string;
   sessionId: string;
+  occasion?: () => Occasion;
   onMemoryRead?: (eventId: string) => void;
 }
 
@@ -72,7 +73,8 @@ function memoryTool(
       if (action === 'read') {
         const requested = requiredText(args, 'eventId');
         const eventId = requested.startsWith('mem:') ? requested.slice('mem:'.length) : requested;
-        return readMemoryEvent(eventId, kernel, trace, config.onMemoryRead);
+        const occasion = config.occasion?.();
+        return readMemoryEvent(eventId, kernel, trace, config.onMemoryRead, { projectId: config.projectId, ...(occasion ? { occasion } : {}) });
       }
       if (action === 'recent') {
         const n = args?.n;

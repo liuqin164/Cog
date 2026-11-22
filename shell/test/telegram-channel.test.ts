@@ -118,7 +118,7 @@ async function connectTelegram(base: string, fake: ReturnType<typeof startFakeTe
   expect(startedBody.ok).toBe(true);
   const pairing = await waitChannelState(base, 'pairing');
   const code = pairing.pairingCode!;
-  fake.push({ update_id: updateId, message: { text: code, chat: { id: OWNER }, from: { id: OWNER } } });
+  fake.push({ update_id: updateId, message: { text: code, chat: { id: OWNER, type: 'private' }, from: { id: OWNER } } });
   await waitChannelState(base, 'connected');
 }
 
@@ -140,7 +140,7 @@ describe('telegram channel plugin (F12)', () => {
       expect((await post(base, '/observatory/channels/telegram/begin', {}, '')).status).toBe(403);
 
       await connectTelegram(base, fake);
-      fake.push({ update_id: 2, message: { text: '你好', chat: { id: OWNER }, from: { id: OWNER } } });
+      fake.push({ update_id: 2, message: { text: '你好', chat: { id: OWNER, type: 'private' }, from: { id: OWNER } } });
       await waitUntil(() => fake.sent.some((entry) => entry.method === 'sendMessage' && entry.body.text === '你好'));
       expect(shell.trace.read().some((record) => record.kind === 'telegram_ingress_failed')).toBe(false);
 
@@ -163,7 +163,7 @@ describe('telegram channel plugin (F12)', () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
       const callsAfterStop = fake.calls();
       const sentAfterStop = fake.sent.length;
-      fake.push({ update_id: 3, message: { text: '还在吗', chat: { id: OWNER }, from: { id: OWNER } } });
+      fake.push({ update_id: 3, message: { text: '还在吗', chat: { id: OWNER, type: 'private' }, from: { id: OWNER } } });
       await new Promise((resolve) => setTimeout(resolve, 150));
       expect(fake.calls()).toBe(callsAfterStop);
       expect(fake.sent.length).toBe(sentAfterStop);
@@ -171,7 +171,7 @@ describe('telegram channel plugin (F12)', () => {
       expect(ledgerAfter).toBe(ledgerBefore);
 
       await connectTelegram(base, fake, 100);
-      fake.push({ update_id: 101, message: { text: '重连了吗', chat: { id: OWNER }, from: { id: OWNER } } });
+      fake.push({ update_id: 101, message: { text: '重连了吗', chat: { id: OWNER, type: 'private' }, from: { id: OWNER } } });
       await waitUntil(() => fake.sent.some((entry) => entry.method === 'sendMessage' && entry.body.text === '又见面了'));
       expect(readPluginRegistry(dataDir)).toContain('builtin:telegram-channel');
 
@@ -223,6 +223,35 @@ describe('telegram channel plugin (F12)', () => {
     const base = shell.httpUrl!;
     try {
       await connectTelegram(base, fake);
+      const proposal = shell.proposals.propose({ command: 'status', reason: '测试提案卡' });
+      expect(proposal.accepted).toBe(true);
+      const id = proposal.proposal!.id;
+      await waitUntil(() => fake.sent.some((entry) => entry.method === 'sendMessage' && Array.isArray(entry.body.reply_markup?.inline_keyboard)));
+
+      fake.push({ update_id: 2, callback_query: { id: 'cb-stranger', data: `confirm:${id}`, from: { id: STRANGER } } });
+      await waitUntil(() => fake.sent.some((entry) => entry.method === 'answerCallbackQuery' && entry.body.callback_query_id === 'cb-stranger'));
+      expect(shell.trace.read()).toContainEqual(expect.objectContaining({ kind: 'telegram_approval_refused', accountId: String(STRANGER), data: `confirm:${id}` }));
+
+      fake.push({ update_id: 3, callback_query: { id: 'cb-owner', data: `confirm:${id}`, from: { id: OWNER } } });
+      await waitUntil(() => fake.sent.some((entry) => entry.method === 'answerCallbackQuery' && entry.body.callback_query_id === 'cb-owner'));
+      expect(shell.trace.read()).toContainEqual(expect.objectContaining({ kind: 'telegram_approval', accountId: String(OWNER), id, action: 'confirm', ok: true }));
+    } finally {
+      await shell.stop();
+      fake.stop();
+    }
+  }, 60_000);
+
+  test('a plugin proposal is a notification without approval buttons', async () => {
+    const fake = startFakeTelegram();
+    const dir = makeTempDir('telegram-plugin-proposal-');
+    const dataDir = join(dir, 'data');
+    writeConfig(dataDir, fake.base);
+    writePluginRegistry(dataDir, ['builtin:telegram-channel']);
+    const shell = makeTelegramShell(dir, new ScriptedProvider([{ text: 'ok', toolCalls: [] }]), dataDir);
+    await shell.start();
+    const base = shell.httpUrl!;
+    try {
+      await connectTelegram(base, fake);
       const sourcePath = join(pluginWorkspaceDir(dataDir), 'echo', 'index.ts');
       mkdirSync(dirname(sourcePath), { recursive: true });
       writeFileSync(sourcePath, "export default { name: 'echo-plugin', apply() {} };\n");
@@ -233,18 +262,49 @@ describe('telegram channel plugin (F12)', () => {
         sourcePath,
       });
       expect(proposal.accepted).toBe(true);
-      const id = proposal.proposal!.id;
-      await waitUntil(() => fake.sent.some((entry) => entry.method === 'sendMessage' && Array.isArray(entry.body.reply_markup?.inline_keyboard)));
-
-      fake.push({ update_id: 2, callback_query: { id: 'cb-stranger', data: `confirm:${id}`, from: { id: STRANGER } } });
-      await waitUntil(() => fake.sent.some((entry) => entry.method === 'answerCallbackQuery' && entry.body.callback_query_id === 'cb-stranger'));
+      await waitUntil(() => fake.sent.some((entry) => entry.method === 'sendMessage' && String(entry.body.text).includes('请到终端或星海批准')));
+      const sent = fake.sent.find((entry) => entry.method === 'sendMessage' && String(entry.body.text).includes('测试提案卡'))!;
+      expect(sent.body.text).toContain('插件提案：echo-plugin');
+      expect(sent.body.reply_markup).toBeUndefined();
       expect(readPluginRegistry(dataDir)).toEqual(['builtin:telegram-channel']);
-      expect(shell.trace.read()).toContainEqual(expect.objectContaining({ kind: 'telegram_approval_refused', accountId: String(STRANGER), data: `confirm:${id}` }));
+    } finally {
+      await shell.stop();
+      fake.stop();
+    }
+  }, 60_000);
 
-      fake.push({ update_id: 3, callback_query: { id: 'cb-owner', data: `confirm:${id}`, from: { id: OWNER } } });
-      await waitUntil(() => readPluginRegistry(dataDir).includes(sourcePath));
-      expect(shell.trace.read()).toContainEqual(expect.objectContaining({ kind: 'telegram_approval', accountId: String(OWNER), id, action: 'confirm', ok: true }));
-      await waitUntil(() => fake.sent.some((entry) => entry.method === 'answerCallbackQuery' && entry.body.callback_query_id === 'cb-owner'));
+  test('pairing and conversation stay in the owner private chat; group chats are refused and traced', async () => {
+    const fake = startFakeTelegram();
+    const dir = makeTempDir('telegram-private-only-');
+    const dataDir = join(dir, 'data');
+    writeConfig(dataDir, fake.base);
+    writePluginRegistry(dataDir, ['builtin:telegram-channel']);
+    const provider = new ScriptedProvider([{ text: '不该出现。', toolCalls: [] }]);
+    const shell = makeTelegramShell(dir, provider, dataDir);
+    await shell.start();
+    const base = shell.httpUrl!;
+    try {
+      const begun = await post(base, '/observatory/channels/telegram/begin', {});
+      const { requestId } = await begun.json() as { requestId: string };
+      const submitted = await post(base, '/observatory/credentials/submit', { id: requestId, values: { token: TOKEN } });
+      const saved = await submitted.json() as { ref: string };
+      await post(base, '/observatory/channels/telegram/start', { ref: saved.ref });
+      const pairing = await waitChannelState(base, 'pairing');
+
+      fake.push({ update_id: 1, message: { text: pairing.pairingCode!, chat: { id: -1001, type: 'group' }, from: { id: OWNER } } });
+      await waitUntil(() => shell.trace.read().some((record) => record.kind === 'telegram_chat_refused' && record.reason === 'not_private'));
+      expect((await channelState(base)).state).toBe('pairing');
+
+      fake.push({ update_id: 2, message: { text: pairing.pairingCode!, chat: { id: OWNER, type: 'private' }, from: { id: OWNER } } });
+      await waitChannelState(base, 'connected');
+
+      fake.push({ update_id: 3, message: { text: '群里说一句', chat: { id: -1001, type: 'group' }, from: { id: OWNER } } });
+      await waitUntil(() => shell.trace.read().filter((record) => record.kind === 'telegram_chat_refused' && record.reason === 'not_private').length === 2);
+      fake.push({ update_id: 4, message: { text: '陌生人私聊', chat: { id: STRANGER, type: 'private' }, from: { id: STRANGER } } });
+      await waitUntil(() => shell.trace.read().some((record) => record.kind === 'telegram_chat_refused' && record.reason === 'not_owner'));
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(provider.calls).toHaveLength(0);
+      expect(fake.sent.some((entry) => entry.method === 'sendMessage' && entry.body.text === '不该出现。')).toBe(false);
     } finally {
       await shell.stop();
       fake.stop();
@@ -269,7 +329,7 @@ describe('telegram channel plugin (F12)', () => {
     const base = shell.httpUrl!;
     try {
       await connectTelegram(base, fake);
-      fake.push({ update_id: 2, message: { text: '帮我查一下部署窗口', chat: { id: OWNER }, from: { id: OWNER } } });
+      fake.push({ update_id: 2, message: { text: '帮我查一下部署窗口', chat: { id: OWNER, type: 'private' }, from: { id: OWNER } } });
       await waitUntil(() => fake.sent.some((entry) => entry.method === 'sendMessage' && entry.body.text === '结论：周二。'));
       expect(fake.sent.some((entry) => entry.method === 'sendMessage' && entry.body.text === '我先查一下文件。')).toBe(false);
 
@@ -390,7 +450,7 @@ describe('telegram channel plugin (F12)', () => {
     const base = shell.httpUrl!;
     try {
       await connectTelegram(base, fake);
-      fake.push({ update_id: 10, message: { text: '记一下：部署窗口是周二。', chat: { id: OWNER }, from: { id: OWNER } } });
+      fake.push({ update_id: 10, message: { text: '记一下：部署窗口是周二。', chat: { id: OWNER, type: 'private' }, from: { id: OWNER } } });
       await waitUntil(() => fake.sent.some((entry) => entry.method === 'sendMessage' && entry.body.text === '记下了。'));
 
       const turns = shell.backend.sessionTurns({

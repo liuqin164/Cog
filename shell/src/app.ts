@@ -8,7 +8,7 @@
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { ChannelContract, createMemoryKernel, KernelAgentMemoryBackend, ModelRegistry, type ChannelSession, type EmbeddingProvider, type MemoryKernel, type ModelRoleConfig, type ModelRoleName, type ModelTextUsage, type SessionContextAssembly, type SurfacingSource } from 'cogmem';
+import { ChannelContract, createMemoryKernel, KernelAgentMemoryBackend, ModelRegistry, type ChannelSession, type EmbeddingProvider, type MemoryKernel, type ModelRoleConfig, type ModelRoleName, type ModelTextUsage, type Occasion, type SessionContextAssembly, type SurfacingSource } from 'cogmem';
 import { defaultShellConfig, type ShellConfig } from './config.ts';
 import { StateMachine } from './state/machine.ts';
 import { CheckpointStore, type InFlightToolCall } from './state/checkpoint.ts';
@@ -373,6 +373,10 @@ export class CompanionShell implements ShellControl, AttachShell {
 
   currentChannelId(): string {
     return this.channelContract.currentChannel() ?? 'web';
+  }
+
+  private currentOccasion(): Occasion {
+    return this.currentChannel === 'terminal' || this.currentChannel === 'web' || this.currentChannel.startsWith('telegram:') ? 'private' : 'public';
   }
 
   isRunning(): boolean {
@@ -752,6 +756,8 @@ export class CompanionShell implements ShellControl, AttachShell {
       cliConfigPath: this.cliConfigPath,
       trace: this.trace,
       kernel: this.kernel,
+      projectId: this.config.projectId,
+      occasion: () => this.currentOccasion(),
       onMemoryRead: () => {
         this.drillsSinceAssembly += 1;
       },
@@ -798,6 +804,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       agentId: this.config.agentId,
       projectId: this.config.projectId,
       sessionId: this.config.sessionId,
+      occasion: () => this.currentOccasion(),
       onMemoryRead: () => {
         this.drillsSinceAssembly += 1;
       },
