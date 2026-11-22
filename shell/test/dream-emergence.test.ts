@@ -42,7 +42,7 @@ describe('night integration (DREAMING)', () => {
       const summary = (dreamEvents[0].payload as { text?: string }).text ?? '';
       expect(summary).not.toContain('今天修好了花园的栅栏');
       expect(summary).not.toContain('花园的栅栏今天修好了');
-      expect(summary).toContain(String(metadata.sourceEventIds!.length));
+      expect(summary).toContain(String((metadata.sourceEventIds as unknown[]).length));
       expect(summary).toContain(seed.rawEventIds[0]!);
       // The product is a deterministic rule over the day's ledger, so its provenance must say
       // rule extraction. `llm_inference` here was the audit lie #231 exists to stop.
