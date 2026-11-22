@@ -807,6 +807,7 @@ export class CompanionShell implements ShellControl, AttachShell {
           contract: this.channelContract,
           projectId: this.config.projectId,
           agentId: this.config.agentId,
+          sessionId: this.config.sessionId,
           dataDir: this.config.dataDir,
         }));
         this.pluginResults.push({ spec, status: 'loaded', name: 'web-channel', tools: [], commands: [] });
@@ -900,8 +901,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       if (!event.toolCallId || !inFlight.some((call) => call.toolCallId === event.toolCallId)) return;
       this.machine.updateRuntime({ inFlightToolCalls: inFlight.filter((call) => call.toolCallId !== event.toolCallId) });
     });
-    // The terminal channel prints what the shell says; the app is the only place that knows a reply
-    // finished, so it forwards the assistant text on the bus the channel already listens to.
+    // The app is the only place that knows a reply finished, so it forwards it to the terminal bus.
     this.host.bus.on('message_end', (event: { message?: { role?: string; content?: string } }) => {
       if (event.message?.role === 'assistant' && event.message.content) {
         void this.host.bus.emit('terminal_print', { text: `${event.message.content}\n` });

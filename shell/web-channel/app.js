@@ -1,7 +1,9 @@
 const TOKEN_KEY = 'observatory-write-token';
 let token = sessionStorage.getItem(TOKEN_KEY) || '';
 let active = null;
-let data = null;
+let oldestCursor = 0;
+let hasMore = false;
+let loadingOlder = false;
 
 const messages = document.getElementById('messages');
 const state = document.getElementById('state');
@@ -27,12 +29,15 @@ function scroll() {
   messages.scrollTop = messages.scrollHeight;
 }
 
-function addMessage(role, textContent) {
+function addMessage(role, textContent, prepend) {
   const row = el('div', `msg ${role}`);
   const bubble = el('div', 'bubble', textContent);
   row.append(bubble);
-  messages.append(row);
-  scroll();
+  if (prepend) messages.prepend(row);
+  else {
+    messages.append(row);
+    scroll();
+  }
   return row;
 }
 
@@ -251,16 +256,33 @@ function connect() {
   });
 }
 
-async function loadHistory() {
+async function loadHistory(before) {
   try {
-    const response = await fetch('/channel/web/history');
+    const response = await fetch(`/channel/web/history${before ? `?before=${before}` : ''}`);
     if (!response.ok) return;
-    data = await response.json();
-    for (const message of data.messages || []) addMessage(message.role, message.text);
+    const page = await response.json();
+    const items = page.messages || [];
+    if (!before) {
+      for (const message of items) addMessage(message.role, message.text);
+    } else {
+      const height = messages.scrollHeight;
+      for (const message of [...items].reverse()) addMessage(message.role, message.text, true);
+      messages.scrollTop += messages.scrollHeight - height;
+    }
+    oldestCursor = page.cursor || 0;
+    hasMore = Boolean(page.hasMore) && items.length > 0;
   } catch {
     return;
   }
 }
+
+messages.addEventListener('scroll', () => {
+  if (!hasMore || loadingOlder || messages.scrollTop > 80) return;
+  loadingOlder = true;
+  void loadHistory(oldestCursor).finally(() => {
+    loadingOlder = false;
+  });
+});
 
 async function submit() {
   const value = text.value.trim();

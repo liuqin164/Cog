@@ -15,11 +15,7 @@ import type { MemoryEventRole } from '../types/index.js';
 /** The most turns one assembly reads. Beyond it the digest says it is truncated rather than lying. */
 export const SESSION_LEDGER_MAX_TURNS = 5000;
 
-/**
- * The newest turns the digest lane compiles (#322). Older turns leave the per-turn view rather than
- * growing it without bound; they stay in the ledger and `recallSession` reaches them unchanged, so
- * the session rotates its *context* window without rotating the identity it is stored under.
- */
+/** The newest turns the digest lane compiles (#322); older ones stay in the ledger for recall. */
 export const SESSION_DIGEST_MAX_TURNS = 512;
 
 export interface SessionTurn {
@@ -41,7 +37,7 @@ export interface SessionTurn {
 
 export interface SessionTurnRead {
   turns: SessionTurn[];
-  /** True when the read hit `SESSION_LEDGER_MAX_TURNS`; older turns exist and are not in `turns`. */
+  /** True when turns older than this page exist. */
   truncated: boolean;
 }
 
@@ -50,6 +46,8 @@ export interface SessionTurnReadInput {
   agentId: string;
   sessionId: string;
   limit?: number;
+  /** Channel-history cursor: only rows older than this ledger sequence. */
+  beforeGlobalSeq?: number;
 }
 
 /** One `tool_call` row: the task's own trajectory, as captured, with no model summary. */
@@ -104,34 +102,35 @@ const LANE_SQL = `
 
 export function readSessionTurns(db: Database, input: SessionTurnReadInput): SessionTurnRead {
   const limit = Math.max(1, Math.min(Math.trunc(input.limit ?? SESSION_LEDGER_MAX_TURNS), SESSION_LEDGER_MAX_TURNS));
+  const before = input.beforeGlobalSeq;
   const rows = db
     .query(`
       SELECT * FROM (
         SELECT ${TURN_COLUMNS}
         FROM memory_events
         WHERE ${LANE_SQL}
+          ${before === undefined ? '' : `AND (
+            occurred_at < (SELECT occurred_at FROM memory_events WHERE global_seq = ?)
+            OR (occurred_at = (SELECT occurred_at FROM memory_events WHERE global_seq = ?)
+              AND COALESCE(global_seq, 0) < ?)
+          )`}
         ORDER BY occurred_at DESC, COALESCE(global_seq, 0) DESC, event_id DESC
         LIMIT ?
       )
       ORDER BY occurred_at ASC, COALESCE(global_seq, 0) ASC, event_id ASC
     `)
-    .all(input.projectId, input.sessionId, `${input.agentId}:${input.sessionId}`, limit + 1) as TurnRow[];
+    .all(
+      input.projectId,
+      input.sessionId,
+      `${input.agentId}:${input.sessionId}`,
+      ...(before === undefined ? [] : [before, before, before]),
+      limit + 1,
+    ) as TurnRow[];
   const truncated = rows.length > limit;
-  // The newest window is the one the tail must come from; the extra row is the oldest of the
-  // fetched window, so drop that one rather than the newest.
   return { turns: (truncated ? rows.slice(rows.length - limit) : rows).map(mapTurn), truncated };
 }
 
-/**
- * The tool calls a task actually made, in capture order. The shell's producer (#262) builds a
- * procedure's steps and tools from these rows, never from the model's account of itself: a tool
- * called outside this window is not evidence of how the task got done.
- *
- * `since` is the assignment's start. There is no upper bound: capture stamps rows at `agent_end`,
- * so the end declaration's own run is written after its `endedAt` and a time window would drop it.
- * Two task boundaries inside one run are the case this cannot order; they are not the producer's
- * shape (an end declaration closes the assignment the run started with).
- */
+/** The tool calls a task made since `since`, in capture order (#262). No upper bound: rows land at `agent_end`. */
 export function readSessionToolCalls(db: Database, input: SessionToolCallReadInput): SessionToolCall[] {
   const rows = db
     .query(`
