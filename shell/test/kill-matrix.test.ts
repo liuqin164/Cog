@@ -133,7 +133,7 @@ describe('kill matrix: every kill point comes back to one IDLE state', () => {
       const loaded = new CheckpointStore(dir).load()!;
       expect(loaded.state).toBe('RUNNING');
       expect(loaded.history.length).toBeLessThanOrEqual(200);
-      expect(loaded.runtime.pendingSteering?.[0] ?? '').not.toHaveLength(0);
+      expect(loaded.runtime.pendingSteering?.[0]?.textId ?? '').not.toHaveLength(0);
 
       const { recovered } = await recover(dir);
       expect(recovered.state, 'a kill in the write path still recovers to one IDLE').toBe('IDLE');

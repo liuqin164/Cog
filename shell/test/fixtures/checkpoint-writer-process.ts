@@ -40,7 +40,7 @@ function atCapacity(seq: number): CheckpointState {
         text: big ? `${seq}:`.padEnd(200_000, 'x') : 'x'.repeat(500),
         startedAt: 1_760_000_000_000,
       },
-      pendingSteering: [big ? `${seq}:`.padEnd(600_000, 'y') : 'y'.repeat(400)],
+      pendingSteering: [{ text: big ? `${seq}:`.padEnd(600_000, 'y') : 'y'.repeat(400) }],
       declaredTools: ['bash', 'edit', 'propose_command', 'read', 'write'],
     },
     history,

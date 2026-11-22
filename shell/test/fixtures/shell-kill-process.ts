@@ -183,7 +183,7 @@ if (mode === 'write') {
   // A checkpoint rewrite in flight, over and over: the kill has to land inside one of them. The
   // payload is large enough that the write window is real (the storage round measures it).
   for (let n = 0; ; n += 1) {
-    shell.machine.updateRuntime({ pendingSteering: [`追写${n}：`.padEnd(60_000, '追')] });
+    shell.machine.updateRuntime({ pendingSteering: [{ text: `追写${n}：`.padEnd(60_000, '追') }] });
     say({ event: 'writing', n });
   }
 }

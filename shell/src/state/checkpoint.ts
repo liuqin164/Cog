@@ -107,14 +107,8 @@ export interface ShellRuntimeState {
    * for any whose policy is `never` (see `ToolDefinition.replay`).
    */
   inFlightToolCalls?: InFlightToolCall[];
-  /**
-   * Lines typed while RUNNING and not yet injected, FIFO. They are state, not memory (#210): the
-   * run's context lives in the process, so a kill before the turn boundary would otherwise lose a
-   * line the model never saw. Restored in order on the next start and drained at the next boundary.
-   */
-  pendingSteering?: string[];
-  /** Follow-up lines waiting for the run to end, same contract as `pendingSteering`. */
-  pendingFollowUps?: string[];
+  pendingSteering?: Array<{ text: string; textId?: string }>;
+  pendingFollowUps?: Array<{ text: string; textId?: string }>;
   /** Last attach/detach of a TUI, so "while you were away" has a window to read. */
   lastAttachAt?: number;
   lastDetachAt?: number;
@@ -346,6 +340,14 @@ export function forgetRuntimeText(runtime: ShellRuntimeState, ledger: RuntimeTex
     next[key] = kept as never;
   }
 
+  for (const key of ['pendingSteering', 'pendingFollowUps'] as const) {
+    const entries = runtime[key];
+    if (!entries) continue;
+    const kept = entries.filter((entry) => entry.textId !== undefined && !gone(entry.textId));
+    cleared += entries.length - kept.length;
+    next[key] = kept;
+  }
+
   if (runtime.suspension) {
     let copy = runtime.suspension;
     if (gone(copy.userTextId)) {
@@ -524,6 +526,16 @@ export class CheckpointStore {
       });
     }
 
+    for (const [key, kind] of [['pendingSteering', 'steering.text'], ['pendingFollowUps', 'followup.text']] as const) {
+      const entries = runtime[key];
+      if (!entries) continue;
+      copy[key] = entries.map((entry) => {
+        entry.textId = this.textId(entry.textId, kind, entry.text);
+        const { text: _text, ...rest } = entry;
+        return rest as { text: string; textId?: string };
+      });
+    }
+
     const suspension = runtime.suspension;
     if (suspension) {
       suspension.userTextId = this.textId(suspension.userTextId, 'suspension.user', suspension.userText);
@@ -580,6 +592,16 @@ export class CheckpointStore {
       runtime.retainedConstraints = runtime.retainedConstraints.flatMap((constraint) => {
         const text = constraint.textId ? ledger.read(constraint.textId) : constraint.text;
         return text === undefined ? [] : [{ ...constraint, text }];
+      });
+    }
+
+    for (const key of ['pendingSteering', 'pendingFollowUps'] as const) {
+      const entries = runtime[key];
+      if (!entries) continue;
+      runtime[key] = (entries as unknown as Array<string | { text?: string; textId?: string }>).flatMap((entry) => {
+        if (typeof entry === 'string') return [{ text: entry }];
+        const text = entry.textId ? ledger.read(entry.textId) : entry.text;
+        return text === undefined ? [] : [{ ...entry, text }];
       });
     }
 

@@ -617,8 +617,6 @@ export class CompanionShell implements ShellControl, AttachShell {
         void this.tick().catch((error) => this.trace.append('tick_error', { message: error instanceof Error ? error.message : String(error) }));
       }, this.config.tickIntervalMs);
     }
-    // The queue is state (#210), so a non-empty one comes back item by item; the recovery fact is
-    // written down rather than silent. The queue's own text stays in the checkpoint, not the log.
     const restoredQueue = {
       steering: [...(this.machine.runtime.pendingSteering ?? [])],
       followUps: [...(this.machine.runtime.pendingFollowUps ?? [])],
@@ -627,7 +625,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       this.trace.append('steering_restored', {
         steering: restoredQueue.steering.length,
         followUps: restoredQueue.followUps.length,
-        steeringChars: restoredQueue.steering.reduce((sum, line) => sum + line.length, 0),
+        steeringChars: restoredQueue.steering.reduce((sum, line) => sum + line.text.length, 0),
       });
     }
     this.started = true;
@@ -881,12 +879,13 @@ export class CompanionShell implements ShellControl, AttachShell {
       // A mid-run hot-plug declares the delta in the transcript; the checkpoint keeps the same set so
       // the next recovery can compare it against what the process can run.
       onToolsDeclared: (names) => this.machine.updateRuntime({ declaredTools: [...names].sort() }),
-      // The queues are state, not memory (#210): the checkpoint written before the process dies is
-      // what the next start drains, in order.
-      initialQueues: { steering: this.machine.runtime.pendingSteering, followUps: this.machine.runtime.pendingFollowUps },
+      initialQueues: {
+        steering: this.machine.runtime.pendingSteering?.map((entry) => entry.text),
+        followUps: this.machine.runtime.pendingFollowUps?.map((entry) => entry.text),
+      },
       onQueueChange: ({ steering, followUps }) => this.machine.updateRuntime({
-        pendingSteering: steering.length > 0 ? [...steering] : undefined,
-        pendingFollowUps: followUps.length > 0 ? [...followUps] : undefined,
+        pendingSteering: steering.length > 0 ? steering.map((text) => ({ text })) : undefined,
+        pendingFollowUps: followUps.length > 0 ? followUps.map((text) => ({ text })) : undefined,
       }),
       // The context gauge is the measured request, not a running total of message events: the system
       // prompt, the tool schemas and a `transformContext`-injected recall block are all part of what
