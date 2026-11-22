@@ -304,7 +304,7 @@ test('ActionFrame time edges use the project civil year across UTC boundary zone
       const year = localDateFor(item.occurredAt, item.timeZone).slice(0, 4);
       const action = kernel.memoryAtlasStore.listNodes('p', 100).find((node) => node.nodeType === 'action');
       expect(action).toBeDefined();
-      expect(kernel.memoryAtlasStore.listEdges('p')).toContainEqual(expect.objectContaining({
+      expect(kernel.memoryAtlasStore.listEdges('p').edges).toContainEqual(expect.objectContaining({
         source: action!.id, relation: 'OCCURRED_IN', target: `time:p:${year}`,
       }));
       const range = localDateRange(Number(year), 1, 1, Number(year) + 1, 1, 1, item.timeZone);

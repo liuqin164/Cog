@@ -136,7 +136,7 @@ test('an overview that hides the relations behind its node budget says so (#145)
     // the budget is spent on nodes no relation touches, which is the shape the box produced
     listNodes: () => ambient,
     listEdgesWithinNodes: () => [],
-    listEdges: () => [edge],
+    listEdges: () => ({ edges: [edge], omitted: 0 }),
     getNode: (id: string) => node(id),
   } as unknown as MemoryAtlasStore;
   const service = new MemoryAtlasService(store, { getEvent: () => ({ projectId: 'p' }) } as unknown as EventStore);
@@ -148,7 +148,7 @@ test('an overview that hides the relations behind its node budget says so (#145)
 
   // and with the relations inside the budget the warning is not there
   const internal = { ...edge, source: 'time:1', target: 'time:2' } as unknown as MemoryAtlasEdge;
-  const shown = new MemoryAtlasService({ ...store, listEdgesWithinNodes: () => [internal], listEdges: () => [internal] } as unknown as MemoryAtlasStore, { getEvent: () => ({ projectId: 'p' }) } as unknown as EventStore)
+  const shown = new MemoryAtlasService({ ...store, listEdgesWithinNodes: () => [internal], listEdges: () => ({ edges: [internal], omitted: 0 }) } as unknown as MemoryAtlasStore, { getEvent: () => ({ projectId: 'p' }) } as unknown as EventStore)
     .overview({ projectId: 'p', limit: 8 });
   expect(shown.edges).toHaveLength(1);
   expect(shown.warnings).toEqual([]);

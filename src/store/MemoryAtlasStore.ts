@@ -391,7 +391,7 @@ export class MemoryAtlasStore {
     return rows.some((row) => wanted.includes(normalizeAlias(String(row.label ?? ''))));
   }
 
-  listEdges(projectId: string): MemoryAtlasEdge[] {
+  listEdges(projectId: string, limit = 4000): { edges: MemoryAtlasEdge[]; omitted: number } {
     const edges: MemoryAtlasEdge[] = [];
     const rows = this.db.prepare(`SELECT * FROM memory_edges WHERE project_id=? AND status IN ('active','weak') ORDER BY confidence DESC LIMIT 2000`).all(projectId) as Array<Record<string, unknown>>;
     for (const row of rows) edges.push({
@@ -399,13 +399,27 @@ export class MemoryAtlasStore {
       target: fromAtlasEdgeEndpoint(String(row.target_type), String(row.target_id), projectId), confidence: Number(row.confidence),
       evidenceEventIds: parseStringArray(String(row.evidence_event_ids_json || '[]')),
     });
-    const actions = this.db.prepare(`SELECT action_id,target_entity_id,occurred_at,confidence FROM memory_action_frames WHERE project_id=?`).all(projectId) as Array<{ action_id: string; target_entity_id?: string; occurred_at: number; confidence: number }>;
+    const actions = this.db.prepare(`SELECT action_id,target_entity_id,occurred_at,confidence FROM memory_action_frames WHERE project_id=? ORDER BY occurred_at DESC LIMIT 2000`).all(projectId) as Array<{ action_id: string; target_entity_id?: string; occurred_at: number; confidence: number }>;
+    const evidence = new Map<string, string[]>();
+    if (actions.length) {
+      const evidenceRows = this.db.prepare(`
+        SELECT action_id,event_id FROM memory_action_frame_evidence
+        WHERE project_id=? AND action_id IN (${actions.map(() => '?').join(',')}) ORDER BY created_at
+      `).all(projectId, ...actions.map((action) => action.action_id)) as Array<{ action_id: string; event_id: string }>;
+      for (const row of evidenceRows) {
+        const ids = evidence.get(row.action_id) ?? [];
+        if (ids.length < 20) ids.push(row.event_id);
+        evidence.set(row.action_id, ids);
+      }
+    }
     for (const action of actions) {
-      if (action.target_entity_id) edges.push({ source: `action:${action.action_id}`, relation: 'TARGETS', target: `entity:${action.target_entity_id}`, confidence: action.confidence, evidenceEventIds: this.actionEvidenceIds(action.action_id, projectId) });
-      edges.push({ source: `action:${action.action_id}`, relation: 'OCCURRED_IN', target: timeNodeId(projectId, action.occurred_at, this.projectTimeZone), confidence: 1, evidenceEventIds: this.actionEvidenceIds(action.action_id, projectId) });
+      const evidenceEventIds = evidence.get(action.action_id) ?? [];
+      if (action.target_entity_id) edges.push({ source: `action:${action.action_id}`, relation: 'TARGETS', target: `entity:${action.target_entity_id}`, confidence: action.confidence, evidenceEventIds });
+      edges.push({ source: `action:${action.action_id}`, relation: 'OCCURRED_IN', target: timeNodeId(projectId, action.occurred_at, this.projectTimeZone), confidence: 1, evidenceEventIds });
     }
     edges.push(...this.topicRelationEdges(projectId));
-    return edges;
+    const bounded = Math.max(1, Math.min(Math.floor(limit), 8000));
+    return { edges: edges.slice(0, bounded), omitted: Math.max(0, edges.length - bounded) };
   }
 
   listEdgesForNodes(projectId: string, nodeIds: string[], limit = 2000): MemoryAtlasEdge[] {
