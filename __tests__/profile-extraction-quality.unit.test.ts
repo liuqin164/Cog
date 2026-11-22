@@ -69,6 +69,7 @@ describe('profile extraction quality (#329)', () => {
         extractionReason: 'explicit_user_statement',
         sourceEventId: event.eventId,
         validFrom: 1_000 + index,
+        metadata: { reviewConfirmed: true },
       });
     }
 
