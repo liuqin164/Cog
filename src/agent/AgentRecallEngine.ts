@@ -12,7 +12,7 @@ import {
 } from '../recall/SourceContextMetadata.js';
 import { filterSuperseded } from '../recall/SupersessionFilter.js';
 import { isOperationalNoiseText } from '../recall/RecallGovernance.js';
-import { correctionAffects, profileCorrectionSignals, supersededSourceEventIds } from '../profile/CorrectionSignal.js';
+import { correctionAffects, profileCorrectionSignals, type ProfileCorrectionSignal } from '../profile/CorrectionSignal.js';
 import type { ProfileRecallEntry } from '../profile/index.js';
 import type { MemoryEvent, MemorySourceRef } from '../types/index.js';
 import type { ChannelBinding, Occasion, OccasionWithholdReason } from '../occasion/index.js';
@@ -148,16 +148,6 @@ export class AgentRecallEngine {
     return { ...query, excludeSessionBeforeTurnSeq: latest - turns + 1 };
   }
 
-  /**
-   * The profile lane (#159). The owner's four ledgers are a compiled product with their own ranking
-   * and their own budget: they are **appended** after the ordinary lanes rather than merged through
-   * `mergeRecallItems`, so a profile entry never displaces the memory the question named and the
-   * compiled lane's cue ranking never reorders the profile's frozen priority/decay order.
-   *
-   * The item anchors the raw event the entry was compiled from, so the secret and agent scope gates
-   * (#142/#143, one chain) apply unchanged — the cross-identity rule stays #153's, not a second one.
-   * Exact-quote and previous-session lanes stay whole: they ask for words, not for a profile.
-   */
   private withProfileItems(query: AgentRecallQuery, result: RecallCoreResult): RecallCoreResult {
     if (!query.projectId) return result;
     if (!laneAllowed(query.retrievalPolicy, 'graph')) return result;
@@ -176,25 +166,46 @@ export class AgentRecallEngine {
     return { ...result, items: [...result.items, ...items] };
   }
 
-  /**
-   * A profile correction also governs the ordinary lanes (#242). The corrected entry's old source
-   * events are exact evidence: an item anchored there is the replaced statement, not a second
-   * answer. Text overlap catches compiled cards whose source link is older than the correction.
-   * Exact-quote and previous-session lanes are left whole — they ask for the words that were said.
-   */
-  private withoutSupersededByProfile(query: AgentRecallQuery, result: RecallCoreResult): RecallCoreResult {
-    if (!query.projectId) return result;
-    if (query.intent === 'forensic_quote' || query.intent === 'previous_session_summary') return result;
-    const signals = profileCorrectionSignals(this.kernel.eventStore, query.projectId);
-    if (signals.length === 0) return result;
-    const oldSourceIds = supersededSourceEventIds(signals);
+  private withoutSupersededByProfile(
+    query: AgentRecallQuery,
+    result: RecallCoreResult,
+    signals: readonly ProfileCorrectionSignal[],
+  ): { result: RecallCoreResult; suppressed: RecallTraceSuppression[] } {
+    if (!query.projectId || signals.length === 0) return { result, suppressed: [] };
+    if (query.intent === 'forensic_quote' || query.intent === 'previous_session_summary') return { result, suppressed: [] };
+    const dropped: string[] = [];
     const items = result.items.filter((item) => {
-      const anchor = item.sourceAnchor?.eventId;
-      if (anchor && oldSourceIds.has(anchor)) return false;
-      if (signals.some((signal) => item.text.toLowerCase().includes(signal.value.toLowerCase()))) return true;
-      return !signals.some((signal) => correctionAffects(signal, { text: item.text }));
+      if (this.itemSurvivesProfileCorrections(item, signals)) return true;
+      dropped.push(item.id);
+      return false;
     });
-    return items.length === result.items.length ? result : { ...result, items };
+    if (dropped.length === 0) return { result, suppressed: [] };
+    return {
+      result: { ...result, items },
+      suppressed: [{ reason: 'profile_superseded', count: dropped.length, ids: dropped }],
+    };
+  }
+
+  private itemSurvivesProfileCorrections(item: AgentRecallItem, signals: readonly ProfileCorrectionSignal[]): boolean {
+    const evidence = new Set(item.evidenceEventIds ?? []);
+    const anchor = item.sourceAnchor?.eventId;
+    if (anchor) evidence.add(anchor);
+    const recordedAt = item.sourceContext?.event?.occurredAt
+      ?? (anchor ? this.kernel.eventStore.getEvent(anchor)?.occurredAt : undefined);
+    for (const signal of signals) {
+      if (signal.previousSourceRefs.some((ref) => ref.eventId && evidence.has(ref.eventId))) return false;
+      if (!this.itemSharesSignalKey(item, signal)) continue;
+      if (correctionAffects(signal, { text: item.text, recordedAt })) return false;
+    }
+    return true;
+  }
+
+  private itemSharesSignalKey(item: AgentRecallItem, signal: ProfileCorrectionSignal): boolean {
+    const key = signal.key.toLowerCase();
+    return [item.canonicalId, item.displayTitle, item.topicPath, ...item.tags].some((value) => {
+      const text = String(value ?? '').toLowerCase();
+      return text === key || text === `canonicalkey:${key}` || text === `topic:${key}`;
+    });
   }
 
   private toAgentProfileItem(entry: ProfileRecallEntry, query: AgentRecallQuery): AgentRecallItem | null {
@@ -402,18 +413,6 @@ export class AgentRecallEngine {
     return eventsVisibleToAgent(this.itemChainEvents(item), agentId);
   }
 
-  /**
-   * Apply the read-time phase to the default lane (#130).
-   *
-   * Read-time and store-free: the phase is computed from the timestamp every time, so switching it off restores
-   * the previous behaviour with no migration and no data to roll back. Forensic and exact-quote lanes never
-   * reach this method, and a by-ID read does not either, which is the ticket's rule that those channels always
-   * return the whole thing.
-   *
-   * The rules live in `PhaseProjection.projectPhaseItems`, which is pure and takes the items directly, so the
-   * projection has a unit test that does not need a lane to seed a timestamp (#171). This method only adds the
-   * trace's suppression reasons and the off switch.
-   */
   private projectPhases(items: AgentRecallItem[], query: AgentRecallQuery): { items: AgentRecallItem[]; suppressed: Array<{ reason: RecallSuppressionReason; count: number }> } {
     if (!this.kernel.phaseProjectionEnabled) return { items, suppressed: [] };
     const now = Number(query.now ?? Date.now());
@@ -438,7 +437,15 @@ export class AgentRecallEngine {
       };
       return { result: { ...empty, decisionTrace: trace, semanticIndex: this.kernel.semanticIndexEnabled() }, suppressedIds: [] };
     }
-    const result = this.withProfileItems(query, this.withoutSupersededByProfile(query, this.recallCore(query)));
+    const limit = query.limit ?? 5;
+    const correctionSignals = query.projectId ? profileCorrectionSignals(this.kernel.eventStore, query.projectId) : [];
+    const core = this.withoutSupersededByProfile(
+      query,
+      this.recallCore(query, correctionSignals.length > 0 ? limit * 2 : limit),
+      correctionSignals,
+    );
+    const capped = core.result.items.length > limit ? { ...core.result, items: core.result.items.slice(0, limit) } : core.result;
+    const result = this.withProfileItems(query, capped);
     const quoteIntent = forensic || FORENSIC_SOCIAL_EXEMPT_INTENTS.has(String(result.queryPlan?.intent ?? ''));
     const gated = this.gateSocialEntries(result.items ?? [], query, quoteIntent);
     const checked = PRIVATE_CHECKED_ITEMS.get(this);
@@ -452,6 +459,7 @@ export class AgentRecallEngine {
     const secretWithheld = rawWithheldIds.length + secretWithheldItems.length;
     const secretIds = [...rawWithheldIds, ...secretWithheldItems.map((item) => item.id)];
     const suppressedIds: RecallTraceSuppression[] = [
+      ...core.suppressed,
       ...gated.suppressedIds,
       ...(secretIds.length ? [{ reason: 'secret_bearing_withheld' as const, count: secretIds.length, ids: secretIds }] : []),
     ];
@@ -481,7 +489,10 @@ export class AgentRecallEngine {
       Number(left.trust === TOOL_OBSERVATION_TRUST) - Number(right.trust === TOOL_OBSERVATION_TRUST)
     ));
     const suppressions = mergeSuppressions(
-      mergeSuppressions(result.decisionTrace?.suppressed, gated.suppressed),
+      mergeSuppressions(
+        mergeSuppressions(result.decisionTrace?.suppressed, core.suppressed.map(({ reason, count }) => ({ reason, count }))),
+        gated.suppressed,
+      ),
       phased.suppressed,
     );
     return {
@@ -640,15 +651,6 @@ export class AgentRecallEngine {
     };
   }
 
-  /**
-   * Defence 2: a social entry is never memory content, whatever the question is.
-   *
-   * The write side already classifies turns (MemoryGate drops pure thanks), but ten-thousand-event
-   * databases hold turns written before that gate existed, and the ticket requires them to work
-   * without a migration. So the classification is redone here at recall time with the same shared
-   * rules — the ledger keeps everything, and this only stops the old pleasantries from being handed
-   * back as answers.
-   */
   private gateSocialEntries(
     items: AgentRecallItem[],
     query: AgentRecallQuery,
@@ -735,9 +737,7 @@ export class AgentRecallEngine {
     return { frequent, rare };
   }
 
-  // Everything but the semantic-index answer: that is a property of the kernel, not of
-  // which lane answered, so it is added once at the single exit above.
-  private recallCore(query: AgentRecallQuery): RecallCoreResult {
+  private recallCore(query: AgentRecallQuery, laneLimit?: number): RecallCoreResult {
     const queryPlan = compileAgentRecallQuery({
       query: query.query,
       intent: query.intent,
@@ -745,16 +745,14 @@ export class AgentRecallEngine {
       taxonomy: this.kernel.taxonomy,
     });
     const limit = query.limit ?? 5;
+    const candidates = laneLimit ?? limit;
     const forensic = FORENSIC_SOCIAL_EXEMPT_INTENTS.has(String(query.intent ?? ''));
     const allowsGraph = laneAllowed(query.retrievalPolicy, 'graph');
     const allowsRawSource = laneAllowed(query.retrievalPolicy, 'raw_source');
-    // Only the three intents below merge atlas items into their result. The
-    // ordinary recall path reads the atlas itself, so computing these up front
-    // made every recall pay for a second atlas read and throw the result away.
     const withEarlyAtlasItems = (result: RecallCoreResult): RecallCoreResult =>
       query.projectId === undefined || !allowsGraph
         ? result
-        : this.withAtlasItems(result, this.atlasItemsForAgentQuery(queryPlan.primarySearchText, query, allowsRawSource), limit, forensic);
+        : this.withAtlasItems(result, this.atlasItemsForAgentQuery(queryPlan.primarySearchText, query, allowsRawSource), candidates, forensic);
     if (queryPlan.intent === 'previous_session_summary') {
       return withEarlyAtlasItems(this.recallPreviousSession(query, queryPlan));
     }
@@ -762,12 +760,12 @@ export class AgentRecallEngine {
       return withEarlyAtlasItems(this.recallForensicQuote(query, queryPlan));
     }
     if (queryPlan.intent === 'historical_discussion' || queryPlan.intent === 'action_history') {
-      return withEarlyAtlasItems(this.recallHistoricalDiscussion(query, queryPlan));
+      return withEarlyAtlasItems(this.recallHistoricalDiscussion(query, queryPlan, candidates));
     }
     const atlasItems = allowsGraph ? this.atlasItemsForAgentQuery(queryPlan.primarySearchText, query, allowsRawSource) : [];
-    const graphItems = allowsGraph ? this.memoryBindingGraphItemsForQuery(query, queryPlan, limit) : [];
-    const rawFallbackItems = allowsRawSource ? this.rawLedgerFallbackItemsForQuery(queryPlan, query, limit) : [];
-    const items = this.mergeRecallItems(graphItems, this.mergeRecallItems(rawFallbackItems, atlasItems, limit, forensic), limit, forensic);
+    const graphItems = allowsGraph ? this.memoryBindingGraphItemsForQuery(query, queryPlan, candidates) : [];
+    const rawFallbackItems = allowsRawSource ? this.rawLedgerFallbackItemsForQuery(queryPlan, query, candidates) : [];
+    const items = this.mergeRecallItems(graphItems, this.mergeRecallItems(rawFallbackItems, atlasItems, candidates, forensic), candidates, forensic);
     return {
       recallMode: 'raw_ledger_fallback',
       items,
@@ -870,8 +868,8 @@ export class AgentRecallEngine {
     };
   }
 
-  private recallHistoricalDiscussion(query: AgentRecallQuery, queryPlan: AgentRecallQueryPlan): RecallCoreResult {
-    const limit = query.limit ?? 5;
+  private recallHistoricalDiscussion(query: AgentRecallQuery, queryPlan: AgentRecallQueryPlan, laneLimit?: number): RecallCoreResult {
+    const limit = laneLimit ?? query.limit ?? 5;
     const allowsGraph = laneAllowed(query.retrievalPolicy, 'graph');
     const allowsRawSource = laneAllowed(query.retrievalPolicy, 'raw_source');
     const facetResult = allowsGraph ? this.facetGraphItemsForQuery(query, limit) : { items: [], cards: [], relatedButNotSelected: [], relaxationTrace: [] };

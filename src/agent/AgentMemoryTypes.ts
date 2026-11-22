@@ -345,6 +345,7 @@ export type RecallSuppressionReason =
   | 'secret_bearing_withheld'
   // Life information (health, money, papers, family): written and marked, not injected by default.
   | 'life_sensitivity_withheld'
+  | 'profile_superseded'
   // Phase projection (#130), off by default: an item too old for the default lane, and one shown as a gist
   // rather than in full. Both are reported so a caller can tell "not remembered" from "not shown here".
   | 'phase_dormant'
