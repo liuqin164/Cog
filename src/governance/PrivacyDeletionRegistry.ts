@@ -53,7 +53,7 @@ const MIGRATION_TABLES = [
   'chat_sessions','chat_turns','deep_write_candidate_reviews','deep_write_candidates','deep_write_runs','deep_write_summaries','dream_ledger_state','entity_merge_candidates','entity_resolution_log','event_sequence_counters',
   'episode_boundary_decisions','episode_closure_receipts','episode_cross_refs','episode_dream_attempts','episode_dream_jobs','episode_dream_runs','episode_event_dispositions','episode_ingest_keys','episode_repair_audit',
   'memory_event_fts_state','memory_event_cjk_terms',
-  'governance_audit_log','import_source_anchors','memory_action_frame_evidence','memory_action_frames','memory_atlas_access','memory_atlas_activation','memory_atlas_alias_ambiguities',
+  'governance_audit_log','import_source_anchors','memory_action_frame_evidence','memory_action_frames','memory_activation','memory_atlas_access','memory_atlas_activation','memory_atlas_alias_ambiguities',
   'memory_atlas_alias_supports','memory_atlas_aliases','memory_atlas_documents','memory_atlas_projection_state','memory_atlas_supports','memory_bindings','memory_clusters','memory_edge_supports','memory_edges','memory_entities','memory_entity_scope_identity',
   'memory_event_embeddings','memory_episode_events','memory_episodes','memory_frame_nodes','memory_frame_relations','memory_frame_reviews','memory_frames','memory_governance_audit','memory_governance_operations',
   'memory_governance_plans','memory_timeline_entries','memory_topics','migration_repair_receipts','pipeline_checkpoints','pipeline_nonfatal_events','pipeline_runs','pipeline_step_timings',
@@ -70,7 +70,7 @@ const MIGRATION_PROJECT_OWNED = [
   'chat_sessions','deep_write_candidate_reviews','deep_write_runs','deep_write_summaries','dream_ledger_state',
   'entity_merge_candidates','episode_boundary_decisions','episode_closure_receipts','episode_cross_refs','episode_dream_jobs',
   'episode_dream_runs','episode_event_dispositions','episode_ingest_keys','episode_repair_audit','import_source_anchors',
-  'memory_action_frame_evidence','memory_action_frames','memory_atlas_access','memory_atlas_activation',
+  'memory_action_frame_evidence','memory_action_frames','memory_activation','memory_atlas_access','memory_atlas_activation',
   'memory_atlas_alias_ambiguities','memory_atlas_alias_supports','memory_atlas_aliases','memory_atlas_documents',
   'memory_atlas_projection_state','memory_atlas_supports','memory_bindings','memory_clusters','memory_edge_supports','memory_edges','memory_entities','memory_entity_scope_identity',
   'memory_event_embeddings','memory_episodes','memory_frame_reviews','memory_frames','memory_governance_audit','memory_governance_operations',
@@ -113,7 +113,6 @@ export const PRIVACY_SCHEMA_CLASSIFICATION: Readonly<Record<string, PrivacyTable
 
 export interface PrivacyDeletionContext {
   scope: string;
-  neuronIds: string[];
   listPersistentTables(): string[];
   hasColumn(table: string, column: string): boolean;
   runDelete(sql: string, params?: Array<string | number>): number;
@@ -123,7 +122,7 @@ export type PrivacyDeletionAudit = Record<string, number>;
 
 /** Child-first registry for user-derived content outside canonical neurons/events. */
 export function deleteRegisteredProjectContent(context: PrivacyDeletionContext): PrivacyDeletionAudit {
-  const { scope, neuronIds, runDelete } = context;
+  const { scope, runDelete } = context;
   const persistentTables = new Set(context.listPersistentTables());
   assertPrivacySchemaClassified([...persistentTables]);
   const audit: PrivacyDeletionAudit = {};
@@ -205,25 +204,22 @@ export function deleteRegisteredProjectContent(context: PrivacyDeletionContext):
       WHERE COALESCE(trace.project_id,'')=?
     )`);
   if (persistentTables.has('ingestion_processed_records')) {
-    const placeholders = neuronIds.map(() => '?').join(', ');
     audit.ingestion_processed_records = runDelete(`DELETE FROM ingestion_processed_records
       WHERE ${context.hasColumn('ingestion_processed_records', 'project_scope') ? `project_scope=? OR` : ''}
         ${context.hasColumn('ingestion_processed_records', 'project_id') ? `COALESCE(project_id,'')=? OR` : ''}
-        ${neuronIds.length > 0 ? `neuron_id IN (${placeholders})` : '0'}`,
+        neuron_id IN (SELECT id FROM _forget_event_ids)`,
       [
         ...(context.hasColumn('ingestion_processed_records', 'project_scope') ? [scope] : []),
         ...(context.hasColumn('ingestion_processed_records', 'project_id') ? [scope] : []),
-        ...neuronIds,
       ]);
   }
   if (persistentTables.has('pending_entity_resolution_quarantine')) {
-    const placeholders = neuronIds.map(() => '?').join(', ');
     audit.pending_entity_resolution_quarantine = runDelete(`
       DELETE FROM pending_entity_resolution_quarantine
       WHERE (scope_resolved=1 AND project_scope=?)
         OR EXISTS (SELECT 1 FROM json_each(COALESCE(implicated_scopes_json,'[]')) WHERE value=?)
-        ${neuronIds.length > 0 ? `OR (json_valid(record_json) AND json_extract(record_json,'$.context_neuron_id') IN (${placeholders}))` : ''}`,
-      [scope, scope, ...neuronIds]);
+        OR (json_valid(record_json) AND json_extract(record_json,'$.context_neuron_id') IN (SELECT id FROM _forget_event_ids))`,
+      [scope, scope]);
   }
   if (persistentTables.has('entity_scope_migration_quarantine')) {
     remove('entity_scope_migration_quarantine', `DELETE FROM entity_scope_migration_quarantine
@@ -267,10 +263,7 @@ export function deleteRegisteredProjectContent(context: PrivacyDeletionContext):
   remove('runtime_event_outbox', `DELETE FROM runtime_event_outbox WHERE project_scope = ?`);
   remove('runtime_transitions', `DELETE FROM runtime_transitions WHERE project_scope = ?`);
   remove('runtime_states', `DELETE FROM runtime_states WHERE project_scope = ?`);
-  if (neuronIds.length > 0) {
-    const placeholders = neuronIds.map(() => '?').join(', ');
-    audit.reasoning_steps_by_event = runDelete(`DELETE FROM reasoning_steps WHERE neuron_id IN (${placeholders})`, neuronIds);
-  }
+  audit.reasoning_steps_by_event = runDelete(`DELETE FROM reasoning_steps WHERE neuron_id IN (SELECT id FROM _forget_event_ids)`);
   return audit;
 }
 

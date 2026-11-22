@@ -2187,9 +2187,9 @@ export class MemoryKernel extends KernelServices {
   async forgetUser(projectId: string, _reason = 'unspecified'): Promise<ForgetUserResult> {
     const db = this.factStore.getDatabase();
     const scope = projectScope(projectId);
-    const sourceEventIds = (db.prepare(`
-      SELECT event_id FROM memory_events WHERE COALESCE(project_id, '') = ?
-    `).all(scope) as Array<{ event_id: string }>).map((row) => row.event_id);
+    db.exec(`DROP TABLE IF EXISTS _forget_event_ids`);
+    db.prepare(`CREATE TEMP TABLE _forget_event_ids AS
+      SELECT event_id AS id FROM memory_events WHERE COALESCE(project_id, '') = ?`).run(scope);
     const auditId = `audit-${randomUUID()}`;
     const auditScope = `sha256:${createHash('sha256').update(scope).digest('hex')}`;
     const deleted = {
@@ -2202,13 +2202,10 @@ export class MemoryKernel extends KernelServices {
       entityRecords: 0,
     };
 
-    const projectMentionRows = (sourceEventIds.length > 0
-      ? db.prepare(`
-          SELECT DISTINCT entity_id FROM entity_mentions
-          WHERE COALESCE(project_id, '') = ? OR neuron_id IN (${sourceEventIds.map(() => '?').join(', ')})
-        `).all(scope, ...sourceEventIds)
-      : db.prepare(`SELECT DISTINCT entity_id FROM entity_mentions WHERE COALESCE(project_id, '') = ?`).all(scope)
-    ) as Array<{ entity_id: string }>;
+    const projectMentionRows = db.prepare(`
+      SELECT DISTINCT entity_id FROM entity_mentions
+      WHERE COALESCE(project_id, '') = ? OR neuron_id IN (SELECT id FROM _forget_event_ids)
+    `).all(scope) as Array<{ entity_id: string }>;
     const projectMentionEntityIds = new Set(projectMentionRows.map((row) => row.entity_id));
     const mentionScopes = new Map<string, Set<string>>();
     for (const row of db.prepare(`SELECT entity_id,COALESCE(project_id,'') AS scope FROM entity_mentions`).all() as Array<{ entity_id: string; scope: string }>) {
@@ -2235,7 +2232,6 @@ export class MemoryKernel extends KernelServices {
       `).all(...projectMentionEntityIds) as Array<{ canonical_entity_id: string }>).map((row) => row.canonical_entity_id)),
     ]);
 
-    const placeholders = sourceEventIds.map(() => '?').join(', ');
     const runDelete = (sql: string, params: Array<string | number> = []): number => {
       try {
         return Number(db.prepare(sql).run(...params).changes ?? 0);
@@ -2254,18 +2250,15 @@ export class MemoryKernel extends KernelServices {
     );
 
     db.exec(`PRAGMA secure_delete = ON`);
-    db.transaction(() => {
+    const erase = db.transaction(() => {
       Object.assign(deleted, { privacyTables: deleteRegisteredProjectContent({
         scope,
-        neuronIds: sourceEventIds,
         runDelete,
         listPersistentTables: () => (db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`).all() as Array<{ name: string }>).map((row) => row.name),
         hasColumn: (table, column) => Boolean(db.prepare(`SELECT 1 FROM pragma_table_info(?) WHERE name=?`).get(table, column)),
       }) });
-      if (sourceEventIds.length > 0) {
-        deleted.facts += runDelete(`DELETE FROM facts WHERE neuron_id IN (${placeholders})`, sourceEventIds);
-        deleted.compiledEvents += runDelete(`DELETE FROM compiled_events WHERE neuron_id IN (${placeholders})`, sourceEventIds);
-      }
+      deleted.facts += runDelete(`DELETE FROM facts WHERE neuron_id IN (SELECT id FROM _forget_event_ids)`);
+      deleted.compiledEvents += runDelete(`DELETE FROM compiled_events WHERE neuron_id IN (SELECT id FROM _forget_event_ids)`);
       deleted.episodes += this.episodeStore.deleteByProject(scope);
       for (const table of [
         'memory_atlas_supports', 'memory_atlas_aliases', 'memory_edge_supports', 'memory_edges', 'memory_atlas_fts',
@@ -2317,17 +2310,14 @@ export class MemoryKernel extends KernelServices {
         deleted.entityRecords += runDelete(`DELETE FROM entity_instances WHERE instance_id IN (${entityPlaceholders})`, projectEntityIds);
         scrubEntityAliasConflicts(db, projectEntityIds);
       }
-      if (sourceEventIds.length > 0) {
-        deleted.entityRecords += runDelete(`DELETE FROM entity_attributes WHERE source_neuron_id IN (${placeholders})`, sourceEventIds);
-        deleted.entityRecords += runDelete(`DELETE FROM entity_relations WHERE source_neuron_id IN (${placeholders})`, sourceEventIds);
-        deleted.entityRecords += runDelete(`DELETE FROM pending_entity_resolution WHERE context_neuron_id IN (${placeholders})`, sourceEventIds);
-      }
+      deleted.entityRecords += runDelete(`DELETE FROM entity_attributes WHERE source_neuron_id IN (SELECT id FROM _forget_event_ids)`);
+      deleted.entityRecords += runDelete(`DELETE FROM entity_relations WHERE source_neuron_id IN (SELECT id FROM _forget_event_ids)`);
+      deleted.entityRecords += runDelete(`DELETE FROM pending_entity_resolution WHERE context_neuron_id IN (SELECT id FROM _forget_event_ids)`);
       for (const canonicalEntityId of affectedCanonicalEntityIds) {
         rebuildCanonicalEntityAfterForget(db, canonicalEntityId, runDelete);
       }
       const residualPrivacyTables = deleteResidualProjectOwnedContent({
         scope,
-        neuronIds: sourceEventIds,
         runDelete,
         listPersistentTables: () => (db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`).all() as Array<{ name: string }>).map((row) => row.name),
         hasColumn: (table, column) => Boolean(db.prepare(`SELECT 1 FROM pragma_table_info(?) WHERE name=?`).get(table, column)),
@@ -2339,7 +2329,12 @@ export class MemoryKernel extends KernelServices {
           audit_id, action, project_id, reason, details_json, created_at
         ) VALUES (?, ?, ?, ?, ?, ?)
       `).run(auditId, 'forgetUser', auditScope, 'privacy_erasure_requested', JSON.stringify({ deleted }), Date.now());
-    })();
+    });
+    try {
+      erase();
+    } finally {
+      db.exec(`DROP TABLE IF EXISTS _forget_event_ids`);
+    }
 
     db.exec(`PRAGMA wal_checkpoint(TRUNCATE)`);
     // #64: VACUUM needs temporary space, and the default is a file in a directory
