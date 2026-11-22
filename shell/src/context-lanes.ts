@@ -1,6 +1,10 @@
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { digestAnchors, type SessionContextItem, type SessionDigestEntry, type SessionToolCall, type SessionTurn } from 'cogmem';
 import type { CompanionShell } from './app.ts';
 import { SecretRedactor } from './kernel-host.ts';
+import { currentPluginDossiers, type PluginDossier } from './plugins/self-install.ts';
+import type { TraceRecord } from './trace.ts';
 
 const MAX_TASK_STUB_QUOTE_CHARS = 240;
 const MAX_TASK_STUBS = 20;
@@ -9,6 +13,7 @@ const TASK_STUB_RETRY_MS = 60 * 60_000;
 export class ContextLanes {
   private readonly redactor = new SecretRedactor();
   private soulFailureTraced = false;
+  private pluginDossiers?: PluginDossier[];
 
   constructor(private readonly shell: CompanionShell) {}
 
@@ -106,14 +111,15 @@ export class ContextLanes {
     }
   }
 
-  /** The open loops that must survive a restart: the open assignment and unconsumed wake intents. */
-  laneOpenLoops(): SessionContextItem[] {
+  /** The open loops that must survive a restart, plus the dossiers this turn names or calls. */
+  laneOpenLoops(query?: string, toolNames: readonly string[] = []): SessionContextItem[] {
     const items: SessionContextItem[] = [];
     const assignment = this.shell.machine.runtime.openAssignment;
     const assignmentText = this.openAssignmentBlock();
     if (assignment && assignmentText) {
       items.push({ id: `assignment:${assignment.id}`, text: assignmentText });
     }
+    items.push(...this.lanePluginDossiers(query, toolNames));
     items.push(...this.laneProcedures());
     // A constraint the task-end exit retained is not task material (#255, #263). It was already
     // classified by the kernel's own markers during the last assembly; the shell only keeps the
@@ -130,6 +136,47 @@ export class ContextLanes {
       });
     }
     return items;
+  }
+
+  private lanePluginDossiers(query: string | undefined, toolNames: readonly string[]): SessionContextItem[] {
+    const mentioned = (query ?? '').toLowerCase();
+    const called = new Set(toolNames);
+    this.pluginDossiers ??= currentPluginDossiers(this.shell.trace);
+    const registered = new Set(this.shell.config.plugins);
+    const matched = this.pluginDossiers
+      .filter((dossier) => registered.has(dossier.sourcePath))
+      .filter((dossier) => mentioned.includes(dossier.name.toLowerCase()) || dossier.tools.some((tool) => called.has(tool)));
+    if (matched.length === 0) return [];
+    const records = this.shell.trace.read();
+    return matched.map((dossier) => ({ id: dossier.id, text: this.renderPluginDossier(dossier, records) }));
+  }
+
+  private renderPluginDossier(dossier: PluginDossier, records: readonly TraceRecord[]): string {
+    const incidents = records
+      .filter((record) => (record.kind === 'plugin_failed' && record.name === dossier.name)
+        || (record.kind === 'plugin_health_failed' && (record.id === dossier.proposalId || record.name === dossier.name)))
+      .map((record) => `incident: ${new Date(record.at).toISOString()} ${record.kind} ${String(record.message ?? record.reason ?? '')}`);
+    return [
+      `<plugin-dossier name="${dossier.name}">`,
+      `purpose: ${dossier.purpose}`,
+      `decision (llm_inference): ${dossier.decision.text}`,
+      `interface: provide=[${dossier.permissions.provide.join(', ')}] inject=[${dossier.permissions.inject.join(', ')}] tools=[${dossier.tools.join(', ')}] commands=[${dossier.commands.join(', ')}]`,
+      `permissions.data=[${dossier.permissions.data.join(', ')}]`,
+      `limitations: ${dossier.limitations.join('; ') || '（未记录）'}`,
+      `installed: ${new Date(dossier.installedAt).toISOString()} · proposal ${dossier.proposalId} · v${dossier.version}${dossier.supersedes ? ` supersedes ${dossier.supersedes}` : ''}`,
+      `source: ${dossier.sourcePath} sha256=${dossier.sourceSha256} ${this.sourceState(dossier)}`,
+      ...incidents,
+      '</plugin-dossier>',
+    ].join('\n');
+  }
+
+  private sourceState(dossier: PluginDossier): string {
+    try {
+      const current = createHash('sha256').update(readFileSync(dossier.sourcePath)).digest('hex');
+      return current === dossier.sourceSha256 ? 'verified' : `mismatch current=${current}`;
+    } catch {
+      return 'missing';
+    }
   }
 
   /**
