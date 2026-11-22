@@ -41,12 +41,12 @@ import { terminalPlugin, TerminalChannel, type ShellControl } from './channels/t
 import { webChannelPlugin } from './channels/web.ts';
 import { telegramChannelPlugin } from './channels/telegram.ts';
 import { ChannelRegistry } from './channels/registry.ts';
-import { UiRegistry } from './plugins/ui.ts';
 import { isOfficialPluginSpec } from './plugins/registry.ts';
 import { AgentRuntime, type ModelProvider, type RunSummary } from './state/agent-loop.ts';
 import type { ToolOutputAccount } from './state/context-budget.ts';
 import { laneAssemblyView, type ContextMetrics } from './state/session-lanes.ts';
 import { startKernelHttpFace, type HttpFaceHandle } from './kernel-host.ts';
+import { companionAvatar, readCompanionName } from './companion-name.ts';
 import { AttachServer, defaultSocketPath, type AttachShell } from './attach/server.ts';
 import { loadNativePlugins, type PluginLoadResult } from './plugins/load.ts';
 import { UpgradeAdmin } from './upgrade/admin.ts';
@@ -125,7 +125,6 @@ export class CompanionShell implements ShellControl, AttachShell {
   readonly proposals: CommandProposals;
   readonly credentials: CredentialService;
   readonly channelRegistry: ChannelRegistry;
-  readonly uiRegistry: UiRegistry;
   readonly sovereignty: SovereigntyCommands;
   readonly proposalsHandlers: ProposalsHandlers;
   readonly pluginsAdmin: PluginsAdmin;
@@ -344,8 +343,6 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.host.seedService('credentials', this.credentials);
     this.channelRegistry = new ChannelRegistry();
     this.host.seedService('channelRegistry', this.channelRegistry);
-    this.uiRegistry = new UiRegistry();
-    this.host.seedService('ui', this.uiRegistry);
     // Every transition is also a bus event, so a plugin can observe the lifecycle without reading the
     // checkpoint file. This one carries the companion prefix.
     this.machine.onTransition((record) => {
@@ -371,6 +368,10 @@ export class CompanionShell implements ShellControl, AttachShell {
   /** How many TUI clients are attached; zero is what makes the shell hold emergence. */
   get attachedClients(): number {
     return this.attach?.clientCount ?? 0;
+  }
+
+  currentChannelId(): string {
+    return this.channelContract.currentChannel() ?? 'web';
   }
 
   isRunning(): boolean {
@@ -566,8 +567,9 @@ export class CompanionShell implements ShellControl, AttachShell {
         connectedAgents: () => [this.config.agentId],
         tracePath: join(this.config.dataDir, 'shell-events.jsonl'),
         credentials: this.credentials,
+        companionName: () => readCompanionName(this.config.dataDir) ?? this.config.companionName,
+        companionAvatar: () => companionAvatar(readCompanionName(this.config.dataDir) ?? this.config.companionName),
         channels: this.channelRegistry,
-        ui: this.uiRegistry,
         webChannel: () => (this.host.hasService('webChannel') ? this.host.getService<{ handle(request: Request, remoteAddress?: string): Promise<Response | null> }>('webChannel') : undefined),
       });
       this.trace.append('http_face_started', { url: this.http.baseUrl, port: this.http.port });
@@ -767,7 +769,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       tailTurns: this.config.tailTurns,
       pinned: () => this.contextLanes.lanePinned(),
       profile: () => this.contextLanes.laneProfile(),
-      openLoops: () => this.contextLanes.laneOpenLoops(),
+      openLoops: (query, toolNames) => this.contextLanes.laneOpenLoops(query, toolNames),
       digestStubs: () => this.contextLanes.laneDigestStubs(),
       ledgerSeq: () => this.backend.latestEventSeq(),
       variablePrompt: () => this.systemPromptSections().tail,
@@ -818,6 +820,7 @@ export class CompanionShell implements ShellControl, AttachShell {
           contract: this.channelContract,
           projectId: this.config.projectId,
           agentId: this.config.agentId,
+          sessionId: this.config.sessionId,
           dataDir: this.config.dataDir,
         }));
         this.pluginResults.push({ spec, status: 'loaded', name: 'web-channel', tools: [], commands: [] });
@@ -918,8 +921,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       if (!event.toolCallId || !inFlight.some((call) => call.toolCallId === event.toolCallId)) return;
       this.machine.updateRuntime({ inFlightToolCalls: inFlight.filter((call) => call.toolCallId !== event.toolCallId) });
     });
-    // The terminal channel prints what the shell says; the app is the only place that knows a reply
-    // finished, so it forwards the assistant text on the bus the channel already listens to.
+    // The app is the only place that knows a reply finished, so it forwards it to the terminal bus.
     this.host.bus.on('message_end', (event: { message?: { role?: string; content?: string } }) => {
       if (event.message?.role === 'assistant' && event.message.content) {
         void this.host.bus.emit('terminal_print', { text: `${event.message.content}\n` });

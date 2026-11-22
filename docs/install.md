@@ -34,7 +34,12 @@ cogmem install \
 the local mg gateway and are read only when that route is chosen. A missing flag stops the install
 before it touches the machine and names what is missing. The other flags are `--data`,
 `--workspace`, `--project`, `--agent`, `--http-port`, `--service-name`, `--home`, `--platform`,
-`--skip-service`, `--uninstall` and `--help`.
+`--name`, `--skip-service`, `--uninstall` and `--help`.
+
+The interactive rhythm step asks for the companion's name. It is stored as `companionName` in
+`install.json`; rerunning `cogmem install --name <name>` updates it in place without repeating the
+other steps. The web chat and the observatory read that same value for the companion label and the
+avatar (Chinese: up to two characters; English: first letter).
 
 The default data directory is `~/.cogmem/companion` (mode 0700); the nightly snapshots and weekly
 archives there are complete plaintext copies of the database. A warning such as an unavailable

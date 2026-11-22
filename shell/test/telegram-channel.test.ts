@@ -89,13 +89,8 @@ async function channelCards(base: string): Promise<Array<{ id: string; state: st
   return body.channels;
 }
 
-async function channelState(base: string): Promise<{ state: string; pairingCode?: string }> {
+async function channelState(base: string): Promise<{ state: string; pairingCode?: string; config: Array<{ name: string; label?: string; secret?: boolean }> }> {
   return (await channelCards(base)).find((entry) => entry.id === 'telegram')!;
-}
-
-async function uiContributions(base: string): Promise<Array<{ id: string; slot: string; channelId?: string; nodes: any[] }>> {
-  const response = await fetch(`${base}/observatory/ui`, { headers: { 'x-observatory-token': OBSERVATORY_TOKEN } });
-  return (await response.json() as { contributions: Array<{ id: string; slot: string; channelId?: string; nodes: any[] }> }).contributions;
 }
 
 async function waitChannelState(base: string, wanted: string): Promise<{ state: string; pairingCode?: string }> {
@@ -112,8 +107,7 @@ async function connectTelegram(base: string, fake: ReturnType<typeof startFakeTe
   const begun = await post(base, '/observatory/channels/telegram/begin', {});
   expect(begun.status).toBe(200);
   const { requestId } = await begun.json() as { requestId: string };
-  const form = (await uiContributions(base)).find((entry) => entry.id === 'telegram-channel-settings')?.nodes.find((node) => node.type === 'credential-form');
-  expect(form).toMatchObject({ requestId, fields: [{ name: 'token', label: 'Bot Token', secret: true }] });
+  expect((await channelState(base)).config).toEqual([{ name: 'token', label: 'Bot Token', secret: true }]);
   const submitted = await post(base, '/observatory/credentials/submit', { id: requestId, values: { token: TOKEN } });
   expect(submitted.status).toBe(200);
   const saved = await submitted.json() as { ok: boolean; ref: string };
@@ -124,7 +118,6 @@ async function connectTelegram(base: string, fake: ReturnType<typeof startFakeTe
   expect(startedBody.ok).toBe(true);
   const pairing = await waitChannelState(base, 'pairing');
   const code = pairing.pairingCode!;
-  expect((await uiContributions(base)).find((entry) => entry.id === 'telegram-channel-settings')?.nodes.some((node) => node.type === 'code' && node.text === code)).toBe(true);
   fake.push({ update_id: updateId, message: { text: code, chat: { id: OWNER }, from: { id: OWNER } } });
   await waitChannelState(base, 'connected');
 }
@@ -201,7 +194,7 @@ describe('telegram channel plugin (F12)', () => {
       await shell.pluginsAdmin.removePlugin('builtin:telegram-channel');
       await waitUntil(() => shell.trace.read().some((record) => record.kind === 'plugin_removed'));
       expect((await channelCards(base)).some((card) => card.id === 'telegram')).toBe(false);
-      expect((await uiContributions(base)).some((entry) => entry.id === 'telegram-channel-settings')).toBe(false);
+      expect(await (await fetch(`${base}/observatory/`)).text()).toContain('id="tab-channels"');
     } finally {
       await shell.stop();
     }
@@ -213,7 +206,6 @@ describe('telegram channel plugin (F12)', () => {
     try {
       expect((await channelCards(reinstalled.httpUrl!)).some((card) => card.id === 'telegram')).toBe(true);
       expect((await channelState(reinstalled.httpUrl!)).state).toBe('connected');
-      expect((await uiContributions(reinstalled.httpUrl!)).some((entry) => entry.id === 'telegram-channel-settings')).toBe(true);
     } finally {
       await reinstalled.stop();
       fake.stop();
@@ -281,6 +273,61 @@ describe('telegram channel plugin (F12)', () => {
       await new Promise((resolve) => setTimeout(resolve, 100));
       expect(fake.sent.some((entry) => entry.method === 'sendMessage' && entry.body.text === '夜里不说')).toBe(false);
       expect(shell.trace.read()).toContainEqual(expect.objectContaining({ kind: 'telegram_surfacing_quiet', candidateId: 'surfacing:commitment:night' }));
+    } finally {
+      await shell.stop();
+      fake.stop();
+    }
+  }, 60_000);
+
+  test('one delivery reaches the current channel only: Web wins, Telegram pushes alone, incidental stays silent', async () => {
+    const fake = startFakeTelegram();
+    const dir = makeTempDir('telegram-routing-');
+    const dataDir = join(dir, 'data');
+    writeConfig(dataDir, fake.base);
+    writePluginRegistry(dataDir, ['builtin:web-channel', 'builtin:telegram-channel']);
+    let now = Date.UTC(2026, 0, 1, 12, 0);
+    const shell = makeTelegramShell(dir, new ScriptedProvider([
+      { text: '一', toolCalls: [] },
+      { text: '二', toolCalls: [] },
+    ]), dataDir, {
+      plugins: ['builtin:web-channel', 'builtin:telegram-channel'],
+      quiet: { startHour: 23, endHour: 7 },
+    }, { now: () => now });
+    await shell.start();
+    const base = shell.httpUrl!;
+    try {
+      await connectTelegram(base, fake);
+      const baseline = fake.sent.length;
+      const emerged: any[] = [];
+      shell.host.bus.on('companion_emergence', (payload: any) => emerged.push(payload));
+
+      const web = shell.host.getService<any>('webChannel');
+      const stream = (await web.handle(new Request('http://127.0.0.1/channel/web/events'), '127.0.0.1')).body!.getReader();
+      await shell.runCommand('wake', '1 第一件事');
+      now += 60_000;
+      await shell.tick(now);
+      expect(emerged.at(-1)).toMatchObject({ channelId: 'web', strength: 'proactive' });
+      expect(fake.sent.length).toBe(baseline);
+      await stream.cancel();
+
+      await shell.runCommand('wake', '1 第二件事');
+      now += 60_000;
+      await shell.tick(now);
+      await waitUntil(() => fake.sent.some((entry) => entry.method === 'sendMessage' && entry.body.text === '第二件事'));
+      const telegramChannelId = emerged.at(-1).channelId;
+      expect(emerged.at(-1)).toMatchObject({ strength: 'proactive' });
+      expect(telegramChannelId.startsWith('telegram:')).toBe(true);
+
+      const sentBefore = fake.sent.length;
+      await shell.host.bus.emit('companion_emergence', { id: 'surfacing:incidental', text: '顺带一提', channelId: telegramChannelId, strength: 'incidental' });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(fake.sent.length).toBe(sentBefore);
+      expect(shell.trace.read()).toContainEqual(expect.objectContaining({ kind: 'telegram_surfacing_incidental', candidateId: 'surfacing:incidental' }));
+
+      now = Date.UTC(2026, 0, 1, 23, 30);
+      await shell.host.bus.emit('companion_emergence', { id: 'surfacing:quiet', text: '夜里不说', channelId: telegramChannelId, strength: 'proactive' });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(fake.sent.length).toBe(sentBefore);
     } finally {
       await shell.stop();
       fake.stop();

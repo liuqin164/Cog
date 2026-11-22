@@ -212,6 +212,7 @@ Every ingress and delivery result carries a trace. The reason is exactly
 | `ingest` | Validate one inbound message and resolve its occasion and role. |
 | `presence` | Store and return the channel's current coarse presence. |
 | `deliver` | Validate one surfacing strength and refuse to emit `silence` or an offline channel. |
+| `currentChannel` | Return the online channel with the latest active interaction, else the latest idle presence, or `undefined`. |
 
 Adding a method, field or frozen value is additive. Removing or renaming one, or changing an
 occasion, strength, role, presence meaning or error meaning, is a breaking change and bumps
@@ -266,29 +267,29 @@ and the registration values. No kernel or shell change is needed.
 `shell/src/channels/web.ts` is an official preinstalled plugin (`builtin:web-channel`). It serves
 `/channel/web` from the shell's loopback HTTP face, registers `web` as a `private` channel with one
 `web-owner` account, and runs every inbound line through `ingest` before `shell.submit`. Replies
-stream over SSE from the shell's bus; history is read from the ledger's current-day thread, not kept
-in the plugin. It reuses the observatory's write token and loopback/Host checks, and the credential
-card opens the observatory's `#credentials` form instead of collecting values itself.
+stream over SSE from the shell's bus; history is read from the session's conversation lane (newest
+window plus a `before` cursor), not kept in the plugin. It reuses the observatory's write token and
+loopback/Host checks, and the credential card opens the observatory's `#credentials` form instead of
+collecting values itself.
 
 ## Fourth implementation: the Telegram channel (#416)
 
 `shell/src/channels/telegram.ts` is an official plugin (`builtin:telegram-channel`). Channel plugins
 register with the host's `channelRegistry` service, declaring their name, state, config fields and
-connect/disconnect actions; the observatory's `#channels` page renders only those entries, so
-removing a channel plugin removes its row and adding one needs no Web change. For Telegram the page
-asks the plugin to begin, the owner enters the bot token in a masked field, the credential service
-writes it to the 0600 vault, and the host starts `getUpdates` long polling. The page then shows a
-one-time pairing code; sending it to the bot binds the owner's Telegram id. The config file keeps
-only the credential reference and the bound ids, and the token is read through the credential service
-at the call site. Every text goes through `ingest` before `shell.submit`, and the assistant reply
-returns to the same chat. Plugin proposals carry inline confirm/discard buttons; only the bound owner
-id confirms, while any other callback is refused and traced. F18-delivered emergence is sent through
-this channel and the quiet window still silences it. Disconnecting stops polling, takes the channel
-offline and revokes the vault entry without touching the ledger; reconnecting keeps the history.
+connect/disconnect actions. The observatory's single shell keeps the page and its trusted surfaces
+host-rendered: when the shell exposes the channel face, the host adds a `渠道` UI slot whose script
+lists only the registry's entries. Removing a channel plugin removes its card, and adding one needs
+no Web change.
 
-The host also exposes a `ui` contribution registry with the slots `sidebar`, `page`, `chat-card`,
-`inspector` and `settings`. Plugins contribute declarative nodes; the Web surface assembles them
-generically. Telegram's channel panel is a `settings` contribution tied to its channel id, so
-removing the plugin removes both the registry row and the contributed UI. Contributions cannot draw
-credential inputs or approval controls: those are host-rendered node types over the credential and
-approval services, so the trusted-surface boundary is not delegated to a plugin.
+For Telegram the card's connect action asks the plugin to begin; the owner enters the bot token in
+the host's masked credential form, the credential service writes it to the 0600 vault, and the
+plugin starts `getUpdates` long polling. The card then shows a one-time pairing code; sending it to
+the bot binds the owner's Telegram id. The config file keeps only the credential reference and the
+bound ids, and the token is read through the credential service at the call site. Every text goes
+through `ingest` before `shell.submit`, and the assistant reply returns to the same chat. Plugin
+proposals carry inline confirm/discard buttons; only the bound owner id confirms, while any other
+callback is refused and traced. Disconnecting stops polling, takes the channel offline and revokes
+the vault entry without touching the ledger; reconnecting keeps the history.
+
+A delivered emergence is pushed only by the channel the router selected: a payload with another
+`channelId` is ignored, and an `incidental` strength is traced and never pushed.

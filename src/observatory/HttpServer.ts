@@ -19,7 +19,7 @@ import { dirname, join } from 'node:path';
 import { createMemoryKernel, createMemoryKernelFromConfig, type MemoryKernel } from '../factory.js';
 import { ensureUsableTempSpace } from '../utils/SqliteTempDirectory.js';
 import { MemoryObservatory } from './MemoryObservatory.js';
-import { createObservatoryRoutes, OBSERVATORY_PREFIX, type ObservatoryChannelFace, type ObservatoryCredentialFace, type ObservatoryUiFace } from './routes.js';
+import { createObservatoryRoutes, OBSERVATORY_PREFIX, type ObservatoryChannelFace, type ObservatoryCredentialFace } from './routes.js';
 import { readObservatoryToken } from './token.js';
 
 export interface ObservatoryRuntime {
@@ -40,7 +40,6 @@ export interface ObservatoryServerOptions extends ObservatoryRuntime {
   hostname?: string;
   credentials?: ObservatoryCredentialFace;
   channels?: ObservatoryChannelFace;
-  ui?: ObservatoryUiFace;
 }
 
 export interface ObservatoryServerHandle {
@@ -86,7 +85,6 @@ export async function startObservatoryServer(options: ObservatoryServerOptions):
       : undefined,
     credentials: options.credentials,
     channels: options.channels,
-    ui: options.ui,
   });
 
   const httpServer = Bun.serve({

@@ -1,10 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { PassThrough } from 'node:stream';
+import { AttachClient } from '../src/attach/client.ts';
 import { pluginWorkspaceDir } from '../src/plugins/self-install.ts';
 import { readPluginRegistry, writePluginRegistry } from '../src/plugins/registry.ts';
 import type { ModelCompletionInput, ModelProvider, ModelTurn } from '../src/state/agent-loop.ts';
-import { makeShell, makeTempDir } from './helpers.ts';
+import { ScriptedProvider, makeShell, makeTempDir, waitUntil } from './helpers.ts';
 
 const NO_DREAM = { runKernelNight: false, maxEpisodes: 5, windowStartHour: 0, windowEndHour: 1 };
 const TOKEN = 'web-channel-test-token';
@@ -95,11 +97,19 @@ describe('web channel plugin (F12)', () => {
     const base = shell.httpUrl!;
     const sse = new Sse((await fetch(`${base}/channel/web/events`)).body!.getReader());
     try {
-      expect((await fetch(`${base}/channel/web/`)).status).toBe(200);
-      const html = await (await fetch(`${base}/channel/web/`)).text();
-      expect(html).toContain('Cog 对话');
+      const page = await fetch(`${base}/channel/web/`, { redirect: 'manual' });
+      expect(page.status).toBe(302);
+      expect(page.headers.get('location')).toBe('/observatory/#chat');
       const script = await (await fetch(`${base}/channel/web/app.js`)).text();
       expect(script).toContain('/observatory/#credentials');
+      expect(script).toContain("document.getElementById('view-chat')");
+      expect(script).toContain('__COGMEM_COMPANION__');
+      const style = await fetch(`${base}/channel/web/view.css`);
+      expect(style.status).toBe(200);
+      expect(style.headers.get('content-type')).toBe('text/css; charset=utf-8');
+      const shellPage = await (await fetch(`${base}/observatory/`)).text();
+      expect(shellPage).toContain('id="tab-chat"');
+      expect(shellPage).toContain('window.__COGMEM_COMPANION__=');
 
       expect((await post(base, '/channel/web/send', { text: '你好' }, '')).status).toBe(403);
 
@@ -138,6 +148,9 @@ describe('web channel plugin (F12)', () => {
       const before = (shell.kernel as any).eventStore.queryEvents(1, 1, { projectId: [shell.config.projectId] }).total;
       await shell.pluginsAdmin.removePlugin('builtin:web-channel');
       expect((await fetch(`${base}/channel/web/`)).status).toBe(404);
+      const afterRemoval = await (await fetch(`${base}/observatory/`)).text();
+      expect(afterRemoval).not.toContain('id="tab-chat"');
+      expect(afterRemoval).toContain('id="tab-starmap"');
       expect((await fetch(`${base}/health`)).status).toBe(200);
       const after = (shell.kernel as any).eventStore.queryEvents(1, 1, { projectId: [shell.config.projectId] }).total;
       expect(after).toBe(before);
@@ -195,6 +208,99 @@ describe('web channel plugin (F12)', () => {
       const pending = shell.backend.surfacingPending({ projectId });
       expect(pending).toHaveLength(1);
       expect(pending[0]!.candidateId).toBe('surfacing:commitment:web-two');
+    } finally {
+      await shell.stop();
+    }
+  }, 60_000);
+
+  test('terminal and web share one ledger conversation, page back to its first turn, and keep the tail', async () => {
+    const dir = makeTempDir('web-channel-sync-');
+    const dataDir = join(dir, 'data');
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(join(dataDir, 'observatory-token'), `${TOKEN}\n`, { mode: 0o600 });
+    writePluginRegistry(dataDir, ['builtin:web-channel']);
+
+    const input = new PassThrough();
+    const provider = new ScriptedProvider([
+      { text: 'reply-1', toolCalls: [] },
+      { text: 'reply-2', toolCalls: [] },
+    ]);
+    const shell = makeShell(dir, provider, {
+      dataDir,
+      dbPath: join(dataDir, 'memory.sqlite'),
+      plugins: ['builtin:web-channel'],
+      terminalEnabled: true,
+      attach: { enabled: true },
+      dream: NO_DREAM,
+      http: { enabled: true, port: 0, hostname: '127.0.0.1' },
+    }, { terminalInput: input, terminalOutput: { write: () => true } as unknown as NodeJS.WritableStream });
+    await shell.start();
+    try {
+      const base = shell.httpUrl!;
+      const { projectId, agentId, sessionId } = shell.config;
+      const seededAt = Date.now() - 3 * 86_400_000;
+      for (let i = 0; i < 120; i += 1) {
+        await shell.backend.captureConversationTurn({
+          projectId,
+          agentId,
+          sessionId,
+          channel: 'telegram',
+          speaker: i % 2 === 0 ? 'owner' : 'agent',
+          text: `seed-${String(i).padStart(3, '0')}`,
+          occurredAt: seededAt + i,
+        });
+      }
+
+      const history = async (query = '') => await (await fetch(`${base}/channel/web/history${query}`)).json() as {
+        messages: Array<{ role: string; text: string }>;
+        cursor: number;
+        hasMore: boolean;
+      };
+
+      input.write('terminal-A\n');
+      await waitUntil(() => provider.calls.length === 1);
+      let newest: Awaited<ReturnType<typeof history>> | undefined;
+      for (let i = 0; i < 100; i += 1) {
+        newest = await history();
+        if (newest.messages.some((message) => message.text === 'reply-1')) break;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      expect(newest!.messages.filter((message) => message.text === 'terminal-A')).toHaveLength(1);
+      expect(newest!.messages.at(-1)).toMatchObject({ role: 'assistant', text: 'reply-1' });
+      expect(newest!.hasMore).toBe(true);
+
+      const seen = new Set(newest!.messages.map((message) => `${message.role}:${message.text}`));
+      let cursor = newest!.cursor;
+      let hasMore = newest!.hasMore;
+      while (hasMore) {
+        const page = await history(`?before=${cursor}&limit=50`);
+        for (const message of page.messages) {
+          const key = `${message.role}:${message.text}`;
+          expect(seen.has(key)).toBe(false);
+          seen.add(key);
+        }
+        cursor = page.cursor;
+        hasMore = page.hasMore && page.messages.length > 0;
+      }
+      expect(seen.has('user:seed-000')).toBe(true);
+      expect([...seen].filter((key) => key === 'user:terminal-A')).toHaveLength(1);
+
+      const busUser = new Promise<string>((resolve) => {
+        shell.host.bus.on('message_end', (event: any) => {
+          if (event.message?.role === 'user') resolve(event.message.content);
+        });
+      });
+      expect((await post(base, '/channel/web/send', { text: 'web-B' })).status).toBe(202);
+      expect(await busUser).toBe('web-B');
+      await waitUntil(() => provider.calls.length === 2);
+      const carried = provider.calls[1]!.messages.map((message) => message.content).join('\n');
+      expect(carried).toContain('terminal-A');
+
+      const after = await history();
+      expect(after.messages.filter((message) => message.text === 'web-B')).toHaveLength(1);
+      expect(after.messages.filter((message) => message.text === 'terminal-A')).toHaveLength(1);
+      const attached = await new AttachClient().connect(join(dataDir, 'attach.sock'));
+      expect(attached.entries.some((entry) => entry.kind === 'user' && entry.text === 'web-B')).toBe(true);
     } finally {
       await shell.stop();
     }

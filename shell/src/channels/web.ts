@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { ChannelContract, ChannelSession } from 'cogmem';
+import type { ChannelContract, ChannelSession, SessionTurnRead, SessionTurnReadInput } from 'cogmem';
 import type { NativePlugin } from '../plugins/host.ts';
 import type { ChannelRegistry } from './registry.ts';
 
@@ -10,9 +10,8 @@ const TOKEN_MODULE = SOURCE_LAYOUT ? '../../../src/observatory/token.ts' : '../.
 
 const PREFIX = '/channel/web';
 const STATIC_FILES: Record<string, { file: string; type: string }> = {
-  [PREFIX]: { file: 'index.html', type: 'text/html; charset=utf-8' },
-  [`${PREFIX}/`]: { file: 'index.html', type: 'text/html; charset=utf-8' },
   [`${PREFIX}/app.js`]: { file: 'app.js', type: 'text/javascript; charset=utf-8' },
+  [`${PREFIX}/view.css`]: { file: 'view.css', type: 'text/css; charset=utf-8' },
 };
 
 export interface WebChannelShell {
@@ -28,6 +27,7 @@ export interface WebChannelBackend {
   recentRecallDecision(input: { projectId: string; agentId: string }): {
     decision?: { timestamp: number; payload: Record<string, unknown> };
   };
+  sessionTurns(input: SessionTurnReadInput): SessionTurnRead;
 }
 
 interface WebChannelOptions {
@@ -38,7 +38,7 @@ interface WebChannelOptions {
   contract: ChannelContract;
   projectId: string;
   agentId: string;
-  dataDir: string;
+  sessionId: string;
   webRoot: string;
   routes: {
     isLoopbackAddress(address: string | undefined): boolean;
@@ -86,6 +86,9 @@ export class WebChannel {
     if (!this.options.routes.isLocalAuthority(request.headers.get('host') ?? url.host)) {
       return new Response('forbidden: unexpected Host (loopback only)', { status: 403 });
     }
+    if (url.pathname === PREFIX || url.pathname === `${PREFIX}/`) {
+      return new Response(null, { status: 302, headers: { location: '/observatory/#chat' } });
+    }
 
     const staticFile = STATIC_FILES[url.pathname];
     if (staticFile && (request.method === 'GET' || request.method === 'HEAD')) {
@@ -103,7 +106,7 @@ export class WebChannel {
 
     if (url.pathname === `${PREFIX}/history`) {
       if (request.method !== 'GET' && request.method !== 'HEAD') return this.methodNotAllowed('GET, HEAD');
-      return this.options.routes.jsonResponse({ messages: this.history() });
+      return this.options.routes.jsonResponse(this.history(url));
     }
 
     if (url.pathname === `${PREFIX}/send`) {
@@ -130,6 +133,9 @@ export class WebChannel {
       return;
     }
     if (name === 'message_end') {
+      if (payload?.message?.role === 'user' && typeof payload.message.content === 'string' && payload.message.content !== '') {
+        this.broadcast('user', { text: payload.message.content, at: this.options.clock.now() });
+      }
       if (payload?.message?.role === 'assistant' && typeof payload.message.content === 'string' && payload.message.content !== '') {
         this.broadcast('reply_end', { text: payload.message.content, provenance: this.provenance() });
       }
@@ -141,6 +147,7 @@ export class WebChannel {
       return;
     }
     if (name === 'companion_emergence') {
+      if (payload?.channelId !== undefined && payload.channelId !== this.session.channelId) return;
       this.broadcast('emergence', { id: payload?.id, text: payload?.text, reason: payload?.reason });
       return;
     }
@@ -158,6 +165,10 @@ export class WebChannel {
     try {
       this.options.contract.presence(this.session, { reachability: 'offline', ownerActivity: 'away' });
     } catch {}
+  }
+
+  uiContribution(): { id: string; label: string; script: string; style: string } {
+    return { id: 'chat', label: '对话', script: `${PREFIX}/app.js`, style: `${PREFIX}/view.css` };
   }
 
   private methodNotAllowed(allow: string): Response {
@@ -179,13 +190,13 @@ export class WebChannel {
     } catch (error) {
       return this.options.routes.jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
     }
+    this.options.contract.presence(this.session, { reachability: 'online', ownerActivity: 'active', at: this.options.clock.now() });
     if (text.startsWith('/')) {
       const [name = '', ...rest] = text.slice(1).split(/\s+/u);
       const reply = await this.options.shell.runCommand(name, rest.join(' '));
       this.broadcast('notice', { text: reply.text });
       return this.options.routes.jsonResponse({ ok: true, command: name });
     }
-    this.broadcast('user', { text, at: this.options.clock.now() });
     void this.options.shell.submit(text).catch((error) => {
       this.broadcast('notice', { text: `回复失败：${error instanceof Error ? error.message : String(error)}` });
     });
@@ -227,18 +238,22 @@ export class WebChannel {
     return this.options.routes.jsonResponse({ ok: true, text: result.text });
   }
 
-  private history(): Array<{ role: string; text: string; at: number }> {
-    const threadId = `companion-day:${this.options.clock.localDate(this.options.clock.now())}`;
-    const page = this.options.kernel.eventStore.queryEvents(1, 100, {
-      projectId: [this.options.projectId],
-      threadId: [threadId],
-      eventType: ['RAW_EVENT_RECORDED'],
-      order: 'asc',
+  private history(url: URL): { messages: Array<{ role: string; text: string; at: number }>; cursor: number; hasMore: boolean } {
+    const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 50, 1), 200);
+    const rawBefore = url.searchParams.get('before');
+    const before = rawBefore === null ? undefined : Number(rawBefore);
+    const read = this.options.backend.sessionTurns({
+      projectId: this.options.projectId,
+      agentId: this.options.agentId,
+      sessionId: this.options.sessionId,
+      limit,
+      ...(before !== undefined && Number.isFinite(before) ? { beforeGlobalSeq: before } : {}),
     });
-    return page.records
-      .filter((event: any) => event.role === 'user' || event.role === 'assistant')
-      .map((event: any) => ({ role: event.role, text: String(event.payload?.text ?? ''), at: event.occurredAt }))
-      .filter((message: { text: string }) => message.text !== '');
+    const messages = read.turns
+      .filter((turn) => turn.role === 'user' || turn.role === 'assistant')
+      .map((turn) => ({ role: turn.role, text: turn.text, at: turn.occurredAt }))
+      .filter((message) => message.text !== '');
+    return { messages, cursor: read.turns[0]?.globalSeq ?? 0, hasMore: read.truncated };
   }
 
   private provenance(): Array<{ id: string; label: string }> {
@@ -270,6 +285,7 @@ export class WebChannel {
   }
 
   private openStream(signal: AbortSignal): Response {
+    this.options.contract.presence(this.session, { reachability: 'online', ownerActivity: 'active', at: this.options.clock.now() });
     const encoder = new TextEncoder();
     const queue: Array<{ event: string; data: unknown }> = [];
     let wake: (() => void) | null = null;
@@ -292,6 +308,7 @@ export class WebChannel {
         wake?.();
         wake = null;
         this.streams.delete(stream);
+        if (this.streams.size === 0 && !this.stopped) this.options.contract.presence(this.session, { reachability: 'offline', ownerActivity: 'away' });
       },
     };
 
@@ -343,6 +360,7 @@ export interface WebChannelPluginOptions {
   contract: ChannelContract;
   projectId: string;
   agentId: string;
+  sessionId: string;
   dataDir: string;
 }
 
@@ -362,7 +380,7 @@ export function webChannelPlugin(options: WebChannelPluginOptions): NativePlugin
         contract: options.contract,
         projectId: options.projectId,
         agentId: options.agentId,
-        dataDir: options.dataDir,
+        sessionId: options.sessionId,
         webRoot: defaultWebRoot(),
         routes,
         token: tokenModule.readObservatoryToken(options.dataDir),

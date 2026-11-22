@@ -1,12 +1,4 @@
-/**
- * The terminal channel: the simplest self-owned way to talk to the shell. No external platform, no
- * OpenMaus, no bot token — a line in, a turn out, and `/name args` reaching the same dispatch the
- * TUI and the attach socket use (`CompanionShell.runCommand`: core table, then plugin registry,
- * then the shared unknown-command receipt).
- *
- * It is a channel plugin like any future platform channel: it injects the shell control surface and
- * knows nothing about the state machine's internals.
- */
+/** The terminal channel: a line in, a turn out, `/<name>` reaching `CompanionShell.runCommand`. */
 import { createInterface, type Interface } from 'node:readline';
 import type {
   ChannelContract,

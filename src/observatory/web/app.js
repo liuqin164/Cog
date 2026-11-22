@@ -1,12 +1,12 @@
 import * as THREE from './three.bundle.js';
 
 const STAR_ROLES = [
-  { id: 'rule', label: '规矩', color: '#e0b25e' },
-  { id: 'soul', label: '灵魂', color: '#c9a7f0' },
-  { id: 'promise', label: '承诺', color: '#e5857e' },
-  { id: 'intent', label: '意图', color: '#7fd6a8' },
-  { id: 'experience', label: '经历', color: '#6ea8fe' },
-  { id: 'ordinary', label: '普通', color: '#9aa8bd' },
+  { id: 'rule', label: '规矩', color: '#e0655f' },
+  { id: 'soul', label: '灵魂', color: '#e6c26e' },
+  { id: 'promise', label: '承诺', color: '#4fb286' },
+  { id: 'intent', label: '意图', color: '#6aa8d8' },
+  { id: 'experience', label: '经历', color: '#8fa3b8' },
+  { id: 'ordinary', label: '普通', color: '#b08fd4' },
 ];
 const ROLE_COLOR = Object.fromEntries(STAR_ROLES.map((role) => [role.id, role.color]));
 const ROLE_LABEL = Object.fromEntries(STAR_ROLES.map((role) => [role.id, role.label]));
@@ -28,14 +28,14 @@ function roleOf(node) {
 }
 
 const colorFor = (node) => ROLE_COLOR[roleOf(node)];
-const SERIES_COLORS = ['#6ea8fe', '#5fd0b4', '#e0b25e', '#e5857e', '#9b8cf0', '#7fc7cf', '#b8c9a0', '#f0a3c8'];
+const SERIES_COLORS = ['#e6c26e', '#4fb286', '#6aa8d8', '#e0655f', '#b08fd4', '#8fa3b8', '#d9a441', '#7fc7cf'];
 const DEMO_SOURCE = 'demo';
 const MOBILE_L1_LIMIT = 3000;
 
 const state = {
   demo: false,
   nodeIndex: new Map(),
-  view: 'starmap',
+  view: document.getElementById('tab-chat') ? 'chat' : 'starmap',
   projectId: null,
   agent: null,
   snapshot: null,
@@ -47,14 +47,6 @@ const state = {
   credentials: null,
   credentialsLoading: false,
   credentialsError: null,
-  channels: null,
-  channelsLoading: false,
-  channelsError: null,
-  channelForm: null,
-  ui: null,
-  uiLoading: false,
-  uiError: null,
-  pluginPageId: null,
   health: null,
   healthLoading: false,
   healthError: null,
@@ -88,14 +80,12 @@ function soulTokens(text) {
 }
 const stamp = (ms) => (ms ? new Date(ms).toLocaleString('zh-CN', { hour12: false }) : '—');
 
-function api(path, params = {}, authed = false) {
+function api(path, params = {}) {
   const url = new URL(`./${path.replace(/^\//, '')}`, location.href);
   for (const [key, value] of Object.entries(params)) {
     if (value !== null && value !== undefined && value !== '') url.searchParams.set(key, value);
   }
-  const headers = { accept: 'application/json' };
-  if (authed && writeToken) headers['x-observatory-token'] = writeToken;
-  return fetch(url, { headers }).then(async (response) => {
+  return fetch(url, { headers: { accept: 'application/json' } }).then(async (response) => {
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(body.message || body.error || `HTTP ${response.status}`);
     return body;
@@ -169,7 +159,7 @@ function ringTexture() {
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = size;
   const ctx = canvas.getContext('2d');
-  ctx.strokeStyle = 'rgba(242,193,78,0.95)';
+  ctx.strokeStyle = 'rgba(230,194,110,0.95)';
   ctx.lineWidth = 5;
   ctx.beginPath();
   ctx.arc(size / 2, size / 2, size / 2 - 7, 0, Math.PI * 2);
@@ -201,7 +191,7 @@ const POINT_FRAGMENT = `
   void main() {
     float alpha = texture2D(uSprite, gl_PointCoord).a;
     float fog = exp(-uFogDensity * uFogDensity * vDepth * vDepth);
-    gl_FragColor = vec4(vColor, alpha * vWeight * uFade * fog);
+    gl_FragColor = vec4(vColor, clamp(alpha * vWeight * uFade * fog * 2.4, 0.0, 1.0));
   }`;
 
 function lodBands() {
@@ -237,7 +227,7 @@ function initMap() {
   }
   map.renderer.setClearAlpha(0);
   map.scene = new THREE.Scene();
-  map.scene.fog = new THREE.FogExp2(0x05070d, 0.0016);
+  map.scene.fog = new THREE.FogExp2(0x060b16, 0.0026);
   map.camera = new THREE.PerspectiveCamera(55, 1, 1, 4000);
   map.camera.position.set(0, 132, 138);
   map.sprite = spriteTexture(0.9, 0);
@@ -265,13 +255,13 @@ function initMap() {
   map.scene.add(map.marker);
   map.edges = new THREE.LineSegments(
     new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3)),
-    new THREE.LineBasicMaterial({ color: 0x607a9b, transparent: true, opacity: 0.16, depthWrite: false }),
+    new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending, depthWrite: false }),
   );
   map.edges.frustumCulled = false;
   map.scene.add(map.edges);
   map.edgeHighlight = new THREE.LineSegments(
     new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3)),
-    new THREE.LineBasicMaterial({ color: 0xf2c14e, transparent: true, opacity: 0.95, depthWrite: false }),
+    new THREE.LineBasicMaterial({ color: 0xe6c26e, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false }),
   );
   map.edgeHighlight.frustumCulled = false;
   map.scene.add(map.edgeHighlight);
@@ -293,13 +283,13 @@ function bindMapEvents(canvas) {
 
 function nebulaClouds() {
   const group = new THREE.Group();
-  const colors = [0x315c8a, 0x5b3f8a, 0x1f6f78];
+  const colors = [0x31559f, 0x2a6f8f, 0x7a4a86, 0x27655c, 0x6b4a9e];
   for (let index = 0; index < colors.length; index += 1) {
     const material = new THREE.SpriteMaterial({
       map: spriteTexture(0.12, 0),
       color: colors[index],
       transparent: true,
-      opacity: 0.16,
+      opacity: 0.13,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
     });
@@ -313,12 +303,12 @@ function nebulaClouds() {
 }
 
 function dustPoints() {
-  const count = state.mobile || state.reducedMotion ? 0 : 2600;
+  const count = state.mobile || state.reducedMotion ? 0 : 700;
   const positions = new Float32Array(Math.max(count, 1) * 3);
   let seed = 0x2f6e2b1;
   const rand = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
   for (let index = 0; index < count; index += 1) {
-    const r = 200 + rand() * 900;
+    const r = 190 + rand() * 160;
     const theta = rand() * Math.PI * 2;
     const phi = Math.acos(2 * rand() - 1);
     positions[index * 3] = r * Math.sin(phi) * Math.cos(theta);
@@ -328,8 +318,8 @@ function dustPoints() {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   return new THREE.Points(geometry, new THREE.PointsMaterial({
-    color: 0x8fa6c8, size: 1.6, sizeAttenuation: true, transparent: true, opacity: 0.45,
-    depthWrite: false, blending: THREE.AdditiveBlending,
+    color: 0x9db8dd, size: 1.5, sizeAttenuation: false, transparent: true, opacity: 0.7,
+    depthWrite: false, fog: false,
   }));
 }
 
@@ -514,7 +504,7 @@ function draw2d() {
       ctx.moveTo(source.x, source.y);
       ctx.lineTo(target.x, target.y);
     }
-    ctx.strokeStyle = 'rgba(242,193,78,0.8)';
+    ctx.strokeStyle = 'rgba(230,194,110,0.9)';
     ctx.lineWidth = 1.4;
     ctx.stroke();
   }
@@ -534,14 +524,14 @@ function draw2d() {
     ctx.fill();
     if (state.selectedNode?.id === node.id) {
       ctx.globalAlpha = 1;
-      ctx.strokeStyle = '#f2c14e';
+      ctx.strokeStyle = '#e6c26e';
       ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.arc(screen.x, screen.y, radius + 5, 0, Math.PI * 2);
       ctx.stroke();
     } else if (state.selectedNeighbors.has(node.id)) {
       ctx.globalAlpha = 0.8;
-      ctx.strokeStyle = 'rgba(242,193,78,0.55)';
+      ctx.strokeStyle = 'rgba(230,194,110,0.55)';
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.arc(screen.x, screen.y, radius + 2.5, 0, Math.PI * 2);
@@ -640,10 +630,15 @@ function buildMap(snapshot) {
     map.layers[lod] = points;
   }
   const allEdges = new Float32Array(map.edgeList.length * 6);
+  const allEdgeColors = new Float32Array(map.edgeList.length * 6);
   map.edgeList.forEach((edge, index) => {
     allEdges.set([edge.sourceNode.x, edge.sourceNode.y, edge.sourceNode.z, edge.targetNode.x, edge.targetNode.y, edge.targetNode.z], index * 6);
+    const sourceColor = new THREE.Color(colorFor(edge.sourceNode));
+    const targetColor = new THREE.Color(colorFor(edge.targetNode));
+    allEdgeColors.set([sourceColor.r, sourceColor.g, sourceColor.b, targetColor.r, targetColor.g, targetColor.b], index * 6);
   });
   map.edges.geometry.setAttribute('position', new THREE.BufferAttribute(allEdges, 3));
+  map.edges.geometry.setAttribute('color', new THREE.BufferAttribute(allEdgeColors, 3));
   map.edges.geometry.computeBoundingSphere();
   applyWeights();
   map.needsFrame = true;
@@ -727,7 +722,7 @@ function applyWeights() {
     });
     weights.needsUpdate = true;
   }
-  if (map.edges) map.edges.material.opacity = state.selectedNode ? 0.04 : 0.16;
+  if (map.edges) map.edges.material.opacity = state.selectedNode ? 0.08 : 0.4;
   map.needsFrame = true;
 }
 
@@ -796,6 +791,8 @@ function onPointerMove(event) {
 
 function selectNode(node, options = {}) {
   state.selectedNode = node;
+  renderMapCard(node);
+  drawMiniMap();
   state.selectedNeighbors = new Set(node ? [node.id, ...(map.adjacency.get(node.id) ?? [])] : []);
   if (map.marker) {
     map.marker.visible = Boolean(node);
@@ -808,9 +805,10 @@ function selectNode(node, options = {}) {
   }
   applyWeights();
   map.needsFrame = true;
-  if (!node) { renderPanel(); return; }
+  if (!node) { renderMapCard(null); drawMiniMap(); renderPanel(); return; }
   if (options.fromSnapshot && state.demo) {
     const detail = demoDetail(node);
+    renderMapCard(node, detail);
     renderPanel({ node, detail });
     return;
   }
@@ -827,6 +825,7 @@ function selectNode(node, options = {}) {
         state.selectedNeighbors = neighborIds;
         drawHighlight(node, neighborIds);
         applyWeights();
+        renderMapCard(node, detail);
         renderPanel({ node, detail });
       })
       .catch((error) => renderPanel({ node, error: error.message }));
@@ -1235,6 +1234,169 @@ function renderRecallDetail(host, detail) {
   host.append(el('pre', { class: 'json', text: JSON.stringify(payload, null, 2) }));
 }
 
+function roleTotals() {
+  const totals = Object.fromEntries(STAR_ROLES.map((role) => [role.id, 0]));
+  for (const node of state.snapshot?.nodes ?? []) totals[roleOf(node)] += 1;
+  return totals;
+}
+
+function roleTypes() {
+  const result = Object.fromEntries(STAR_ROLES.map((role) => [role.id, new Map()]));
+  for (const node of state.snapshot?.nodes ?? []) {
+    const types = result[roleOf(node)];
+    types.set(node.type, (types.get(node.type) ?? 0) + 1);
+  }
+  return result;
+}
+
+function filterRole(roleId) {
+  state.hiddenRoles = new Set(STAR_ROLES.filter((role) => role.id !== roleId).map((role) => role.id));
+  showView('starmap');
+  applyWeights();
+  renderLegend();
+  map.needsFrame = true;
+  updateMapStats();
+}
+
+function renderClassification() {
+  const host = $('view-classification');
+  host.innerHTML = '';
+  if (!state.snapshot) {
+    host.append(emptyState('还没有快照', '等星图加载完再来看分类审计。'));
+    return;
+  }
+  const totals = roleTotals();
+  const types = roleTypes();
+  const total = Math.max(1, state.snapshot.nodes.length);
+  const audit = el('div', { class: 'audit' });
+  audit.append(el('div', { class: 'audit-head' }, [
+    el('h2', { text: '分类审计' }),
+    el('p', { class: 'dim', text: `六类角色与类型映射的只读对照。本视图 ${num(state.snapshot.nodes.length)} 个节点，来自水位线 #${num(state.snapshot.watermark)}。` }),
+  ]));
+  const grid = el('div', { class: 'role-grid' });
+  for (const role of STAR_ROLES) {
+    const roleCount = totals[role.id];
+    const share = Math.round((roleCount / total) * 100);
+    const topTypes = [...types[role.id].entries()].sort((left, right) => right[1] - left[1]).slice(0, 4);
+    const card = el('div', { class: 'role-card' });
+    card.append(el('header', {}, [
+      el('span', { class: 'swatch', style: `color:${role.color}` }),
+      el('span', { class: 'role-name', text: role.label }),
+      el('span', { class: 'role-count', text: `${num(roleCount)} · ${share}%` }),
+    ]));
+    card.append(el('div', { class: 'role-bar', style: `color:${role.color}` }, [
+      el('span', { style: `width:${share}%` }),
+    ]));
+    card.append(topTypes.length
+      ? el('div', { class: 'role-types' }, topTypes.map(([type, count]) => el('span', { text: `${type} ${num(count)}` })))
+      : el('p', { class: 'hint', text: '本视图没有这一类的节点。' }));
+    card.append(el('button', {
+      class: 'chip', type: 'button', text: '在星图中只看这类', onclick: () => filterRole(role.id),
+    }));
+    grid.append(card);
+  }
+  audit.append(grid);
+  const byType = Object.entries(state.snapshot.counts.nodesByType).sort((left, right) => right[1] - left[1]);
+  const table = el('table', { class: 'audit-table' }, [
+    el('thead', {}, [el('tr', {}, [
+      el('th', { text: '类型' }), el('th', { text: '节点' }), el('th', { text: '主要角色' }),
+    ])]),
+    el('tbody', {}, byType.map(([type, count]) => {
+      const roleCounts = STAR_ROLES.map((role) => ({
+        role,
+        count: (state.snapshot.nodes ?? []).filter((node) => node.type === type && roleOf(node) === role.id).length,
+      })).sort((left, right) => right.count - left.count);
+      const dominant = roleCounts[0];
+      return el('tr', {}, [
+        el('td', { text: type }),
+        el('td', { class: 'num', text: num(count) }),
+        el('td', {}, [el('span', { class: 'role-tag', style: `color:${dominant.role.color}` }, [
+          el('i'), `${dominant.role.label} ${num(dominant.count)}`,
+        ])]),
+      ]);
+    })),
+  ]);
+  audit.append(table);
+  host.append(audit);
+}
+
+function roundDetail(node) {
+  const block = el('div');
+  block.append(el('h3', { text: node.label || node.id }));
+  block.append(el('dl', { class: 'kv' }, [
+    el('dt', { text: '角色' }), el('dd', {}, [el('span', { class: 'role-tag', style: `color:${colorFor(node)}` }, [el('i'), ROLE_LABEL[roleOf(node)]])]),
+    el('dt', { text: '类型' }), el('dd', { text: node.type }),
+    el('dt', { text: '时间' }), el('dd', { text: stamp(node.occurredAt) }),
+    el('dt', { text: 'support' }), el('dd', { text: num(node.support) }),
+    el('dt', { text: 'activation' }), el('dd', { text: (node.activation ?? 0).toFixed(3) }),
+    el('dt', { text: 'id' }), el('dd', { text: node.id }),
+  ]));
+  block.append(el('p', { class: 'hint', text: '原文与证据在星图详情面读取，本页不新开写路径。' }));
+  block.append(el('button', {
+    class: 'chip', type: 'button', text: '在星图中打开',
+    onclick: () => { showView('starmap'); selectNode(node, { fromSnapshot: true }); },
+  }));
+  return block;
+}
+
+function renderRound() {
+  const host = $('view-round');
+  host.innerHTML = '';
+  if (!state.snapshot) {
+    host.append(emptyState('还没有快照', '等星图加载完再来看本轮记忆。'));
+    return;
+  }
+  const nodes = [...state.snapshot.nodes]
+    .filter((node) => node.occurredAt)
+    .sort((left, right) => right.occurredAt - left.occurredAt)
+    .slice(0, 60);
+  const grid = el('div', { class: 'round-grid' });
+  const list = el('div', { class: 'round-list' });
+  const side = el('div', { class: 'round-side' });
+  list.append(el('h2', { class: 'head', text: '本轮记忆 · inspector' }));
+  list.append(el('p', {
+    class: 'dim',
+    text: '按 occurredAt 倒序的最近写入，来自当前只读快照；不推断对话轮次，也不新增写路径。',
+  }));
+  if (!nodes.length) {
+    list.append(el('p', { class: 'hint', text: '快照里没有带时间的节点。' }));
+    side.append(emptyState('没有可查看的节点', '这个项目的节点都没有 occurredAt。'));
+    grid.append(list, side);
+    host.append(grid);
+    return;
+  }
+  let activeButton = null;
+  const open = (node, button) => {
+    if (activeButton) activeButton.removeAttribute('aria-current');
+    button.setAttribute('aria-current', 'true');
+    activeButton = button;
+    side.innerHTML = '';
+    side.append(roundDetail(node));
+    const recalls = (state.recalls?.recalls ?? []).slice(0, 4);
+    if (recalls.length) {
+      side.append(el('h2', { class: 'head', text: '最近召回', style: 'margin-top:1.25rem' }));
+      side.append(el('ul', { class: 'plain' }, recalls.map((recall) => el('li', {}, [
+        el('span', { text: recall.query || '(无查询文本)' }),
+        el('span', { class: 'dim', text: stamp(recall.startedAt) }),
+      ]))));
+    }
+  };
+  for (const node of nodes) {
+    const button = el('button', { class: 'round-item', type: 'button' }, [
+      el('span', { class: 'r' }, [
+        el('b', { text: node.label || node.id }),
+        el('span', { class: 'role-tag', style: `color:${colorFor(node)}` }, [el('i'), ROLE_LABEL[roleOf(node)]]),
+      ]),
+      el('span', { class: 'm', text: `${stamp(node.occurredAt)} · ${node.type} · support ${num(node.support)}` }),
+    ]);
+    button.addEventListener('click', () => open(node, button));
+    list.append(button);
+  }
+  grid.append(list, side);
+  host.append(grid);
+  open(nodes[0], list.querySelector('.round-item'));
+}
+
 /* ------------------------------------------------------------------- panel */
 
 function emptyState(title, body) {
@@ -1248,19 +1410,12 @@ function panelHeader(title, sub) {
 function renderPanel(options = {}) {
   const panel = $('panel');
   panel.innerHTML = '';
-  renderPanelBody(panel, options);
-  for (const contribution of (state.ui ?? []).filter((entry) => entry.slot === 'inspector')) {
-    panel.append(renderUiContribution(contribution));
-  }
-}
-
-function renderPanelBody(panel, options = {}) {
   if (state.view === 'recalls') { renderRecallsPanel(panel); return; }
   if (state.view === 'timeline') { renderTimelinePanel(panel); return; }
+  if (state.view === 'classification') { renderClassificationPanel(panel); return; }
+  if (state.view === 'round') { renderRoundPanel(panel); return; }
   if (state.view === 'soul') { renderSoulPanel(panel); return; }
   if (state.view === 'credentials') { renderCredentialsPanel(panel); return; }
-  if (state.view === 'channels') { renderChannelsPanel(panel); return; }
-  if (state.view === 'plugin') { renderPluginPanel(panel); return; }
   if (state.view === 'health') { renderHealthPanel(panel); return; }
   if (state.selectedNode) { renderNodePanel(panel, options); return; }
   renderOverviewPanel(panel);
@@ -1420,11 +1575,6 @@ function credentialTokenInput() {
     if (writeToken) sessionStorage.setItem(WRITE_TOKEN_KEY, writeToken);
     else sessionStorage.removeItem(WRITE_TOKEN_KEY);
   });
-  input.addEventListener('change', () => {
-    if (!writeToken) return;
-    void loadUi();
-    if (state.view === 'channels') void loadChannels();
-  });
   return input;
 }
 
@@ -1541,429 +1691,6 @@ async function revokeCredential(ref) {
   } catch (error) {
     state.credentialsError = error.message;
     renderCredentials();
-    renderPanel();
-  }
-}
-
-let channelPollTimer = null;
-
-function startChannelPolling() {
-  if (channelPollTimer) return;
-  channelPollTimer = setInterval(() => {
-    if (!writeToken) return;
-    if (state.view === 'channels' && !state.channelsLoading && !state.channelForm) {
-      void loadUi();
-      void loadChannels();
-    }
-    if (state.view === 'plugin') void loadUi();
-  }, 2_000);
-}
-
-function stopChannelPolling() {
-  if (!channelPollTimer) return;
-  clearInterval(channelPollTimer);
-  channelPollTimer = null;
-}
-
-function channelStateText(value) {
-  if (value === 'connected') return '已连接';
-  if (value === 'pairing') return '待配对';
-  if (value === 'error') return '异常';
-  return '未连接';
-}
-
-function uiToneClass(tone) {
-  if (tone === 'ok') return 'connected';
-  if (tone === 'warn') return 'pairing';
-  if (tone === 'error') return 'error';
-  return '';
-}
-
-async function runUiAction(action) {
-  state.channelsError = null;
-  try {
-    await postJson(action.path.replace(/^\/observatory\//u, ''), action.body ?? {});
-    await loadUi();
-    await loadChannels();
-  } catch (error) {
-    state.channelsError = error.message;
-    renderPluginPage();
-    renderChannels();
-    renderPanel();
-  }
-}
-
-function renderCredentialNode(node) {
-  const form = el('div', { class: 'channel-form' });
-  const inputs = [];
-  const error = el('p', { class: 'channel-error' });
-  form.append(el('p', { class: 'channel-hint', text: `${node.service} · ${node.purpose}` }));
-  for (const field of node.fields) {
-    const input = el('input', {
-      type: field.secret ? 'password' : 'text',
-      placeholder: field.label || field.name,
-      autocomplete: 'off',
-      spellcheck: 'false',
-    });
-    inputs.push({ name: field.name, label: field.label || field.name, input });
-    form.append(el('label', { class: 'channel-hint', text: `${field.label || field.name}（宿主保密输入面）` }));
-    form.append(input);
-  }
-  const save = el('button', { type: 'button', class: 'primary', text: node.submitLabel || '保存' });
-  const cancel = el('button', { type: 'button', text: '取消' });
-  save.addEventListener('click', () => {
-    void (async () => {
-      const values = {};
-      for (const entry of inputs) {
-        const value = entry.input.value.trim();
-        if (!value) {
-          error.textContent = `${entry.label} 不能为空。`;
-          return;
-        }
-        values[entry.name] = value;
-        entry.input.value = '';
-      }
-      try {
-        const saved = await postJson('credentials/submit', { id: node.requestId, values });
-        await postJson(node.onSaved.path, { ref: saved.ref });
-        await loadUi();
-        await loadChannels();
-      } catch (cause) {
-        error.textContent = cause.message;
-      }
-    })();
-  });
-  cancel.addEventListener('click', () => {
-    void (async () => {
-      try {
-        await postJson('credentials/cancel', { id: node.requestId });
-        await loadUi();
-        await loadChannels();
-      } catch (cause) {
-        error.textContent = cause.message;
-      }
-    })();
-  });
-  form.append(error);
-  form.append(el('div', { class: 'channel-actions' }, [save, cancel]));
-  return form;
-}
-
-function renderApprovalNode(node) {
-  const wrap = el('div', { class: 'ui-node-section' });
-  if (node.title) wrap.append(el('h3', { text: node.title }));
-  if (node.detail) wrap.append(el('p', { class: 'channel-hint', text: node.detail }));
-  const approve = el('button', { type: 'button', class: 'primary', text: '批准' });
-  const discard = el('button', { type: 'button', text: '作废' });
-  approve.addEventListener('click', () => { void runUiAction({ method: 'POST', path: '../channel/web/proposal', body: { id: node.proposalId, action: 'confirm' } }); });
-  discard.addEventListener('click', () => { void runUiAction({ method: 'POST', path: '../channel/web/proposal', body: { id: node.proposalId, action: 'discard' } }); });
-  wrap.append(el('div', { class: 'ui-node-actions' }, [approve, discard]));
-  return wrap;
-}
-
-function renderUiNode(node) {
-  if (node.type === 'heading') return el(node.level === 2 ? 'h2' : 'h3', { text: node.text });
-  if (node.type === 'text') return el('p', { class: 'channel-hint', text: node.text });
-  if (node.type === 'badge') return el('span', { class: `channel-state ${uiToneClass(node.tone)}`, text: node.text });
-  if (node.type === 'kv') {
-    const dl = el('dl', { class: 'ui-node-kv' });
-    for (const item of node.items) dl.append(el('dt', { text: item.label }), el('dd', { text: item.value }));
-    return dl;
-  }
-  if (node.type === 'code') return el('div', { class: 'channel-code', text: node.text });
-  if (node.type === 'button') {
-    const button = el('button', { type: 'button', class: node.primary ? 'primary' : undefined, text: node.label });
-    button.disabled = node.disabled === true;
-    button.addEventListener('click', () => { void runUiAction(node.action); });
-    return el('div', { class: 'ui-node-actions' }, [button]);
-  }
-  if (node.type === 'section') {
-    const section = el('div', { class: 'ui-node-section' });
-    if (node.title) section.append(el('h3', { text: node.title }));
-    section.append(renderUiNodes(node.nodes));
-    return section;
-  }
-  if (node.type === 'grid') return el('div', { class: 'ui-node-grid' }, [renderUiNodes(node.nodes)]);
-  if (node.type === 'credential-form') return renderCredentialNode(node);
-  if (node.type === 'approval') return renderApprovalNode(node);
-  return el('span');
-}
-
-function renderUiNodes(nodes) {
-  const wrap = el('div');
-  for (const node of nodes ?? []) wrap.append(renderUiNode(node));
-  return wrap;
-}
-
-function renderUiContribution(contribution) {
-  const section = el('div', { class: 'section' });
-  if (contribution.title) section.append(el('h2', { text: contribution.title }));
-  section.append(renderUiNodes(contribution.nodes));
-  return section;
-}
-
-function renderUiNav() {
-  const host = $('ui-tabs');
-  if (!host) return;
-  host.innerHTML = '';
-  const pages = (state.ui ?? []).filter((contribution) => contribution.slot === 'page' || contribution.slot === 'sidebar');
-  for (const page of pages) {
-    const button = el('button', {
-      role: 'tab',
-      id: `tab-ui-${page.id}`,
-      'aria-selected': String(state.pluginPageId === page.id),
-      text: page.label || page.title || page.id,
-    });
-    button.addEventListener('click', () => showPluginPage(page.id));
-    host.append(button);
-  }
-  if (state.pluginPageId && !pages.some((page) => page.id === state.pluginPageId)) {
-    state.pluginPageId = null;
-    state.view = 'starmap';
-    $('view-plugin').classList.remove('on');
-    $('view-starmap').classList.add('on');
-    $('tab-starmap').setAttribute('aria-selected', 'true');
-  }
-}
-
-function renderPluginPage() {
-  const root = $('view-plugin');
-  root.innerHTML = '';
-  const page = (state.ui ?? []).find((contribution) => (contribution.slot === 'page' || contribution.slot === 'sidebar') && contribution.id === state.pluginPageId);
-  if (!page) {
-    root.append(emptyState('插件页不存在', state.uiError || '这个插件没有可显示的页面。'));
-    return;
-  }
-  root.append(renderUiContribution(page));
-}
-
-function showPluginPage(id) {
-  state.view = 'plugin';
-  state.pluginPageId = id;
-  for (const name of ['starmap', 'timeline', 'recalls', 'soul', 'credentials', 'channels', 'health']) {
-    $(`tab-${name}`).setAttribute('aria-selected', 'false');
-    $(`view-${name}`).classList.remove('on');
-  }
-  $('view-plugin').classList.add('on');
-  for (const button of $('ui-tabs').querySelectorAll('button')) {
-    button.setAttribute('aria-selected', String(button.id === `tab-ui-${id}`));
-  }
-  renderPluginPage();
-  renderPanel();
-  startChannelPolling();
-  void loadUi();
-}
-
-async function loadUi() {
-  state.uiLoading = true;
-  state.uiError = null;
-  try {
-    state.ui = (await api('ui', {}, true)).contributions ?? [];
-  } catch (error) {
-    state.uiError = error.message;
-  } finally {
-    state.uiLoading = false;
-    renderUiNav();
-    if (state.pluginPageId) renderPluginPage();
-    renderChannels();
-    renderPanel();
-  }
-}
-
-function renderChannelsPanel(panel) {
-  panel.append(panelHeader('渠道', '渠道插件在 Web 上连接；配置项直达保险库。'));
-  const cards = state.channels ?? [];
-  if (cards.length === 0) {
-    panel.append(el('p', { class: 'dim', text: state.channelsLoading ? '读取中…' : (state.channelsError || '没有渠道插件。') }));
-    return;
-  }
-  for (const card of cards) {
-    panel.append(el('dl', { class: 'kv' }, [
-      el('dt', { text: card.name }),
-      el('dd', { text: channelStateText(card.state) }),
-      el('dt', { text: '说明' }),
-      el('dd', { text: card.detail || '—' }),
-    ]));
-  }
-}
-
-function renderPluginPanel(panel) {
-  const page = (state.ui ?? []).find((contribution) => (contribution.slot === 'page' || contribution.slot === 'sidebar') && contribution.id === state.pluginPageId);
-  panel.append(panelHeader(page?.title || '插件', '插件贡献的界面；保密输入与批准由宿主渲染。'));
-  if (state.uiError) panel.append(el('p', { class: 'dim', text: state.uiError }));
-}
-
-function channelForm(card) {
-  const form = el('div', { class: 'channel-form' });
-  const inputs = [];
-  const error = el('p', { class: 'channel-error' });
-  const save = el('button', { type: 'button', class: 'primary', text: '保存并连接' });
-  const cancel = el('button', { type: 'button', text: '取消' });
-  save.addEventListener('click', () => { void saveChannelConfig(inputs, error); });
-  cancel.addEventListener('click', () => { void cancelChannelConnect(); });
-  for (const field of card.config ?? []) {
-    const input = el('input', {
-      type: field.secret ? 'password' : 'text',
-      placeholder: field.label || field.name,
-      autocomplete: 'off',
-      spellcheck: 'false',
-    });
-    inputs.push({ name: field.name, label: field.label || field.name, input });
-    form.append(el('label', { class: 'channel-hint', text: `${field.label || field.name}（只写入 0600 保险库）` }));
-    form.append(input);
-  }
-  form.append(error);
-  form.append(el('div', { class: 'channel-actions' }, [save, cancel]));
-  return form;
-}
-
-function renderChannelCard(card) {
-  const wrap = el('div', { class: 'channel-card' });
-  wrap.append(el('div', { class: 'channel-card-head' }, [
-    el('h3', { text: card.name }),
-    el('span', { class: `channel-state ${card.state}`, text: channelStateText(card.state) }),
-  ]));
-  if (card.detail) wrap.append(el('p', { class: 'channel-hint', text: card.detail }));
-  if (card.pairingCode) {
-    wrap.append(el('div', { class: 'channel-code', text: card.pairingCode }));
-    wrap.append(el('p', { class: 'channel-hint', text: '把上述配对码发给该渠道的 bot，绑定成功后会显示已连接。' }));
-  }
-  if (card.connectable) {
-    const actions = el('div', { class: 'channel-actions' });
-    if (card.state !== 'connected') {
-      const connect = el('button', { type: 'button', class: 'primary', text: '连接 ' + card.name });
-      connect.disabled = Boolean(state.channelForm);
-      connect.addEventListener('click', () => { void beginChannelConnect(card); });
-      actions.append(connect);
-    }
-    if (card.state !== 'disconnected') {
-      const disconnect = el('button', { type: 'button', text: card.state === 'pairing' ? '取消连接' : '断开' });
-      disconnect.disabled = Boolean(state.channelForm);
-      disconnect.addEventListener('click', () => { void disconnectChannel(card.id); });
-      actions.append(disconnect);
-    }
-    wrap.append(actions);
-    if (state.channelForm?.id === card.id) wrap.append(channelForm(card));
-  }
-  return wrap;
-}
-
-function renderChannels() {
-  const root = $('view-channels');
-  root.innerHTML = '';
-  if (state.demo) {
-    root.append(emptyState('演示模式没有渠道', '渠道连接只对真实数据目录开放。'));
-    return;
-  }
-  const head = el('div', { class: 'section' });
-  head.append(el('h2', { text: '渠道' }));
-  head.append(el('p', { class: 'channel-hint', text: '渠道以插件提供，在这里连接与断开。配置项只进保险库，页面、日志与账本不保留明文。' }));
-  head.append(credentialTokenInput());
-  if (state.channelsError) head.append(el('p', { class: 'channel-error', text: state.channelsError }));
-  root.append(head);
-  if (state.channelsLoading && !state.channels) {
-    root.append(el('div', { class: 'section' }, [el('div', { class: 'skeleton w60' }), el('div', { class: 'skeleton' })]));
-    return;
-  }
-  for (const contribution of (state.ui ?? []).filter((entry) => entry.slot === 'settings' && !entry.channelId)) {
-    root.append(renderUiContribution(contribution));
-  }
-  const grid = el('div', { class: 'channel-grid' });
-  for (const card of state.channels ?? []) {
-    const contribution = (state.ui ?? []).find((entry) => entry.slot === 'settings' && entry.channelId === card.id);
-    if (contribution) {
-      const wrapEl = el('div', { class: 'channel-card' });
-      wrapEl.append(renderUiContribution(contribution));
-      grid.append(wrapEl);
-    } else {
-      grid.append(renderChannelCard(card));
-    }
-  }
-  root.append(grid);
-}
-
-async function loadChannels() {
-  state.channelsLoading = true;
-  state.channelsError = null;
-  renderChannels();
-  try {
-    state.channels = (await api('channels', {}, true)).channels ?? [];
-  } catch (error) {
-    state.channelsError = error.message;
-  } finally {
-    state.channelsLoading = false;
-    renderChannels();
-    renderPanel();
-  }
-}
-
-async function beginChannelConnect(card) {
-  state.channelsError = null;
-  try {
-    const result = await postJson(`channels/${card.id}/begin`, {});
-    if (!result.ok) throw new Error(result.error || 'credential_request_failed');
-    state.channelForm = { id: card.id, requestId: result.requestId };
-    renderChannels();
-    renderPanel();
-  } catch (error) {
-    state.channelsError = error.message;
-    renderChannels();
-  }
-}
-
-async function saveChannelConfig(inputs, errorHost) {
-  const form = state.channelForm;
-  if (!form) return;
-  const values = {};
-  for (const entry of inputs) {
-    const value = entry.input.value.trim();
-    if (!value) {
-      errorHost.textContent = `${entry.label} 不能为空。`;
-      return;
-    }
-    values[entry.name] = value;
-    entry.input.value = '';
-  }
-  state.channelsError = null;
-  let ref = null;
-  try {
-    const saved = await postJson('credentials/submit', { id: form.requestId, values });
-    ref = saved.ref;
-    const started = await postJson(`channels/${form.id}/start`, { ref });
-    if (!started.ok) throw new Error(started.error || 'channel_start_failed');
-    state.channelForm = null;
-    await loadChannels();
-  } catch (error) {
-    if (ref) void postJson('credentials/revoke', { ref }).catch(() => {});
-    state.channelForm = null;
-    state.channelsError = error.message;
-    renderChannels();
-    renderPanel();
-  }
-}
-
-async function cancelChannelConnect() {
-  const form = state.channelForm;
-  if (!form) return;
-  state.channelForm = null;
-  try {
-    await postJson('credentials/cancel', { id: form.requestId });
-  } catch {}
-  renderChannels();
-  renderPanel();
-}
-
-async function disconnectChannel(id) {
-  if (!confirm(`断开 ${id}？token 会从保险库删除，账本不变。`)) return;
-  state.channelsError = null;
-  try {
-    const result = await postJson(`channels/${id}/disconnect`, {});
-    if (!result.ok) throw new Error(result.error || 'channel_disconnect_failed');
-    state.channelForm = null;
-    await loadChannels();
-  } catch (error) {
-    state.channelsError = error.message;
-    renderChannels();
     renderPanel();
   }
 }
@@ -2364,6 +2091,51 @@ function renderRecallsPanel(panel) {
   panel.append(section);
 }
 
+function renderClassificationPanel(panel) {
+  panel.append(panelHeader('分类审计', '六类角色来自快照的只读映射；点击角色卡片可在星图中单独查看。'));
+  if (!state.snapshot) { panel.append(loadingPanel()); return; }
+  const totals = roleTotals();
+  const section = el('div', { class: 'section' });
+  section.append(el('h2', { class: 'head', text: '角色计数' }));
+  section.append(el('ul', { class: 'plain' }, STAR_ROLES.map((role) => el('li', {}, [
+    el('span', {}, [el('span', { class: 'swatch', style: `color:${role.color};margin-right:0.375rem` }), role.label]),
+    el('span', { class: 'num', text: num(totals[role.id]) }),
+  ]))));
+  panel.append(section);
+  const types = Object.entries(state.snapshot.counts.nodesByType).sort((left, right) => right[1] - left[1]).slice(0, 12);
+  const typeSection = el('div', { class: 'section' });
+  typeSection.append(el('h2', { class: 'head', text: '类型计数' }));
+  typeSection.append(el('ul', { class: 'plain' }, types.map(([type, count]) => el('li', {}, [
+    el('span', { text: type }), el('span', { class: 'num', text: num(count) }),
+  ]))));
+  panel.append(typeSection);
+}
+
+function renderRoundPanel(panel) {
+  panel.append(panelHeader('本轮记忆', '最近写入的节点按时间倒序；点选后看右侧 inspector 或到星图读原文。'));
+  if (!state.snapshot) { panel.append(loadingPanel()); return; }
+  const latest = [...state.snapshot.nodes]
+    .filter((node) => node.occurredAt)
+    .sort((left, right) => right.occurredAt - left.occurredAt)
+    .slice(0, 5);
+  const section = el('div', { class: 'section' });
+  section.append(el('h2', { class: 'head', text: '最近 5 条' }));
+  section.append(latest.length
+    ? el('ul', { class: 'plain' }, latest.map((node) => el('li', {}, [
+      el('span', { text: node.label || node.id }),
+      el('span', { class: 'dim', text: stamp(node.occurredAt) }),
+    ])))
+    : el('p', { class: 'dim', text: '没有带时间的节点。' }));
+  panel.append(section);
+  const scope = el('div', { class: 'section' });
+  scope.append(el('dl', { class: 'kv' }, [
+    el('dt', { text: '视图节点' }), el('dd', { text: num(state.snapshot.nodes.length) }),
+    el('dt', { text: '水位线' }), el('dd', { text: `#${num(state.snapshot.watermark)}` }),
+    el('dt', { text: '范围' }), el('dd', { text: state.agent ?? '全部' }),
+  ]));
+  panel.append(scope);
+}
+
 function loadingPanel() {
   return el('div', { class: 'section' }, [
     el('div', { class: 'skeleton w60' }), el('div', { class: 'skeleton' }),
@@ -2372,6 +2144,93 @@ function loadingPanel() {
 }
 
 /* ---------------------------------------------------------- scope and boot */
+
+const VIEW_META = {
+  chat: ['对话', '聊天、批提案、看它用了哪些记忆，都在这一个面里'],
+  starmap: ['记忆星图', '六类记忆按关系聚成星团；点一颗星，看它的原文与出处'],
+  classification: ['分类审计', '六类角色与类型映射的只读对照'],
+  soul: ['灵魂', '同伴醒来时读到的自己；改动经你审阅后才生效'],
+  timeline: ['时间线', '按日看写入与记忆增长'],
+  recalls: ['召回检查', '每一次召回的决策链与证据'],
+  round: ['本轮记忆', '按时间倒序的最近写入，来自当前只读快照'],
+  credentials: ['凭据', '待处理的保密输入请求与引用'],
+  channels: ['渠道', '连接、配对与断开同伴的对话渠道'],
+  health: ['健康', '自检、最近做梦、预算与异常'],
+};
+
+function renderCompanion() {
+  const companion = window.__COGMEM_COMPANION__ ?? { name: 'Cog', avatar: 'C' };
+  for (const node of document.querySelectorAll('[data-companion-name]')) node.textContent = companion.name;
+  for (const node of document.querySelectorAll('[data-companion-avatar]')) node.textContent = companion.avatar;
+}
+
+function renderSidebarBooks() {
+  const host = $('sidebar-books');
+  if (!host) return;
+  host.innerHTML = '';
+  const counts = state.snapshot?.counts.nodesByRole ?? {};
+  for (const role of STAR_ROLES) {
+    const count = counts[role.id] ?? (state.snapshot?.nodes ?? []).filter((node) => roleOf(node) === role.id).length;
+    const button = el('button', { type: 'button', onclick: () => filterRole(role.id) }, [
+      (() => { const dot = el('span', { class: 'chip-dot' }); dot.style.color = role.color; return dot; })(),
+      `${role.label}册`,
+      el('span', { class: 'n', text: num(count) }),
+    ]);
+    host.append(button);
+  }
+}
+
+function drawMiniMap() {
+  const canvas = $('mini-canvas');
+  if (!canvas) return;
+  const width = canvas.clientWidth;
+  const height = canvas.clientHeight;
+  if (!width || !height) return;
+  const ratio = window.devicePixelRatio || 1;
+  canvas.width = width * ratio;
+  canvas.height = height * ratio;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(ratio, ratio);
+  ctx.clearRect(0, 0, width, height);
+  const nodes = state.snapshot?.nodes ?? [];
+  $('mini-tag').textContent = `${num(nodes.length)} 条 · 6 类`;
+  if (!nodes.length) return;
+  let minX = Infinity; let maxX = -Infinity; let minY = Infinity; let maxY = -Infinity;
+  for (const node of nodes) {
+    const x = node.x ?? 0; const y = node.y ?? 0;
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+  for (const node of nodes) {
+    const px = 8 + ((node.x ?? 0) - minX) / (maxX - minX || 1) * (width - 16);
+    const py = 8 + ((node.y ?? 0) - minY) / (maxY - minY || 1) * (height - 22);
+    ctx.fillStyle = colorFor(node);
+    ctx.globalAlpha = state.selectedNeighbors.has(node.id) || !state.selectedNode ? 0.9 : 0.2;
+    ctx.beginPath();
+    ctx.arc(px, py, state.selectedNode?.id === node.id ? 3 : 1.4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function renderMapCard(node, detail) {
+  const category = $('map-card-cat');
+  if (!node) {
+    category.textContent = '记忆星图';
+    category.style.color = 'var(--gold)';
+    $('map-card-title').textContent = '点一颗星，看它的原文与出处';
+    $('map-card-body').textContent = `${num(state.snapshot?.nodes?.length ?? 0)} 个节点，按六类角色着色；拖拽旋转，滚轮缩放。`;
+    $('map-card-meta').textContent = state.agent ? `范围 ${state.agent}` : '范围 全部';
+    return;
+  }
+  category.textContent = ROLE_LABEL[roleOf(node)];
+  category.style.color = colorFor(node);
+  $('map-card-title').textContent = node.label || node.id;
+  $('map-card-body').textContent = detail?.summary || `${node.type} · support ${num(node.support)}`;
+  $('map-card-meta').textContent = `${stamp(node.occurredAt)} · ${node.type} · 连边 ${num(node.degree ?? 0)} · 证据 ${num(detail?.evidenceTotal ?? node.evidenceTotal ?? 0)}`;
+}
 
 function renderHeader() {
   const snapshot = state.snapshot;
@@ -2382,7 +2241,8 @@ function renderHeader() {
   $('waterline').innerHTML = demo
     ? '演示数据 · <b>无水位线</b>'
     : `水位线 <b>#${num(snapshot?.watermark ?? 0)}</b> · 生成 <b>${stamp(snapshot?.generatedAt)}</b> · 范围 <b>${state.agent ? escapeHtml(state.agent) : '全部'}</b>`;
-  $('legend-scope').textContent = state.agent ? `范围 ${state.agent}` : '全部';
+  const scope = $('legend-scope');
+  if (scope) scope.textContent = state.agent ? `范围 ${state.agent}` : '全部';
 }
 
 function escapeHtml(text) {
@@ -2416,6 +2276,18 @@ function renderLegend() {
     return result;
   }, {});
   $('legend-items').innerHTML = '';
+  const all = el('button', {
+    class: 'legend-role',
+    type: 'button',
+    'aria-pressed': String(state.hiddenRoles.size === 0),
+    onclick: () => {
+      state.hiddenRoles.clear();
+      applyWeights();
+      renderLegend();
+      map.needsFrame = true;
+    },
+  }, ['全部']);
+  $('legend-items').append(el('li', {}, [all]));
   for (const role of STAR_ROLES) {
     const hidden = state.hiddenRoles.has(role.id);
     const button = el('button', {
@@ -2450,26 +2322,29 @@ function renderLegend() {
 
 function showView(view) {
   state.view = view;
-  state.pluginPageId = null;
-  $('view-plugin').classList.remove('on');
-  for (const button of $('ui-tabs').querySelectorAll('button')) button.setAttribute('aria-selected', 'false');
-  for (const name of ['starmap', 'timeline', 'recalls', 'soul', 'credentials', 'channels', 'health']) {
-    $(`tab-${name}`).setAttribute('aria-selected', String(name === view));
-    $(`view-${name}`).classList.toggle('on', name === view);
+  $('legend').classList.toggle('hidden', view !== 'starmap');
+  const mainViews = ['chat', 'starmap', 'classification', 'soul', 'channels'];
+  if (view !== 'chat') $('inspector').classList.remove('open');
+  for (const tab of document.querySelectorAll('.nav-item[id^="tab-"]')) {
+    tab.setAttribute('aria-selected', String(tab.id === `tab-${view}`));
   }
+  for (const panel of document.querySelectorAll('.view')) {
+    panel.classList.toggle('on', panel.id === `view-${view}`);
+  }
+  for (const button of document.querySelectorAll('.tabbar button[data-view]')) {
+    button.setAttribute('aria-selected', String(mainViews.includes(button.dataset.view) && button.dataset.view === view));
+  }
+  const meta = VIEW_META[view];
+  if (meta) { $('view-title').textContent = meta[0]; $('view-note').textContent = meta[1]; }
   if (view === 'recalls') renderRecalls();
   if (view === 'timeline') renderTimeline();
+  if (view === 'classification') renderClassification();
+  if (view === 'round') renderRound();
   if (view === 'soul') void loadSoul();
   if (view === 'credentials') void loadCredentials();
-  if (view === 'channels') {
-    void loadUi();
-    void loadChannels();
-    startChannelPolling();
-  } else {
-    stopChannelPolling();
-  }
   if (view === 'health') void loadHealth();
   if (view === 'starmap') map.needsFrame = true;
+  if (view === 'starmap') drawMiniMap();
   renderPanel();
 }
 
@@ -2499,16 +2374,20 @@ function applyLoaded() {
     $('project-select').append(el('option', { text: state.projectId || '（无项目）' }));
   }
   state.nodeIndex = new Map(state.snapshot.nodes.map((node) => [node.id, node]));
+  renderCompanion();
   renderHeader();
   renderScope();
   renderLegend();
+  renderSidebarBooks();
+  renderMapCard(null);
   buildMap(state.snapshot);
+  drawMiniMap();
   renderTimeline();
   renderRecalls();
-  void loadUi();
+  if (state.view === 'classification') renderClassification();
+  if (state.view === 'round') renderRound();
   if (state.view === 'soul') void loadSoul();
   if (state.view === 'credentials') void loadCredentials();
-  if (state.view === 'channels') void loadChannels();
   if (state.view === 'health') void loadHealth();
   renderPanel();
   applyHashTarget();
@@ -2517,7 +2396,6 @@ function applyLoaded() {
 function applyHashTarget() {
   const hash = decodeURIComponent(location.hash.replace(/^#/u, ''));
   if (hash === 'credentials') { showView('credentials'); return; }
-  if (hash === 'channels') { showView('channels'); return; }
   if (!hash.startsWith('node=')) return;
   const node = state.nodeIndex.get(hash.slice('node='.length));
   if (node) selectNode(node, { fromSnapshot: true });
@@ -2544,7 +2422,6 @@ async function boot() {
     try { await loadDemo(); return; } catch (error) { /* fall through to the live path */ }
   }
   try {
-    void loadUi();
     await reload();
   } catch (error) {
     $('panel').innerHTML = '';
@@ -2552,13 +2429,18 @@ async function boot() {
   }
 }
 
-$('tab-starmap').addEventListener('click', () => showView('starmap'));
-$('tab-timeline').addEventListener('click', () => showView('timeline'));
-$('tab-recalls').addEventListener('click', () => showView('recalls'));
-$('tab-soul').addEventListener('click', () => showView('soul'));
-$('tab-credentials').addEventListener('click', () => showView('credentials'));
-$('tab-channels').addEventListener('click', () => showView('channels'));
-$('tab-health').addEventListener('click', () => showView('health'));
+for (const button of document.querySelectorAll('.nav-item[id^="tab-"]')) {
+  button.addEventListener('click', () => showView(button.id.slice('tab-'.length)));
+}
+for (const button of document.querySelectorAll('.tabbar button[data-view]')) {
+  button.addEventListener('click', () => showView(button.dataset.view));
+}
+$('insp-toggle')?.addEventListener('click', () => $('inspector').classList.toggle('open'));
+$('insp-close')?.addEventListener('click', () => $('inspector').classList.remove('open'));
+$('mini-map')?.addEventListener('click', () => { $('inspector').classList.remove('open'); showView('starmap'); });
+new ResizeObserver(() => drawMiniMap()).observe($('mini-canvas'));
+renderCompanion();
+showView(state.view);
 $('scope-all').addEventListener('click', () => { state.agent = null; reload(); });
 $('project-select').addEventListener('change', (event) => { state.projectId = event.target.value; reload(); });
 for (const button of document.querySelectorAll('.lod-row button')) {

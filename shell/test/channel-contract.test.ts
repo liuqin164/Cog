@@ -106,3 +106,35 @@ describe('the terminal channel consumes F12 strengths', () => {
     }
   });
 });
+
+describe('the current channel is the latest owner activity (#420)', () => {
+  test('activity outranks idle, the latest call breaks a tie, and offline is skipped', () => {
+    const contract = new ChannelContract(new OccasionScope());
+    const web = contract.register({
+      channelId: 'web',
+      occasion: 'private',
+      accounts: [{ accountId: 'web-owner', role: 'owner' }],
+    });
+    const telegram = contract.register({
+      channelId: 'telegram:1',
+      occasion: 'private',
+      accounts: [{ accountId: 'owner', role: 'owner' }],
+    });
+    expect(contract.currentChannel()).toBeUndefined();
+
+    contract.presence(telegram, { reachability: 'online', ownerActivity: 'idle', at: 1 });
+    expect(contract.currentChannel()).toBe('telegram:1');
+
+    contract.presence(web, { reachability: 'online', ownerActivity: 'active', at: 2 });
+    expect(contract.currentChannel()).toBe('web');
+
+    contract.ingest(telegram, { accountId: 'owner', text: '你好', at: 3 });
+    expect(contract.currentChannel()).toBe('telegram:1');
+
+    contract.presence(web, { reachability: 'online', ownerActivity: 'active', at: 3 });
+    expect(contract.currentChannel()).toBe('web');
+
+    contract.presence(telegram, { reachability: 'offline', ownerActivity: 'away', at: 4 });
+    expect(contract.currentChannel()).toBe('web');
+  });
+});

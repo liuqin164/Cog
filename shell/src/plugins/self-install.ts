@@ -46,6 +46,7 @@ export interface PluginProposal extends CommandProposal {
   sourceSha256: string;
   sourceBytes: number;
   permissions: PluginPermissions;
+  limitations?: string[];
   removal: string;
   approvedAt?: number;
 }
@@ -56,6 +57,7 @@ export interface ProposePluginInput {
   source?: string;
   sourcePath?: string;
   permissions?: Partial<PluginPermissions>;
+  limitations?: string[];
 }
 
 export interface PluginProposeResult {
@@ -147,6 +149,10 @@ export class PluginProposals {
     if (provide.some((service) => inject.includes(service))) {
       return reject('plugin_permissions_invalid: 不得 provide 并 inject 同一个服务');
     }
+    const limitations = input.limitations === undefined ? undefined : stringList(input.limitations);
+    if (input.limitations !== undefined && !limitations) {
+      return reject('plugin_limitations_invalid: limitations 必须是字符串数组');
+    }
     for (const service of inject) {
       if (!this.options.serviceExists(service)) return reject(`plugin_service_missing: ${service} 不是当前可注入的服务`);
     }
@@ -178,7 +184,7 @@ export class PluginProposals {
       } catch (error) {
         return reject(`plugin_unreadable: ${error instanceof Error ? error.message : String(error)}`);
       }
-      return this.record(id, at, name, purpose, real, source, { provide, inject, data }, reject);
+      return this.record(id, at, name, purpose, real, source, { provide, inject, data }, limitations, reject);
     }
     const source = textOf(input.source);
     if (source.trim() === '') return reject('plugin_source_required');
@@ -189,7 +195,7 @@ export class PluginProposals {
     }
     mkdirSync(dirname(entry), { recursive: true, mode: 0o700 });
     writeFileSync(entry, source, { mode: 0o600 });
-    const result = this.record(id, at, name, purpose, entry, source, { provide, inject, data }, reject);
+    const result = this.record(id, at, name, purpose, entry, source, { provide, inject, data }, limitations, reject);
     if (!result.accepted) rmSync(dirname(entry), { recursive: true, force: true });
     return result;
   }
@@ -202,6 +208,7 @@ export class PluginProposals {
     entry: string,
     source: string,
     permissions: PluginPermissions,
+    limitations: string[] | undefined,
     reject: (reason: string) => PluginProposeResult,
   ): PluginProposeResult {
     let registered: string[];
@@ -235,6 +242,7 @@ export class PluginProposals {
       sourceSha256,
       sourceBytes,
       permissions,
+      ...(limitations ? { limitations } : {}),
       removal,
       detail: [
         `源码：${entry}（${sourceBytes} 字节，sha256 ${sourceSha256.slice(0, 12)}）`,
@@ -252,6 +260,7 @@ export class PluginProposals {
       sourceBytes,
       sourceSha256,
       permissions,
+      ...(limitations ? { limitations } : {}),
       removal,
     }, at);
     this.options.onChange?.(proposal);
@@ -377,6 +386,104 @@ export function latestAuditForSpec(trace: TraceLog, spec: string): PluginAuditEn
   return pluginAuditEntries(trace).filter((entry) => entry.spec === spec).pop();
 }
 
+export interface PluginDossier {
+  id: string;
+  proposalId: string;
+  name: string;
+  purpose: string;
+  decision: { text: string; sourceType: 'llm_inference' };
+  permissions: PluginPermissions;
+  tools: string[];
+  commands: string[];
+  limitations: string[];
+  sourcePath: string;
+  sourceSha256: string;
+  installedAt: number;
+  version: number;
+  supersedes: string | null;
+}
+
+function stringsOf(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
+}
+
+function permissionsOf(value: unknown): PluginPermissions {
+  const raw = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  return { provide: stringsOf(raw.provide), inject: stringsOf(raw.inject), data: stringsOf(raw.data) };
+}
+
+function dossierFrom(record: TraceRecord): PluginDossier | undefined {
+  if (typeof record.name !== 'string' || typeof record.sourcePath !== 'string') return undefined;
+  const decision = record.decision as { text?: unknown } | undefined;
+  return {
+    id: String(record.id ?? ''),
+    proposalId: String(record.proposalId ?? ''),
+    name: record.name,
+    purpose: textOf(record.purpose),
+    decision: { text: textOf(decision?.text) || textOf(record.purpose), sourceType: 'llm_inference' },
+    permissions: permissionsOf(record.permissions),
+    tools: stringsOf(record.tools),
+    commands: stringsOf(record.commands),
+    limitations: stringsOf(record.limitations),
+    sourcePath: record.sourcePath,
+    sourceSha256: textOf(record.sourceSha256),
+    installedAt: typeof record.installedAt === 'number' ? record.installedAt : record.at,
+    version: typeof record.version === 'number' ? record.version : 1,
+    supersedes: typeof record.supersedes === 'string' ? record.supersedes : null,
+  };
+}
+
+function pluginDossierHistory(trace: TraceLog): PluginDossier[] {
+  return trace.read()
+    .filter((record) => record.kind === 'plugin_dossier')
+    .map(dossierFrom)
+    .filter((dossier): dossier is PluginDossier => dossier !== undefined);
+}
+
+export function currentPluginDossiers(trace: TraceLog): PluginDossier[] {
+  const latest = new Map<string, PluginAuditEntry>();
+  for (const entry of pluginAuditEntries(trace)) latest.set(entry.spec, entry);
+  const byName = new Map<string, PluginDossier>();
+  for (const dossier of pluginDossierHistory(trace)) byName.set(dossier.name, dossier);
+  return [...byName.values()].filter((dossier) => latest.get(dossier.sourcePath)?.status === 'installed');
+}
+
+export function compilePluginDossier(options: {
+  trace: TraceLog;
+  id: string;
+  name: string;
+  tools: string[];
+  commands: string[];
+  now: number;
+}): PluginDossier | undefined {
+  const records = options.trace.read();
+  const proposed = records.find((record) => record.kind === 'plugin_proposed' && record.id === options.id);
+  if (!proposed || typeof proposed.sourcePath !== 'string') return undefined;
+  const registered = records.find((record) => record.kind === 'plugin_registered' && record.id === options.id);
+  const prior = records
+    .filter((record) => record.kind === 'plugin_dossier' && record.name === options.name)
+    .map(dossierFrom)
+    .filter((dossier): dossier is PluginDossier => dossier !== undefined);
+  const dossier: PluginDossier = {
+    id: `plugin-dossier-${options.now.toString(36)}-${options.name}`,
+    proposalId: options.id,
+    name: options.name,
+    purpose: textOf(proposed.purpose),
+    decision: { text: textOf(proposed.purpose), sourceType: 'llm_inference' },
+    permissions: permissionsOf(proposed.permissions),
+    tools: options.tools,
+    commands: options.commands,
+    limitations: stringsOf(proposed.limitations),
+    sourcePath: proposed.sourcePath,
+    sourceSha256: textOf(registered?.sourceSha256) || textOf(proposed.sourceSha256),
+    installedAt: options.now,
+    version: prior.length + 1,
+    supersedes: prior.at(-1)?.id ?? null,
+  };
+  options.trace.append('plugin_dossier', { ...dossier }, options.now);
+  return dossier;
+}
+
 function field(args: unknown, key: string): string {
   const value = (args as Record<string, unknown> | undefined)?.[key];
   return typeof value === 'string' ? value : '';
@@ -412,17 +519,24 @@ export function selfInstallPlugin(options: { proposals: PluginProposals; admin: 
               },
               required: ['provide', 'inject', 'data'],
             },
+            limitations: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Optional known limitations the owner should know before approving',
+            },
           },
           required: ['name', 'purpose', 'source', 'permissions'],
         },
         execute({ args }): ToolOutcome {
           const raw = (args as Record<string, unknown> | undefined)?.permissions;
           const permissions = raw && typeof raw === 'object' ? raw as Partial<PluginPermissions> : undefined;
+          const limitations = (args as Record<string, unknown> | undefined)?.limitations;
           const result = options.proposals.propose({
             name: field(args, 'name'),
             purpose: field(args, 'purpose'),
             source: field(args, 'source'),
             ...(permissions ? { permissions } : {}),
+            ...(Array.isArray(limitations) ? { limitations: limitations.map(String) } : {}),
           });
           if (!result.accepted || !result.proposal) {
             return { output: `proposal_rejected: ${result.reason ?? 'unknown'}`, isError: true };

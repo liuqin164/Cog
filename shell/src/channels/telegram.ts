@@ -4,7 +4,6 @@ import { dirname, join } from 'node:path';
 import type { ChannelContract, ChannelSession } from 'cogmem';
 import type { CredentialService } from '../credentials.ts';
 import type { NativePlugin } from '../plugins/host.ts';
-import type { UiNode, UiRegistry } from '../plugins/ui.ts';
 import type { TraceLog } from '../trace.ts';
 import type { ChannelRegistry } from './registry.ts';
 
@@ -448,11 +447,16 @@ export class TelegramChannel {
 
   private async onEmergence(payload: any): Promise<void> {
     if (this.state !== 'connected' || typeof payload?.id !== 'string' || typeof payload?.text !== 'string' || payload.text === '') return;
+    if (payload.channelId !== undefined && payload.channelId !== this.session?.channelId) return;
     if (this.options.clock.quietWindowOpen(this.options.clock.now())) {
       this.options.trace.append('telegram_surfacing_quiet', { candidateId: payload.id });
       return;
     }
     if (!this.session) return;
+    if (payload.strength === 'incidental') {
+      this.options.trace.append('telegram_surfacing_incidental', { candidateId: payload.id });
+      return;
+    }
     const delivery = this.options.contract.deliver(this.session, {
       candidateId: payload.id,
       strength: payload.strength === 'incidental' ? 'incidental' : 'proactive',
@@ -484,7 +488,7 @@ export class TelegramChannel {
 export function telegramChannelPlugin(options: TelegramChannelPluginOptions): NativePlugin {
   return {
     name: 'telegram-channel',
-    inject: ['shell', 'credentials', 'clock', 'trace', 'channelRegistry', 'ui'],
+    inject: ['shell', 'credentials', 'clock', 'trace', 'channelRegistry'],
     apply(ctx) {
       let config: TelegramConfig | undefined;
       let error: string | undefined;
@@ -534,65 +538,11 @@ export function telegramChannelPlugin(options: TelegramChannelPluginOptions): Na
           return { ok: true };
         },
       });
-      const unregisterUi = ctx.getService<UiRegistry>('ui').register({
-        id: 'telegram-channel-settings',
-        slot: 'settings',
-        channelId: 'telegram',
-        title: 'Telegram',
-        order: 10,
-        render: () => {
-          const status = channel.card();
-          const pending = credentials.pending().find((entry) => entry.service === 'telegram-bot' && entry.requestedBy === 'web:channels');
-          const tone = status.state === 'connected'
-            ? 'ok'
-            : status.state === 'pairing'
-              ? 'warn'
-              : status.state === 'error'
-                ? 'error'
-                : 'dim';
-          const label = status.state === 'connected'
-            ? '已连接'
-            : status.state === 'pairing'
-              ? '待配对'
-              : status.state === 'error'
-                ? '异常'
-                : '未连接';
-          const nodes: UiNode[] = [
-            { type: 'heading', text: 'Telegram', level: 3 },
-            { type: 'badge', text: label, tone },
-            ...(status.detail ? [{ type: 'text' as const, text: status.detail }] : []),
-          ];
-          if (pending) {
-            nodes.push({
-              type: 'credential-form',
-              requestId: pending.id,
-              service: pending.service,
-              purpose: pending.purpose,
-              fields: pending.fields,
-              submitLabel: '保存并连接',
-              onSaved: { method: 'POST', path: 'channels/telegram/start' },
-            });
-          } else {
-            if (status.pairingCode) {
-              nodes.push({ type: 'code', text: status.pairingCode });
-              nodes.push({ type: 'text', text: '把配对码发给 bot，绑定成功后会显示已连接。' });
-            }
-            if (status.state !== 'connected') {
-              nodes.push({ type: 'button', label: '连接 Telegram', primary: true, action: { method: 'POST', path: 'channels/telegram/begin' } });
-            }
-            if (status.state !== 'disconnected') {
-              nodes.push({ type: 'button', label: status.state === 'pairing' ? '取消连接' : '断开', action: { method: 'POST', path: 'channels/telegram/disconnect' } });
-            }
-          }
-          return nodes;
-        },
-      });
       for (const name of ['message_end', 'companion_command_proposal', 'companion_emergence']) {
         ctx.on(name, (payload: any) => channel.onBusEvent(name, payload));
       }
       channel.start();
       ctx.dispose(() => {
-        unregisterUi();
         unregister();
         channel.stop();
       });
