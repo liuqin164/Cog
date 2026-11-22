@@ -598,7 +598,11 @@ export class ResidentTick {
         nextAt: retry.nextAt ?? null,
         gaveUp: retry.gaveUp,
       });
-      await this.shell.machine.dispatch('run_error', { reason: `dream_failed:${message}` });
+      if (this.shell.machine.state !== 'DREAMING') {
+        this.shell.trace.append('dream_failed_after_wake', { localDate, state: this.shell.machine.state });
+        return;
+      }
+      await this.shell.machine.dispatch('dream_failed', { reason: `dream_failed:${message}` });
     }
   }
 

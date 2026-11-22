@@ -127,8 +127,6 @@ export class TuiApp {
       return;
     }
 
-    // The sleep screen promises any key wakes it. `wake` is a submit with no text, so the resident
-    // takes the existing DREAMING -> WAKING edge; the key itself is swallowed, not typed.
     if (this.view.lifecycle === 'DREAMING') {
       this.client.send({ t: 'wake' });
       this.view.applyEvent({ name: 'companion_transition', payload: { state: 'WAKING' } });

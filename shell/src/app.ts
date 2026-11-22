@@ -988,6 +988,10 @@ export class CompanionShell implements ShellControl, AttachShell {
     return this.runLoop.submit(text, channel);
   }
 
+  async wakeFromSleep(): Promise<void> {
+    return this.runLoop.wake();
+  }
+
   async tick(at = this.now()): Promise<void> {
     return this.residentTick.tick(at);
   }

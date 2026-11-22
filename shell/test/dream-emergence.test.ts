@@ -83,6 +83,29 @@ describe('dream and run do not collide', () => {
       await shell.stop();
     }
   });
+
+  test('a failure after a waking message leaves the user run untouched', async () => {
+    const dir = makeTempDir();
+    const provider = new ScriptedProvider([{ text: '我醒着，先回你。', toolCalls: [] }]);
+    const shell = makeDreamShell(dir, provider);
+    await shell.start();
+    try {
+      (shell as unknown as { dream: { integrate: (...args: unknown[]) => Promise<unknown> } }).dream = {
+        integrate: async () => {
+          await shell.submit('做梦时来消息，随后整理失败');
+          throw new Error('integrate failed');
+        },
+      };
+      await shell.runDream(Date.now());
+      const trace = shell.trace.read();
+      expect(shell.state).toBe('IDLE');
+      expect(provider.calls).toHaveLength(1);
+      expect(trace.some((record) => record.kind === 'dream_failed_after_wake')).toBe(true);
+      expect(trace.some((record) => record.kind === 'illegal_transition')).toBe(false);
+    } finally {
+      await shell.stop();
+    }
+  });
 });
 
 describe('emergence decision point (kernel surfacing)', () => {

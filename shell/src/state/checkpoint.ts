@@ -51,6 +51,16 @@ export interface InFlightToolCall {
   toolName: string;
 }
 
+export interface InboundMessage {
+  id: string;
+  text: string;
+  textId?: string;
+  channel: string;
+  at: number;
+  status: 'queued' | 'failed';
+  error?: string;
+}
+
 /**
  * The one paused run (#228). A work-tier budget stop or a question the companion asked both end the
  * run and leave this object behind; the lifecycle state is SUSPENDED while it exists.
@@ -115,6 +125,11 @@ export interface ShellRuntimeState {
   pendingSteering?: string[];
   /** Follow-up lines waiting for the run to end, same contract as `pendingSteering`. */
   pendingFollowUps?: string[];
+  /**
+   * Lines submitted while the run could not take them. They wait for the run to settle, then start
+   * their own user run with the channel they arrived on. A failed item stays for a later resend.
+   */
+  inboundQueue?: InboundMessage[];
   /** Last attach/detach of a TUI, so "while you were away" has a window to read. */
   lastAttachAt?: number;
   lastDetachAt?: number;
@@ -289,6 +304,7 @@ const RUNTIME_KEYS: Record<keyof ShellRuntimeState, true> = {
   inFlightToolCalls: true,
   pendingSteering: true,
   pendingFollowUps: true,
+  inboundQueue: true,
   lastAttachAt: true,
   lastDetachAt: true,
   awayQueue: true,
@@ -344,6 +360,12 @@ export function forgetRuntimeText(runtime: ShellRuntimeState, ledger: RuntimeTex
     const kept = entries.filter((entry) => !gone(entry.textId));
     cleared += entries.length - kept.length;
     next[key] = kept as never;
+  }
+
+  if (runtime.inboundQueue) {
+    const kept = runtime.inboundQueue.filter((entry) => !gone(entry.textId));
+    cleared += runtime.inboundQueue.length - kept.length;
+    next.inboundQueue = kept.length > 0 ? kept : undefined;
   }
 
   if (runtime.suspension) {
@@ -508,6 +530,14 @@ export class CheckpointStore {
       });
     }
 
+    if (runtime.inboundQueue) {
+      copy.inboundQueue = runtime.inboundQueue.map((entry) => {
+        entry.textId = this.textId(entry.textId, 'inbound.text', entry.text);
+        const { text: _text, ...rest } = entry;
+        return rest as InboundMessage;
+      });
+    }
+
     if (runtime.taskStubs) {
       copy.taskStubs = runtime.taskStubs.map((stub) => {
         stub.textId = this.textId(stub.textId, 'task.stub', stub.text);
@@ -564,6 +594,13 @@ export class CheckpointStore {
 
     if (runtime.awayQueue) {
       runtime.awayQueue = runtime.awayQueue.flatMap((entry) => {
+        const text = entry.textId ? ledger.read(entry.textId) : entry.text;
+        return text === undefined ? [] : [{ ...entry, text }];
+      });
+    }
+
+    if (runtime.inboundQueue) {
+      runtime.inboundQueue = runtime.inboundQueue.flatMap((entry) => {
         const text = entry.textId ? ledger.read(entry.textId) : entry.text;
         return text === undefined ? [] : [{ ...entry, text }];
       });
