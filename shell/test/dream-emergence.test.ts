@@ -62,6 +62,26 @@ describe('night integration (DREAMING)', () => {
       await shell.stop();
     }
   });
+
+  test('the nightly promotion limit follows the night candidate production (#433)', async () => {
+    const dir = makeTempDir();
+    const provider = new ScriptedProvider([{ text: 'unused', toolCalls: [] }]);
+    const shell = makeDreamShell(dir, provider);
+    await shell.start();
+    try {
+      (shell as unknown as { dream: { integrate: (...args: unknown[]) => Promise<unknown> } }).dream = {
+        integrate: async (localDate: unknown) => ({
+          localDate, eventCount: 0, candidateCount: 137, sourceRefs: [], summary: 'partial',
+          kernelNightRan: false, memoryModelUsed: false,
+        }),
+      };
+      await shell.runDream(Date.now());
+      const promotion = shell.trace.read().find((record) => record.kind === 'dream_promotion');
+      expect(promotion?.limit).toBe(137);
+    } finally {
+      await shell.stop();
+    }
+  });
 });
 
 describe('dream and run do not collide', () => {

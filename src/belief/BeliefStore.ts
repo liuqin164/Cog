@@ -151,6 +151,29 @@ export class BeliefStore {
     return rows.map((row) => this.mapBelief(row));
   }
 
+  listBeliefKeysByStatus(options: {
+    statuses: Array<'active' | 'superseded' | 'revoked' | 'suspect' | 'expired'>;
+    projectId?: string;
+  }): Array<{ subject: string; predicate: string; canonicalKey: string }> {
+    if (options.statuses.length === 0) return [];
+    const queryProject = projectQueryValue(options.projectId);
+    const rows = this.db.prepare(`
+      SELECT DISTINCT subject, predicate, canonical_key
+      FROM beliefs
+      WHERE status IN (${options.statuses.map(() => '?').join(', ')})
+        AND (? IS NULL OR COALESCE(project_id,'') = ?)
+    `).all(...options.statuses, queryProject, queryProject) as Array<{
+      subject: string;
+      predicate: string;
+      canonical_key: string;
+    }>;
+    return rows.map((row) => ({
+      subject: row.subject,
+      predicate: row.predicate,
+      canonicalKey: row.canonical_key,
+    }));
+  }
+
   getActiveBeliefsForQuery(input: {
     query: string;
     projectId?: string;

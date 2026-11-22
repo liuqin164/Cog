@@ -104,6 +104,8 @@ export interface DreamCandidateListOptions {
 export interface DreamGovernanceRunOptions {
   projectId?: string;
   limit?: number;
+  now?: number;
+  candidateTtlMs?: number;
 }
 
 export interface DreamGovernanceRunResult {
@@ -113,6 +115,8 @@ export interface DreamGovernanceRunResult {
   promotedCandidates: number;
   /** Neurons created by this run — zero unless a candidate carries a source neuron. */
   neuronsWritten: number;
+  /** Candidate-status rows this run retired by TTL. */
+  expiredCandidates: number;
   queue: {
     candidate: number;
     needsConfirmation: number;

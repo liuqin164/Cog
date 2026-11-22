@@ -96,7 +96,7 @@ Adding a method is an additive change and does not bump the constant. Removing o
 |---|---|---|
 | `PROFILE_ENTRY_COMPILED` | A compile derives a value for a key that changed. | `entryId`, `projectId`, `ledger`, `key`, `value`, `sourceRefs`, `recordedAt`, `compiledAt`, `version` |
 | `PROFILE_ENTRY_CORRECTED` | The owner corrects an entry. | The same, with the correction turn among `sourceRefs`. |
-| `PROFILE_ENTRY_RETIRED` | A full recompile no longer derives the key. | The same, carrying the value the entry had. |
+| `PROFILE_ENTRY_RETIRED` | The key has no live evidence, and the evidence that did back it is invalidated — `superseded` / `archived` / `rejected` for a fact, `superseded` / `revoked` / `expired` for a belief, or a relation/ongoing item that no longer exists. A key merely outside the read window is not retired. | The same, carrying the value the entry had. |
 | `PROFILE_LEDGER_RECOMPILED` | A compile wrote an entry, or `correct` recompiled the ledger. | `projectId`, `ledger`, `entries`, `written`, `compiledAt` |
 
 ## Errors (frozen)
@@ -229,6 +229,7 @@ The classification is a closed vocabulary, so a typo cannot move an entry into t
 The compiler is in-process and synchronous. Two processes holding one database can both compile; each
 reads the same evidence and appends its own receipt, and the ledger append is the only arbiter. The
 intended holder is the one resident process that already holds the kernel, the same ceiling F2's wake
-tick states. Beyond `PROFILE_EVIDENCE_LIMIT` (500) evidence rows the compiler reads the newest and the
-caller must raise the bound; ledger rows are read in full, so a stable entry cannot be pushed out by
-newer versions.
+tick states. Beyond `PROFILE_EVIDENCE_LIMIT` (500) live evidence rows the compiler reads the newest and
+the caller must raise the bound; ledger rows are read in full, so a stable entry cannot be pushed out by
+newer versions. An entry pushed out of the read window keeps its last value: absence from the window is
+not evidence that the claim was invalidated.

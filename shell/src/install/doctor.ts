@@ -49,6 +49,8 @@ export interface BacklogReading {
     rejected: number;
     superseded: number;
     shadow: number;
+    oldestCandidateAt: number | null;
+    oldestCandidateAgeMs: number | null;
     needsConfirmationExpiringSoon: number;
     needsConfirmationOverdue: number;
     highPrivilege: {

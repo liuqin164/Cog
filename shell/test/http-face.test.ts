@@ -195,8 +195,9 @@ describe('in-process kernel host and its loopback HTTP face', () => {
         mode: 'process',
         pid: process.pid,
       });
-      const { measuredAt: _measuredAt, ...readings } = health.backlog;
-      expect(report.backlog).toMatchObject(readings);
+      const { measuredAt: _measuredAt, candidateQueue, ...readings } = health.backlog;
+      const { oldestCandidateAgeMs: _oldestCandidateAgeMs, ...queue } = candidateQueue;
+      expect(report.backlog).toMatchObject({ ...readings, candidateQueue: queue });
       const check = report.checks.find((entry) => entry.id === 'backlog');
       expect(check?.warn).toBe(true);
       expect(check?.detail).toContain('needs_confirmation_expiring_soon=4');
