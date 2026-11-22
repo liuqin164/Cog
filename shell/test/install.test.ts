@@ -591,13 +591,13 @@ describe('the model step: a custom OpenAI-protocol route', () => {
       'my-model',
       'myroute',
       'sk-custom-secret',
-      '', // embedding provider -> default local
-      '小海', // companion name
-      '', // time zone -> default
-      '', // dream start -> default
-      '', // dream end -> default
-      '', // quiet window -> off
-      'y', // confirm rhythm
+      '',
+      '小海',
+      '',
+      '',
+      '',
+      '',
+      'y',
     ]);
     const probed: Array<{ provider: string; baseUrl: string; model: string }> = [];
     const harness = makeHarness({
