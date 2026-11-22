@@ -13,7 +13,7 @@
  * Both are one JSON object, published the way the checkpoint is (temp + fsync + rename), so a kill
  * leaves the previous complete file or the new one.
  */
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 export type UpgradeStep = 'requested' | 'stop' | 'snapshot' | 'gate' | 'switch' | 'health' | 'done';
@@ -166,6 +166,7 @@ export function writeAtomicFile(path: string, contents: string | Uint8Array): vo
   } finally {
     closeSync(fd);
   }
+  chmodSync(temp, 0o600);
   renameSync(temp, path);
   try {
     const dir = openSync(dirname(path), 'r');
