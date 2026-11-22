@@ -386,7 +386,13 @@ export class MemoryObservatory {
     const belief = this.db
       .query(`SELECT COALESCE(MAX(updated_at), 0) AS stamp FROM beliefs WHERE COALESCE(project_id, '') = ?`)
       .get(projectId) as { stamp: number } | null;
-    return `${watermark}:${atlas?.stamp ?? 0}:${soul?.stamp ?? 0}:${belief?.stamp ?? 0}`;
+    const rows = this.db
+      .query(`SELECT
+        (SELECT COUNT(*) FROM memory_atlas_documents WHERE project_id = ?) AS atlas,
+        (SELECT COUNT(*) FROM memory_events WHERE project_id = ?) AS events,
+        (SELECT COUNT(*) FROM beliefs WHERE COALESCE(project_id, '') = ?) AS beliefs`)
+      .get(projectId, projectId, projectId) as { atlas: number; events: number; beliefs: number } | null;
+    return `${watermark}:${atlas?.stamp ?? 0}:${soul?.stamp ?? 0}:${belief?.stamp ?? 0}:${rows?.atlas ?? 0}:${rows?.events ?? 0}:${rows?.beliefs ?? 0}`;
   }
 
   private watermark(): number {
