@@ -144,6 +144,7 @@ export class WebChannel {
       return;
     }
     if (name === 'companion_emergence') {
+      if (payload?.channelId !== undefined && payload.channelId !== this.session.channelId) return;
       this.broadcast('emergence', { id: payload?.id, text: payload?.text, reason: payload?.reason });
       return;
     }
@@ -182,6 +183,7 @@ export class WebChannel {
     } catch (error) {
       return this.options.routes.jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
     }
+    this.options.contract.presence(this.session, { reachability: 'online', ownerActivity: 'active', at: this.options.clock.now() });
     if (text.startsWith('/')) {
       const [name = '', ...rest] = text.slice(1).split(/\s+/u);
       const reply = await this.options.shell.runCommand(name, rest.join(' '));
@@ -276,6 +278,7 @@ export class WebChannel {
   }
 
   private openStream(signal: AbortSignal): Response {
+    this.options.contract.presence(this.session, { reachability: 'online', ownerActivity: 'active', at: this.options.clock.now() });
     const encoder = new TextEncoder();
     const queue: Array<{ event: string; data: unknown }> = [];
     let wake: (() => void) | null = null;
@@ -298,6 +301,7 @@ export class WebChannel {
         wake?.();
         wake = null;
         this.streams.delete(stream);
+        if (this.streams.size === 0 && !this.stopped) this.options.contract.presence(this.session, { reachability: 'offline', ownerActivity: 'away' });
       },
     };
 

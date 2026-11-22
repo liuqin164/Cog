@@ -212,6 +212,7 @@ Every ingress and delivery result carries a trace. The reason is exactly
 | `ingest` | Validate one inbound message and resolve its occasion and role. |
 | `presence` | Store and return the channel's current coarse presence. |
 | `deliver` | Validate one surfacing strength and refuse to emit `silence` or an offline channel. |
+| `currentChannel` | Return the online channel with the latest active interaction, else the latest idle presence, or `undefined`. |
 
 Adding a method, field or frozen value is additive. Removing or renaming one, or changing an
 occasion, strength, role, presence meaning or error meaning, is a breaking change and bumps

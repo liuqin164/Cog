@@ -106,7 +106,7 @@ export const CHANNEL_DELIVERY_OUTCOMES = ['delivered', 'silenced'] as const;
 export type ChannelDeliveryOutcome = (typeof CHANNEL_DELIVERY_OUTCOMES)[number];
 
 /** The face's methods. Frozen. */
-export const CHANNEL_API_METHODS = ['register', 'ingest', 'presence', 'deliver'] as const;
+export const CHANNEL_API_METHODS = ['register', 'ingest', 'presence', 'deliver', 'currentChannel'] as const;
 
 /** The refusals this face names. Frozen. */
 export const CHANNEL_ERROR_CODES = [
@@ -244,6 +244,8 @@ export class ChannelContract {
   private readonly issued = new WeakSet<ChannelSession>();
   private readonly sessions = new Map<string, ChannelSession>();
   private readonly presences = new Map<string, ChannelPresence>();
+  private readonly activity = new Map<string, { rank: number; seq: number }>();
+  private activitySeq = 0;
 
   constructor(private readonly occasionScope: OccasionScope) {}
 
@@ -316,6 +318,7 @@ export class ChannelContract {
     const mismatch = declared !== undefined && declared !== resolved.occasion;
     const account = current.accounts.find((candidate) => candidate.accountId === accountId);
     const role: ChannelAccountRole = account?.role ?? 'other';
+    if (role === 'owner') this.noteActivity(current.channelId, 2);
     const steps: ChannelDecisionStep[] = [
       {
         rule: 'identity',
@@ -370,6 +373,7 @@ export class ChannelContract {
       updatedAt,
     };
     this.presences.set(current.channelId, presence);
+    this.noteActivity(current.channelId, input.ownerActivity === 'active' ? 2 : input.ownerActivity === 'idle' ? 1 : 0);
     return presence;
   }
 
@@ -439,6 +443,26 @@ export class ChannelContract {
       reason: traceOf(steps).reason,
       decisionTrace: traceOf(steps),
     };
+  }
+
+  currentChannel(): string | undefined {
+    let current: string | undefined;
+    let bestRank = 0;
+    let bestSeq = 0;
+    for (const [channelId, presence] of this.presences) {
+      const activity = this.activity.get(channelId);
+      if (presence.reachability !== 'online' || !activity || activity.rank === 0) continue;
+      if (activity.rank > bestRank || (activity.rank === bestRank && activity.seq > bestSeq)) {
+        current = channelId;
+        bestRank = activity.rank;
+        bestSeq = activity.seq;
+      }
+    }
+    return current;
+  }
+
+  private noteActivity(channelId: string, rank: number): void {
+    this.activity.set(channelId, { rank, seq: ++this.activitySeq });
   }
 
   private currentSession(session: ChannelSession): ChannelSession {

@@ -364,6 +364,10 @@ export class CompanionShell implements ShellControl, AttachShell {
     return this.attach?.clientCount ?? 0;
   }
 
+  currentChannelId(): string {
+    return this.channelContract.currentChannel() ?? 'web';
+  }
+
   isRunning(): boolean {
     return this.machine.state === 'RUNNING';
   }

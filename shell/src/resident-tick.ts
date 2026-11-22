@@ -100,7 +100,7 @@ export class ResidentTick {
           reason: entry!.reason,
           ...(entry!.source === undefined ? {} : { source: entry!.source as SurfacingSource }),
           ...(entry!.sourceRefs === undefined ? {} : { sourceRefs: entry!.sourceRefs }),
-        }, at);
+        }, at, 'incidental', this.shell.currentChannelId());
         this.shell.trace.append('emergence_quiet_delivered', { projectId: this.shell.config.projectId, id: entry!.id, at });
         return;
       }
@@ -152,7 +152,7 @@ export class ResidentTick {
           const delivery = routed.get(item.id);
           if (delivery?.decision === 'deliver') {
             this.consumeEmergence(item, at);
-            await this.speakEmergence(item, at);
+            await this.speakEmergence(item, at, delivery.strength === 'incidental' ? 'incidental' : 'proactive', this.shell.currentChannelId());
             break;
           }
           if (delivery?.decision === 'accumulate') {
@@ -318,7 +318,7 @@ export class ResidentTick {
     };
   }
 
-  private async speakEmergence(candidate: { id: string; text: string; reason: string; source?: SurfacingSource; sourceRefs?: Array<{ eventId?: string; sourceId?: string; contentHash?: string }> }, at: number): Promise<void> {
+  private async speakEmergence(candidate: { id: string; text: string; reason: string; source?: SurfacingSource; sourceRefs?: Array<{ eventId?: string; sourceId?: string; contentHash?: string }> }, at: number, strength: 'proactive' | 'incidental', channelId: string): Promise<void> {
     try {
       this.shell.backend.deliverSurfacing({
         projectId: this.shell.config.projectId,
@@ -330,7 +330,7 @@ export class ResidentTick {
     } catch (error) {
       this.shell.trace.append('surfacing_delivery_failed', { candidateId: candidate.id, message: error instanceof Error ? error.message : String(error) });
     }
-    void this.shell.host.bus.emit('companion_emergence', { id: candidate.id, reason: candidate.reason, text: candidate.text });
+    void this.shell.host.bus.emit('companion_emergence', { id: candidate.id, reason: candidate.reason, text: candidate.text, strength, channelId });
     let ok = false;
     try {
       const summary = await this.shell.runLoop.executeRun(candidate.text, 'emergence_due', `emergence:${candidate.id}`);
@@ -403,7 +403,7 @@ export class ResidentTick {
       });
       if (notice.decision.decision !== 'deliver') return;
       const text = `我最近 ${notice.streak} 晚的夜间整合都失败了，记忆可能不完整。我不会假装正常——你回来时我们先补这一块。`;
-      void this.shell.host.bus.emit('companion_emergence', { id: 'health:dream-streak', reason: 'health_notice', text });
+      void this.shell.host.bus.emit('companion_emergence', { id: 'health:dream-streak', reason: 'health_notice', text, strength: 'proactive', channelId: this.shell.currentChannelId() });
     } catch (error) {
       this.shell.trace.append('health_check_failed', { message: error instanceof Error ? error.message : String(error) });
     }
@@ -427,7 +427,7 @@ export class ResidentTick {
       highBytes: memory.highBytes,
       source: memory.source,
     }, at);
-    void this.shell.host.bus.emit('companion_emergence', { id: 'health:memory-pressure', reason: 'memory_notice', text });
+    void this.shell.host.bus.emit('companion_emergence', { id: 'health:memory-pressure', reason: 'memory_notice', text, strength: 'proactive', channelId: this.shell.currentChannelId() });
   }
 
   rotateServiceLog(): void {
