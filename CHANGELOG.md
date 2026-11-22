@@ -2,6 +2,25 @@
 
 ## 5.0.0 (unreleased)
 
+- **Forget now follows references, not only timestamps (#424).** `run_prompt` keeps the prompt in the
+  ledger and the trace holds only its `textId`; shell runtime-text copies carry `sourceRefs`, so a
+  copy written after the window is erased with the event it quotes. Trace records with text are
+  removed by window text and time, and `intention:` / `wake-intention:` streams are deleted and the
+  intention book recompiled. User-visible effect, in one line: after `/forget`, a later prompt that
+  recalled the window, a proposed command that quoted it, and the intention's FTS row no longer
+  survive anywhere.
+
+- **The plan-execution subsystem and its dead tables are gone (#450).** Removed `PlanRuntimeStore`,
+  `PolicyExecutionStore`, `PlanDslExecutor`, `PolicyRuntimeEvaluator`, `PolicySideEffectExecutor`
+  (2,379 lines), the `BeliefStore` execution-feedback calibration and plan-DSL scoring, nine tables
+  nothing read or wrote, the ten policy/runtime projection tables, and their deletion-registry and
+  schema entries. Also removed unreachable `AlgorithmReviewBackend`, `Embedder*`, `LongMemEvalCli`,
+  board files, topology identity helpers, eval datasets, `SynapseUtils`, the public `agent-loop`
+  follow-up setter, and nine uncalled `AgentRecallEngine` methods; `src/eval/strategy` moved to
+  `src/strategy` because it is runtime code. `freeze-budget.json` drops to 86 tables and CI gains a
+  reachability check. User-visible effect, in one line: the shipped package and its schema no longer
+  carry a plan runtime no product path ever instantiated, and a new unreferenced source file fails CI.
+
 - **The first batch of unreachable files is gone (#337).** 23 files nothing could reach from
   `shell/src` or `src/bin` were removed from `src/routing/templates/`, `src/boards/`,
   `src/store/`, `src/meta/`, `src/engine/`, `src/recall/`, `src/models/adapters/` and

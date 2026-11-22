@@ -13,8 +13,14 @@ function tools(overrides: Partial<ToolInvoker> = {}): ToolInvoker {
   };
 }
 
-function runtime(bus: EventBus, provider: ScriptedProvider, invoker = tools(), cage = new RunCage({ maxTurnsPerRun: 10, maxTokensPerRun: 10_000, toolWhitelist: null })) {
-  return new AgentRuntime({ bus, tools: invoker, provider, budget: cage, systemPrompt: () => 'system' });
+function runtime(
+  bus: EventBus,
+  provider: ScriptedProvider,
+  invoker = tools(),
+  cage = new RunCage({ maxTurnsPerRun: 10, maxTokensPerRun: 10_000, toolWhitelist: null }),
+  initialQueues?: { followUps?: readonly string[] },
+) {
+  return new AgentRuntime({ bus, tools: invoker, provider, budget: cage, systemPrompt: () => 'system', initialQueues });
 }
 
 describe('Pi-aligned loop', () => {
@@ -89,7 +95,7 @@ describe('Pi-aligned loop', () => {
       { text: 'after steering', toolCalls: [] },
       { text: 'after followup', toolCalls: [] },
     ]);
-    const runner = runtime(bus, provider);
+    const runner = runtime(bus, provider, undefined, undefined, { followUps: ['follow up later'] });
     let steered = false;
     bus.on('message_end', (event: { message?: { role?: string } }) => {
       if (event.message?.role === 'assistant' && !steered) {
@@ -97,7 +103,6 @@ describe('Pi-aligned loop', () => {
         runner.steer('steer now');
       }
     });
-    runner.followUp('follow up later');
     const summary = await runner.run({ runId: 'r', sessionId: 's', userText: 'start' });
     expect(summary.turns).toBe(3);
     expect(provider.calls[1].messages.some((message) => message.role === 'user' && message.content === 'steer now')).toBe(true);

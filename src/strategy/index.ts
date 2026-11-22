@@ -3,3 +3,8 @@ export * from './StrategyTemplateRegistry.js';
 export * from './StrategyCortex.js';
 export * from './StrategyConditionedCandidateBuilder.js';
 export * from './StrategyContextFormatter.js';
+export * from './MemoryUseJudge.js';
+export * from './ContextOutcomeStore.js';
+export * from './ContextPolicyScorer.js';
+export * from './StrategyDiversitySelector.js';
+export * from './StrategyRolloutEvaluator.js';

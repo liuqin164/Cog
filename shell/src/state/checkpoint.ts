@@ -315,7 +315,7 @@ const RUNTIME_KEYS: Record<keyof ShellRuntimeState, true> = {
 };
 
 export interface RuntimeTextLedger {
-  record(kind: string, text: string): string;
+  record(kind: string, text: string, sourceRefs?: Array<{ eventId?: string; sourceId?: string; contentHash?: string }>): string;
   read(eventId: string): string | undefined;
   has(eventId: string, text: string): boolean;
 }
@@ -519,9 +519,14 @@ export class CheckpointStore {
     return history.length > MAX_HISTORY ? history.slice(history.length - MAX_HISTORY) : history;
   }
 
-  private textId(current: string | undefined, kind: string, text: string | undefined): string | undefined {
+  private textId(
+    current: string | undefined,
+    kind: string,
+    text: string | undefined,
+    sourceRefs?: Array<{ eventId?: string; sourceId?: string; contentHash?: string }>,
+  ): string | undefined {
     if (!text || !this.ledger) return current;
-    return current && this.ledger.has(current, text) ? current : this.ledger.record(kind, text);
+    return current && this.ledger.has(current, text) ? current : this.ledger.record(kind, text, sourceRefs);
   }
 
   private persist(state: CheckpointState): CheckpointState {
@@ -542,7 +547,7 @@ export class CheckpointStore {
 
     if (runtime.awayQueue) {
       copy.awayQueue = runtime.awayQueue.map((entry) => {
-        entry.textId = this.textId(entry.textId, 'away.text', entry.text);
+        entry.textId = this.textId(entry.textId, 'away.text', entry.text, entry.sourceRefs);
         const { text: _text, ...rest } = entry;
         return rest as NonNullable<ShellRuntimeState['awayQueue']>[number];
       });
@@ -558,7 +563,7 @@ export class CheckpointStore {
 
     if (runtime.taskStubs) {
       copy.taskStubs = runtime.taskStubs.map((stub) => {
-        stub.textId = this.textId(stub.textId, 'task.stub', stub.text);
+        stub.textId = this.textId(stub.textId, 'task.stub', stub.text, stub.sourceRefs.map((eventId) => ({ eventId })));
         const { text: _text, ...rest } = stub;
         return rest as SessionDigestEntry & { textId?: string };
       });

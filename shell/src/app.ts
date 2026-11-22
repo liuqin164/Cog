@@ -521,8 +521,13 @@ export class CompanionShell implements ShellControl, AttachShell {
       if (restored.previous === 'RUNNING' && recoveredRunId) {
         // Pi #10000's durable prompt is what the interrupted turn hangs on; the session log holds all of it.
         const prompt = traceScan.records.find((record) => record.kind === 'run_prompt' && record.runId === recoveredRunId);
-        if (prompt && typeof prompt.text === 'string') {
-          this.interrupted = { runId: recoveredRunId, text: prompt.text, chars: Number(prompt.chars ?? prompt.text.length) };
+        const recoveredText = typeof prompt?.text === 'string'
+          ? prompt.text
+          : typeof prompt?.textId === 'string'
+            ? this.stateLedger.read(prompt.textId)
+            : undefined;
+        if (prompt && recoveredText !== undefined) {
+          this.interrupted = { runId: recoveredRunId, text: recoveredText, chars: Number(prompt.chars ?? recoveredText.length) };
           this.trace.append('prompt_recovered', { runId: recoveredRunId, chars: this.interrupted.chars });
         }
       }

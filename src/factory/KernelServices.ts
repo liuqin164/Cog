@@ -72,8 +72,7 @@ import { SoulService } from '../soul/index.js';
 import { ContextCortex } from '../context/index.js';
 import { ProspectiveMemoryService } from '../prospective/index.js';
 import { KernelEventStream, ledgerAppendEvent } from '../events/index.js';
-import { StrategyCortex } from '../strategy/index.js';
-import { ContextOutcomeStore, MemoryUseJudge } from '../eval/strategy/index.js';
+import { ContextOutcomeStore, MemoryUseJudge, StrategyCortex } from '../strategy/index.js';
 import { EpisodeAssembler, EpisodeStore, type EpisodeBoundaryDecisionRecord, type EpisodeClosureMode, type EpisodeClosureReceipt, type EpisodeDreamStatus, type EpisodeListOptions, type MemoryEpisode, type TurnRelationAdvisoryReviewer } from '../episode/index.js';
 import { EpisodeBoundaryAuditService, type EpisodeBoundaryAuditResult } from '../episode/EpisodeBoundaryAuditService.js';
 import { localDateFor, resolveProjectClockContext, type ProjectClockContext } from '../utils/LocalDateContext.js';
@@ -606,6 +605,7 @@ export abstract class KernelServices {
       profile: this.profile,
       procedures: this.procedures,
       commitments: this.commitments,
+      intentions: this.intentions,
       snapshotsDir: options.snapshotsDir,
       exportsDir: options.exportsDir ?? (this.dbPath === ':memory:' ? undefined : join(dirname(this.dbPath), 'exports')),
       rebuildAtlas: (projectId) => this.memoryAtlasIndexer.rebuild({ projectId }),

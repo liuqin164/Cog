@@ -5,7 +5,7 @@ import {
   StrategyDiversitySelector,
   StrategyRolloutEvaluator,
   type StrategyRolloutOutcome,
-} from '../src/eval/strategy/index.js';
+} from '../src/strategy/index.js';
 
 function outcome(input: Partial<StrategyRolloutOutcome> = {}): StrategyRolloutOutcome {
   return {

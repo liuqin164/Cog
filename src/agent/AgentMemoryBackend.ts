@@ -139,13 +139,17 @@ export class KernelAgentMemoryBackend {
     };
   }
 
-  recordRuntimeText(input: { projectId: string; kind: string; text: string }): string {
+  recordRuntimeText(input: { projectId: string; kind: string; text: string; sourceRefs?: unknown[] }): string {
     return this.kernel.eventStore.append({
       streamId: `shell-state:${input.projectId}:${input.kind}`,
       streamType: 'system',
       eventType: 'SHELL_STATE_RECORDED',
       projectId: input.projectId,
-      payload: { kind: input.kind, text: input.text },
+      payload: {
+        kind: input.kind,
+        text: input.text,
+        ...(input.sourceRefs === undefined ? {} : { sourceRefs: input.sourceRefs }),
+      },
     }).eventId;
   }
 

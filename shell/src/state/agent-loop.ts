@@ -293,7 +293,12 @@ export interface AgentRuntimeOptions {
    * The prompt is durable before the model call (Pi #10000's requirement). The callback owns
    * redaction and the log, so a crash can still rebuild the whole prompt.
    */
-  onPrompt?: (prompt: { runId: string; sessionId: string; text: string }) => void;
+  onPrompt?: (prompt: {
+    runId: string;
+    sessionId: string;
+    text: string;
+    sourceRefs?: Array<{ eventId?: string; sourceId?: string; contentHash?: string }>;
+  }) => void;
   trace?: TraceLog;
   clock?: () => number;
   /** The failure ladder's budget (Pi's `RetrySettings`); defaults to the mg gateway's real one. */
@@ -383,12 +388,6 @@ export class AgentRuntime {
     this.persistQueues();
   }
 
-  /** Follow-up: injected only when the loop would otherwise end. */
-  followUp(text: string): void {
-    this.followUps.push(text);
-    this.persistQueues();
-  }
-
   /** The steering queue as the view shows it; FIFO, so the newest is last. */
   get steeringMessages(): readonly string[] {
     return this.steering;
@@ -424,13 +423,19 @@ export class AgentRuntime {
     userText: string;
     origin?: RunOrigin;
     signal?: AbortSignal;
+    sourceRefs?: Array<{ eventId?: string; sourceId?: string; contentHash?: string }>;
   }): Promise<RunSummary> {
     if (this.running) throw new Error('agent_already_running: at most one RUNNING state exists');
     this.running = true;
     const origin: RunOrigin = input.origin ?? 'user';
     // Pi #10000: the prompt is durable before the model call. The callback redacts and writes the
     // session log, so an interrupted run keeps its whole prompt.
-    this.options.onPrompt?.({ runId: input.runId, sessionId: input.sessionId, text: input.userText });
+    this.options.onPrompt?.({
+      runId: input.runId,
+      sessionId: input.sessionId,
+      text: input.userText,
+      ...(input.sourceRefs === undefined ? {} : { sourceRefs: input.sourceRefs }),
+    });
     this.overflowRecoveryUsed = false;
     const controller = new AbortController();
     this.abortController = controller;

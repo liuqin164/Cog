@@ -139,7 +139,6 @@ const RULES: ReadonlyArray<readonly [string, string]> = [
   ['memory_events_fts', `DELETE FROM memory_events_fts WHERE event_id IN (SELECT id FROM ${EVENT})`],
   ['memory_event_cjk_terms', `DELETE FROM memory_event_cjk_terms WHERE event_id IN (SELECT id FROM ${EVENT})`],
   ['memory_event_embeddings', `DELETE FROM memory_event_embeddings WHERE event_id IN (SELECT id FROM ${EVENT})`],
-  ['memory_activation', `DELETE FROM memory_activation WHERE neuron_id IN (SELECT id FROM ${EVENT})`],
 ];
 
 const SCOPE_RULES: ReadonlyArray<readonly [string, string]> = [
@@ -153,16 +152,15 @@ const SCOPE_RULES: ReadonlyArray<readonly [string, string]> = [
   ['episode_repair_audit', `DELETE FROM episode_repair_audit WHERE COALESCE(project_id,'')=?`],
   ['deep_write_summaries', `DELETE FROM deep_write_summaries WHERE COALESCE(project_id,'')=?`],
   ['deep_write_runs', `DELETE FROM deep_write_runs WHERE COALESCE(project_id,'')=?`],
-  ['memory_activation', `DELETE FROM memory_activation WHERE COALESCE(project_id,'')=?`],
   ['memory_atlas_access', `DELETE FROM memory_atlas_access WHERE COALESCE(project_id,'')=?`],
   ['memory_atlas_activation', `DELETE FROM memory_atlas_activation WHERE COALESCE(project_id,'')=?`],
   ['memory_atlas_projection_state', `DELETE FROM memory_atlas_projection_state WHERE COALESCE(project_id,'')=?`],
 ];
 
 const KEEP = new Set([
-  '_episode_integrity_markers', '_meta', '_schema_migrations', 'dream_ledger_state',
+  '_meta', '_schema_migrations', 'dream_ledger_state',
   'event_sequence_counters', 'memory_event_fts_state', 'governance_audit_log', 'soul_versions',
-  'pipeline_checkpoints', 'pipeline_runs', 'pipeline_step_timings', 'pipeline_nonfatal_events',
+  'pipeline_runs', 'pipeline_step_timings', 'pipeline_nonfatal_events',
   'ingestion_source_cursors', 'ingestion_processed_records', 'import_source_anchors',
   'memory_atlas_documents', 'memory_frames', 'memory_events',
   'memory_topics',
@@ -172,18 +170,14 @@ const KEEP = new Set([
 
 const SCOPE_HANDLED = new Set([
   'entity_alias_conflicts', 'entity_instances', 'entity_merge_candidates', 'entity_resolution_log',
-  'entity_scope_migration_quarantine', 'memory_entity_scope_identity', 'memory_governance_audit',
-  'memory_governance_operations', 'memory_governance_plans', 'pending_entity_resolution_quarantine',
-  'policy_execution_audit_outbox', 'policy_execution_legacy_tombstones', 'policy_execution_quarantine',
-  'policy_execution_read_model', 'policy_executions', 'policy_projection_state',
-  'projection_event_discard_receipts', 'runtime_event_outbox', 'runtime_projection_state',
-  'runtime_projection_states', 'runtime_projection_transitions', 'runtime_scope_discard_receipts',
-  'runtime_states', 'runtime_transitions', 'user_session_scopes', 'user_sessions',
+  'memory_entity_scope_identity', 'memory_governance_audit',
+  'memory_governance_operations', 'memory_governance_plans',
+  'user_session_scopes', 'user_sessions',
   'user_session_runtime', 'web_session_tokens', 'meta_proposals', 'meta_observations',
   'agent_approval_queue', 'agent_task_records', 'background_jobs', 'sandbox_snapshots',
   'graph_signals', 'plasticity_graph_edge_audit', 'plasticity_graph_edges',
   'plasticity_proposal_review_decisions', 'plasticity_proposals', 'reasoning_chains',
-  'reasoning_steps', 'runtime_projection_state', 'compiler_confidence_runs',
+  'reasoning_steps', 'compiler_confidence_runs',
 ]);
 
 export function assertDerivedErasureCovered(tables: readonly string[]): void {

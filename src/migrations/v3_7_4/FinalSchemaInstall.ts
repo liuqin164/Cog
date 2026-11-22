@@ -30,7 +30,6 @@ export function installFinalSchema(db: Database): void {
   const preservedAuxiliaryObjects = detachAuxiliaryObjects(db);
   resetFreshBootstrap(db);
   installMissingFinalTables(db);
-  installMigrationAuditTables(db);
   dropRebuildableProjections(db);
   installMissingFinalTables(db);
   initializeProjectionState(db);
@@ -62,7 +61,6 @@ export function multidimensionalMemoryGraph374Issue(db: Database): string | unde
     if (!actual) return `${object.type}_missing:${object.name}`;
     if (normalizeSql(actual) !== normalizeSql(object.sql)) return `${object.type}_definition:${object.name}`;
   }
-  if (!tableExists(db, 'entity_scope_migration_quarantine')) return 'table_missing:entity_scope_migration_quarantine';
   if (tableExists(db, 'memory_events') && db.prepare(`
     SELECT 1 FROM memory_events WHERE project_scope<>COALESCE(project_id,'') LIMIT 1
   `).get()) return 'memory_event_scope';
@@ -178,20 +176,6 @@ function installMissingFinalTables(db: Database): void {
     if (tableExists(db, object.name)) continue;
     db.exec(withIfNotExists(object.sql));
   }
-}
-
-function installMigrationAuditTables(db: Database): void {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS entity_scope_migration_quarantine (
-      quarantine_id TEXT PRIMARY KEY,
-      record_type TEXT NOT NULL,
-      record_id TEXT NOT NULL,
-      record_hash TEXT NOT NULL,
-      implicated_scopes_json TEXT NOT NULL,
-      reason TEXT NOT NULL,
-      created_at INTEGER NOT NULL
-    );
-  `);
 }
 
 type MemoryBindingMigrationRow = Record<string, unknown> & {

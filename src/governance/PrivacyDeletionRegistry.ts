@@ -23,21 +23,20 @@ function explicitClassification(
 
 const BASELINE_PROJECT_OWNED = [
   'beliefs','compiler_confidence_runs','ingestion_source_cursors','memory_events',
-  'reasoning_chains','trace_events','user_session_scopes','user_sessions','runtime_states','runtime_transitions',
+  'reasoning_chains','trace_events','user_session_scopes','user_sessions',
 ] as const;
 const BASELINE_PROVENANCE_OWNED = [
   'agent_approval_queue','agent_task_records','belief_evidence','compiled_events','fact_access_log','fact_supersede_chain',
   'facts','graph_signals','ingestion_processed_records','interaction_units','meta_proposals','pending_bindings',
   'plasticity_graph_edge_audit','plasticity_graph_edges','plasticity_proposal_review_decisions','plasticity_proposals',
-  'policy_executions','reasoning_steps','sandbox_snapshots',
+  'reasoning_steps','sandbox_snapshots',
 ] as const;
 const BASELINE_SHARED_CANONICAL = [
   'entities','entity_alias_conflicts','entity_aliases','entity_attributes','entity_instances','entity_mentions',
   'entity_relations','pending_entity_resolution',
 ] as const;
 const BASELINE_OPERATIONAL_NON_PERSONAL = [
-  'background_jobs','policy_projection_state','projection_observability_rollups','projection_observability_samples',
-  'runtime_projection_state',
+  'background_jobs','projection_observability_rollups','projection_observability_samples',
 ] as const;
 export const PRIVACY_BASELINE_CLASSIFICATION = explicitClassification(V0_5_BASELINE_TABLES, {
   project_owned: BASELINE_PROJECT_OWNED,
@@ -48,52 +47,50 @@ export const PRIVACY_BASELINE_CLASSIFICATION = explicitClassification(V0_5_BASEL
 });
 
 const MIGRATION_TABLES = [
-  '_episode_integrity_markers','_memory_frame_integrity_markers','_meta','_schema_migrations','agent_brain_health_checks','archived_sessions',
+  '_memory_frame_integrity_markers','_meta','_schema_migrations','agent_brain_health_checks','archived_sessions',
   'belief_graph_conflicts','belief_graph_evidence','belief_graph_nodes','belief_graph_versions','context_activation_receipts','context_strategy_outcomes',
   'chat_sessions','chat_turns','deep_write_candidate_reviews','deep_write_candidates','deep_write_runs','deep_write_summaries','dream_ledger_state','entity_merge_candidates','entity_resolution_log','event_sequence_counters',
   'episode_boundary_decisions','episode_closure_receipts','episode_cross_refs','episode_dream_attempts','episode_dream_jobs','episode_dream_runs','episode_event_dispositions','episode_ingest_keys','episode_repair_audit',
   'memory_event_fts_state','memory_event_cjk_terms',
-  'governance_audit_log','import_source_anchors','memory_action_frame_evidence','memory_action_frames','memory_activation','memory_atlas_access','memory_atlas_activation','memory_atlas_alias_ambiguities',
+  'governance_audit_log','import_source_anchors','memory_action_frame_evidence','memory_action_frames','memory_atlas_access','memory_atlas_activation','memory_atlas_alias_ambiguities',
   'memory_atlas_alias_supports','memory_atlas_aliases','memory_atlas_documents','memory_atlas_projection_state','memory_atlas_supports','memory_bindings','memory_clusters','memory_edge_supports','memory_edges','memory_entities','memory_entity_scope_identity',
   'memory_event_embeddings','memory_episode_events','memory_episodes','memory_frame_nodes','memory_frame_relations','memory_frame_reviews','memory_frames','memory_governance_audit','memory_governance_operations',
-  'memory_governance_plans','memory_timeline_entries','memory_topics','migration_repair_receipts','pipeline_checkpoints','pipeline_nonfatal_events','pipeline_runs','pipeline_step_timings',
+  'memory_governance_plans','memory_timeline_entries','memory_topics','migration_repair_receipts','pipeline_nonfatal_events','pipeline_runs','pipeline_step_timings',
   'prospective_memories','prospective_memory_transitions','re_embedding_progress','scheduled_job_runs','scheduled_jobs','notification_records','notification_rules','workspace_settings','workspaces','meta_observations',
-  'pending_entity_resolution_quarantine','policy_execution_quarantine','policy_execution_legacy_tombstones','topic_aliases','topic_nodes','topic_operations','topic_relations',
+  'topic_aliases','topic_nodes','topic_operations','topic_relations',
   
   'user_session_runtime','web_session_tokens',
   'file_assets','file_blocks','file_chunks','file_chunk_edges','user_insights',
-  'policy_execution_read_model','policy_execution_audit_outbox','runtime_event_outbox','runtime_projection_states','runtime_projection_transitions','runtime_scope_discard_receipts','projection_event_discard_receipts',
-  'entity_scope_migration_quarantine','soul_versions',
+  'soul_versions',
 ] as const;
 const MIGRATION_PROJECT_OWNED = [
   'archived_sessions','belief_graph_conflicts','belief_graph_nodes','context_activation_receipts','context_strategy_outcomes',
   'chat_sessions','deep_write_candidate_reviews','deep_write_runs','deep_write_summaries','dream_ledger_state',
   'entity_merge_candidates','episode_boundary_decisions','episode_closure_receipts','episode_cross_refs','episode_dream_jobs',
   'episode_dream_runs','episode_event_dispositions','episode_ingest_keys','episode_repair_audit','import_source_anchors',
-  'memory_action_frame_evidence','memory_action_frames','memory_activation','memory_atlas_access','memory_atlas_activation',
+  'memory_action_frame_evidence','memory_action_frames','memory_atlas_access','memory_atlas_activation',
   'memory_atlas_alias_ambiguities','memory_atlas_alias_supports','memory_atlas_aliases','memory_atlas_documents',
   'memory_atlas_projection_state','memory_atlas_supports','memory_bindings','memory_clusters','memory_edge_supports','memory_edges','memory_entities','memory_entity_scope_identity',
   'memory_event_embeddings','memory_episodes','memory_frame_reviews','memory_frames','memory_governance_audit','memory_governance_operations',
-  'memory_governance_plans','memory_timeline_entries','memory_topics','pipeline_checkpoints',
+  'memory_governance_plans','memory_timeline_entries','memory_topics',
   'pipeline_nonfatal_events','prospective_memories','re_embedding_progress','topic_aliases','topic_nodes','topic_operations','topic_relations',
   
   
   'user_session_runtime',
   'web_session_tokens',
   'file_assets','user_insights',
-  'policy_execution_read_model','policy_execution_audit_outbox','runtime_event_outbox','runtime_projection_states','runtime_projection_transitions',
 ] as const;
 const MIGRATION_PROVENANCE_OWNED = [
   'belief_graph_evidence','belief_graph_versions','chat_turns','deep_write_candidates','entity_resolution_log',
   'episode_dream_attempts','memory_episode_events','memory_frame_nodes','memory_frame_relations',
   'prospective_memory_transitions','scheduled_job_runs','scheduled_jobs','notification_records','notification_rules',
-  'workspace_settings','workspaces','meta_observations','pending_entity_resolution_quarantine',
-  'file_blocks','file_chunks','file_chunk_edges','entity_scope_migration_quarantine',
+  'workspace_settings','workspaces','meta_observations',
+  'file_blocks','file_chunks','file_chunk_edges',
   'memory_event_cjk_terms',
 ] as const;
 const MIGRATION_OPERATIONAL_NON_PERSONAL = [
-  '_episode_integrity_markers','_memory_frame_integrity_markers','_meta','agent_brain_health_checks','pipeline_runs',
-  'pipeline_step_timings','policy_execution_quarantine','policy_execution_legacy_tombstones','event_sequence_counters','runtime_scope_discard_receipts','projection_event_discard_receipts',
+  '_memory_frame_integrity_markers','_meta','agent_brain_health_checks','pipeline_runs',
+  'pipeline_step_timings','event_sequence_counters',
   'memory_event_fts_state',
 ] as const;
 // `soul_versions` is the companion's own persona history, not user-derived content: a project
@@ -213,25 +210,6 @@ export function deleteRegisteredProjectContent(context: PrivacyDeletionContext):
         ...(context.hasColumn('ingestion_processed_records', 'project_id') ? [scope] : []),
       ]);
   }
-  if (persistentTables.has('pending_entity_resolution_quarantine')) {
-    audit.pending_entity_resolution_quarantine = runDelete(`
-      DELETE FROM pending_entity_resolution_quarantine
-      WHERE (scope_resolved=1 AND project_scope=?)
-        OR EXISTS (SELECT 1 FROM json_each(COALESCE(implicated_scopes_json,'[]')) WHERE value=?)
-        OR (json_valid(record_json) AND json_extract(record_json,'$.context_neuron_id') IN (SELECT id FROM _forget_event_ids))`,
-      [scope, scope]);
-  }
-  if (persistentTables.has('entity_scope_migration_quarantine')) {
-    remove('entity_scope_migration_quarantine', `DELETE FROM entity_scope_migration_quarantine
-      WHERE EXISTS (
-        SELECT 1 FROM json_each(COALESCE(implicated_scopes_json,'[]'))
-        WHERE value=?
-      )`);
-  }
-  if (persistentTables.has('policy_executions') && context.hasColumn('policy_executions', 'project_scope')) {
-    remove('policy_executions', `DELETE FROM policy_executions WHERE project_scope=?`);
-  }
-
   remove('deep_write_candidate_reviews', `DELETE FROM deep_write_candidate_reviews
     WHERE COALESCE(project_id, '') = ? OR candidate_id IN (
       SELECT c.candidate_id FROM deep_write_candidates c
@@ -256,13 +234,6 @@ export function deleteRegisteredProjectContent(context: PrivacyDeletionContext):
     (SELECT episode_id FROM memory_episodes WHERE COALESCE(project_id, '') = ?)`);
   remove('episode_dream_jobs', `DELETE FROM episode_dream_jobs WHERE COALESCE(project_id, '') = ?`);
   remove('dream_ledger_state', `DELETE FROM dream_ledger_state WHERE project_key = ?`, [dreamLedgerProjectKey(scope)]);
-  remove('policy_execution_read_model', `DELETE FROM policy_execution_read_model WHERE project_scope = ?`);
-  remove('policy_execution_audit_outbox', `DELETE FROM policy_execution_audit_outbox WHERE project_scope = ?`);
-  remove('runtime_projection_transitions', `DELETE FROM runtime_projection_transitions WHERE project_scope = ?`);
-  remove('runtime_projection_states', `DELETE FROM runtime_projection_states WHERE project_scope = ?`);
-  remove('runtime_event_outbox', `DELETE FROM runtime_event_outbox WHERE project_scope = ?`);
-  remove('runtime_transitions', `DELETE FROM runtime_transitions WHERE project_scope = ?`);
-  remove('runtime_states', `DELETE FROM runtime_states WHERE project_scope = ?`);
   audit.reasoning_steps_by_event = runDelete(`DELETE FROM reasoning_steps WHERE neuron_id IN (SELECT id FROM _forget_event_ids)`);
   return audit;
 }

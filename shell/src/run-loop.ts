@@ -132,6 +132,7 @@ export class RunLoop {
     dispatchTrigger: Trigger = trigger,
     grant?: { tokens: number; turns: number },
     channel?: string,
+    sourceRefs?: Array<{ eventId?: string; sourceId?: string; contentHash?: string }>,
   ): Promise<RunSummary> {
     if (this.stopping) return Promise.reject(new Error('run_loop_stopping'));
     const run = this.runOnce(text, trigger, reason, dispatchTrigger, grant, channel);
@@ -183,6 +184,7 @@ export class RunLoop {
           sessionId: this.shell.config.sessionId,
           userText: text,
           origin,
+          ...(sourceRefs === undefined ? {} : { sourceRefs }),
         });
       } finally {
         this.shell.hideAssignmentContext = false;

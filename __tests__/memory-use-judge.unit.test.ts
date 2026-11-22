@@ -1,8 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import Database from 'bun:sqlite';
 
-import { ContextOutcomeStore, MemoryUseJudge } from '../src/eval/strategy/index.js';
-import { StrategyCortex } from '../src/strategy/index.js';
+import { ContextOutcomeStore, MemoryUseJudge, StrategyCortex } from '../src/strategy/index.js';
 
 describe('memory use judge', () => {
   test('flags source, safety, budget, and strategy-adherence violations deterministically', () => {

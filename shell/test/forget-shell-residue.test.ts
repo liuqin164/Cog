@@ -96,7 +96,7 @@ describe('/forget covers the shell checkpoint and trace', () => {
     const trace = join(data, 'shell-events.jsonl');
     expect(scan(join(data, 'checkpoint.json'), marker)).toBe(false);
     expect(scan(join(data, 'checkpoint.json.prev'), marker)).toBe(false);
-    expect(scan(trace, marker)).toBe(true);
+    expect(scan(trace, marker)).toBe(false);
     appendFileSync(join(data, 'shell-events.jsonl.1'), `${JSON.stringify({ at: Date.now(), kind: 'run_prompt', runId: 'old', chars: marker.length, text: marker })}\n`);
 
     const second = makeShell(dir, new ScriptedProvider([{ text: '好。', toolCalls: [] }]));
@@ -112,6 +112,67 @@ describe('/forget covers the shell checkpoint and trace', () => {
       }
     } finally {
       await second.stop();
+    }
+  }, 30_000);
+
+  test('a prompt and a command proposed after the window leave no window text in either trace generation', async () => {
+    const dir = makeTempDir('forget-shell-trace-');
+    const data = join(dir, 'data');
+    const marker = 'zz-late-recall-61f2';
+    const shell = makeShell(dir, new ScriptedProvider([{ text: '记下了。', toolCalls: [] }]));
+    await shell.start();
+    try {
+      await shell.submit(`${marker} 我的旧住址是青叶町十二号。`);
+      const db = shell.kernel.factStore.getDatabase();
+      const row = db.prepare(`
+        SELECT event_id, occurred_at FROM memory_events
+        WHERE role='user' AND payload_json LIKE ? ORDER BY occurred_at DESC LIMIT 1
+      `).get(`%${marker}%`) as { event_id: string; occurred_at: number };
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      shell.contextLanes.recordPrompt({
+        runId: 'run-late-recall',
+        sessionId: shell.config.sessionId,
+        text: `窗口原文：${marker} 我的旧住址是青叶町十二号。`,
+        sourceRefs: [{ eventId: row.event_id }],
+      });
+      shell.trace.append('command_proposed', {
+        id: 'proposal-late',
+        command: 'bash',
+        args: `echo ${marker}`,
+        reason: `${marker} 的旧住址`,
+      });
+      expect(scan(join(data, 'shell-events.jsonl'), marker)).toBe(true);
+      expect(scan(join(data, 'shell-events.jsonl.1'), marker)).toBe(false);
+      await shell.runCommand('forget', `${new Date(row.occurred_at - 1).toISOString()} ${new Date(row.occurred_at + 1).toISOString()}`);
+      await shell.runCommand('forget', 'confirm');
+      for (const file of ['shell-events.jsonl', 'shell-events.jsonl.1']) {
+        expect(scan(join(data, file), marker), file).toBe(false);
+      }
+    } finally {
+      await shell.stop();
+    }
+  }, 30_000);
+
+  test('a runtime text written after the window but sourced from it is erased with its reference', async () => {
+    const dir = makeTempDir('forget-shell-runtime-ref-');
+    const marker = 'zz-runtime-ref-2b7d';
+    const shell = makeShell(dir, new ScriptedProvider([{ text: '记下了。', toolCalls: [] }]));
+    await shell.start();
+    try {
+      await shell.submit(`${marker} 先记住这句话。`);
+      const db = shell.kernel.factStore.getDatabase();
+      const row = db.prepare(`
+        SELECT event_id, occurred_at FROM memory_events
+        WHERE role='user' AND payload_json LIKE ? ORDER BY occurred_at DESC LIMIT 1
+      `).get(`%${marker}%`) as { event_id: string; occurred_at: number };
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const textId = shell.stateLedger.record('task.stub', `任务副本：${marker}`, [{ eventId: row.event_id }]);
+      expect(shell.backend.readRuntimeText(textId)?.text).toContain(marker);
+      await shell.runCommand('forget', `${new Date(row.occurred_at - 1).toISOString()} ${new Date(row.occurred_at + 1).toISOString()}`);
+      await shell.runCommand('forget', 'confirm');
+      expect(shell.backend.readRuntimeText(textId)).toBeUndefined();
+    } finally {
+      await shell.stop();
     }
   }, 30_000);
 

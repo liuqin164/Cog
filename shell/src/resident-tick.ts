@@ -357,7 +357,15 @@ export class ResidentTick {
     void this.shell.host.bus.emit('companion_emergence', { id: candidate.id, reason: candidate.reason, text: candidate.text, strength, channelId });
     let ok = false;
     try {
-      const summary = await this.shell.runLoop.executeRun(candidate.text, 'emergence_due', `emergence:${candidate.id}`);
+      const summary = await this.shell.runLoop.executeRun(
+        candidate.text,
+        'emergence_due',
+        `emergence:${candidate.id}`,
+        'emergence_due',
+        undefined,
+        undefined,
+        candidate.sourceRefs,
+      );
       ok = summary.stopReason === 'run_complete';
     } finally {
       this.shell.trace.append('emergence_run', { projectId: this.shell.config.projectId, id: candidate.id, ok });
