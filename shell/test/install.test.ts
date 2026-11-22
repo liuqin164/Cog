@@ -340,7 +340,7 @@ describe('the six-step install', () => {
     const harness = makeHarness({ probeOk: true });
     expect(await harness.installer.run()).toBe(0);
     const pluginsPath = join(harness.dataDir, 'plugins.json');
-    expect(JSON.parse(readFileSync(pluginsPath, 'utf8'))).toEqual(['builtin:web-channel']);
+    expect(JSON.parse(readFileSync(pluginsPath, 'utf8'))).toEqual(['builtin:web-channel', 'builtin:telegram-channel']);
     expect(statSync(pluginsPath).mode & 0o777).toBe(0o600);
 
     // What `/plugins add` would have written. A re-run that goes through the place step again (a lost

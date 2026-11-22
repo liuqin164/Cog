@@ -28,6 +28,7 @@ export const RESERVED_PLUGIN_NAMES: readonly string[] = [
   'terminal-channel',
   'web',
   'web-channel',
+  'telegram-channel',
   'plugin-self-install',
 ];
 

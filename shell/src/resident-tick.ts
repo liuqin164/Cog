@@ -100,7 +100,7 @@ export class ResidentTick {
           reason: entry!.reason,
           ...(entry!.source === undefined ? {} : { source: entry!.source as SurfacingSource }),
           ...(entry!.sourceRefs === undefined ? {} : { sourceRefs: entry!.sourceRefs }),
-        }, at);
+        }, at, 'incidental');
         this.shell.trace.append('emergence_quiet_delivered', { projectId: this.shell.config.projectId, id: entry!.id, at });
         return;
       }
@@ -152,7 +152,7 @@ export class ResidentTick {
           const delivery = routed.get(item.id);
           if (delivery?.decision === 'deliver') {
             this.consumeEmergence(item, at);
-            await this.speakEmergence(item, at);
+            await this.speakEmergence(item, at, delivery.strength === 'incidental' ? 'incidental' : 'proactive');
             break;
           }
           if (delivery?.decision === 'accumulate') {
@@ -318,7 +318,7 @@ export class ResidentTick {
     };
   }
 
-  private async speakEmergence(candidate: { id: string; text: string; reason: string; source?: SurfacingSource; sourceRefs?: Array<{ eventId?: string; sourceId?: string; contentHash?: string }> }, at: number): Promise<void> {
+  private async speakEmergence(candidate: { id: string; text: string; reason: string; source?: SurfacingSource; sourceRefs?: Array<{ eventId?: string; sourceId?: string; contentHash?: string }> }, at: number, strength: 'proactive' | 'incidental' = 'proactive'): Promise<void> {
     try {
       this.shell.backend.deliverSurfacing({
         projectId: this.shell.config.projectId,
@@ -330,7 +330,7 @@ export class ResidentTick {
     } catch (error) {
       this.shell.trace.append('surfacing_delivery_failed', { candidateId: candidate.id, message: error instanceof Error ? error.message : String(error) });
     }
-    void this.shell.host.bus.emit('companion_emergence', { id: candidate.id, reason: candidate.reason, text: candidate.text });
+    void this.shell.host.bus.emit('companion_emergence', { id: candidate.id, reason: candidate.reason, text: candidate.text, strength });
     let ok = false;
     try {
       const summary = await this.shell.runLoop.executeRun(candidate.text, 'emergence_due', `emergence:${candidate.id}`);

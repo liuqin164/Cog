@@ -14,7 +14,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-export const OFFICIAL_PLUGIN_SPECS = ['builtin:web-channel'] as const;
+export const OFFICIAL_PLUGIN_SPECS = ['builtin:web-channel', 'builtin:telegram-channel'] as const;
 
 export function isOfficialPluginSpec(spec: string): boolean {
   return (OFFICIAL_PLUGIN_SPECS as readonly string[]).includes(spec);

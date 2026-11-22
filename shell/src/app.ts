@@ -39,6 +39,7 @@ import { dreamPlugin } from './plugins/dream.ts';
 import { emergencePlugin } from './plugins/emergence.ts';
 import { terminalPlugin, TerminalChannel, type ShellControl } from './channels/terminal.ts';
 import { webChannelPlugin } from './channels/web.ts';
+import { telegramChannelPlugin } from './channels/telegram.ts';
 import { isOfficialPluginSpec } from './plugins/registry.ts';
 import { AgentRuntime, type ModelProvider, type RunSummary } from './state/agent-loop.ts';
 import type { ToolOutputAccount } from './state/context-budget.ts';
@@ -810,6 +811,13 @@ export class CompanionShell implements ShellControl, AttachShell {
           dataDir: this.config.dataDir,
         }));
         this.pluginResults.push({ spec, status: 'loaded', name: 'web-channel', tools: [], commands: [] });
+      }
+      if (spec === 'builtin:telegram-channel') {
+        this.host.register(telegramChannelPlugin({
+          contract: this.channelContract,
+          dataDir: this.config.dataDir,
+        }));
+        this.pluginResults.push({ spec, status: 'loaded', name: 'telegram-channel', tools: [], commands: [] });
       }
     }
     if (this.config.terminalEnabled) {

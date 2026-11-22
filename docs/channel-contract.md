@@ -269,3 +269,15 @@ and the registration values. No kernel or shell change is needed.
 stream over SSE from the shell's bus; history is read from the ledger's current-day thread, not kept
 in the plugin. It reuses the observatory's write token and loopback/Host checks, and the credential
 card opens the observatory's `#credentials` form instead of collecting values itself.
+
+## Fourth implementation: the Telegram channel (#416)
+
+`shell/src/channels/telegram.ts` is an official plugin (`builtin:telegram-channel`). Its
+`<dataDir>/telegram-channel.json` names the credential reference, the owner's Telegram id and an
+optional chat id; the bot token is read through the credential service at the call site, never
+collected or stored by the plugin. `getUpdates` long polling feeds every text through `ingest`
+before `shell.submit`, and the assistant reply is sent back to the same chat. Plugin proposals carry
+inline confirm/discard buttons; only a callback from the configured owner id confirms, while any
+other callback is refused and traced. F18-delivered emergence is sent through this channel and the
+quiet window still silences it. Removing the plugin aborts polling and stops sends without touching
+the ledger.
