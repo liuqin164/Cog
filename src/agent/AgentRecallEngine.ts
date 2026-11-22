@@ -1008,7 +1008,7 @@ export class AgentRecallEngine {
       displayTitle: card.displayTitle,
       matchedFacets: card.matchedFacets,
       matchedPaths: card.matchedPaths,
-      tags: ['facet_graph', card.eventKind, card.issueType].filter((tag): tag is string => Boolean(tag)),
+      tags: ['facet_graph', card.eventKind, card.issueType, query.agentId ? `agent:${query.agentId}` : ''].filter((tag): tag is string => Boolean(tag)),
       source: 'memory_atlas',
       sourceType: card.origin === 'legacy_facet' ? 'raw_ledger' : 'compiled_memory',
       sourceAnchor: allowRaw ? (anchorEvent ? this.toAgentSourceAnchorFromContextEvent(anchorEvent) : eventId ? { eventId } : undefined) : undefined,
@@ -1035,7 +1035,7 @@ export class AgentRecallEngine {
       projectId: query.projectId,
       canonicalId: node.id,
       displayTitle: node.label,
-      tags: ['atlas_node', node.nodeType],
+      tags: ['atlas_node', node.nodeType, ...(query.agentId ? [`agent:${query.agentId}`] : [])],
       source: 'memory_atlas',
       sourceType: 'compiled_memory',
       sourceAnchor: allowRaw ? this.toAgentSourceAnchor(event) : undefined,
@@ -1374,7 +1374,7 @@ export class AgentRecallEngine {
     const superseded = filterSuperseded(merged, (item) => ({
       id: item.id,
       content: item.text,
-      createdAt: item.sourceAnchor?.turnSeq ?? item.sourceAnchor?.eventOrdinal ?? 0,
+      createdAt: item.sourceContext?.event?.occurredAt ?? item.sourceAnchor?.turnSeq ?? item.sourceAnchor?.eventOrdinal ?? 0,
       tags: item.tags,
       projectId: item.projectId,
     }));

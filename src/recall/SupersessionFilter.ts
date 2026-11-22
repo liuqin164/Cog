@@ -41,6 +41,8 @@ const SUBJECT_TERMINATORS = new Set([
   'runs', 'ran', 'happens', 'happened', 'becomes', 'became',
 ]);
 
+const CJK_VALUE_MARKER = /(?:定在|改到|改在|改成|调整到|调整为|挪到|推迟到|提前到|换到|换成)/u;
+
 /** Filler inside the subject phrase: it does not distinguish one subject from another. */
 const SUBJECT_FILLER = new Set([
   'the', 'a', 'an', 'for', 'of', 'to', 'and', 'or', 'our', 'its', 'their', 'his', 'her',
@@ -57,7 +59,7 @@ export function normalizeContentForTopicKey(content: string): string {
 /** Does this read as a correction of an earlier statement? */
 export function looksLikeCorrection(content: string): boolean {
   return normalizeContentForTopicKey(content) !== content.trim()
-    || /now\s+(?:is|scheduled|on)|现在[:：]\s*(?:是|安排在|为)|supersede|取代|替换/i.test(content);
+    || /now\s+(?:is|scheduled|on)|现在[:：]\s*(?:是|安排在|为)|supersede|取代|替换|改到|改在|改成|调整到|调整为|挪到|推迟到|提前到|换到|换成/iu.test(content);
 }
 
 /**
@@ -74,7 +76,15 @@ export function extractTopicKey(view: SupersessionView): string | undefined {
     if (tag.startsWith('topic:')) return tag.slice(6);
     if (tag.startsWith('canonicalKey:')) return tag.slice(13);
   }
-  const words = normalizeContentForTopicKey(view.content).toLowerCase().match(/[a-z0-9\u4e00-\u9fff]{2,}/g) ?? [];
+  const normalized = normalizeContentForTopicKey(view.content);
+  const marker = CJK_VALUE_MARKER.exec(normalized);
+  if (marker && marker.index > 0) {
+    const subject = normalized.slice(0, marker.index)
+      .replace(/^(?:(?:用户|助手|告知|提到|表示|确认|回复)[，,：:\s]*)+/u, '')
+      .replace(/[^\u3400-\u9fff]/gu, '');
+    if (subject.length >= 2) return subject;
+  }
+  const words = normalized.toLowerCase().match(/[a-z0-9\u4e00-\u9fff]{2,}/g) ?? [];
   const subject: string[] = [];
   for (const word of words) {
     if (SUBJECT_TERMINATORS.has(word)) break;
