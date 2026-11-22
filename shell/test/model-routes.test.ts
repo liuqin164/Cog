@@ -40,6 +40,14 @@ describe('the named route store', () => {
     expect(store.list()).toEqual([{ ...STORED, model: 'deepseek-reasoner' }]);
   });
 
+  test('a foreign 0644 temp file cannot leave routes.json at 0644', () => {
+    const dir = makeTempDir();
+    const path = join(dir, 'routes.json');
+    writeFileSync(`${path}.${process.pid}.tmp`, 'occupied', { mode: 0o644 });
+    storeAt(dir).add(STORED);
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+  });
+
   test('the built-in name is reserved, and a stored mg route cannot shadow it', async () => {
     const dir = makeTempDir();
     const store = storeAt(dir);
