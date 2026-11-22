@@ -356,3 +356,34 @@ describe('the profile lane ranks by its own rule, not the compiled lane', () => 
     expect(fact.score).toBeGreaterThan(0);
   });
 });
+
+describe('a corrected ledger stops writing receipts on empty ticks', () => {
+  test('纠正一次后 1000 个新事件 tick 不灌水，再纠正一次立即生效', async () => {
+    const projectId = 'profile-receipt-aging';
+    await kernel.ingest({ content: '我喜欢喝乌龙茶。', projectId });
+    kernel.profile.compile({ projectId });
+    const before = kernel.profile.entries({ projectId, ledger: 'preferences' })[0]!;
+    const correction = kernel.recordRawEvent({ threadId: 't-receipt', projectId, role: 'user', content: '其实我改喝红茶了。' });
+    kernel.profile.correct({ projectId, ledger: 'preferences', key: before.key, value: '喝红茶', correctionEventId: correction.eventId });
+
+    const rows = kernel.profile.audit({ projectId });
+    const receipts = rows.filter((row) => row.eventType === 'PROFILE_LEDGER_RECOMPILED').length;
+    expect(receipts).toBe(2);
+
+    const base = Date.now();
+    for (let index = 0; index < 1000; index += 1) {
+      const at = base + index;
+      kernel.recordRawEvent({ threadId: 't-receipt', projectId, role: 'user', content: `tick ${index}`, occurredAt: at });
+      kernel.profile.compile({ projectId, now: at });
+    }
+    const afterTicks = kernel.profile.audit({ projectId });
+    expect(afterTicks).toHaveLength(rows.length);
+    expect(afterTicks.filter((row) => row.eventType === 'PROFILE_LEDGER_RECOMPILED')).toHaveLength(receipts);
+    expect(kernel.profile.entries({ projectId, ledger: 'preferences' }).map((entry) => entry.value)).toEqual(['喝红茶']);
+
+    const again = kernel.recordRawEvent({ threadId: 't-receipt', projectId, role: 'user', content: '再改成普洱。' });
+    kernel.profile.correct({ projectId, ledger: 'preferences', key: before.key, value: '喝普洱', correctionEventId: again.eventId });
+    expect(kernel.profile.entries({ projectId, ledger: 'preferences' }).map((entry) => entry.value)).toEqual(['喝普洱']);
+    expect(kernel.profile.audit({ projectId }).filter((row) => row.eventType === 'PROFILE_LEDGER_RECOMPILED')).toHaveLength(receipts + 1);
+  });
+});

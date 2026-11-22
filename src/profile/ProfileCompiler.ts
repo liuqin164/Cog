@@ -245,9 +245,6 @@ interface EntryGroup {
 
 const MAX_TIME = 8_640_000_000_000_000;
 const LEDGER_PAGE_SIZE = 500;
-// ponytail: a project with more than 4000 profile rows reads the newest 4000; page the rest or add
-// an event_type index when a companion has years of them.
-const MAX_PROFILE_LEDGER_ROWS = 4000;
 
 function profileError(code: ProfileErrorCode, detail?: string): Error {
   return new Error(detail ? `${code}: ${detail}` : code);
@@ -310,6 +307,11 @@ export class ProfileCompiler {
     const projectId = requiredText(input.projectId, 'project_id_required');
     const now = input.now ?? Date.now();
     const ledgers: ProfileLedger[] = input.ledger === undefined ? [...PROFILE_LEDGERS] : [this.requireLedger(input.ledger)];
+    const result = this.compileLedgers(projectId, ledgers, now);
+    return { projectId, ledgers, written: result.written, entries: result.entries, compiledAt: now };
+  }
+
+  private compileLedgers(projectId: string, ledgers: ProfileLedger[], now: number): { written: number; entries: number } {
     const candidates = this.derive(projectId, ledgers);
     const index = this.entryGroups(projectId);
     let written = 0;
@@ -322,12 +324,10 @@ export class ProfileCompiler {
         }
         ledgerWritten += this.retireAbsent(index, projectId, ledger, new Set(forLedger.map((candidate) => candidate.key)), now);
         written += ledgerWritten;
-        const corrected = [...index.values()].some((group) => group.versions.at(-1)?.ledger === ledger
-          && group.lastEventType === 'PROFILE_ENTRY_CORRECTED');
-        if (ledgerWritten > 0 || corrected) this.appendReceipt(projectId, ledger, now, forLedger.length, ledgerWritten);
+        if (ledgerWritten > 0) this.appendReceipt(projectId, ledger, now, forLedger.length, ledgerWritten);
       }
     })();
-    return { projectId, ledgers, written, entries: candidates.length, compiledAt: now };
+    return { written, entries: candidates.length };
   }
 
   /** Current value per key, one per (ledger, key). Older versions are history. */
@@ -424,8 +424,10 @@ export class ProfileCompiler {
     // the Atlas and the default recall lanes stop presenting the replaced value as current.
     this.propagateCorrection(projectId, current, value, event, now);
     // The whole ledger is recompiled, not only the corrected key: the ticket's "该册重编译".
-    this.compile({ projectId, ledger, now });
-    return this.entries({ projectId, ledger }).find((entry) => entry.entryId === entryId)!;
+    const result = this.compileLedgers(projectId, [ledger], now);
+    const entries = this.entries({ projectId, ledger });
+    this.appendReceipt(projectId, ledger, now, entries.length, result.written);
+    return entries.find((entry) => entry.entryId === entryId)!;
   }
 
   /** Every profile row for the project, oldest first. The audit is the ledger itself. */
@@ -820,13 +822,13 @@ export class ProfileCompiler {
   private loadProjectRows(projectId: string): Array<{ event: MemoryEvent; payload: Record<string, unknown> }> {
     const rows: Array<{ event: MemoryEvent; payload: Record<string, unknown> }> = [];
     const filters = { projectId: [projectId], eventType: [...PROFILE_EVENT_TYPES], order: 'asc' as const };
-    for (let page = 1; rows.length < MAX_PROFILE_LEDGER_ROWS; page += 1) {
+    for (let page = 1; ; page += 1) {
       const result = this.events.queryEvents(page, LEDGER_PAGE_SIZE, filters);
       if (result.records.length === 0) break;
       for (const event of result.records) rows.push({ event, payload: (event.payload ?? {}) as Record<string, unknown> });
       if (rows.length >= result.total) break;
     }
-    return rows.slice(0, MAX_PROFILE_LEDGER_ROWS);
+    return rows;
   }
 }
 
