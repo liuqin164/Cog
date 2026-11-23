@@ -238,6 +238,11 @@ numeric token the cut would split, so truncation cannot fabricate a shorter numb
 surrogate. Otherwise the deterministic card is used. The `锚点` line is built from the ledger text
 by construction. Model calls use the existing `memory` role and add no configuration surface.
 
+**Corrections.** A card whose `sourceRefs` include an event named by a later `corrects_previous`
+turn or by a `PROFILE_ENTRY_CORRECTED` row gains a final `后有纠正：mem:<id>` line when it is read.
+The stored card is unchanged; the note is rendered, so the old value is never presented as current
+without its correction beside it.
+
 **Entry, expansion, drill-down.** A card enters the digest lane as `kind: "deep"` and renders its
 first `anchorEvent`. The #253 auto-expansion matches a card by its keys or its anchor line; when the
 request names one, the card is also placed in `working_set` with `autoExpanded: true`. Every

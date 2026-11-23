@@ -1,14 +1,3 @@
-/**
- * The session-context face: the three primitives behind one kernel service.
- *
- * `digest` compiles the mechanical session document, `recall` pages the session ledger verbatim,
- * and `assemble` projects both (plus the caller's pinned/profile/working-set/recall material) onto
- * the target bandwidth. The assembly writes a `session.context.assemble` trace row only when a lane
- * was downgraded, so "why is the context this long" is answerable after the fact.
- *
- * The written contract is `docs/session-context.md`, held by
- * `__tests__/session-context.contract.test.ts`.
- */
 import type Database from 'bun:sqlite';
 
 import { TraceStore } from '../observability/TraceStore.js';
@@ -34,7 +23,6 @@ import {
 
 export const SESSION_CONTEXT_CONTRACT_VERSION = 1;
 
-/** The face's methods, frozen by `docs/session-context.md`. */
 export const SESSION_CONTEXT_API_METHODS = ['digest', 'recall', 'assemble'] as const;
 
 export interface SessionDigestInput {
@@ -47,10 +35,6 @@ export interface SessionDigestInput {
 }
 
 export interface SessionContextServiceOptions {
-  /**
-   * The open loops that must survive a restart: F2 wake intentions and F6 candidates. The kernel
-   * wires this to the services that own them; the session face does not import either one.
-   */
   openLoops?: (input: { projectId: string; agentId: string; sessionId: string; now: number }) => SessionContextItem[];
   deepGenerate?: () => TextGenerateFn | undefined;
 }
@@ -78,7 +62,6 @@ export class SessionContextService {
     });
   }
 
-  /** The session ledger, paged verbatim. */
   recall(input: SessionRecallInput): SessionRecallPage {
     return recallSession(this.db, input);
   }
@@ -104,15 +87,6 @@ export class SessionContextService {
     return assembly;
   }
 
-  /**
-   * The kernel's own "never fold" markers (#255), read from the books and the episode index:
-   * a promise said out loud (`COMMITMENT_OPENED`), a plan (`INTENTION_OPENED`), a profile
-   * correction, and a turn the episode classifier called a correction. The assembler adds the
-   * permanent-importance half (a prohibition) from the same kernel classifier ingestion uses.
-   *
-   * A failing read is not a turn failure: the permanent half still protects the obvious
-   * constraints, and the caller's own `protectedIds` are still honoured.
-   */
   private protectedEventIds(projectId: string, sessionId: string): string[] {
     const ids = new Set<string>();
     try {
@@ -152,7 +126,6 @@ export class SessionContextService {
     try {
       return this.options.openLoops({ ...input, now: Date.now() });
     } catch {
-      // Open loops are a convenience lane; a failing source must not fail the turn's assembly.
       return [];
     }
   }
@@ -176,9 +149,7 @@ export class SessionContextService {
           autoExpanded: assembly.autoExpanded,
         },
       });
-    } catch {
-      // The returned `decisionTrace` is authoritative; the stored row is the audit copy.
-    }
+    } catch {}
   }
 }
 

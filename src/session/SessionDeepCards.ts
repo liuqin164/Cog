@@ -137,6 +137,7 @@ export function readDeepCardEntries(
   limit = SESSION_DEEP_MAX_CARDS_IN_LANE,
 ): SessionDigestEntry[] {
   if (!tableExists(db)) return [];
+  const corrections = cardCorrections(db, scope.projectId);
   const rows = db.query(`
     SELECT * FROM (
       SELECT entry_id, session_id, occurred_at, text, source_refs_json, anchor
@@ -147,16 +148,46 @@ export function readDeepCardEntries(
     )
     ORDER BY occurred_at ASC, entry_id ASC
   `).all(scope.projectId, scope.agentId, limit) as CardRow[];
-  return rows.map((row) => ({
-    entryId: row.entry_id,
-    kind: 'deep' as const,
-    sessionId: row.session_id,
-    occurredAt: row.occurred_at,
-    speaker: 'agent' as const,
-    text: row.text,
-    sourceRefs: parseRefs(row.source_refs_json),
-    anchor: row.anchor === 1,
-  }));
+  return rows.map((row) => {
+    const sourceRefs = parseRefs(row.source_refs_json);
+    const noted = [...new Set(sourceRefs.map((ref) => corrections.get(ref)).filter(Boolean) as string[])].sort();
+    return {
+      entryId: row.entry_id,
+      kind: 'deep' as const,
+      sessionId: row.session_id,
+      occurredAt: row.occurred_at,
+      speaker: 'agent' as const,
+      text: noted.length === 0 ? row.text : `${row.text}\n后有纠正：${noted.map((id) => `mem:${id}`).join('、')}`,
+      sourceRefs,
+      anchor: row.anchor === 1,
+    };
+  });
+}
+
+function cardCorrections(db: Database, projectId: string): Map<string, string> {
+  const corrections = new Map<string, string>();
+  try {
+    const rows = db.query(`
+      SELECT json_extract(prev.value, '$.eventId') AS corrected_id,
+        COALESCE(json_extract(e.payload_json, '$.correctionEventId'), e.event_id) AS correction_id
+      FROM memory_events e,
+        json_each(COALESCE(json_extract(e.payload_json, '$.previousSourceRefs'), json_extract(e.payload_json, '$.sourceRefs'))) prev
+      WHERE COALESCE(e.project_id, '') = ? AND e.event_type = 'PROFILE_ENTRY_CORRECTED'
+      UNION
+      SELECT prior.event_id, cur.event_id
+      FROM memory_episode_events cur
+      JOIN memory_episode_events prior ON prior.episode_id = cur.episode_id AND prior.position < cur.position
+      JOIN memory_events correction ON correction.event_id = cur.event_id
+      JOIN memory_events corrected ON corrected.event_id = prior.event_id
+      WHERE cur.relation = 'corrects_previous'
+        AND COALESCE(correction.project_id, '') = ?
+        AND corrected.role = 'user'
+    `).all(projectId, projectId) as Array<{ corrected_id: string | null; correction_id: string | null }>;
+    for (const row of rows) {
+      if (row.corrected_id && row.correction_id && row.corrected_id !== row.correction_id) corrections.set(row.corrected_id, row.correction_id);
+    }
+  } catch {}
+  return corrections;
 }
 
 export function mergeDeepCardEntries(

@@ -113,6 +113,7 @@ describe('the DREAMING boundary compiles one card per closed undeclared segment 
       expect(card.text).toContain('做了什么：');
       expect(card.text).toContain('遗留问题：');
       expect(card.text).toContain('指针：');
+      expect(card.text).not.toContain('后有纠正');
       const claimLines = card.text.split('\n').filter((line) => !line.startsWith('指针：')).join('\n');
       const source = decision + '\n' + Array.from({ length: 24 }, (_, index) => `第 ${index} 轮：继续整理文档，待办第 ${index} 项。`).join('\n');
       for (const anchor of digestAnchors(claimLines)) expect(source.includes(anchor)).toBe(true);
@@ -313,6 +314,110 @@ describe('the model compiler keeps the anchor discipline (#474)', () => {
     const card = buildDeepCardEntry({ projectId: 'p', agentId: 'a', sessionId: 's', entries, now: T0 + 10_000 }, '做了什么。', '无');
     expect(card.kind).toBe('deep');
     expect(card.sourceRefs).toEqual(entries.map((entry) => entry.sourceRefs[0]!));
+  });
+});
+
+describe('a corrected episode card names the later correction (#499)', () => {
+  test('a corrects_previous turn annotates the card it covers', async () => {
+    const dir = makeTempDir('cogmem-deep-corrected-');
+    const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.sqlite'), projectTimeZone: 'UTC' });
+    const projectId = 'corrected-project';
+    const agentId = 'corrected-agent';
+    const sessionId = 'corrected-session';
+    const backend = new KernelAgentMemoryBackend(kernel);
+    let correctionId = '';
+    try {
+      for (let index = 0; index < 24; index += 1) {
+        const text = index === 0
+          ? '决定：由「小明」负责文档迁移，预算 12,500 元。'
+          : index === 10 ? '不对，预算改成 9,000 元，负责人还是「小明」。'
+            : `第 ${index} 轮：继续整理文档，待办第 ${index} 项。`;
+        const captured = await backend.captureConversationTurn({
+          projectId,
+          agentId,
+          sessionId,
+          channel: 'terminal',
+          speaker: index % 2 === 0 ? 'owner' : 'agent',
+          text,
+          occurredAt: T0 + index * 1_000,
+        });
+        if (index === 10) correctionId = captured.eventId;
+      }
+      await kernel.runDreamTick({ projectId, now: T0 + 24_000 + GAP + 1_000 });
+
+      const card = kernel.sessionContext.digest({ projectId, agentId, sessionId }).entries.find((entry) => entry.kind === 'deep')!;
+      expect(card).toBeDefined();
+      expect(card.sourceRefs).toContain(correctionId);
+      expect(card.text).toContain(`后有纠正：mem:${correctionId}`);
+      const lane = backend.assembleSessionContext({
+        projectId, agentId, sessionId, targetTokens: 200_000, tailTurns: 4,
+      }).lanes.find((item) => item.lane === 'digest')!;
+      expect(lane.text).toContain(`后有纠正：mem:${correctionId}`);
+    } finally {
+      kernel.close();
+    }
+  });
+
+  test('a PROFILE_ENTRY_CORRECTED row annotates the card built from its replaced evidence', async () => {
+    const dir = makeTempDir('cogmem-deep-profile-corrected-');
+    const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.sqlite'), projectTimeZone: 'UTC' });
+    const projectId = 'profile-corrected-project';
+    const agentId = 'profile-corrected-agent';
+    const sessionId = 'profile-corrected-session';
+    const backend = new KernelAgentMemoryBackend(kernel);
+    let sourceId = '';
+    try {
+      for (let index = 0; index < 24; index += 1) {
+        const captured = await backend.captureConversationTurn({
+          projectId,
+          agentId,
+          sessionId,
+          channel: 'terminal',
+          speaker: index % 2 === 0 ? 'owner' : 'agent',
+          text: index === 0 ? '我喜欢喝乌龙茶。' : `第 ${index} 轮：继续整理文档。`,
+          occurredAt: T0 + index * 1_000,
+        });
+        if (index === 0) sourceId = captured.eventId;
+      }
+      kernel.beliefStore.upsert({
+        projectId,
+        scope: 'project',
+        subject: 'owner',
+        predicate: 'likes',
+        objectValue: { raw: '喝乌龙茶', type: 'string' },
+        confidence: 0.9,
+        sourceType: 'user_input',
+        extractionReason: 'explicit_user_statement',
+        sourceEventId: sourceId,
+        validFrom: T0,
+      }, T0);
+      kernel.profile.compile({ projectId, ledger: 'preferences', now: T0 + 1 });
+      const entry = kernel.profile.entries({ projectId, ledger: 'preferences' }).find((item) => item.value === '喝乌龙茶')!;
+      expect(entry.sourceRefs[0]!.eventId).toBe(sourceId);
+      await kernel.runDreamTick({ projectId, now: T0 + 24_000 + GAP + 1_000 });
+
+      const correction = kernel.recordRawEvent({
+        projectId,
+        threadId: sessionId,
+        role: 'user',
+        content: '其实我不喝乌龙茶了，现在喜欢红茶。',
+        occurredAt: T0 + 24_000 + GAP + 2_000,
+      });
+      kernel.profile.correct({
+        projectId,
+        ledger: 'preferences',
+        key: entry.key,
+        value: '喝红茶',
+        correctionEventId: correction.eventId,
+        now: T0 + 24_000 + GAP + 3_000,
+      });
+
+      const card = kernel.sessionContext.digest({ projectId, agentId, sessionId }).entries.find((item) => item.kind === 'deep')!;
+      expect(card.sourceRefs).toContain(sourceId);
+      expect(card.text).toContain(`后有纠正：mem:${correction.eventId}`);
+    } finally {
+      kernel.close();
+    }
   });
 });
 
