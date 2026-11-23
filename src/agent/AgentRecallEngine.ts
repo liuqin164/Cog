@@ -92,6 +92,11 @@ const DISCRIMINATIVE_TERM_BUDGET = 8;
 const RAW_LANE_CANDIDATE_FLOOR = 40;
 const RAW_LANE_CANDIDATE_CAP = 200;
 const BACK_REFERENCE_ANCHOR_TTL_MS = 30 * 60_000;
+const PROFILE_CUE_STOP_WORDS = new Set([
+  '什么', '怎么', '为什么', '哪些', '哪个', '多少', '是否', '有没有', '我们', '你们', '他们',
+  '上次', '之前', '以前', '当时', '现在', '最近', '问题', '记忆',
+  'the', 'a', 'an', 'what', 'did', 'do', 'we', 'you', 'last', 'about',
+]);
 
 export class AgentRecallEngine {
   constructor(private readonly kernel: MemoryKernel, private readonly binding?: ChannelBinding) {}
@@ -326,9 +331,14 @@ export class AgentRecallEngine {
     if (!laneAllowed(query.retrievalPolicy, 'graph')) return result;
     const intent = result.queryPlan?.intent;
     if (intent === 'forensic_quote' || intent === 'previous_session_summary') return result;
+    const cues = [...new Set(extractRecallKeywords(this.effectiveQueryText(query)).flatMap((keyword) => discriminativeProbes(keyword)))]
+      .map((cue) => cue.toLowerCase())
+      .filter((cue) => cue.length >= 2 && !PROFILE_CUE_STOP_WORDS.has(cue));
+    if (cues.length === 0) return result;
     const entries = this.kernel.profile.recall({
       projectId: query.projectId,
       query: this.effectiveQueryText(query),
+      cues,
       now: query.now,
     });
     if (entries.length === 0) return result;
@@ -344,8 +354,7 @@ export class AgentRecallEngine {
       })
       .slice(0, query.limit ?? 5);
     if (items.length === 0) return result;
-    const limit = query.limit ?? 5;
-    return { ...result, items: [...result.items.slice(0, Math.max(0, limit - items.length)), ...items] };
+    return { ...result, items: [...result.items, ...items] };
   }
 
   private withoutSupersededByProfile(

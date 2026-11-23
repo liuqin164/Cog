@@ -173,8 +173,8 @@ export interface ProfileHistoryInput {
 
 export interface ProfileRecallInput {
   projectId: string;
-  /** Cue text. Empty matches every entry; the priority/decay order decides the cut. */
   query?: string;
+  cues?: readonly string[];
   ledger?: ProfileLedger;
   now?: number;
   limit?: number;
@@ -340,10 +340,11 @@ export class ProfileCompiler {
     if (!Number.isInteger(limit) || limit <= 0) throw profileError('invalid_limit', String(input.limit));
     const now = input.now ?? Date.now();
     const ledger = input.ledger === undefined ? undefined : this.requireLedger(input.ledger);
-    const cues = profileCues(input.query ?? '');
+    const cues = input.cues === undefined ? profileCues(input.query ?? '') : [...input.cues];
+    const filterByCue = input.cues !== undefined || cues.length > 0;
     return this.currentEntries(projectId)
       .filter((entry) => ledger === undefined || entry.ledger === ledger)
-      .filter((entry) => cues.length === 0 || cues.some((cue) => `${entry.key} ${entry.value}`.toLowerCase().includes(cue)))
+      .filter((entry) => !filterByCue || cues.some((cue) => `${entry.key} ${entry.value}`.toLowerCase().includes(cue)))
       .map((entry) => ({ ...entry, score: profileScore(entry, now) }))
       .sort((a, b) => b.score - a.score || PROFILE_LEDGERS.indexOf(a.ledger) - PROFILE_LEDGERS.indexOf(b.ledger) || a.key.localeCompare(b.key))
       .slice(0, limit);
