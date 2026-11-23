@@ -33,8 +33,6 @@ describe('system prompt sections: a stable pinned zone and a variable tail', () 
       const secondRequest = provider.calls[1].systemPrompt;
       const secondMessages = asText(provider.calls[1].messages);
 
-      // The clock lives in the variable block and nowhere else: three hours later that block differs,
-      // the system prompt is byte-identical, and both requests carry the same pinned prefix.
       expect(first.pinned).not.toContain('<time-context>');
       expect(first.tail).toContain('<time-context>');
       expect(second.tail).not.toBe(first.tail);

@@ -92,7 +92,6 @@ describe('the six-lane assembly (#249 A5)', () => {
       const view = shell.currentStatus().contextLanes!;
       expect(view.lanes.map((lane) => lane.lane)).toEqual([...SESSION_CONTEXT_LANES]);
 
-      // The provider sees the digest first in the block, then the remaining lanes in render order.
       const last = asText(provider.calls.at(-1)!.messages);
       const positions = (['digest', 'working_set', 'tail', 'recall'] as const).map((lane) => last.indexOf(`[${lane}]`));
       expect(positions.every((position) => position >= 0)).toBe(true);
