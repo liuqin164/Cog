@@ -15,6 +15,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statfsSync,
 import { homedir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { createMemoryKernel } from 'cogmem';
 import { DEFAULT_AUTONOMOUS_BUDGET, DEFAULT_DAILY_BUDGET, DEFAULT_MAX_IDLE_TURNS, DEFAULT_NIGHT_BUDGET, DEFAULT_WORK_BUDGET } from '../config.ts';
@@ -733,6 +734,7 @@ export class Installer {
         COGMEM_EMBEDDING_QUERY_PREFIX: this.flags.embeddingQueryPrefix,
         COGMEM_EMBEDDING_API_KEY: undefined,
       });
+      await this.ensureLocalEmbeddingRuntime();
       await this.ensureLocalEmbeddingModel();
       return { ok: true };
     }
@@ -804,6 +806,21 @@ export class Installer {
     this.io.say(`向量配置已写入 ${this.envPath}（0600；provider=${provider}，${probedDimensions} 维）`);
     if (provider === 'openai') this.io.say('向量钥匙只写入 0600 env 文件，不出现在任何输出里。');
     return { ok: true };
+  }
+
+  private async ensureLocalEmbeddingRuntime(): Promise<void> {
+    try {
+      createRequire(import.meta.url).resolve('@huggingface/transformers');
+      return;
+    } catch {}
+    this.io.say('embedding 运行时：安装 @huggingface/transformers（仅本地向量需要）…');
+    const installed = await this.runner(this.bunPath, ['add', '--no-save', '@huggingface/transformers@^4.3.2'], {
+      cwd: this.shellDir,
+      timeoutMs: 10 * 60_000,
+    });
+    this.io.say(installed.code === 0
+      ? 'embedding 运行时：就位'
+      : `embedding 运行时：安装失败（bun add 退出 ${installed.code}）`);
   }
 
   /** The local model's 99 MiB supply; a failure degrades recall, it does not stop the install. */
