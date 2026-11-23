@@ -462,6 +462,68 @@ describe('cards enter the lane, auto-expand, drill down, and leave on forget (#4
   });
 });
 
+describe('the reading window does not recard a truncated first segment (#518)', () => {
+  test('the dropped first segment leaves the next card disjoint from the first', async () => {
+    const dir = makeTempDir('cogmem-deep-truncated-');
+    const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.sqlite'), projectTimeZone: 'UTC' });
+    const projectId = 'truncated-project';
+    const agentId = 'truncated-agent';
+    const sessionId = 'truncated-session';
+    const backend = new KernelAgentMemoryBackend(kernel);
+    const firstIds: string[] = [];
+    const nextIds: string[] = [];
+    try {
+      for (let index = 0; index < 500; index += 1) {
+        const captured = await backend.captureConversationTurn({
+          projectId,
+          agentId,
+          sessionId,
+          channel: 'terminal',
+          speaker: index % 2 === 0 ? 'owner' : 'agent',
+          text: `第 ${index} 轮：整理长文档。`,
+          occurredAt: T0 + index * 1_000,
+        });
+        firstIds.push(captured.eventId);
+      }
+      const first = await kernel.sessionContext.compileEpisodeCards({
+        projectId,
+        agentId,
+        sessionId,
+        now: T0 + 499_000 + GAP + 1,
+      });
+      expect(first.created).toHaveLength(1);
+      expect(first.created[0]!.sourceRefs).toEqual(firstIds);
+
+      const afterGap = T0 + 499_000 + GAP + 1;
+      for (let index = 0; index < 20; index += 1) {
+        const captured = await backend.captureConversationTurn({
+          projectId,
+          agentId,
+          sessionId,
+          channel: 'terminal',
+          speaker: index % 2 === 0 ? 'owner' : 'agent',
+          text: `第 ${index} 轮：继续整理长文档。`,
+          occurredAt: afterGap + index * 1_000,
+        });
+        nextIds.push(captured.eventId);
+      }
+      const now = afterGap + 19_000 + GAP + 1;
+      const second = await kernel.sessionContext.compileEpisodeCards({ projectId, agentId, sessionId, now });
+      expect(second.created).toHaveLength(1);
+      expect(second.created[0]!.sourceRefs).toEqual(nextIds);
+      expect(second.created[0]!.sourceRefs.some((id) => firstIds.includes(id))).toBe(false);
+
+      const again = await kernel.sessionContext.compileEpisodeCards({ projectId, agentId, sessionId, now });
+      expect(again.created).toHaveLength(0);
+      const cards = kernel.sessionContext.digest({ projectId, agentId, sessionId })
+        .entries.filter((entry) => entry.kind === 'deep');
+      expect(cards).toHaveLength(2);
+    } finally {
+      kernel.close();
+    }
+  }, 60_000);
+});
+
 describe('the model compiler keeps the anchor discipline (#474)', () => {
   const entries: SessionDigestEntry[] = Array.from({ length: 8 }, (_, index) => ({
     entryId: `digest:evt-${index}`,

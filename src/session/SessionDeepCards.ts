@@ -255,7 +255,8 @@ async function compileScope(
   const read = readSessionTurns(db, { ...scope, limit: SESSION_DIGEST_MAX_TURNS });
   const taskEnds = readTaskEnds(db, scope);
   const taskStarts = readTaskStarts(db, scope);
-  const segments = planDeepSegments(read.turns, taskEnds, now, undefined, taskStarts);
+  const planned = planDeepSegments(read.turns, taskEnds, now, undefined, taskStarts);
+  const segments = read.truncated ? planned.slice(1) : planned;
   const existing = existingSegmentKeys(db, scope);
   const created: SessionDigestEntry[] = [];
   let declaredSkipped = 0;
