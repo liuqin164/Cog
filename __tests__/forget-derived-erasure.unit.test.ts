@@ -322,11 +322,19 @@ test('#500 a row referenced only through relatedEventIds is erased by the ledger
 
 function rowsHolding(db: Database, needle: string): string[] {
   const hits: string[] = [];
-  const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all() as Array<{ name: string }>;
+  const tables = db.prepare(`SELECT name,sql FROM sqlite_master WHERE type='table'`).all() as Array<{ name: string; sql: string | null }>;
+  const ftsTables = tables.filter(({ sql }) => /CREATE VIRTUAL TABLE.*USING fts5/iu.test(sql ?? '')).map(({ name }) => name);
+  const ftsShadowTables = new Set(ftsTables.flatMap((name) => ['data', 'idx', 'content', 'docsize', 'config'].map((suffix) => `${name}_${suffix}`)));
   for (const { name } of tables) {
+    if (ftsTables.includes(name)) {
+      const row = db.prepare(`SELECT COUNT(*) AS c FROM "${name}" WHERE "${name}" MATCH ?`).get(needle) as { c: number };
+      if (Number(row.c) > 0) hits.push(`${name}.fts_match:${row.c}`);
+      continue;
+    }
+    if (ftsShadowTables.has(name)) continue;
     const columns = db.prepare(`PRAGMA table_info("${name}")`).all() as Array<{ name: string }>;
     for (const column of columns) {
-      const row = db.prepare(`SELECT COUNT(*) AS c FROM "${name}" WHERE instr(CAST("${column.name}" AS TEXT), ?) > 0`).get(needle) as { c: number };
+      const row = db.prepare(`SELECT COUNT(*) AS c FROM "${name}" WHERE instr(lower(CAST("${column.name}" AS TEXT)), ?) > 0`).get(needle.toLowerCase()) as { c: number };
       if (Number(row.c) > 0) hits.push(`${name}.${column.name}:${row.c}`);
     }
   }
