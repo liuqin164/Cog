@@ -93,15 +93,6 @@ const RAW_LANE_CANDIDATE_CAP = 200;
 export class AgentRecallEngine {
   constructor(private readonly kernel: MemoryKernel, private readonly binding?: ChannelBinding) {}
 
-  /**
-   * Recall with every item marked for what is missing from its text.
-   *
-   * Redaction happens when a turn is written, so by the time an item is built its text
-   * is already altered — and the lane that built it decides nothing about whether the
-   * caller can tell. One decoration here covers the raw ledger, compiled memory and the
-   * Atlas alike; decorating the raw builder is how the raw lane got it and the compiled
-   * lane did not (#115).
-   */
   recall(query: AgentRecallQuery): AgentRecallResult {
     query = this.withRelativeDates(query);
     const rewrite = this.rewriteBackReference(query);
@@ -109,10 +100,8 @@ export class AgentRecallEngine {
     query = this.scopeExcludedSessionTail(query);
     const { result, suppressedIds } = this.recallPrivate(query);
     const answered = this.withSharedLane(query, result);
-    // Occasion scope is the last admission, after the shared lane as well as the local ones: a shared
-    // item is still text this connection may not be allowed to speak (#162).
     const gated = this.applyOccasionGate(query, answered, suppressedIds);
-    const finished = this.finishBackReference(query, rewrite, gated.result);
+    const finished = this.finishBackReference(query, rewrite, gated.result, gated.suppressedIds.length > 0);
     this.touchAtlasRecallHits(query, finished);
     this.recordRecallTrace(query, finished, gated.suppressedIds, rewrite);
     this.rememberCanonicalIds(finished);
@@ -145,16 +134,22 @@ export class AgentRecallEngine {
 
   private backReferenceAnchor(query: AgentRecallQuery, kind: BackReferenceRewrite['kind']): string {
     const terms = new Set<string>();
+    const scopeQuery = { ...query, sessionId: undefined, excludeSessionId: undefined, excludeSessionBeforeTurnSeq: undefined };
     const addText = (text: string | undefined): void => {
       if (!text) return;
       for (const term of digestAnchors(text)) if (term.trim() !== '') terms.add(term.trim());
       for (const term of extractRecallKeywords(text).slice(0, 6)) terms.add(term);
     };
+    const inScope = (event: MemoryEvent): boolean => isAgentRawEvent(event, query.agentId)
+      && this.isRawEventInRecallScope(event, scopeQuery, query.intent);
     if (kind === 'previous_session') {
       const previousSessionId = this.findPreviousSessionId(query);
       const events = previousSessionId ? this.getSessionEvents(previousSessionId, query, 24) : [];
-      for (const event of events.filter((candidate) => candidate.role === 'user' || candidate.role === 'assistant').slice(-4)) {
-        if (this.hasReadableEventText(event)) addText(this.rawEventText(event));
+      for (const event of events
+        .filter((candidate) => candidate.role === 'user' || candidate.role === 'assistant')
+        .filter((candidate) => this.hasReadableEventText(candidate) && inScope(candidate))
+        .slice(-4)) {
+        addText(this.rawEventText(event));
       }
     } else {
       const sessionId = query.excludeSessionId ?? query.sessionId;
@@ -167,7 +162,7 @@ export class AgentRecallEngine {
         let assistant = false;
         let user = false;
         for (const event of page.records) {
-          if (event.role === 'tool' || !this.hasReadableEventText(event)) continue;
+          if (event.role === 'tool' || !this.hasReadableEventText(event) || !inScope(event)) continue;
           const text = this.rawEventText(event);
           if (normalizeQueryText(text) === normalizeQueryText(query.query)) continue;
           if (event.role === 'assistant' && !assistant) {
@@ -189,6 +184,7 @@ export class AgentRecallEngine {
     query: AgentRecallQuery,
     rewrite: BackReferenceRewrite | undefined,
     result: AgentRecallResult,
+    gateWithheld: boolean,
   ): AgentRecallResult {
     if (!rewrite) return result;
     const ordered = rewrite.kind !== 'state_follow_up' || result.items.length < 2
@@ -201,6 +197,7 @@ export class AgentRecallEngine {
           )),
         };
     if (ordered.items.length > 0 || !query.projectId) return ordered;
+    if (gateWithheld) return ordered;
     let episodes: ReturnType<MemoryKernel['listEpisodes']>;
     try {
       episodes = this.kernel.listEpisodes({ projectId: query.projectId, limit: 5 });
@@ -208,10 +205,25 @@ export class AgentRecallEngine {
       return ordered;
     }
     if (episodes.length === 0) return ordered;
+    const menuQuery = { ...query, sessionId: undefined, excludeSessionId: undefined, excludeSessionBeforeTurnSeq: undefined };
+    const candidates: AgentRecallItem[] = [];
+    for (const episode of episodes) {
+      const event = this.kernel.eventStore.getEvent(episode.startEventId);
+      if (!event || !this.isRawEventInRecallScope(event, menuQuery, query.intent)) continue;
+      candidates.push({
+        id: episode.startEventId,
+        text: String(episode.summary ?? episode.topicPath ?? episode.episodeType).slice(0, 80),
+        tags: ['recall_menu'],
+        source: episode.startEventId,
+        sourceAnchor: this.toAgentSourceAnchor(event),
+      });
+    }
+    const visible = this.gateOccasionEntries(candidates, menuQuery).items;
+    if (visible.length === 0) return ordered;
     const text = [
       '<recent-items>',
       '最近事项（可指代其一继续问）：',
-      ...episodes.map((episode) => `- ${(episode.summary ?? episode.topicPath ?? episode.episodeType).slice(0, 80)} · mem:${episode.startEventId}`),
+      ...visible.map((item) => `- ${item.text} · mem:${item.source}`),
       '</recent-items>',
     ].join('\n');
     return {
@@ -368,15 +380,6 @@ export class AgentRecallEngine {
     };
   }
 
-  /**
-   * The stored decision behind a recall: ids, reasons and the lane, never an item's text (#187).
-   *
-   * Written after the answer is assembled and after the shared lane has had its say, so the row names
-   * what the caller actually received — and never instead of returning it: a trace that cannot be
-   * written is a non-fatal pipeline event, and the recall is unaffected. The whole body is guarded,
-   * including the failure report, because nothing on this path may turn a written trace into a lost
-   * answer.
-   */
   private recordRecallTrace(
     query: AgentRecallQuery,
     result: AgentRecallResult,
@@ -397,7 +400,7 @@ export class AgentRecallEngine {
         reason: decision?.reason ?? 'unknown',
         selectedIds: result.items.map((item) => item.id),
         suppressed: suppressionsForTrace(decision?.suppressed, suppressedIds),
-        ...(rewrite ? { rewrite: { source: rewrite.source, terms: rewrite.terms } } : {}),
+        ...(rewrite ? { rewrite: { source: rewrite.source, termCount: rewrite.terms.length } } : {}),
       });
     } catch (error) {
       this.recordTraceFailure(query, error);

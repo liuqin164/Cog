@@ -108,9 +108,10 @@ describe('deterministic back-reference detection (#472)', () => {
       const row = kernel.factStore.getDatabase()
         .query('SELECT payload FROM trace_events WHERE event_type = ? ORDER BY rowid DESC LIMIT 1')
         .get('recall.result') as { payload: string } | null;
-      const payload = JSON.parse(row!.payload) as { rewrite?: { source?: string; terms?: string[] } };
+      const payload = JSON.parse(row!.payload) as { rewrite?: { source?: string; termCount?: number } };
       expect(payload.rewrite?.source).toBe('deterministic_backref');
-      expect(payload.rewrite?.terms?.join(' ')).toContain('限流阈值');
+      expect(payload.rewrite?.termCount).toBeGreaterThan(0);
+      expect(JSON.stringify(payload)).not.toContain('限流阈值');
     } finally {
       kernel.close();
     }
@@ -140,6 +141,161 @@ describe('deterministic back-reference detection (#472)', () => {
       expect(result.items[0]?.source).toBe('recall_menu');
       expect(result.items[0]?.text).toContain('<recent-items>');
       expect(result.items[0]?.text).toMatch(/mem:evt-/);
+    } finally {
+      kernel.close();
+    }
+  });
+
+  test('the recent-items menu omits an episode the occasion gate withholds', async () => {
+    const { kernel, backend } = setup();
+    try {
+      await backend.rememberTurnWithResult({
+        agentId: AGENT,
+        projectId: PROJECT,
+        sessionId: 'session-today',
+        turnId: 'menu:clean',
+        userText: '普通对话关于天气。',
+        assistantText: '好。',
+        timestamp: NOW,
+      });
+      await backend.rememberTurnWithResult({
+        agentId: AGENT,
+        projectId: PROJECT,
+        sessionId: 'session-today',
+        turnId: 'menu:third-party',
+        userText: '邻居说他们家要搬去大阪。',
+        assistantText: '嗯。',
+        metadata: { speaker: 'other' },
+        timestamp: NOW + 1000,
+      });
+      const result = backend.recall({
+        agentId: AGENT,
+        projectId: PROJECT,
+        query: '刚才那个怎么样了',
+        excludeSessionId: 'session-today',
+        excludeSessionTailTurns: 2,
+        limit: 3,
+        now: NOW,
+      });
+      expect(result.items[0]?.source).toBe('recall_menu');
+      expect(result.items[0]?.text).toContain('天气');
+      expect(result.items[0]?.text).not.toContain('邻居');
+    } finally {
+      kernel.close();
+    }
+  });
+
+  test('a recall whose only hit the occasion gate withheld returns no menu', async () => {
+    const { kernel, backend } = setup();
+    try {
+      await backend.rememberTurnWithResult({
+        agentId: AGENT,
+        projectId: PROJECT,
+        sessionId: 'session-yesterday',
+        turnId: 'withheld:0',
+        userText: '邻居说他们家要搬去大阪。',
+        assistantText: '嗯。',
+        metadata: { speaker: 'other' },
+        timestamp: NOW - DAY,
+      });
+      const result = backend.recall({
+        agentId: AGENT,
+        projectId: PROJECT,
+        query: '昨天聊的那个',
+        excludeSessionId: 'session-today',
+        limit: 3,
+        now: NOW,
+      });
+      expect(result.items).toEqual([]);
+      expect(result.decisionTrace?.suppressed).toContainEqual({ reason: 'occasion_third_party', count: 1 });
+    } finally {
+      kernel.close();
+    }
+  });
+
+  test('a secret-marked anchor event is not tokenized into the trace', async () => {
+    const { kernel, backend } = setup();
+    try {
+      kernel.eventStore.append({
+        streamType: 'thread',
+        streamId: 'session-secret',
+        eventType: 'RAW_EVENT_RECORDED',
+        projectId: PROJECT,
+        threadId: 'session-secret',
+        sessionId: 'session-secret',
+        threadSeq: 1,
+        eventOrdinal: 1,
+        role: 'user',
+        sourceId: `${AGENT}:session-secret`,
+        occurredAt: NOW - DAY,
+        payload: {
+          text: '部署口令是 zephyr-nine，别外传。',
+          metadata: { sourceAgent: AGENT, secretFindings: { total: 1, byKind: { github_token: 1 } } },
+        },
+      });
+      const result = backend.recall({
+        agentId: AGENT,
+        projectId: PROJECT,
+        query: '昨天聊的那个',
+        excludeSessionId: 'session-today',
+        limit: 3,
+        now: NOW,
+      });
+      expect(JSON.stringify(result.items)).not.toContain('zephyr');
+      const row = kernel.factStore.getDatabase()
+        .query('SELECT payload FROM trace_events WHERE event_type = ? ORDER BY rowid DESC LIMIT 1')
+        .get('recall.result') as { payload: string } | null;
+      const payload = JSON.parse(row!.payload) as { rewrite?: { termCount?: number } };
+      expect(payload.rewrite?.termCount).toBe(0);
+      expect(row!.payload).not.toContain('zephyr');
+    } finally {
+      kernel.close();
+    }
+  });
+
+  test('a life-sensitive anchor event is not tokenized into the trace', async () => {
+    const { kernel, backend } = setup();
+    try {
+      kernel.eventStore.append({
+        streamType: 'thread',
+        streamId: 'session-life',
+        eventType: 'RAW_EVENT_RECORDED',
+        projectId: PROJECT,
+        threadId: 'session-life',
+        sessionId: 'session-life',
+        threadSeq: 1,
+        eventOrdinal: 1,
+        role: 'user',
+        sourceId: `${AGENT}:session-life`,
+        occurredAt: NOW - DAY,
+        payload: {
+          text: '我的工资是保密数字，别记录。',
+          metadata: {
+            sourceAgent: AGENT,
+            lifeSensitivityFindings: {
+              total: 1,
+              byCategory: { finance: 1 },
+              byTier: { private: 1 },
+              byKind: { finance_personal: 1 },
+            },
+          },
+        },
+      });
+      const result = backend.recall({
+        agentId: AGENT,
+        projectId: PROJECT,
+        query: '昨天聊的那个',
+        excludeSessionId: 'session-today',
+        limit: 3,
+        now: NOW,
+      });
+      expect(JSON.stringify(result.items)).not.toContain('工资');
+      const row = kernel.factStore.getDatabase()
+        .query('SELECT payload FROM trace_events WHERE event_type = ? ORDER BY rowid DESC LIMIT 1')
+        .get('recall.result') as { payload: string } | null;
+      const payload = JSON.parse(row!.payload) as { rewrite?: { termCount?: number } };
+      expect(payload.rewrite?.termCount).toBe(0);
+      expect(row!.payload).not.toContain('工资');
     } finally {
       kernel.close();
     }
