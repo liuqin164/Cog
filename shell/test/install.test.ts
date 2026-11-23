@@ -446,6 +446,7 @@ describe('the six-step install', () => {
       platform: 'linux',
       homeDir: dir,
       hooks: {
+        ensureEmbedding: async () => ({ ok: true, downloaded: false, detail: 'test stub' }),
         probe: async () => (probeOk
           ? { ok: true, latencyMs: 1, sample: 'OK' }
           : { ok: false, code: 'model_timeout', message: '超时。', hint: '再试。' }),

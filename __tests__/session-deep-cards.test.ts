@@ -373,7 +373,7 @@ describe('verbatim anchors are set members and truncation respects code points (
   }
 
   test('a number cut by truncation is not a verbatim anchor', async () => {
-    const entries = entriesWith('决定：由「小明」负责，预算 12,500 元。');
+    const entries = entriesWith('决定：由「小明」负责，预算 1,500,000 元。');
     const compiler = createSessionDeepCompiler(async () =>
       JSON.stringify({ did: '「小明」负责，预算 1,5 元。', open: '无' }));
     const [card] = await compiler.compile({ projectId: 'p', agentId: 'a', sessionId: 's', entries, now: T0 + 10_000 });
