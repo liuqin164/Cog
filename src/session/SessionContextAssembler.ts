@@ -639,6 +639,8 @@ function browseKeys(items: readonly SessionContextItem[]): string[] {
 
 function browseEventId(id: string): string | undefined {
   if (id.startsWith('evt-')) return id;
+  if (id.startsWith('digest:card:model:')) return id.slice('digest:card:model:'.length);
+  if (id.startsWith('digest:card:rule:')) return id.slice('digest:card:rule:'.length);
   if (id.startsWith('digest:card:')) return id.slice('digest:card:'.length);
   if (id.startsWith('digest:evt-')) return id.slice('digest:'.length);
   return undefined;

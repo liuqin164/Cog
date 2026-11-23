@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
 import { createMemoryKernel, type MemoryKernel } from '../src/factory.js';
 import {
+  assembleSessionContext,
   buildDeepCardEntry,
   createSessionDeepCompiler,
   digestAnchors,
@@ -312,6 +313,48 @@ describe('the model compiler keeps the anchor discipline (#474)', () => {
     const card = buildDeepCardEntry({ projectId: 'p', agentId: 'a', sessionId: 's', entries, now: T0 + 10_000 }, '做了什么。', '无');
     expect(card.kind).toBe('deep');
     expect(card.sourceRefs).toEqual(entries.map((entry) => entry.sourceRefs[0]!));
+  });
+});
+
+describe('an episode card names its producer (#496)', () => {
+  const entries: SessionDigestEntry[] = Array.from({ length: 8 }, (_, index) => ({
+    entryId: `digest:evt-${index}`,
+    kind: 'turn',
+    sessionId: 's',
+    occurredAt: T0 + index,
+    speaker: index % 2 === 0 ? 'owner' : 'agent',
+    text: index === 0 ? '决定：由「小明」负责，预算 12,500 元。' : `第 ${index} 轮。`,
+    sourceRefs: [`evt-${index}`],
+    anchor: index === 0,
+  }));
+
+  test('an accepted model card carries the model header and id prefix', async () => {
+    const compiler = createSessionDeepCompiler(async () =>
+      JSON.stringify({ did: '「小明」负责迁移，预算 12,500 元。', open: '待办：下一次核对。' }));
+    const [card] = await compiler.compile({ projectId: 'p', agentId: 'a', sessionId: 's', entries, now: T0 + 10_000 });
+    expect(card!.entryId).toBe('digest:card:model:evt-0');
+    expect(card!.text.startsWith('情节卡（模型整理，未经核实）\n')).toBe(true);
+  });
+
+  test('the deterministic card keeps the rule header and id prefix', async () => {
+    const compiler = createSessionDeepCompiler(async () =>
+      JSON.stringify({ did: '「小明」负责，预算 13,000 元。', open: '无' }));
+    const [card] = await compiler.compile({ projectId: 'p', agentId: 'a', sessionId: 's', entries, now: T0 + 10_000 });
+    expect(card!.entryId).toBe('digest:card:rule:evt-0');
+    expect(card!.text.startsWith('情节卡（本段）\n')).toBe(true);
+  });
+
+  test('the digest lane renders the model marker and drills to the first event', async () => {
+    const compiler = createSessionDeepCompiler(async () =>
+      JSON.stringify({ did: '「小明」负责迁移，预算 12,500 元。', open: '待办：下一次核对。' }));
+    const [card] = await compiler.compile({ projectId: 'p', agentId: 'a', sessionId: 's', entries, now: T0 + 10_000 });
+    const assembly = assembleSessionContext(
+      { projectId: 'p', agentId: 'a', sessionId: 's', targetTokens: 200_000 },
+      { sessionId: 's', entries: [card!], tail: [], truncated: false },
+    );
+    const lane = assembly.lanes.find((item) => item.lane === 'digest')!;
+    expect(lane.text).toContain('情节卡（模型整理，未经核实）');
+    expect(lane.text).toContain('anchorEvent=evt-0');
   });
 });
 

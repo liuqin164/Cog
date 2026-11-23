@@ -87,21 +87,22 @@ export function planDeepSegments(
   return segments;
 }
 
-export function deepCardEntryId(first: SessionDigestEntry): string {
-  return `digest:card:${first.sourceRefs[0] ?? first.entryId}`;
+export function deepCardEntryId(first: SessionDigestEntry, origin: 'rule' | 'model' = 'rule'): string {
+  return `digest:card:${origin}:${first.sourceRefs[0] ?? first.entryId}`;
 }
 
 export function buildDeepCardEntry(
   input: SessionDeepCompileInput,
   did: string,
   open: string,
+  origin: 'rule' | 'model' = 'rule',
 ): SessionDigestEntry {
   const first = input.entries[0]!;
   const last = input.entries[input.entries.length - 1]!;
   const sourceRefs = [...new Set(input.entries.flatMap((entry) => entry.sourceRefs))];
-  const text = renderCardText(input.entries, did, open);
+  const text = renderCardText(input.entries, did, open, origin);
   return {
-    entryId: deepCardEntryId(first),
+    entryId: deepCardEntryId(first, origin),
     kind: 'deep',
     sessionId: input.sessionId,
     occurredAt: input.now,
@@ -116,18 +117,15 @@ export function createSessionDeepCompiler(generateText: TextGenerateFn): Session
   return {
     async compile(input: SessionDeepCompileInput): Promise<SessionDigestEntry[]> {
       const source = input.entries.map((entry) => entry.text).join('\n');
-      let did = deterministicDid(input.entries);
-      let open = deterministicOpen(input.entries);
       try {
         const parsed = parseCompiledCard(await generateText(DEEP_CARD_SYSTEM_PROMPT, deepCardUserPrompt(input.entries)));
         if (parsed && anchorsVerbatim(`${parsed.did}\n${parsed.open}`, source)) {
-          did = parsed.did;
-          open = parsed.open;
+          return [buildDeepCardEntry(input, parsed.did, parsed.open, 'model')];
         }
       } catch {
-        return [buildDeepCardEntry(input, did, open)];
+        return [buildDeepCardEntry(input, deterministicDid(input.entries), deterministicOpen(input.entries))];
       }
-      return [buildDeepCardEntry(input, did, open)];
+      return [buildDeepCardEntry(input, deterministicDid(input.entries), deterministicOpen(input.entries))];
     },
   };
 }
@@ -203,7 +201,7 @@ async function compileScope(
   const read = readSessionTurns(db, { ...scope, limit: SESSION_DIGEST_MAX_TURNS });
   const taskEnds = readTaskEnds(db, scope);
   const segments = planDeepSegments(read.turns, taskEnds, now);
-  const existing = existingCardIds(db, scope);
+  const existing = existingSegmentKeys(db, scope);
   const created: SessionDigestEntry[] = [];
   let declaredSkipped = 0;
   for (const segment of segments) {
@@ -222,8 +220,8 @@ async function compileScope(
       sourceRefs: [turn.eventId],
       anchor: digestAnchors(turn.text).length > 0,
     }));
-    const cardId = deepCardEntryId(entries[0]!);
-    if (existing.has(cardId)) continue;
+    const segmentKey = deepSegmentKey(segment);
+    if (existing.has(segmentKey)) continue;
     const compileInput: SessionDeepCompileInput = { ...scope, entries, now };
     const compiler = generateText ? createSessionDeepCompiler(generateText) : undefined;
     let card: SessionDigestEntry;
@@ -238,7 +236,7 @@ async function compileScope(
     }
     if (insertCard(db, scope, card, segment, now)) {
       created.push(card);
-      existing.add(card.entryId);
+      existing.add(segmentKey);
     }
   }
   return { created, declaredSkipped };
@@ -251,7 +249,7 @@ function insertCard(
   segment: SessionDeepSegment,
   now: number,
 ): boolean {
-  const segmentKey = `${segment.turns[0]!.eventId}:${segment.turns[segment.turns.length - 1]!.eventId}`;
+  const segmentKey = deepSegmentKey(segment);
   const changes = db.query(`
     INSERT OR IGNORE INTO ${CARD_TABLE}
       (entry_id, project_id, agent_id, session_id, segment_key, occurred_at, speaker, text, source_refs_json, anchor, created_at)
@@ -272,12 +270,16 @@ function insertCard(
   return Number(changes ?? 0) > 0;
 }
 
-function existingCardIds(db: Database, scope: SessionDeepScope): Set<string> {
+function existingSegmentKeys(db: Database, scope: SessionDeepScope): Set<string> {
   const rows = db.query(`
-    SELECT entry_id FROM ${CARD_TABLE}
+    SELECT segment_key FROM ${CARD_TABLE}
     WHERE project_id = ? AND agent_id = ? AND session_id = ?
-  `).all(scope.projectId, scope.agentId, scope.sessionId) as Array<{ entry_id: string }>;
-  return new Set(rows.map((row) => row.entry_id));
+  `).all(scope.projectId, scope.agentId, scope.sessionId) as Array<{ segment_key: string }>;
+  return new Set(rows.map((row) => row.segment_key));
+}
+
+function deepSegmentKey(segment: SessionDeepSegment): string {
+  return `${segment.turns[0]!.eventId}:${segment.turns[segment.turns.length - 1]!.eventId}`;
 }
 
 function listDeepScopes(db: Database, projectId?: string): SessionDeepScope[] {
@@ -384,14 +386,14 @@ function deterministicOpen(entries: readonly SessionDigestEntry[]): string {
   return lines.join('；') || '无';
 }
 
-function renderCardText(entries: readonly SessionDigestEntry[], did: string, open: string): string {
+function renderCardText(entries: readonly SessionDigestEntry[], did: string, open: string, origin: 'rule' | 'model'): string {
   const first = entries[0]!;
   const last = entries[entries.length - 1]!;
   const anchors = [...new Set(entries.flatMap((entry) => digestAnchors(entry.text)))].slice(0, 12);
   const pointers = sample(entries.map((entry) => entry.entryId), 10);
   const primary = [first.sourceRefs[0], last.sourceRefs[0]].filter((id): id is string => typeof id === 'string');
   return [
-    '情节卡（本段）',
+    origin === 'model' ? '情节卡（模型整理，未经核实）' : '情节卡（本段）',
     `做了什么：${did.trim() || '无'}`,
     `遗留问题：${open.trim() || '无'}`,
     `锚点：${anchors.join('、') || '无'}`,
