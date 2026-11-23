@@ -310,7 +310,12 @@ export class MemoryKernel extends KernelServices {
     void job.finally(() => this.embeddingJobs.delete(job));
   }
 
-  nearestRawEventIds(query: string, projectId: string | undefined, limit: number): string[] {
+  nearestRawEventIds(
+    query: string,
+    projectId: string | undefined,
+    limit: number,
+    window: { startTime?: number; endTime?: number } = {},
+  ): string[] {
     if (!this.embeddingProvider) return [];
     const embedSync = (this.embeddingProvider as EmbeddingProvider & {
       embedSync?: (text: string) => Float32Array;
@@ -320,7 +325,7 @@ export class MemoryKernel extends KernelServices {
       const vector = embedSync.call(this.embeddingProvider, query);
       if (vector.length === 0) return [];
       return this.eventEmbeddingStore
-        .findNearest(vector, projectId, limit, this.embeddingProvider.modelId)
+        .findNearest(vector, projectId, limit, this.embeddingProvider.modelId, window)
         .map((hit) => hit.eventId);
     } catch {
       return [];

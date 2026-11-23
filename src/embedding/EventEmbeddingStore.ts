@@ -20,7 +20,7 @@ interface EmbeddingCache {
 export class EventEmbeddingStore {
   private readonly caches = new Map<string, EmbeddingCache>();
 
-  constructor(private readonly db: Database, private readonly minSimilarity = 0.5) {}
+  constructor(private readonly db: Database, private readonly minScoreRatio = 0.8) {}
 
   upsert(eventId: string, modelId: string, vector: Float32Array, projectId: string | undefined): void {
     if (vector.length === 0) return;
@@ -50,13 +50,19 @@ export class EventEmbeddingStore {
     projectId: string | undefined,
     limit: number,
     modelId: string,
+    window: { startTime?: number; endTime?: number } = {},
   ): EventEmbeddingHit[] {
     if (vector.length === 0) return [];
     const cache = this.loadCache(projectId, modelId, vector.length);
-    return [...cache.vectors.entries()]
+    const hits = [...cache.vectors.entries()]
+      .filter(([, entry]) => (window.startTime === undefined || entry.occurredAt >= window.startTime)
+        && (window.endTime === undefined || entry.occurredAt < window.endTime))
       .map(([eventId, entry]) => ({ eventId, score: cosine(vector, entry.vector) }))
-      .filter((hit) => hit.score >= this.minSimilarity)
-      .sort((left, right) => right.score - left.score)
+      .sort((left, right) => right.score - left.score);
+    const best = hits[0]?.score ?? 0;
+    if (best <= 0) return [];
+    return hits
+      .filter((hit) => hit.score >= best * this.minScoreRatio)
       .slice(0, Math.max(1, limit));
   }
 

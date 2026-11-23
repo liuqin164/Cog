@@ -1327,6 +1327,7 @@ export class AgentRecallEngine {
       this.effectiveQueryText(query) || queryPlan.primarySearchText,
       query.projectId,
       RAW_LANE_CANDIDATE_CAP,
+      { startTime: query.startTime, endTime: query.endTime },
     );
     for (;;) {
       const rankedSemanticIds = semanticIds.slice(0, candidateLimit);
@@ -1346,7 +1347,13 @@ export class AgentRecallEngine {
         + (lexicalRank.has(event.eventId) ? 1 / (RRF_K + lexicalRank.get(event.eventId)!) : 0)
         + this.relativeWindowBoost(event, query)
       );
-      rawEvents.sort((left, right) => fusedScore(right) - fusedScore(left));
+      if (semanticEvents.length > 0) {
+        rawEvents.sort((left, right) => fusedScore(right) - fusedScore(left));
+      } else if (query.relativeWindow) {
+        rawEvents.sort((left, right) => (
+          this.relativeWindowBoost(right, query) - this.relativeWindowBoost(left, query)
+        ));
+      }
       const items = rawEvents
         .filter((event) => this.isRawEventInRecallScope(event, query, queryPlan.intent))
         .filter((event) => !this.isOperationalNoiseRawEvent(event))

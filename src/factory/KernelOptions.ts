@@ -27,7 +27,7 @@ export interface MemoryKernelOptions {
   dbPath?: string;
   vectorBackend?: string;
   vectorDimension?: number;
-  semanticMinSimilarity?: number;
+  semanticRelativeThreshold?: number;
   embeddingProvider?: EmbeddingProvider;
   modelRegistry?: ModelRegistry;
   encryptionProvider?: EncryptionProvider;
