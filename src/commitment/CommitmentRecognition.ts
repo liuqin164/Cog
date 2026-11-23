@@ -101,14 +101,9 @@ function localClock(today: { year: number; month: number; day: number }, days: n
   return zonedTime(year, month, day, hour, 0, timeZone);
 }
 
-function weekdayIndex(token: string): number {
-  const map: Record<string, number> = { 日: 0, 天: 0, 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6 };
-  return map[token] ?? 1;
-}
+function weekdayIndex(token: string): number { return { 日: 0, 天: 0, 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6 }[token] ?? 1; }
 
-function isoWeekday(weekday: number): number {
-  return weekday === 0 ? 7 : weekday;
-}
+function isoWeekday(weekday: number): number { return weekday === 0 ? 7 : weekday; }
 
 function chineseNumber(token: string): number {
   const digits: Record<string, number> = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
@@ -153,11 +148,7 @@ export function parseCommitmentDue(text: string, now: number, timeZone?: string)
   if (/今天/u.test(text)) return clock(now + 8 * HOUR_MS);
 
   match = /下周([一二三四五六日天])/u.exec(text);
-  if (match) {
-    const todayIso = isoWeekday(today.weekday);
-    const targetIso = isoWeekday(weekdayIndex(match[1]!));
-    return at(8 - todayIso + targetIso - 1);
-  }
+  if (match) return at(8 - isoWeekday(today.weekday) + isoWeekday(weekdayIndex(match[1]!)) - 1);
   match = /(?:周|星期)([一二三四五六日天])/u.exec(text);
   if (match) return at((weekdayIndex(match[1]!) - today.weekday + 7) % 7);
   if (/下周/u.test(text)) return clock(now + 7 * DAY_MS);
