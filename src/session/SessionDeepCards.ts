@@ -70,22 +70,45 @@ export function planDeepSegments(
   taskEnds: readonly number[],
   now: number,
   gapMs = SESSION_DEEP_SEGMENT_GAP_MS,
+  taskStarts: readonly number[] = [],
 ): SessionDeepSegment[] {
+  const windows = taskWindows(taskStarts, taskEnds);
   const segments: SessionDeepSegment[] = [];
   let current: SessionTurn[] = [];
   for (let index = 0; index < turns.length; index += 1) {
     const turn = turns[index]!;
     current.push(turn);
     const next = turns[index + 1];
-    const boundary = taskEnds.some((at) => at > turn.occurredAt && (next === undefined || at <= next.occurredAt));
+    const cut = (times: readonly number[]) =>
+      times.some((at) => at >= turn.occurredAt && (next === undefined || at < next.occurredAt));
+    const ends = cut(taskEnds);
+    const starts = cut(taskStarts);
     const gap = next === undefined
       ? now - turn.occurredAt > gapMs
       : next.occurredAt - turn.occurredAt > gapMs;
-    if (!boundary && !gap) continue;
-    if (current.length >= SESSION_DEEP_MIN_TURNS) segments.push({ turns: current, declared: boundary });
+    if (!ends && !starts && !gap) continue;
+    const inWindow = windows.some((window) =>
+      current[0]!.occurredAt >= window.from && turn.occurredAt <= window.to);
+    if (current.length >= SESSION_DEEP_MIN_TURNS) segments.push({ turns: current, declared: ends || inWindow });
     current = [];
   }
   return segments;
+}
+
+function taskWindows(taskStarts: readonly number[], taskEnds: readonly number[]): Array<{ from: number; to: number }> {
+  const events = [
+    ...taskStarts.map((at) => ({ at, start: true })),
+    ...taskEnds.map((at) => ({ at, start: false })),
+  ].sort((left, right) => left.at - right.at || Number(left.start) - Number(right.start));
+  const open: number[] = [];
+  return events.flatMap((event) => {
+    if (event.start) {
+      open.push(event.at);
+      return [];
+    }
+    const from = open.pop();
+    return from === undefined ? [] : [{ from, to: event.at }];
+  });
 }
 
 export function deepCardEntryId(first: SessionDigestEntry, origin: 'rule' | 'model' = 'rule'): string {
@@ -231,7 +254,8 @@ async function compileScope(
 ): Promise<{ created: SessionDigestEntry[]; declaredSkipped: number }> {
   const read = readSessionTurns(db, { ...scope, limit: SESSION_DIGEST_MAX_TURNS });
   const taskEnds = readTaskEnds(db, scope);
-  const segments = planDeepSegments(read.turns, taskEnds, now);
+  const taskStarts = readTaskStarts(db, scope);
+  const segments = planDeepSegments(read.turns, taskEnds, now, undefined, taskStarts);
   const existing = existingSegmentKeys(db, scope);
   const created: SessionDigestEntry[] = [];
   let declaredSkipped = 0;
@@ -338,17 +362,43 @@ function listDeepScopes(db: Database, projectId?: string): SessionDeepScope[] {
 }
 
 function readTaskEnds(db: Database, scope: SessionDeepScope): number[] {
+  const base = baseSessionId(scope.sessionId);
+  const source = `${scope.agentId}:${base}`;
   const rows = db.query(`
     SELECT occurred_at FROM memory_events
     WHERE event_type = 'RAW_EVENT_RECORDED'
       AND project_id = ?
-      AND COALESCE(session_id, '') = ?
-      AND COALESCE(source_id, '') = ?
       AND raw_event_type = 'task_event'
       AND json_valid(payload_json)
       AND json_extract(payload_json, '$.metadata.kind') = 'task-procedure'
-  `).all(scope.projectId, scope.sessionId, `${scope.agentId}:${scope.sessionId}`) as Array<{ occurred_at: number }>;
+      AND (session_id = ? OR substr(session_id, 1, length(?) + 1) = ? || ':')
+      AND (source_id = ? OR substr(source_id, 1, length(?) + 1) = ? || ':')
+  `).all(scope.projectId, base, base, base, source, source, source) as Array<{ occurred_at: number }>;
   return rows.map((row) => row.occurred_at);
+}
+
+function readTaskStarts(db: Database, scope: SessionDeepScope): number[] {
+  const base = baseSessionId(scope.sessionId);
+  const source = `${scope.agentId}:${base}`;
+  const rows = db.query(`
+    SELECT occurred_at FROM memory_events
+    WHERE event_type = 'RAW_EVENT_RECORDED'
+      AND project_id = ?
+      AND raw_event_type = 'tool_call'
+      AND json_valid(payload_json)
+      AND json_extract(payload_json, '$.metadata.toolName') = 'declare_task'
+      AND json_extract(payload_json, '$.metadata.input.action') = 'start'
+      AND (session_id = ? OR substr(session_id, 1, length(?) + 1) = ? || ':')
+      AND (source_id = ? OR substr(source_id, 1, length(?) + 1) = ? || ':')
+  `).all(scope.projectId, base, base, base, source, source, source) as Array<{ occurred_at: number }>;
+  return rows.map((row) => row.occurred_at);
+}
+
+function baseSessionId(sessionId: string): string {
+  const index = sessionId.lastIndexOf(':');
+  return index > 0 && /^\d{4}-\d{2}-\d{2}$/u.test(sessionId.slice(index + 1))
+    ? sessionId.slice(0, index)
+    : sessionId;
 }
 
 const DEEP_CARD_SYSTEM_PROMPT = [

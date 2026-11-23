@@ -76,6 +76,20 @@ describe('deterministic episode segmentation (#474)', () => {
     const turns = continuous(7);
     expect(planDeepSegments(turns, [], T0 + 7_000 + GAP + 1)).toHaveLength(0);
   });
+
+  test('a task start splits the chat before it and only the declared run is skipped (#498)', () => {
+    const turns = continuous(25);
+    const segments = planDeepSegments(turns, [T0 + 24_500], T0 + 24_500 + GAP + 1, undefined, [T0 + 14_500]);
+    expect(segments.map((segment) => segment.turns.length)).toEqual([15, 10]);
+    expect(segments.map((segment) => segment.declared)).toEqual([false, true]);
+  });
+
+  test('a task end at the last turn millisecond is a boundary (#498)', () => {
+    const turns = continuous(20);
+    const segments = planDeepSegments(turns, [T0 + 19_000], T0 + 19_000 + GAP + 1);
+    expect(segments).toHaveLength(1);
+    expect(segments[0]!.declared).toBe(true);
+  });
 });
 
 describe('the DREAMING boundary compiles one card per closed undeclared segment (#474)', () => {
@@ -192,6 +206,171 @@ describe('the DREAMING boundary compiles one card per closed undeclared segment 
       expect(compiled.created).toHaveLength(1);
       const nextDay = kernel.sessionContext.digest({ projectId, agentId, sessionId: 'day-two:2026-11-24' });
       expect(nextDay.entries.filter((entry) => entry.kind === 'deep')).toHaveLength(1);
+    } finally {
+      kernel.close();
+    }
+  });
+
+  test('chat before a declared task is carded and the task run is not (#498)', async () => {
+    const dir = makeTempDir('cogmem-deep-start-');
+    const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.sqlite'), projectTimeZone: 'UTC' });
+    const projectId = 'start-project';
+    const agentId = 'start-agent';
+    const sessionId = 'start-session';
+    const backend = new KernelAgentMemoryBackend(kernel);
+    const chatIds: string[] = [];
+    try {
+      for (let index = 0; index < 15; index += 1) {
+        const captured = await backend.captureConversationTurn({
+          projectId,
+          agentId,
+          sessionId,
+          channel: 'terminal',
+          speaker: index % 2 === 0 ? 'owner' : 'agent',
+          text: `第 ${index} 轮：闲聊。`,
+          occurredAt: T0 + index * 1_000,
+        });
+        chatIds.push(captured.eventId);
+      }
+      kernel.recordToolCall({
+        projectId,
+        sessionId,
+        threadId: sessionId,
+        sourceId: `${agentId}:${sessionId}`,
+        toolName: 'declare_task',
+        input: { action: 'start' },
+        occurredAt: T0 + 14_500,
+      });
+      for (let index = 15; index < 25; index += 1) {
+        await backend.captureConversationTurn({
+          projectId,
+          agentId,
+          sessionId,
+          channel: 'terminal',
+          speaker: index % 2 === 0 ? 'owner' : 'agent',
+          text: `第 ${index} 轮：声明内的工作。`,
+          occurredAt: T0 + index * 1_000,
+        });
+      }
+      kernel.recordRawEvent({
+        projectId,
+        sessionId,
+        threadId: sessionId,
+        sourceId: `${agentId}:${sessionId}`,
+        role: 'system',
+        rawEventType: 'task_event',
+        content: 'task completed: chat/cleanup',
+        occurredAt: T0 + 24_500,
+        metadata: { kind: 'task-procedure' },
+      });
+      const compiled = await kernel.sessionContext.compileEpisodeCards({
+        projectId,
+        agentId,
+        sessionId,
+        now: T0 + 24_500 + GAP + 1,
+      });
+      expect(compiled.created).toHaveLength(1);
+      expect(compiled.created[0]!.sourceRefs).toEqual(chatIds);
+      expect(compiled.declaredSkipped).toBe(1);
+      const again = await kernel.sessionContext.compileEpisodeCards({
+        projectId,
+        agentId,
+        sessionId,
+        now: T0 + 24_500 + GAP + 2,
+      });
+      expect(again.created).toHaveLength(0);
+    } finally {
+      kernel.close();
+    }
+  });
+
+  test('a task declared on one day and ended on the next is not carded on either side (#498)', async () => {
+    const dir = makeTempDir('cogmem-deep-midnight-');
+    const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.sqlite'), projectTimeZone: 'UTC' });
+    const projectId = 'midnight-project';
+    const agentId = 'midnight-agent';
+    const dayOne = 'midnight:2026-11-23';
+    const dayTwo = 'midnight:2026-11-24';
+    const dayTwoStart = T0 + 3_600_000;
+    const backend = new KernelAgentMemoryBackend(kernel);
+    const chatIds: string[] = [];
+    const afterIds: string[] = [];
+    try {
+      for (let index = 0; index < 10; index += 1) {
+        const captured = await backend.captureConversationTurn({
+          projectId,
+          agentId,
+          sessionId: dayOne,
+          channel: 'terminal',
+          speaker: index % 2 === 0 ? 'owner' : 'agent',
+          text: `第 ${index} 轮：任务前的闲聊。`,
+          occurredAt: T0 + index * 1_000,
+        });
+        chatIds.push(captured.eventId);
+      }
+      kernel.recordToolCall({
+        projectId,
+        sessionId: dayOne,
+        threadId: dayOne,
+        sourceId: `${agentId}:${dayOne}`,
+        toolName: 'declare_task',
+        input: { action: 'start' },
+        occurredAt: T0 + 9_500,
+      });
+      for (let index = 10; index < 20; index += 1) {
+        await backend.captureConversationTurn({
+          projectId,
+          agentId,
+          sessionId: dayOne,
+          channel: 'terminal',
+          speaker: index % 2 === 0 ? 'owner' : 'agent',
+          text: `第 ${index} 轮：跨午夜任务。`,
+          occurredAt: T0 + index * 1_000,
+        });
+      }
+      for (let index = 20; index < 30; index += 1) {
+        await backend.captureConversationTurn({
+          projectId,
+          agentId,
+          sessionId: dayTwo,
+          channel: 'terminal',
+          speaker: index % 2 === 0 ? 'owner' : 'agent',
+          text: `第 ${index} 轮：跨午夜任务。`,
+          occurredAt: dayTwoStart + (index - 20) * 1_000,
+        });
+      }
+      kernel.recordRawEvent({
+        projectId,
+        sessionId: dayTwo,
+        threadId: dayTwo,
+        sourceId: `${agentId}:${dayTwo}`,
+        role: 'system',
+        rawEventType: 'task_event',
+        content: 'task completed: midnight/migration',
+        occurredAt: dayTwoStart + 9_500,
+        metadata: { kind: 'task-procedure' },
+      });
+      for (let index = 0; index < 10; index += 1) {
+        const captured = await backend.captureConversationTurn({
+          projectId,
+          agentId,
+          sessionId: dayTwo,
+          channel: 'terminal',
+          speaker: index % 2 === 0 ? 'owner' : 'agent',
+          text: `第 ${index} 轮：任务后的闲聊。`,
+          occurredAt: dayTwoStart + 20_000 + index * 1_000,
+        });
+        afterIds.push(captured.eventId);
+      }
+      const now = dayTwoStart + 30_000 + GAP + 1;
+      const first = await kernel.sessionContext.compileEpisodeCards({ projectId, agentId, sessionId: dayOne, now });
+      expect(first.created).toHaveLength(1);
+      expect(first.created[0]!.sourceRefs).toEqual(chatIds);
+      expect(first.declaredSkipped).toBe(1);
+      const second = await kernel.sessionContext.compileEpisodeCards({ projectId, agentId, sessionId: dayTwo, now });
+      expect(second.created).toHaveLength(1);
+      expect(second.created[0]!.sourceRefs).toEqual(afterIds);
+      expect(second.declaredSkipped).toBe(1);
     } finally {
       kernel.close();
     }
