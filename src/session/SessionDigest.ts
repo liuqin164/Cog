@@ -42,7 +42,6 @@ export interface SessionDigestEntry {
   sessionId: string;
   occurredAt: number;
   speaker: ConversationSpeaker;
-  /** The ledger's exact text. Never a summary, never a re-rendering. */
   text: string;
   sourceRefs: string[];
   /** True when `text` contains a number, a quoted span or a named person. */

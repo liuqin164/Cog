@@ -218,19 +218,25 @@ index: it never replaces, rewrites or deletes a ledger row.
 Only closed segments with at least `SESSION_DEEP_MIN_TURNS` turns (8) become cards. The compiler
 creates at most `SESSION_DEEP_MAX_CARDS_PER_RUN` (8) per tick and the lane shows the newest
 `SESSION_DEEP_MAX_CARDS_IN_LANE` (24). A card id derives from the segment's first event
-(`digest:card:<eventId>`), and a unique `(project, agent, session, segment)` key makes a re-run of
+(`digest:card:rule:<eventId>` when the deterministic builder wrote it, `digest:card:model:<eventId>`
+when the memory model did), and a unique `(project, agent, session, segment)` key makes a re-run of
 the same Dream idempotent. A model-less kernel produces the same card deterministically.
 
 **Card fields.** The text carries `做了什么` (what the run accomplished), `遗留问题` (unclosed
 items; the memory model may cite an F16 promise), `锚点` (every `digestAnchors` fragment from the
 covered turns) and `指针` (a sampled set of covered `digest:evt-…` ids plus `mem:` keys for the
 first and last turn). The entry's `sourceRefs` is the complete covered event set; `occurredAt` is
-the compile instant, so the card appends after the turns it covers and before any later turn.
+the compile instant, so the card appends after the turns it covers and before any later turn. A
+model-written card starts with `情节卡（模型整理，未经核实）`; the deterministic card starts with
+`情节卡（本段）`, so a reader can tell an inference from a compiled record without consulting the
+database.
 
 A model answer is accepted only when every `digestAnchors` fragment in `做了什么` and `遗留问题`
-is a literal substring of the covered ledger text; otherwise the deterministic card is used. The
-`锚点` line is built from the ledger text by construction. Model calls use the existing `memory`
-role and add no configuration surface.
+is one of the covered ledger text's anchors (set membership, not a substring): `1,5` cut from
+`12,500` is rejected. Prompt and deterministic text are clipped by code point and back off a
+numeric token the cut would split, so truncation cannot fabricate a shorter number or a lone
+surrogate. Otherwise the deterministic card is used. The `锚点` line is built from the ledger text
+by construction. Model calls use the existing `memory` role and add no configuration surface.
 
 **Entry, expansion, drill-down.** A card enters the digest lane as `kind: "deep"` and renders its
 first `anchorEvent`. The #253 auto-expansion matches a card by its keys or its anchor line; when the
@@ -275,10 +281,12 @@ text: this is a request re-assembly, not deletion and not a second fold mechanis
 
 A decision, a number or a name may appear in the digest only as the exact text the ledger holds.
 The mechanical builder satisfies this by construction: `text` is the row's text, not a rewrite.
-`digestAnchors(text)` names the risky fragments (numbers with separators, quoted spans, and a person
-introduced by 叫/名叫/名字是) so a reader and the contract test can compare them against the source
-turn. A deep entry that paraphrases an anchor is rejected before it is stored, and the deterministic
-card is written instead.
+`digestAnchors(text)` names the risky fragments it actually enforces: numbers with separators,
+quoted spans, and a person introduced by 叫/名叫/名字是. A bare name, an English name, or decision
+wording outside those shapes is not extracted, so the contract test does not check it; the card
+header tells whether the words came from the rule builder or the model. A deep entry that
+paraphrases an enforced anchor is rejected before it is stored, and the deterministic card is
+written instead.
 
 ## Recall modes (frozen)
 

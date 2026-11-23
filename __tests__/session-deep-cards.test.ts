@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
 import { createMemoryKernel, type MemoryKernel } from '../src/factory.js';
 import {
+  assembleSessionContext,
   buildDeepCardEntry,
   createSessionDeepCompiler,
   digestAnchors,
@@ -315,8 +316,118 @@ describe('the model compiler keeps the anchor discipline (#474)', () => {
   });
 });
 
+describe('an episode card names its producer (#496)', () => {
+  const entries: SessionDigestEntry[] = Array.from({ length: 8 }, (_, index) => ({
+    entryId: `digest:evt-${index}`,
+    kind: 'turn',
+    sessionId: 's',
+    occurredAt: T0 + index,
+    speaker: index % 2 === 0 ? 'owner' : 'agent',
+    text: index === 0 ? '决定：由「小明」负责，预算 12,500 元。' : `第 ${index} 轮。`,
+    sourceRefs: [`evt-${index}`],
+    anchor: index === 0,
+  }));
+
+  test('an accepted model card carries the model header and id prefix', async () => {
+    const compiler = createSessionDeepCompiler(async () =>
+      JSON.stringify({ did: '「小明」负责迁移，预算 12,500 元。', open: '待办：下一次核对。' }));
+    const [card] = await compiler.compile({ projectId: 'p', agentId: 'a', sessionId: 's', entries, now: T0 + 10_000 });
+    expect(card!.entryId).toBe('digest:card:model:evt-0');
+    expect(card!.text.startsWith('情节卡（模型整理，未经核实）\n')).toBe(true);
+  });
+
+  test('the deterministic card keeps the rule header and id prefix', async () => {
+    const compiler = createSessionDeepCompiler(async () =>
+      JSON.stringify({ did: '「小明」负责，预算 13,000 元。', open: '无' }));
+    const [card] = await compiler.compile({ projectId: 'p', agentId: 'a', sessionId: 's', entries, now: T0 + 10_000 });
+    expect(card!.entryId).toBe('digest:card:rule:evt-0');
+    expect(card!.text.startsWith('情节卡（本段）\n')).toBe(true);
+  });
+
+  test('the digest lane renders the model marker and drills to the first event', async () => {
+    const compiler = createSessionDeepCompiler(async () =>
+      JSON.stringify({ did: '「小明」负责迁移，预算 12,500 元。', open: '待办：下一次核对。' }));
+    const [card] = await compiler.compile({ projectId: 'p', agentId: 'a', sessionId: 's', entries, now: T0 + 10_000 });
+    const assembly = assembleSessionContext(
+      { projectId: 'p', agentId: 'a', sessionId: 's', targetTokens: 200_000 },
+      { sessionId: 's', entries: [card!], tail: [], truncated: false },
+    );
+    const lane = assembly.lanes.find((item) => item.lane === 'digest')!;
+    expect(lane.text).toContain('情节卡（模型整理，未经核实）');
+    expect(lane.text).toContain('anchorEvent=evt-0');
+  });
+});
+
+describe('verbatim anchors are set members and truncation respects code points (#497)', () => {
+  function entriesWith(text: string): SessionDigestEntry[] {
+    return Array.from({ length: 8 }, (_, index) => ({
+      entryId: `digest:evt-${index}`,
+      kind: 'turn',
+      sessionId: 's',
+      occurredAt: T0 + index,
+      speaker: index % 2 === 0 ? 'owner' : 'agent',
+      text: index === 0 ? text : `第 ${index} 轮。`,
+      sourceRefs: [`evt-${index}`],
+      anchor: index === 0,
+    }));
+  }
+
+  test('a number cut by truncation is not a verbatim anchor', async () => {
+    const entries = entriesWith('决定：由「小明」负责，预算 1,500,000 元。');
+    const compiler = createSessionDeepCompiler(async () =>
+      JSON.stringify({ did: '「小明」负责，预算 1,5 元。', open: '无' }));
+    const [card] = await compiler.compile({ projectId: 'p', agentId: 'a', sessionId: 's', entries, now: T0 + 10_000 });
+    expect(card!.entryId).toBe('digest:card:rule:evt-0');
+    expect(card!.text).not.toContain('预算 1,5 元');
+  });
+
+  test('a complete number, quoted span and name still pass', async () => {
+    const entries = entriesWith('决定：叫小明负责，预算 12,500 元，引用「原文片段」。');
+    const compiler = createSessionDeepCompiler(async () =>
+      JSON.stringify({ did: '叫小明负责，预算 12,500 元，引用「原文片段」。', open: '无' }));
+    const [card] = await compiler.compile({ projectId: 'p', agentId: 'a', sessionId: 's', entries, now: T0 + 10_000 });
+    expect(card!.entryId).toBe('digest:card:model:evt-0');
+    expect(card!.text).toContain('叫小明负责，预算 12,500 元，引用「原文片段」。');
+  });
+
+  test('deterministic truncation does not leave half a number', async () => {
+    const entries = entriesWith(`${'x'.repeat(170)}预算 1,500,000 元`);
+    const compiler = createSessionDeepCompiler(async () => {
+      throw new Error('unreachable');
+    });
+    const [card] = await compiler.compile({ projectId: 'p', agentId: 'a', sessionId: 's', entries, now: T0 + 10_000 });
+    const didLine = card!.text.split('\n').find((line) => line.startsWith('做了什么：'))!;
+    expect(didLine).not.toContain('1,5');
+  });
+
+  test('truncation never splits a surrogate pair', async () => {
+    const entries = entriesWith(`${'a'.repeat(179)}😀 tail`);
+    const compiler = createSessionDeepCompiler(async () => {
+      throw new Error('unreachable');
+    });
+    const [card] = await compiler.compile({ projectId: 'p', agentId: 'a', sessionId: 's', entries, now: T0 + 10_000 });
+    expect(card!.text).toContain('😀');
+    expect(card!.text).not.toContain('\uFFFD');
+    expect(hasLoneSurrogate(card!.text)).toBe(false);
+  });
+});
+
 function count(db: Database, table: string): number {
   return Number((db.query(`SELECT COUNT(*) AS c FROM "${table}"`).get() as { c?: number } | null)?.c ?? 0);
+}
+
+function hasLoneSurrogate(text: string): boolean {
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = text.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return true;
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function residue(db: Database, needles: readonly string[]): string[] {
