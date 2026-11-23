@@ -3,34 +3,20 @@ import type { CompanionShell } from './app.ts';
 import type { CommandReply } from './commands.ts';
 import { formatBytes } from './memory.ts';
 import { forgetRuntimeText } from './state/checkpoint.ts';
+import { forgetHash, forgetNeedles } from './trace.ts';
 
 export class SovereigntyCommands {
-  /**
-   * The window `/forget` previewed and `/forget confirm` may execute. Process-local: a restart
-   * asks for a fresh preview rather than resuming a confirmation the owner can no longer see.
-   */
   private pendingForget?: { start: number; end: number };
-  /**
-   * The export path `/export` asked the owner to confirm (#290). Process-local: unlike the data-dir
-   * path, writing outside the data dir must belong to a confirmation the owner just saw.
-   */
   private pendingExport?: { path: string };
-  /**
-   * The practice `/correct` proposed and `/correct confirm` may write (#264). Process-local for the
-   * same reason as the forget window: a confirmation must belong to a proposal the owner just saw.
-   */
   private pendingProcedureCorrection?: { domain: string; key: string; value: string; title: string; steps: string[] };
 
   constructor(private readonly shell: CompanionShell) {}
-
-  // ---- Memory sovereignty entry points (#232): three commands over F9's face. ----
 
   forgetPreview(start: number, end: number): CommandReply {
     if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end) {
       return { text: '删除窗口无效：起点必须早于终点（半开窗口 [起, 止)）。', receipt: true };
     }
     const projectId = this.shell.config.projectId;
-    // The same half-open occurredAt filter deleteRange applies; this is a read, not a second rule.
     const count = this.shell.backend.countEventsBetween({ projectId, startTime: start, endTime: end });
     const pending = this.shell.backend.countPendingBindingsBetween({ projectId, startTime: start, endTime: end });
     this.pendingForget = { start, end };
@@ -51,6 +37,9 @@ export class SovereigntyCommands {
     if (!pending) return { text: '还没有预览：先 /forget <起> <止> 看范围和条数。', receipt: true };
     const projectId = this.shell.config.projectId;
     const deletedTexts = new Set<string>();
+    this.shell.machine.updateRuntime({
+      pendingForget: { start: pending.start, end: pending.end, hashes: this.rangeHashes(projectId, pending.start, pending.end) },
+    });
     const result = this.shell.kernel.sovereignty.deleteRange({
       projectId,
       start: pending.start,
@@ -70,6 +59,7 @@ export class SovereigntyCommands {
     const scrubbed = forgetRuntimeText(this.shell.machine.runtime, this.shell.stateLedger);
     this.shell.machine.updateRuntime(scrubbed.runtime);
     const traceRecordsRemoved = this.shell.trace.forgetWindow(pending.start, pending.end, [...deletedTexts]);
+    this.shell.machine.updateRuntime({ pendingForget: undefined });
     const deleted = Object.entries(result.deleted)
       .filter(([, value]) => value > 0)
       .map(([field, value]) => `${field} ${value}`)
@@ -85,6 +75,26 @@ export class SovereigntyCommands {
       receipt: true,
       data: { sovereignty_delete: result },
     };
+  }
+
+  resumePendingForget(): void {
+    const pending = this.shell.machine.runtime.pendingForget;
+    if (!pending) return;
+    this.shell.stateLedger.forget();
+    const scrubbed = forgetRuntimeText(this.shell.machine.runtime, this.shell.stateLedger);
+    this.shell.machine.updateRuntime(scrubbed.runtime);
+    this.shell.trace.forgetWindow(pending.start, pending.end, [], pending.hashes);
+    this.shell.machine.updateRuntime({ pendingForget: undefined });
+  }
+
+  private rangeHashes(projectId: string, start: number, end: number): string[] {
+    const hashes = new Set<string>();
+    for (const event of this.shell.kernel.eventStore.iterateProjectEvents(projectId, start, end)) {
+      const text = (event.payload as { text?: unknown } | undefined)?.text;
+      if (typeof text !== 'string') continue;
+      for (const needle of forgetNeedles([text])) hashes.add(forgetHash(needle));
+    }
+    return [...hashes];
   }
 
   exportMemory(path: string | undefined): CommandReply {

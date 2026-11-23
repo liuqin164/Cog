@@ -4,12 +4,19 @@ import { join } from 'node:path';
 import { createMemoryKernel } from 'cogmem';
 
 import { enqueueAway } from '../src/presence.ts';
-import { makeShell, makeTempDir, ScriptedProvider } from './helpers.ts';
+import { makeShell, makeTempDir, ScriptedProvider, spawnFixture } from './helpers.ts';
 
 const DAY = 86_400_000;
 
 function scan(path: string, needle: string): boolean {
   return existsSync(path) && readFileSync(path).includes(Buffer.from(needle));
+}
+
+function pendingForget(data: string): { start: number; end: number; hashes: string[] } | undefined {
+  const checkpoint = JSON.parse(readFileSync(join(data, 'checkpoint.json'), 'utf8')) as {
+    runtime?: { pendingForget?: { start: number; end: number; hashes: string[] } };
+  };
+  return checkpoint.runtime?.pendingForget;
 }
 
 describe('/forget covers the shell checkpoint and trace', () => {
@@ -293,6 +300,86 @@ describe('/forget covers the shell checkpoint and trace', () => {
       } finally {
         await restored.stop();
       }
+    } finally {
+      await shell.stop();
+    }
+  }, 30_000);
+
+  test('#503 a kill after the kernel commit resumes trace and checkpoint cleanup from the shell marker', async () => {
+    const dir = makeTempDir('forget-shell-marker-');
+    const data = join(dir, 'data');
+    const marker = 'zz-forget-marker-7c3e';
+    const first = spawnFixture('forget-crash-process.ts', [dir, 'crash', marker]);
+    await first.waitFor('forgetting');
+    expect(await first.exited()).toBeNull();
+
+    const raw = readFileSync(join(data, 'checkpoint.json'), 'utf8');
+    expect(raw).not.toContain(marker);
+    const pending = pendingForget(data)!;
+    expect(Object.keys(pending).sort()).toEqual(['end', 'hashes', 'start']);
+    expect(typeof pending.start).toBe('number');
+    expect(typeof pending.end).toBe('number');
+    expect(pending.hashes.length).toBeGreaterThan(0);
+    expect(scan(join(data, 'shell-events.jsonl'), marker)).toBe(true);
+
+    const second = spawnFixture('forget-crash-process.ts', [dir, 'recover', marker]);
+    const recovered = await second.waitFor('recovered');
+    await second.exited();
+    expect(recovered.pendingForget).toBeNull();
+    expect(recovered.steering).toHaveLength(0);
+    expect(recovered.trace ?? '').not.toContain(marker);
+    expect(recovered.checkpoint ?? '').not.toContain(marker);
+    expect(recovered.previous ?? '').not.toContain(marker);
+  }, 60_000);
+
+  test('#503 a failed trace rewrite keeps the marker, and the next start retries the cleanup', async () => {
+    const dir = makeTempDir('forget-shell-marker-retry-');
+    const data = join(dir, 'data');
+    const marker = 'zz-forget-marker-retry-5d1a';
+    const first = makeShell(dir, new ScriptedProvider([{ text: '记下了。', toolCalls: [] }]));
+    await first.start();
+    try {
+      await first.submit(`${marker} 我的旧住址是青叶町十二号。`);
+      const now = Date.now();
+      first.trace.append('command_proposed', { id: 'late', command: 'bash', args: `echo ${marker}` }, now + DAY);
+      await first.runCommand('forget', `${new Date(now - DAY).toISOString()} ${new Date(now + DAY).toISOString()}`);
+      const original = first.trace.forgetWindow.bind(first.trace);
+      first.trace.forgetWindow = () => {
+        throw new Error('trace_io');
+      };
+      const failed = await first.runCommand('forget', 'confirm');
+      expect(failed.text).toContain('trace_io');
+      const raw = readFileSync(join(data, 'checkpoint.json'), 'utf8');
+      expect(raw).not.toContain(marker);
+      expect(pendingForget(data)?.hashes.length).toBeGreaterThan(0);
+      expect(scan(join(data, 'shell-events.jsonl'), marker)).toBe(true);
+      first.trace.forgetWindow = original;
+    } finally {
+      await first.stop();
+    }
+
+    const second = makeShell(dir, new ScriptedProvider([{ text: '在。', toolCalls: [] }]));
+    await second.start();
+    try {
+      expect(scan(join(data, 'shell-events.jsonl'), marker)).toBe(false);
+      expect(pendingForget(data)).toBeUndefined();
+    } finally {
+      await second.stop();
+    }
+  }, 60_000);
+
+  test('#503 a successful forget clears its shell marker', async () => {
+    const dir = makeTempDir('forget-shell-marker-clear-');
+    const data = join(dir, 'data');
+    const shell = makeShell(dir, new ScriptedProvider([{ text: '记下了。', toolCalls: [] }]));
+    await shell.start();
+    try {
+      await shell.submit('我的旧住址是青叶町十二号。');
+      const now = Date.now();
+      await shell.runCommand('forget', `${new Date(now - DAY).toISOString()} ${new Date(now + DAY).toISOString()}`);
+      const receipt = await shell.runCommand('forget', 'confirm');
+      expect(receipt.text).toContain('已删除');
+      expect(pendingForget(data)).toBeUndefined();
     } finally {
       await shell.stop();
     }

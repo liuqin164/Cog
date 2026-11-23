@@ -1,16 +1,5 @@
-/**
- * Append-only JSONL trace: transitions, hook decisions, cage violations, capture outcomes.
- *
- * The trace is evidence, not state. A trace write that fails does not halt the shell (unlike the
- * checkpoint, where a failed write means the recovered state would be a lie), but it does say so on
- * stderr once, because a silently missing trace is how a spike loses the kill test's story.
- *
- * Damage tolerance follows Pi's session loader (`session-manager.ts`, `loadEntriesFromFile`): every
- * parseable record is kept, a malformed line is skipped instead of voiding the file — with one
- * deliberate difference. Pi skips in silence; here the damage is written down (`trace_corrupt`) once
- * per damaged byte range, because this log is the evidence the kill matrix reads back.
- */
 import { appendFileSync, closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 
 export interface TraceRecord {
@@ -46,9 +35,26 @@ function stringValues(value: unknown, out: string[] = []): string[] {
   return out;
 }
 
-function shouldForget(record: TraceRecord, start: number, end: number, needles: readonly string[]): boolean {
+export function forgetNeedles(texts: readonly string[]): string[] {
+  return [...new Set(texts.flatMap((text) => {
+    const trimmed = text.trim();
+    return [trimmed, ...trimmed.split(/[^\p{L}\p{N}_-]+/u)].filter((token) => token.length >= 8);
+  }))];
+}
+
+export function forgetHash(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function hashedValue(value: string, hashes: ReadonlySet<string>): boolean {
+  return [value.trim(), ...value.trim().split(/[^\p{L}\p{N}_-]+/u)]
+    .some((token) => token.length >= 8 && hashes.has(forgetHash(token)));
+}
+
+function shouldForget(record: TraceRecord, start: number, end: number, needles: readonly string[], hashes: ReadonlySet<string>): boolean {
   const values = stringValues(record);
   if (needles.some((needle) => values.some((value) => value.includes(needle)))) return true;
+  if (hashes.size > 0 && values.some((value) => hashedValue(value, hashes))) return true;
   if (typeof record.at !== 'number' || record.at < start || record.at >= end) return false;
   return Object.entries(record).some(([key, value]) => TEXT_FIELDS.has(key) && typeof value === 'string' && value !== '');
 }
@@ -117,19 +123,13 @@ export class TraceLog {
     return this.scan().records;
   }
 
-  forgetWindow(start: number, end: number, texts: readonly string[] = []): number {
-    const needles = new Set<string>();
-    for (const text of texts) {
-      const trimmed = text.trim();
-      if (trimmed.length >= 8) needles.add(trimmed);
-      for (const token of trimmed.split(/[^\p{L}\p{N}_-]+/u)) {
-        if (token.length >= 8) needles.add(token);
-      }
-    }
-    return this.rewrite(this.path, start, end, [...needles]) + this.rewrite(`${this.path}.1`, start, end, [...needles]);
+  forgetWindow(start: number, end: number, texts: readonly string[] = [], hashes: readonly string[] = []): number {
+    const needles = forgetNeedles(texts);
+    const hashed = new Set(hashes);
+    return this.rewrite(this.path, start, end, needles, hashed) + this.rewrite(`${this.path}.1`, start, end, needles, hashed);
   }
 
-  private rewrite(path: string, start: number, end: number, needles: readonly string[]): number {
+  private rewrite(path: string, start: number, end: number, needles: readonly string[], hashes: ReadonlySet<string>): number {
     let raw: string;
     try {
       raw = readFileSync(path, 'utf8');
@@ -145,7 +145,7 @@ export class TraceLog {
       } catch {
         record = undefined;
       }
-      if (record && shouldForget(record, start, end, needles)) {
+      if (record && shouldForget(record, start, end, needles, hashes)) {
         removed += 1;
         continue;
       }

@@ -529,6 +529,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       // record behind (the lock goes with the failure, since this process will not run).
       traceScan = this.trace.recover();
       restored = this.machine.restore();
+      this.sovereignty.resumePendingForget();
     } catch (error) {
       this.lock.release(process.pid);
       throw error;

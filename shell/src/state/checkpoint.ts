@@ -240,12 +240,8 @@ export interface ShellRuntimeState {
    * "recover to IDLE, never replay" rule is untouched.
    */
   resumeAfterRestart?: { assignmentId: string; at: number; reason: 'plugins' };
-  /**
-   * `/pause`: while true the shell's ingest call points write nothing to the kernel. It is state, not
-   * a UI toggle — a pause that a restart forgot would resume capturing behind the user's back, so it
-   * lives in the checkpoint with everything else the next process must honour.
-   */
   capturePaused?: boolean;
+  pendingForget?: { start: number; end: number; hashes: string[] };
 }
 
 export interface CheckpointState {
@@ -312,6 +308,7 @@ const RUNTIME_KEYS: Record<keyof ShellRuntimeState, true> = {
   emergence: true,
   resumeAfterRestart: true,
   capturePaused: true,
+  pendingForget: true,
 };
 
 export interface RuntimeTextLedger {
