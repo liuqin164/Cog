@@ -71,10 +71,11 @@ outranks the digest and the working set. The digest is sacrificed first because 
 `pinned` and `profile` as the fixed system prompt, then opens the block before the newest user line
 with the digest; the remaining lanes and the per-turn time block follow, with the time block last.
 The stable prefix therefore continues across the message boundary without making the first system
-message grow. The digest renders entries in ascending `occurredAt` with `entryId` as the tie-break,
-so a new mechanical turn, task stub or episode card appends at the end of the lane instead of
-inserting into it. The digest's `stable` flag is `no` only because budget pressure may still
-downgrade it to a pointer; while it is included, its earlier bytes do not change between
+message grow. The digest renders episode cards first as their own section in `created_at` order,
+then the mechanical turns in ascending `occurredAt` with `entryId` as the tie-break. A new turn
+therefore appends after the card section, and a new card shifts the prefix once. The digest's
+`stable` flag is `no` only because budget pressure may still downgrade it to a pointer; while it
+is included, its earlier bytes do not change between
 assemblies. The one deliberate exception is the #322 rotation: when the 512-turn window rolls, the
 oldest entries leave the front and the prefix is rebuilt.
 
@@ -226,8 +227,9 @@ the same Dream idempotent. A model-less kernel produces the same card determinis
 items; the memory model may cite an F16 promise), `锚点` (every `digestAnchors` fragment from the
 covered turns) and `指针` (a sampled set of covered `digest:evt-…` ids plus `mem:` keys for the
 first and last turn). The entry's `sourceRefs` is the complete covered event set; `occurredAt` is
-the compile instant, so the card appends after the turns it covers and before any later turn. A
-model-written card starts with `情节卡（模型整理，未经核实）`; the deterministic card starts with
+the compile instant; in the digest the card sits in a leading card section ordered by creation, so
+a later turn never slides in front of it. A model-written card starts with
+`情节卡（模型整理，未经核实）`; the deterministic card starts with
 `情节卡（本段）`, so a reader can tell an inference from a compiled record without consulting the
 database.
 

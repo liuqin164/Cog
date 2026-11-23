@@ -140,13 +140,13 @@ export function readDeepCardEntries(
   const corrections = cardCorrections(db, scope.projectId);
   const rows = db.query(`
     SELECT * FROM (
-      SELECT entry_id, session_id, occurred_at, text, source_refs_json, anchor
+      SELECT entry_id, session_id, occurred_at, text, source_refs_json, anchor, created_at
       FROM ${CARD_TABLE}
       WHERE project_id = ? AND agent_id = ?
-      ORDER BY occurred_at DESC, entry_id DESC
+      ORDER BY created_at DESC, entry_id DESC
       LIMIT ?
     )
-    ORDER BY occurred_at ASC, entry_id ASC
+    ORDER BY created_at ASC, entry_id ASC
   `).all(scope.projectId, scope.agentId, limit) as CardRow[];
   return rows.map((row) => {
     const sourceRefs = parseRefs(row.source_refs_json);
@@ -194,8 +194,7 @@ export function mergeDeepCardEntries(
   entries: readonly SessionDigestEntry[],
   cards: readonly SessionDigestEntry[],
 ): SessionDigestEntry[] {
-  return [...entries, ...cards].sort((left, right) =>
-    left.occurredAt - right.occurredAt || left.entryId.localeCompare(right.entryId));
+  return [...cards, ...entries];
 }
 
 export async function compileSessionDeepCards(

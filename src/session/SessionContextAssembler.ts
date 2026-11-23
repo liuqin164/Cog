@@ -576,11 +576,9 @@ function renderItemLine(item: SessionContextItem): string {
 function mergeTaskStubs(digest: SessionDigest, stubs: readonly SessionDigestEntry[]): SessionDigest {
   if (stubs.length === 0) return digest;
   const stubIds = new Set(stubs.map((stub) => stub.entryId));
-  return {
-    ...digest,
-    entries: [...digest.entries.filter((entry) => !stubIds.has(entry.entryId)), ...stubs]
-      .sort((left, right) => left.occurredAt - right.occurredAt || left.entryId.localeCompare(right.entryId)),
-  };
+  const turns = [...digest.entries.filter((entry) => entry.kind !== 'deep' && !stubIds.has(entry.entryId)), ...stubs]
+    .sort((left, right) => left.occurredAt - right.occurredAt || left.entryId.localeCompare(right.entryId));
+  return { ...digest, entries: [...digest.entries.filter((entry) => entry.kind === 'deep'), ...turns] };
 }
 
 function renderRecallLane(items: SessionContextItem[]): string {
