@@ -11,7 +11,9 @@ import { probeModel } from '../src/install/model.ts';
 import { renderLaunchdPlist, renderSystemdUnit, residentArgs, launchdLabel, type Runner, type ServiceSpec } from '../src/install/service.ts';
 import { createScriptedIO } from '../src/install/io.ts';
 import { Installer, parseEnvFile, parseInstallFlags, type InstallerHooks, type InstallFlags } from '../src/install/installer.ts';
+import { runDoctor } from '../src/install/doctor.ts';
 import { cliEntry, cogEntry, defaultShellHome, isSourceShell, supervisorEntry } from '../src/install/layout.ts';
+import { LOCAL_EMBEDDING_RUNTIME } from '../src/embedding/model.ts';
 import { makeTempDir } from './helpers.ts';
 
 const SHELL_DIR = fileURLToPath(new URL('..', import.meta.url));
@@ -766,6 +768,68 @@ describe('the vector provider step (#313)', () => {
     const state = JSON.parse(readFileSync(join(harness.dataDir, 'install.json'), 'utf8')) as { done: string[]; failedAt: string };
     expect(state.done).toEqual(['preflight', 'place']);
     expect(state.failedAt).toBe('model');
+  });
+});
+
+describe('the local embedding runtime registration (#527)', () => {
+  function doctorInput(dir: string) {
+    const dataDir = join(dir, 'data');
+    mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+    mkdirSync(join(dataDir, 'snapshots'), { recursive: true, mode: 0o700 });
+    const dbPath = join(dataDir, 'memory.sqlite');
+    const socketPath = join(dataDir, 'attach.sock');
+    writeFileSync(socketPath, '');
+    return {
+      dataDir,
+      dbPath,
+      socketPath,
+      healthUrl: 'http://127.0.0.1:7338/health',
+      fetchHealth: async () => ({
+        status: 'ok',
+        bind: '127.0.0.1',
+        state: 'IDLE',
+        kernel: { status: 'ok', package: 'cogmem', dbPath },
+        memory: { rssBytes: 1, source: 'proc' },
+      }),
+      spec: serviceSpec(dir),
+      platform: 'linux' as const,
+      run: async () => ({ code: 0, stdout: '', stderr: '' }),
+      mode: 'process' as const,
+      pid: process.pid,
+    };
+  }
+
+  test('doctor WARNs, without failing, when the local runtime is missing', async () => {
+    const report = await runDoctor({ ...doctorInput(makeTempDir()), embeddingProvider: 'local', embeddingRuntimePresent: () => false });
+    const check = report.checks.find((entry) => entry.id === 'embedding-runtime');
+    expect(check?.ok).toBe(true);
+    expect(check?.warn).toBe(true);
+    expect(check?.detail).toContain('@huggingface/transformers missing');
+    expect(report.ok).toBe(true);
+  });
+
+  test('doctor stays quiet when the runtime is present, and skips the check for a remote provider', async () => {
+    const present = await runDoctor({ ...doctorInput(makeTempDir()), embeddingProvider: 'local', embeddingRuntimePresent: () => true });
+    expect(present.checks.find((entry) => entry.id === 'embedding-runtime')?.warn).toBe(false);
+
+    const remote = await runDoctor({ ...doctorInput(makeTempDir()), embeddingProvider: 'ollama', embeddingRuntimePresent: () => false });
+    expect(remote.checks.some((entry) => entry.id === 'embedding-runtime')).toBe(false);
+  });
+
+  test('install.json records the runtime and a re-run rechecks and restores the registration', async () => {
+    const harness = makeHarness({ probeOk: true });
+    expect(await harness.installer.run()).toBe(0);
+    const statePath = join(harness.dataDir, 'install.json');
+    const state = JSON.parse(readFileSync(statePath, 'utf8')) as { embeddingRuntime?: string; done: string[] };
+    expect(state.embeddingRuntime).toBe(LOCAL_EMBEDDING_RUNTIME);
+
+    delete state.embeddingRuntime;
+    writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
+    expect(await harness.buildInstaller().run()).toBe(0);
+
+    const rerun = JSON.parse(readFileSync(statePath, 'utf8')) as { embeddingRuntime?: string; done: string[] };
+    expect(rerun.embeddingRuntime).toBe(LOCAL_EMBEDDING_RUNTIME);
+    expect(rerun.done).toEqual(['preflight', 'place', 'model', 'rhythm', 'resident', 'awake']);
   });
 });
 

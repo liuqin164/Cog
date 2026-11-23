@@ -209,6 +209,7 @@ export interface DefaultOpsOptions {
   /** Spawn a detached resident for a tree with no service manager. Injected by tests. */
   spawnDetached?: (command: string[], options: { cwd: string; env: Record<string, string> }) => number | undefined;
   fetchHealth?: (url: string) => Promise<HealthPayload>;
+  embeddingRuntimePresent?: () => boolean;
   log?: (kind: string, record: Record<string, unknown>) => void;
   now?: () => number;
   /** How long to wait for a stop, a start's health, and the gate. */
@@ -369,14 +370,6 @@ export function defaultUpgradeOps(options: DefaultOpsOptions): UpgradeOps {
         ? { ok: true, detail: `unit points at ${tree}` }
         : { ok: false, detail: `daemon-reload exited ${reload.code}: ${reload.stderr.trim()}` };
     },
-    /**
-     * The live half of the gate: the install's own `runDoctor`, once the new version is serving.
-     *
-     * It is the whole six-check doctor — health face, loopback-only bind, attach socket, kernel
-     * identity and dbPath, soul, unit/process — because that is the check a real install ends on, and
-     * the upgrade's claim is exactly "this install is as healthy as a fresh one". It runs *after* the
-     * switch rather than before it because every one of those checks needs a process to ask.
-     */
     async health(request, pid) {
       const fetchHealth = options.fetchHealth ?? defaultFetchHealth;
       const platform = platformOf(request);
@@ -391,6 +384,8 @@ export function defaultUpgradeOps(options: DefaultOpsOptions): UpgradeOps {
             fetchHealth: () => fetchHealth(healthUrl(request)),
             spec: serviceSpecFromRequest(request, request.toTree),
             platform,
+            embeddingProvider: parseEnvFile(request.envFile).COGMEM_EMBEDDING_PROVIDER ?? 'local',
+            embeddingRuntimePresent: options.embeddingRuntimePresent,
             run: options.run,
             mode: request.serviceMode ? 'service' : 'process',
             pid: pid ?? request.pid,

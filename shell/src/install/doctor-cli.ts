@@ -40,6 +40,7 @@ interface InstallState {
     httpPort?: number;
     platform?: string;
     serviceName?: string;
+    embedding?: { provider?: string };
   };
   pid?: number;
 }
@@ -221,6 +222,7 @@ async function main(): Promise<void> {
     fetchHealth: () => defaultFetchHealth(healthUrl),
     spec,
     platform,
+    embeddingProvider: choices.embedding?.provider ?? 'local',
     run: defaultRunner(),
     mode: state.pid ? 'process' : 'service',
     pid: state.pid,

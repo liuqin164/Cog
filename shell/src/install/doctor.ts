@@ -1,16 +1,8 @@
-/**
- * The install's own doctor: the checks that decide whether the six steps actually produced a living
- * companion, run against the running resident rather than a second kernel.
- *
- * It asks the resident's loopback `/health` for kernel state on purpose. Opening a second
- * `MemoryKernel` on the same database file to ask how the first one is doing would be two writers on
- * one path, which CONCURRENT_ACCESS.md forbids — the health face is the surface that exists so this
- * command does not have to.
- */
 import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { bwrapUsable } from '../plugins/builtin-tools.ts';
 import { formatBytes } from '../memory.ts';
+import { embeddingRuntimePresent } from '../embedding/model.ts';
 import { serviceStatus, type Platform, type Runner, type ServiceSpec } from './service.ts';
 
 export interface HealthPayload {
@@ -73,16 +65,14 @@ export interface DoctorContext {
   /** `service` checks the unit; `process` checks the pid an install without a manager left behind. */
   mode: 'service' | 'process';
   pid?: number;
+  embeddingProvider?: string;
+  embeddingRuntimePresent?: () => boolean;
 }
 
 export interface DoctorCheck {
   id: string;
   ok: boolean;
   detail: string;
-  /**
-   * Not green, but not a failed install: the shell degrades visibly instead (#284). The check keeps
-   * `ok` true so every consumer that reads `!ok` as a failure does not misname the upgrade gate.
-   */
   warn?: boolean;
 }
 
@@ -239,8 +229,16 @@ export async function runDoctor(ctx: DoctorContext): Promise<DoctorReport> {
     }
   }
 
-  // 6. bash isolation. A missing bubblewrap is a WARN, not a FAIL: the shell still runs, but every
-  // bash result says `[sandbox: off]` and `/status` reports it, so the degradation is not silent.
+  if ((ctx.embeddingProvider ?? 'local') === 'local') {
+    const present = (ctx.embeddingRuntimePresent ?? embeddingRuntimePresent)();
+    checks.push({
+      id: 'embedding-runtime',
+      ok: true,
+      warn: !present,
+      detail: present ? '@huggingface/transformers resolvable' : 'local embedding runtime @huggingface/transformers missing: recall falls back to lexical; rerun cogmem install',
+    });
+  }
+
   const sandbox = bwrapUsable();
   checks.push({
     id: 'sandbox',

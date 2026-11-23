@@ -527,6 +527,7 @@ describe('the supervisor cycle (requirement ⑤: 旁置安装 → 快照 → 迁
       { id: 'resident-health', ok: true, detail: 'ok' },
       { id: 'attach-socket', ok: true, detail: 'ok' },
       { id: 'service', ok: true, detail: 'active' },
+      { id: 'embedding-runtime', ok: true, warn: true, detail: '@huggingface/transformers missing' },
     ];
     const { calls, ops } = fakeOps({
       async health(_request, pid) {
@@ -541,9 +542,35 @@ describe('the supervisor cycle (requirement ⑤: 旁置安装 → 快照 → 迁
     expect(outcome.status).toBe('completed');
     expect(calls[calls.length - 1]).toBe('doctor');
     // One row per id, and each row says which half of the gate produced it.
-    expect(outcome.checks.map((check) => check.id)).toEqual(['recall-self-check', 'resident-health', 'attach-socket', 'service']);
+    expect(outcome.checks.map((check) => check.id)).toEqual(['recall-self-check', 'resident-health', 'attach-socket', 'service', 'embedding-runtime']);
     expect(outcome.checks.find((check) => check.id === 'recall-self-check')?.phase).toBe('pre-switch');
     expect(outcome.checks.find((check) => check.id === 'resident-health')?.phase).toBe('post-switch');
+    expect(outcome.checks.find((check) => check.id === 'embedding-runtime')?.warn).toBe(true);
+  });
+
+  test('the post-switch doctor rechecks the local embedding runtime from the install env (#527)', async () => {
+    const dataDir = makeDataDir();
+    writeFileSync(join(dataDir, 'attach.sock'), '');
+    writeFileSync(join(dataDir, 'env'), 'COGMEM_EMBEDDING_PROVIDER=local\n', { mode: 0o600 });
+    const request = makeRequest(dataDir, '/old-tree', '/staged-tree', { pid: process.pid, serviceMode: false });
+    const ops = defaultUpgradeOps({
+      run: async () => ({ code: 0, stdout: '', stderr: '' }),
+      embeddingRuntimePresent: () => false,
+      fetchHealth: async () => ({
+        status: 'ok',
+        bind: '127.0.0.1',
+        state: 'IDLE',
+        kernel: { status: 'ok', package: 'cogmem', dbPath: request.dbPath },
+        memory: { rssBytes: 1, source: 'proc' },
+      }),
+    });
+
+    const result = await ops.health(request, process.pid);
+
+    const check = result.checks?.find((entry) => entry.id === 'embedding-runtime');
+    expect(result.ok).toBe(true);
+    expect(check?.ok).toBe(true);
+    expect(check?.warn).toBe(true);
   });
 
   test('a check both halves run appears once, and the live half is the row kept', async () => {

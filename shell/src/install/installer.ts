@@ -15,7 +15,6 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statfsSync,
 import { homedir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createRequire } from 'node:module';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { createMemoryKernel } from 'cogmem';
 import { DEFAULT_AUTONOMOUS_BUDGET, DEFAULT_DAILY_BUDGET, DEFAULT_MAX_IDLE_TURNS, DEFAULT_NIGHT_BUDGET, DEFAULT_WORK_BUDGET } from '../config.ts';
@@ -43,7 +42,9 @@ import {
   EMBEDDING_DIMENSIONS,
   EMBEDDING_MODEL,
   EMBEDDING_QUERY_PREFIX,
+  LOCAL_EMBEDDING_RUNTIME,
   REMOTE_EMBEDDING_DEFAULTS,
+  embeddingRuntimePresent,
   type EmbeddingConfig,
   type EmbeddingProviderKind,
 } from '../embedding/model.ts';
@@ -115,10 +116,9 @@ export interface InstallState {
   done: InstallStepId[];
   failedAt?: InstallStepId;
   choices: Partial<InstallChoices>;
-  /** Why the chosen workspace was too wide, when it was (#302); recorded so the choice leaves a trace. */
   workspaceWarning?: string;
-  /** The detached resident, when the install runs in `--skip-service` mode. */
   pid?: number;
+  embeddingRuntime?: string;
   updatedAt: number;
 }
 
@@ -282,7 +282,6 @@ export class Installer {
     writeAtomicFile(this.statePath, `${JSON.stringify(this.state, null, 2)}\n`);
   }
 
-  /** The observatory's soul-write token, minted once at 0600. A re-run keeps the existing value. */
   private ensureObservatoryToken(): void {
     const path = join(this.choices.dataDir, 'observatory-token');
     if (existsSync(path)) return;
@@ -294,7 +293,6 @@ export class Installer {
     }
   }
 
-  /** The env file is the one place the model key lives. Mode 0600, merged, never printed. */
   private writeEnvFile(patch: Record<string, string | undefined>): void {
     const merged: Record<string, string> = { ...parseEnvFile(this.envPath) };
     for (const [key, value] of Object.entries(patch)) {
@@ -330,6 +328,7 @@ export class Installer {
     mkdirSync(this.choices.dataDir, { recursive: true, mode: 0o700 });
     this.announceWorkspaceRisk();
     this.ensureObservatoryToken();
+    if (this.state.done.includes('model') && this.choices.embedding.provider === 'local') { await this.ensureLocalEmbeddingRuntime(); this.saveState(); }
 
     const steps: Record<InstallStepId, () => Promise<StepResult>> = {
       preflight: () => this.stepPreflight(),
@@ -804,21 +803,22 @@ export class Installer {
   }
 
   private async ensureLocalEmbeddingRuntime(): Promise<void> {
-    try {
-      createRequire(import.meta.url).resolve('@huggingface/transformers');
-      return;
-    } catch {}
-    this.io.say('embedding 运行时：安装 @huggingface/transformers（仅本地向量需要）…');
-    const installed = await this.runner(this.bunPath, ['add', '--no-save', '@huggingface/transformers@^4.3.2'], {
-      cwd: this.shellDir,
-      timeoutMs: 10 * 60_000,
-    });
-    this.io.say(installed.code === 0
-      ? 'embedding 运行时：就位'
-      : `embedding 运行时：安装失败（bun add 退出 ${installed.code}）`);
+    if (!embeddingRuntimePresent()) {
+      this.io.say('embedding 运行时：安装 @huggingface/transformers（仅本地向量需要）…');
+      const installed = await this.runner(this.bunPath, ['add', '--no-save', LOCAL_EMBEDDING_RUNTIME], {
+        cwd: this.shellDir,
+        timeoutMs: 10 * 60_000,
+      });
+      if (installed.code !== 0) {
+        this.io.say(`embedding 运行时：安装失败（bun add 退出 ${installed.code}）`);
+        delete this.state.embeddingRuntime;
+        return;
+      }
+      this.io.say('embedding 运行时：就位');
+    }
+    this.state.embeddingRuntime = LOCAL_EMBEDDING_RUNTIME;
   }
 
-  /** The local model's 99 MiB supply; a failure degrades recall, it does not stop the install. */
   private async ensureLocalEmbeddingModel(): Promise<void> {
     this.io.say('embedding 模型：检查本机 bge-base-zh-v1.5（约 99 MiB，缺失则从 Hugging Face 下载）…');
     let lastFile = '';
@@ -967,6 +967,7 @@ export class Installer {
       fetchHealth: () => (this.hooks.fetchHealth ?? defaultFetchHealth)(this.healthUrl),
       spec: this.serviceSpec(),
       platform: this.choices.platform as Platform,
+      embeddingProvider: this.choices.embedding.provider,
       run: this.runner,
       mode: this.flags.skipService ? 'process' : 'service',
       pid: this.state.pid,

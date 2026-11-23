@@ -56,12 +56,8 @@ export interface UpgradeCheck {
   id: string;
   ok: boolean;
   detail: string;
-  /**
-   * Which half of the health gate produced this check. The two halves run at different moments (before
-   * the switch, and after it) and a few ids are the same check done twice, so a report that only kept
-   * `id` could not say which one failed.
-   */
   phase?: 'pre-switch' | 'post-switch';
+  warn?: boolean;
 }
 
 /**
