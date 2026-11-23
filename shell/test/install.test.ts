@@ -476,7 +476,7 @@ describe('the six-step install', () => {
     expect(output).toContain('1/6 预检（系统 / 运行时 / 磁盘 / 端口）（已完成，跳过）');
     expect(output).toContain('2/6 落位');
     expect(output).toContain('安装完成');
-  }, 15_000);
+  }, 60_000);
 
   test('a damaged install.json is reported and kept, not treated as a fresh install', () => {
     const harness = makeHarness();

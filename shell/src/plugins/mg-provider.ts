@@ -19,6 +19,7 @@ export interface MgProviderConfig {
   cacheKey?: string;
   /** Bounded provider-side backoff (#282); tests shrink it, production uses the default. */
   retry?: Partial<ProviderRetryPolicy>;
+  clock?: { now(): number; sleep(ms: number, signal: AbortSignal): Promise<void> };
   /** The account of each retry; the shell writes it to the trace so a recovered 429 is visible. */
   onRetry?: (event: { attempt: number; status: number; delayMs: number }) => void;
 }
@@ -237,7 +238,7 @@ export class MgModelProvider implements ModelProvider {
   readonly name: string;
   readonly model: string;
 
-  constructor(private readonly config: MgProviderConfig, name = 'mg') {
+  constructor(private readonly config: MgProviderConfig, name = 'mg', private readonly clock = config.clock ?? { now: Date.now, sleep: sleepAbortable }) {
     this.name = name;
     this.model = config.model;
   }
@@ -245,10 +246,9 @@ export class MgModelProvider implements ModelProvider {
   async complete(input: ModelCompletionInput): Promise<ModelTurn> {
     const url = `${this.config.baseUrl.replace(/\/+$/u, '')}/chat/completions`;
     const retry = { ...DEFAULT_PROVIDER_RETRY_POLICY, ...this.config.retry };
-    // One cap covers every attempt and the waits between them, so #240's fast failure is unchanged.
     const timeout = AbortSignal.timeout(this.config.timeoutMs);
     const signal = AbortSignal.any([input.signal, timeout]);
-    const startedAt = Date.now();
+    const startedAt = this.clock.now();
     let response: Response;
     let callStartedAt = startedAt;
     for (let attempt = 1; ; attempt += 1) {
@@ -273,7 +273,7 @@ export class MgModelProvider implements ModelProvider {
       });
       if (response.ok) break;
       const text = await response.text();
-      const elapsed = Date.now() - startedAt;
+      const elapsed = this.clock.now() - startedAt;
       const budgetLeft = retry.maxTotalMs - elapsed;
       const retryable = RETRYABLE_STATUS.has(response.status);
       if (!retryable || attempt >= retry.maxAttempts || budgetLeft <= 0) {
@@ -283,11 +283,11 @@ export class MgModelProvider implements ModelProvider {
         throw new Error(redactSecrets(`mg_gateway_error: ${response.status} ${text.slice(0, 400)}${account}`, [this.config.apiKey]));
       }
       const exponential = Math.min(retry.baseDelayMs * 2 ** (attempt - 1), retry.maxDelayMs);
-      const requested = retryAfterMs(response.headers.get('retry-after'), Date.now()) ?? exponential;
+      const requested = retryAfterMs(response.headers.get('retry-after'), this.clock.now()) ?? exponential;
       const delayMs = Math.min(requested, retry.maxDelayMs, budgetLeft);
       this.config.onRetry?.({ attempt, status: response.status, delayMs });
       try {
-        await sleepAbortable(delayMs, signal);
+        await this.clock.sleep(delayMs, signal);
       } catch {
         // The timeout signal and the user's abort are different outcomes: the first is #240's
         // whole-turn cap and must keep its name, the second is a stop.
