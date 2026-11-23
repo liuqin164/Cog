@@ -234,6 +234,7 @@ describe('/forget covers the shell checkpoint and trace', () => {
       db.prepare(`INSERT INTO pending_bindings (pending_id, binding_type, unit_id, reference_text, status, created_at, updated_at)
         VALUES ('pending-probe', 'question', 'unit-probe', ?, 'pending', ?, ?)`)
         .run(`${marker} 你把它放在哪里了?`, Date.now(), Date.now());
+      db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
     } finally {
       seeded.close();
     }
