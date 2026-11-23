@@ -66,7 +66,7 @@ describe('one turn assembles once (#351)', () => {
       expect(blocks[0]).toContain('周五绝对不能部署');
       for (const block of blocks) expect(block).toBe(blocks[0]);
       expect(traceCount(shell, 'recall.result') - before).toBe(1);
-      expect(laneReads).toBe(2);
+      expect(laneReads).toBe(3);
     } finally {
       await shell.stop();
     }

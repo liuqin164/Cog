@@ -9,7 +9,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ChannelContract, createMemoryKernel, KernelAgentMemoryBackend, ModelRegistry, type ChannelSession, type EmbeddingProvider, type MemoryKernel, type ModelRoleConfig, type ModelRoleName, type ModelTextUsage, type Occasion, type SessionContextAssembly, type SurfacingSource } from 'cogmem';
-import { defaultShellConfig, sessionLaneId, type ShellConfig } from './config.ts';
+import { defaultShellConfig, previousSessionLaneId, sessionLaneId, type ShellConfig } from './config.ts';
 import { StateMachine } from './state/machine.ts';
 import { CheckpointStore, type InFlightToolCall } from './state/checkpoint.ts';
 import { ShellStateLedger } from './state/state-ledger.ts';
@@ -255,6 +255,8 @@ export class CompanionShell implements ShellControl, AttachShell {
   private tickTimer?: ReturnType<typeof setInterval>;
   private started = false;
   readonly now: () => number;
+  private readonly baseSessionId: string;
+  private runSessionId?: string;
   readonly pluginResults: PluginLoadResult[] = [];
   private readonly embedding?: ShellEmbeddingProvider;
   private readonly embeddingProvider?: EmbeddingProvider;
@@ -262,6 +264,19 @@ export class CompanionShell implements ShellControl, AttachShell {
   readonly modelRegistry: ModelRegistry;
   readonly stateLedger: ShellStateLedger;
   memoryModelFailed = false;
+
+  get sessionId(): string {
+    return this.runSessionId ?? sessionLaneId(this.baseSessionId, this.now(), this.config.timeZone);
+  }
+
+  pinRunSession(): string {
+    this.runSessionId = sessionLaneId(this.baseSessionId, this.now(), this.config.timeZone);
+    return this.runSessionId;
+  }
+
+  releaseRunSession(): void {
+    this.runSessionId = undefined;
+  }
 
   noteMemoryModel(state: 'reachable' | 'unreachable' | 'degraded', reason?: string, at = this.now()): void {
     const previous = this.machine.runtime.memoryModel;
@@ -276,11 +291,11 @@ export class CompanionShell implements ShellControl, AttachShell {
   constructor(readonly options: CompanionShellOptions = {}) {
     this.config = defaultShellConfig(options.config);
     this.now = options.now ?? Date.now;
-    const baseSessionId = this.config.sessionId;
+    this.baseSessionId = this.config.sessionId;
     Object.defineProperty(this.config, 'sessionId', {
       enumerable: true,
       configurable: true,
-      get: () => sessionLaneId(baseSessionId, this.now(), this.config.timeZone),
+      get: () => this.sessionId,
     });
     this.trace = new TraceLog(this.config.dataDir);
     this.cliConfigPath = join(this.config.dataDir, 'cogmem-cli.toml');
@@ -815,6 +830,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       get sessionId() {
         return live.config.sessionId;
       },
+      previousSessionId: () => previousSessionLaneId(live.config.sessionId),
       targetTokens: () => this.targetTokens(),
       calibrationFactor: (model) => this.runtimeInstance?.contextCalibrationFactor(model) ?? 1,
       clock: () => ({ now: this.now(), timeZone: this.kernel.eventStore.getProjectTimeZone() }),
