@@ -1,5 +1,4 @@
-// Generated from the verified fresh 3.7.4 schema. This is the immutable final DDL catalog;
-// schema31 data conversion lives separately in the release migration.
+import { DERIVATION_INDEX_SQLS, DERIVATION_TABLE_SQL } from '../../governance/DerivationLedger.js';
 
 export interface FinalSchemaObject {
   readonly type: 'table' | 'index' | 'trigger' | 'view';
@@ -9,6 +8,8 @@ export interface FinalSchemaObject {
 }
 
 export const FINAL_TABLES: readonly FinalSchemaObject[] = [
+  { type: "table", name: "memory_derivations", table: "memory_derivations", sql: DERIVATION_TABLE_SQL },
+
   { type: "table", name: "facts", table: "facts", sql: `CREATE TABLE facts (
         fact_id TEXT PRIMARY KEY,
         neuron_id TEXT NOT NULL,
@@ -940,6 +941,10 @@ export const FINAL_TABLES: readonly FinalSchemaObject[] = [
 
 
 export const FINAL_AUXILIARY_OBJECTS: readonly FinalSchemaObject[] = [
+  { type: "index", name: "idx_memory_derivations_source", table: "memory_derivations", sql: DERIVATION_INDEX_SQLS[0] },
+
+  { type: "index", name: "idx_memory_derivations_derived", table: "memory_derivations", sql: DERIVATION_INDEX_SQLS[1] },
+
   { type: "index", name: "idx_facts_subject_predicate", table: "facts", sql: `CREATE INDEX idx_facts_subject_predicate
         ON facts(subject, predicate_family, valid_from DESC)` },
 

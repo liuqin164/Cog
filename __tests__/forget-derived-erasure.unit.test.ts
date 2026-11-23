@@ -227,6 +227,7 @@ test('#422 a range deletion erases every derived row the real pipelines wrote', 
       ['interaction_units', `EXISTS (SELECT 1 FROM json_each(message_neuron_ids_json) WHERE value IN (${eventPlaceholders}))`, eventIds],
     ];
     for (const [table, where, params] of tables) expect(present(table, where, params), table).toBe(0);
+    expect(present('memory_derivations', `COALESCE(project_id,'')=?`, [projectId])).toBe(0);
     expect(rowsHolding(db, SECRET)).toEqual([]);
 
     const otherFts = Number((db.prepare(`SELECT COUNT(*) AS c FROM memory_atlas_fts WHERE project_id=?`).get(otherProject) as { c?: number } | null)?.c ?? 0);

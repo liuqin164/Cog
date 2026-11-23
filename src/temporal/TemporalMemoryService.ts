@@ -1,5 +1,6 @@
 import Database from 'bun:sqlite';
 import { randomUUID } from 'node:crypto';
+import { registerDerivation } from '../governance/DerivationLedger.js';
 import { matchesProjectScope } from '../topology/ProjectScope.js';
 
 export type TimelineEntryType = 'milestone' | 'decision' | 'correction' | 'belief_version';
@@ -81,6 +82,13 @@ export class TemporalMemoryService {
       input.entityId ?? null, input.beliefId ?? null, title, input.summary ?? null, input.reason ?? null,
       occurredAt, JSON.stringify([...new Set(input.evidenceEventIds)]), now,
     );
+    registerDerivation(this.db, {
+      kind: 'memory_timeline_entries',
+      derivedId: entryId,
+      sourceEventIds: input.evidenceEventIds,
+      projectId: input.projectId,
+      createdAt: now,
+    });
     return this.get(entryId)!;
   }
 

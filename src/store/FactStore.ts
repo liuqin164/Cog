@@ -1,6 +1,7 @@
 import Database from 'bun:sqlite';
 import { randomUUID } from 'crypto';
 import type { EncryptionProvider } from '../encryption/index.js';
+import { registerDerivation } from '../governance/DerivationLedger.js';
 
 export interface FactRecord {
   factId: string;
@@ -131,6 +132,11 @@ export class FactStore {
         this.encodeText(record.sourceText),
         record.metadata ? JSON.stringify(record.metadata) : null
       );
+      registerDerivation(this.db, {
+        kind: 'facts',
+        derivedId: record.factId,
+        sourceEventIds: [record.neuronId],
+      });
       return record;
     });
   }
@@ -162,6 +168,11 @@ export class FactStore {
         record.confidence,
         record.status
       );
+      registerDerivation(this.db, {
+        kind: 'compiled_events',
+        derivedId: record.eventId,
+        sourceEventIds: [record.neuronId],
+      });
       return record;
     });
   }

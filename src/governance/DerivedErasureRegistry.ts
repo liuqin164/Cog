@@ -136,6 +136,7 @@ const RULES: ReadonlyArray<readonly [string, string]> = [
   ['memory_episode_events', `DELETE FROM memory_episode_events
     WHERE event_id IN (SELECT id FROM ${EVENT}) OR episode_id IN (SELECT id FROM ${EPISODE})`],
   ['memory_episodes', `DELETE FROM memory_episodes WHERE episode_id IN (SELECT id FROM ${EPISODE})`],
+  ['memory_derivations', `DELETE FROM memory_derivations WHERE source_event_id IN (SELECT id FROM ${EVENT})`],
   ['memory_events_fts', `DELETE FROM memory_events_fts WHERE event_id IN (SELECT id FROM ${EVENT})`],
   ['memory_event_cjk_terms', `DELETE FROM memory_event_cjk_terms WHERE event_id IN (SELECT id FROM ${EVENT})`],
   ['memory_event_embeddings', `DELETE FROM memory_event_embeddings WHERE event_id IN (SELECT id FROM ${EVENT})`],
