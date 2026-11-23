@@ -10,8 +10,7 @@
     "rewriteRelativeImportExtensions": true,
     "types": ["bun-types"],
     "paths": {
-      "cogmem": ["../dist.next/public.d.ts"],
-      "cogmem/internal": ["../dist.next/internal.d.ts"]
+      "cogmem": ["../dist.next/public.d.ts"]
     }
   },
   "include": ["src/**/*.ts"],

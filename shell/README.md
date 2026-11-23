@@ -5,7 +5,7 @@ basic tools. It is built into the `cogmem` package as `dist/shell`, and `cog` op
 directory is the source layout for development, not a package a user installs first. Every gap it hit
 is a ticket proposal in `src/probes/gaps.ts` and on #165. The kernel takes zero diff from it: in the
 source tree the shell reaches the kernel through this directory's own `tsconfig.json` paths
-(`cogmem` → `../src/public.ts`, `cogmem/internal` → `../src/internal.ts`), and the published build
+(`cogmem` → `../src/public.ts`), and the published build
 imports the package itself.
 
 ## Run

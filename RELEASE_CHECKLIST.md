@@ -43,7 +43,7 @@ cogmem memory status --db "$work/fresh-5.0.db" --json
 ## Required Metadata
 
 - [ ] `package.json` has `name = cogmem`, `version = 5.0.0`, and `publishConfig.access = public`.
-- [ ] Public export `.` points to `dist/public.js` and `dist/public.d.ts`; `./internal` is the
+- [ ] Public export `.` points to `dist/public.js` and `dist/public.d.ts`; `./web` is the
       only other subpath.
 - [ ] `package.json` declares exactly two bins, `cog` and `cogmem`, and both source entrypoints
       exist (`__tests__/release-metadata.unit.test.ts`).

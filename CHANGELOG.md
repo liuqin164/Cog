@@ -2,6 +2,13 @@
 
 ## 5.0.0 (unreleased)
 
+- **The `cogmem/internal` subpath is gone (#469).** The shell now imports the loopback observatory
+  and installer step helpers from the `cogmem` entry, so `src/public.ts` gains those symbols and
+  `src/internal.ts` is deleted. Four modules that only `./internal` re-exported had no other
+  consumer and leave with it: `DeepWriteConfig.ts`, `migrations/index.ts`, `models/index.ts` and
+  `utils/text.ts`. `src/public.ts` also loses its dangling `SEMVER.md` reference. User-visible
+  effect, in one line: importing `cogmem/internal` now fails, and nothing else changes.
+
 - **Forget now follows references, not only timestamps (#424).** `run_prompt` keeps the prompt in the
   ledger and the trace holds only its `textId`; shell runtime-text copies carry `sourceRefs`, so a
   copy written after the window is erased with the event it quotes. Trace records with text are

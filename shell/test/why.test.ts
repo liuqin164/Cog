@@ -4,7 +4,8 @@
  * when nothing was stored it must say so rather than produce a plausible-looking trace.
  */
 import { describe, expect, test } from 'bun:test';
-import { RecallDecisionTrace, TraceStore } from 'cogmem/internal';
+import { RecallDecisionTrace } from '../../src/observability/RecallDecisionTrace.ts';
+import { TraceStore } from '../../src/observability/TraceStore.ts';
 import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
 
 const NO_DREAM = { windowStartHour: 0, windowEndHour: 1, runKernelNight: false, maxEpisodes: 5 };

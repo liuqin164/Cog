@@ -19,7 +19,7 @@
     "shell/src/state": 2705,
     "shell/src/tui": 2782,
     "shell/src/upgrade": 1435,
-    "src": 3694,
+    "src": 3630,
     "src/adapters": 2310,
     "src/agent": 4708,
     "src/atlas": 3233,
@@ -39,7 +39,7 @@
     "src/dream": 251,
     "src/embedding": 245,
     "src/encryption": 54,
-    "src/engine": 5562,
+    "src/engine": 5510,
     "src/entity": 317,
     "src/episode": 3987,
     "src/events": 274,
@@ -51,8 +51,8 @@
     "src/install": 1328,
     "src/intention": 1009,
     "src/lexicon": 891,
-    "src/migrations": 2678,
-    "src/models": 431,
+    "src/migrations": 2668,
+    "src/models": 420,
     "src/observability": 621,
     "src/observatory": 5391,
     "src/occasion": 179,
@@ -77,7 +77,7 @@
     "src/topic": 524,
     "src/topology": 17,
     "src/types": 1220,
-    "src/utils": 1654,
+    "src/utils": 1633,
     "install.sh": 192,
     "shell/bin": 9
   },
@@ -85,5 +85,5 @@
   "commands": 23,
   "states": 6,
   "tables": 86,
-  "exportSymbols": 771
+  "exportSymbols": 793
 }

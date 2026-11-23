@@ -1,7 +1,7 @@
 /**
  * cogmem — public API surface for v2.0+
  *
- * Stability tiers (see SEMVER.md for full policy):
+ * Stability tiers:
  *   @stable      — covered by SemVer; no breaking changes within a major
  *   @beta        — available for integration; may change before next stable minor
  *   @experimental — no stability promise; can change or be removed at any time
@@ -1008,4 +1008,30 @@ export { ZH_ENTITY_HINTS, ZH_STOPWORDS, ZH_TOPIC_LEXICON } from './lexicon/zh/in
 export type { ChineseTopicLexiconEntry } from './lexicon/zh/index.js';
 // The shared-memory types a host integrates against; the SQLite adapter stays internal (ADR-0004).
 export type { SharedCollection, SharedItem, SharedMemoryPort, SharedRetraction } from './ports/index.js';
+
+export { MemoryObservatory } from './observatory/MemoryObservatory.js';
+export type { MemoryObservatoryOptions } from './observatory/MemoryObservatory.js';
+export {
+  createObservatoryRoutes,
+  isLocalAuthority,
+  isLoopbackAddress,
+  jsonResponse,
+  readJsonBody,
+  refuseWrite,
+} from './observatory/routes.js';
+export { readObservatoryToken } from './observatory/token.js';
+export {
+  buildGate,
+  cogmemLauncherPath,
+  hasCogmemLauncher,
+  hasInstalledLauncher,
+  installPathSteps,
+  isOnPath,
+  pathWarningSteps,
+  readCogmemLauncherTarget,
+  resolveCliBinDir,
+  resolveCogmemInvocation,
+} from './install/InstallSteps.js';
+export type { InstallGateDiagnostic, InstallStep } from './install/InstallSteps.js';
+export { printJsonDocument } from './bin/CliJson.js';
 

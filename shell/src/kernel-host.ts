@@ -17,7 +17,7 @@ import {
   createObservatoryRoutes,
   MemoryObservatory,
   readObservatoryToken,
-} from 'cogmem/internal';
+} from 'cogmem';
 import { readMemoryUsage } from './memory.ts';
 
 /** The product manifest beside this module (`dist/shell` → package root). */
@@ -191,15 +191,6 @@ export async function startKernelHttpFace(kernel: unknown, options: HttpFaceOpti
   };
 }
 
-/**
- * Secret redaction for captured text (#189).
- *
- * `redactSecretText` is the kernel's public primitive: the same pattern table the kernel's own
- * write path counts with, so a value redacted here and a value redacted there come out identical.
- * The shell used to borrow `DeepWriteRedactor` from `cogmem/internal` because the public surface
- * had no secret primitive; #189 promoted the text helpers, and this class is now only the
- * structured-value walk over that primitive.
- */
 export class SecretRedactor {
   redact<T>(value: T): { value: T; count: number; chars: number } {
     return redactValue(value);
