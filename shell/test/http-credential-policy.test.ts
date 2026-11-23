@@ -18,7 +18,10 @@ interface Harness {
   stop(): Promise<void>;
 }
 
-async function harness(options: { allowLoopback?: boolean } = {}): Promise<Harness> {
+async function harness(options: {
+  allowLoopback?: boolean;
+  fetch?: (input: string | URL, init?: RequestInit, pin?: { address: string; family: number }) => Promise<Response>;
+} = {}): Promise<Harness> {
   const dir = makeTempDir('http-credential-policy-');
   const workspace = join(dir, 'ws');
   const dataDir = join(dir, 'data');
@@ -32,7 +35,11 @@ async function harness(options: { allowLoopback?: boolean } = {}): Promise<Harne
     dataDir,
     trace,
     credentials,
-    http: { lookup: async () => [{ address: '93.184.216.34', family: 4 }], ...(options.allowLoopback === true ? { allowLoopback: true } : {}) },
+    http: {
+      lookup: async () => [{ address: '93.184.216.34', family: 4 }],
+      ...(options.fetch ? { fetch: options.fetch } : {}),
+      ...(options.allowLoopback === true ? { allowLoopback: true } : {}),
+    },
   });
   await host.start();
   return { dataDir, trace, credentials, host, stop: () => host.stop() };
@@ -185,6 +192,73 @@ describe('http_request credential policy (#480)', () => {
       expect(seen).toEqual([]);
     } finally {
       server.stop(true);
+      await h.stop();
+    }
+  });
+});
+
+describe('http_request response streaming (#488)', () => {
+  test('an oversized body is cancelled at the 1 MiB cap and reported as truncated', async () => {
+    const chunk = new Uint8Array(64 * 1024).fill(97);
+    const state = { pulled: 0, cancelled: false };
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        state.pulled += chunk.byteLength;
+        controller.enqueue(chunk);
+      },
+      cancel() {
+        state.cancelled = true;
+      },
+    });
+    const h = await harness({ fetch: async () => new Response(stream) });
+    try {
+      const ref = save(h.credentials, ['https://api.example.com']);
+      const result = await h.host.tools.invoke(
+        'http_request',
+        { toolCallId: 's1', input: { credentialRef: ref, url: 'https://api.example.com/big' } },
+        { runId: 'r' },
+      );
+      expect(result.isError).toBe(false);
+      expect(result.output).toContain('[response body truncated:');
+      expect(state.cancelled).toBe(true);
+      expect(state.pulled).toBeLessThanOrEqual(1024 * 1024 + 2 * chunk.byteLength);
+      expect(Buffer.byteLength(result.output, 'utf8')).toBeLessThan(1024 * 1024 + 256);
+    } finally {
+      await h.stop();
+    }
+  });
+
+  test('a body under 1 MiB is returned whole', async () => {
+    const body = `${'a'.repeat(512 * 1024)}-end`;
+    const h = await harness({ fetch: async () => new Response(body) });
+    try {
+      const ref = save(h.credentials, ['https://api.example.com']);
+      const result = await h.host.tools.invoke(
+        'http_request',
+        { toolCallId: 's2', input: { credentialRef: ref, url: 'https://api.example.com/ok' } },
+        { runId: 'r' },
+      );
+      expect(result.isError).toBe(false);
+      expect(result.output.endsWith('-end')).toBe(true);
+      expect(result.output).not.toContain('truncated');
+    } finally {
+      await h.stop();
+    }
+  });
+
+  test('masking still applies to the kept prefix of a truncated body', async () => {
+    const h = await harness({ fetch: async () => new Response(`${SECRET}${'x'.repeat(1024 * 1024)}`) });
+    try {
+      const ref = save(h.credentials, ['https://api.example.com']);
+      const result = await h.host.tools.invoke(
+        'http_request',
+        { toolCallId: 's3', input: { credentialRef: ref, url: 'https://api.example.com/echo' } },
+        { runId: 'r' },
+      );
+      expect(result.output).toContain('«credential:demo-api.token»');
+      expect(result.output).not.toContain(SECRET);
+      expect(result.output).toContain('[response body truncated:');
+    } finally {
       await h.stop();
     }
   });

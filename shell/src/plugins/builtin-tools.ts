@@ -10,6 +10,7 @@ import type { NativePlugin, ToolDefinition, ToolOutcome } from './host.ts';
 import { fetchPinned, validateRemoteUrl, type LookupAddress } from './web.ts';
 
 const MAX_READ_BYTES = 256 * 1024;
+const MAX_HTTP_BYTES = 1024 * 1024;
 /** Pi's bash output cap: 2000 lines or 50 KiB, whichever is hit first (`truncate.js:13-14`). */
 const MAX_OUTPUT_BYTES = 50 * 1024;
 const MAX_OUTPUT_LINES = 2000;
@@ -303,7 +304,6 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
 
-/** The first `maxBytes` bytes of `text`, cut back to the previous character boundary. */
 function headBytes(text: string, maxBytes: number): string {
   const buffer = Buffer.from(text, 'utf8');
   if (buffer.length <= maxBytes) return text;
@@ -312,12 +312,33 @@ function headBytes(text: string, maxBytes: number): string {
   return buffer.subarray(0, end).toString('utf8');
 }
 
-/** The last `maxBytes` bytes of `text`, moved forward to the next character boundary. */
 function tailBytes(text: string, maxBytes: number): string {
   const buffer = Buffer.from(text, 'utf8');
   let start = buffer.length - maxBytes;
   while (start < buffer.length && (buffer[start] & 0xc0) === 0x80) start += 1;
   return buffer.subarray(start).toString('utf8');
+}
+
+async function readCappedBody(response: Response, limit: number): Promise<{ text: string; truncated: boolean }> {
+  const reader = response.body?.getReader();
+  if (!reader) return { text: '', truncated: false };
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  let truncated = false;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    bytes += value.byteLength;
+    if (bytes < limit) continue;
+    truncated = bytes > limit || !(await reader.read()).done;
+    break;
+  }
+  if (truncated) await reader.cancel();
+  const buffer = Buffer.concat(chunks);
+  let end = Math.min(buffer.length, limit);
+  while (end > 0 && (buffer[end] & 0xc0) === 0x80) end -= 1;
+  return { text: buffer.subarray(0, end).toString('utf8'), truncated };
 }
 
 export function readMemoryEvent(
@@ -560,7 +581,7 @@ function definitions(
     {
       name: 'http_request',
       replay: 'never',
-      description: 'Send one HTTP request from the host with a stored credential. Pass the reference returned by request_credential as credentialRef. The request only goes to an origin the owner registered for that credential; loopback, private, link-local and reserved destinations are refused. Header values may contain {{field}} placeholders; the host replaces each with that credential field before sending, so the value never enters the conversation. Returns "HTTP <status>" and the response body capped at 256 KiB, with any echo of a credential value masked. Redirects are refused.',
+      description: 'Send one HTTP request from the host with a stored credential. Pass the reference returned by request_credential as credentialRef. The request only goes to an origin the owner registered for that credential; loopback, private, link-local and reserved destinations are refused. Header values may contain {{field}} placeholders; the host replaces each with that credential field before sending, so the value never enters the conversation. Returns "HTTP <status>" and the response body streamed up to 1 MiB, with any echo of a credential value masked and a truncation note when the body is longer. Redirects are refused.',
       parameters: {
         type: 'object',
         properties: {
@@ -611,11 +632,12 @@ function definitions(
             redirect: 'error',
             signal: AbortSignal.any(signals),
           }, target.pin);
-          const text = mask(await response.text());
+          const received = await readCappedBody(response, MAX_HTTP_BYTES);
+          const text = mask(received.text);
           const bytes = Buffer.byteLength(text, 'utf8');
-          const shown = bytes <= MAX_READ_BYTES
+          const shown = !received.truncated && bytes <= MAX_HTTP_BYTES
             ? text
-            : `${headBytes(text, MAX_READ_BYTES)}\n\n[response body truncated: showing ${formatSize(MAX_READ_BYTES)} of ${formatSize(bytes)}]`;
+            : `${headBytes(text, MAX_HTTP_BYTES)}\n\n[response body truncated: showing the first ${formatSize(MAX_HTTP_BYTES)}]`;
           return { output: `HTTP ${response.status} ${response.statusText}\n\n${shown}`, isError: false };
         } catch (error) {
           throw new Error(mask(error instanceof Error ? error.message : String(error)));
