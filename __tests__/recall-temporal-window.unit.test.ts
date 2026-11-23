@@ -4,7 +4,9 @@ import { join } from 'node:path';
 import { createMemoryKernel, localDateFor } from '../src/public.js';
 import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
 import { localDateCue } from '../src/agent/AgentRecallText.js';
+import { FacetQueryPlanner } from '../src/atlas/FacetQueryPlanner.js';
 import { MultidimensionalQueryPlanner } from '../src/recall/MultidimensionalQueryPlanner.js';
+import { relativeDateRange } from '../src/temporal/RelativeDateRange.js';
 import { makeTempDir } from './helpers/tmp.js';
 
 const TOKYO = 'Asia/Tokyo';
@@ -102,4 +104,35 @@ test('a month without a year is not pushed into the future, and bare "may" is no
   expect(localDateFor(planner.plan('in May', options).time!.from!, TOKYO)).toBe('2025-05-01');
   expect(localDateCue('11月3日', options)).toBe('2025-11-03');
   expect(localDateCue('2026年11月3日', options)).toBe('2026-11-03');
+});
+
+test('year and half-year relative windows keep their civil boundaries (#464)', () => {
+  const options = { localDateNow: '2026-11-20', timeZone: TOKYO };
+  const window = (query: string) => {
+    const range = relativeDateRange(query, options)!;
+    return [localDateFor(range.from, TOKYO), localDateFor(range.to, TOKYO)];
+  };
+
+  expect(window('今年')).toEqual(['2026-01-01', '2027-01-01']);
+  expect(window('去年')).toEqual(['2025-01-01', '2026-01-01']);
+  expect(window('近半年')).toEqual(['2026-05-21', '2026-11-21']);
+  expect(window('近一年')).toEqual(['2025-11-20', '2026-11-21']);
+  expect(window('半年前')).toEqual(['2026-05-04', '2026-06-13']);
+
+  expect(window('昨天')).toEqual(['2026-11-19', '2026-11-20']);
+  expect(window('前天')).toEqual(['2026-11-18', '2026-11-19']);
+  expect(window('上周')).toEqual(['2026-11-09', '2026-11-16']);
+  expect(window('上个月')).toEqual(['2026-10-01', '2026-11-01']);
+  expect(window('3天前')).toEqual(['2026-11-17', '2026-11-18']);
+  expect(window('刚才')).toEqual(['2026-11-20', '2026-11-21']);
+});
+
+test('a yearless facet day falls back to last year when its month is still ahead (#464)', () => {
+  const planner = new FacetQueryPlanner();
+  const timeValue = (query: string, localDateNow: string) =>
+    planner.plan(query, { projectId: 'p', localDateNow, timeZone: TOKYO }).facets.find((facet) => facet.type === 'time')?.value;
+
+  expect(timeValue('11月3日', '2026-02-10')).toBe('2025-11-03');
+  expect(timeValue('11月3日', '2026-11-20')).toBe('2026-11-03');
+  expect(timeValue('2026年11月3日', '2026-02-10')).toBe('2026-11-03');
 });
