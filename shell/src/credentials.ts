@@ -38,15 +38,44 @@ export interface CredentialMask {
   value: string;
 }
 
-export function maskCredentialValues(text: string, masks: readonly CredentialMask[]): { text: string; hits: number; fields: string[] } {
+function base64Url(value: string): string {
+  return value.replace(/\+/gu, '-').replace(/\//gu, '_').replace(/=+$/u, '');
+}
+
+function credentialVariants(value: string): string[] {
+  const bytes = Buffer.from(value, 'utf8');
+  const encoded = bytes.toString('base64');
+  const aligned = [0, 1, 2].map((pad) => {
+    const padded = Buffer.concat([Buffer.alloc(pad), bytes]).toString('base64');
+    return padded.slice(Math.ceil((4 * pad) / 3), Math.floor((4 * (pad + bytes.length)) / 3 - 1) + 1);
+  });
+  const base64 = [encoded, ...aligned];
+  return [
+    value,
+    encodeURIComponent(value),
+    new URLSearchParams([['v', value]]).toString().slice(2),
+    JSON.stringify(value).slice(1, -1),
+    bytes.toString('hex'),
+    ...base64,
+    ...base64.map(base64Url),
+  ];
+}
+
+export function maskCredentialValues(
+  text: string,
+  masks: readonly CredentialMask[],
+  trace?: { append(kind: string, record?: Record<string, unknown>, now?: number): void },
+): { text: string; hits: number; fields: string[] } {
   let masked = text;
   let hits = 0;
   const fields = new Set<string>();
   const ordered = [...masks].sort((a, b) => b.value.length - a.value.length);
   for (const mask of ordered) {
-    if (mask.value.length < 4) continue;
-    const variants = [...new Set([mask.value, Buffer.from(mask.value, 'utf8').toString('base64'), encodeURIComponent(mask.value)])]
-      .sort((a, b) => b.length - a.length);
+    if (mask.value.length < 4) {
+      trace?.append('credential_value_too_short', { ref: mask.ref, field: mask.field, length: mask.value.length });
+      continue;
+    }
+    const variants = [...new Set(credentialVariants(mask.value))].sort((a, b) => b.length - a.length);
     for (const variant of variants) {
       const parts = masked.split(variant);
       if (parts.length === 1) continue;
@@ -376,9 +405,7 @@ export class CredentialService {
   use(ref: string, caller: string, options?: { toolCallId?: string; url?: string }): Record<string, string> {
     const values = this.vault.use(ref, caller, options?.url === undefined ? undefined : { url: options.url });
     if (options?.toolCallId !== undefined) {
-      const masks = Object.entries(values)
-        .filter(([, value]) => value.length >= 4)
-        .map(([field, value]) => ({ ref, field, value }));
+      const masks = Object.entries(values).map(([field, value]) => ({ ref, field, value }));
       this.masksByCall.set(options.toolCallId, [...(this.masksByCall.get(options.toolCallId) ?? []), ...masks]);
     }
     return values;
