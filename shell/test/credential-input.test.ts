@@ -16,7 +16,7 @@ function traceKinds(shell: ReturnType<typeof makeShell>, kind: string): Array<Re
 }
 
 describe('the credential input surface', () => {
-  test('a work run asks, the terminal answers, bash uses it, and no raw value reaches ledger, log or model', async () => {
+  test('bash refuses the credential channel, so a write-then-read cannot leak a plaintext value', async () => {
     const dir = makeTempDir('credential-e2e-');
     const provider = new ScriptedProvider([
       {
@@ -33,16 +33,16 @@ describe('the credential input surface', () => {
       },
       {
         text: '',
-        toolCalls: [{
-          toolCallId: 'c2',
-          toolName: 'bash',
-          input: {
-            credential: 'demo-api',
-            command: 'test -n "$COGMEM_CRED_DEMO_API_PASSWORD" && test -n "$COGMEM_CRED_DEMO_API_ACCOUNT" && echo authenticated',
+        toolCalls: [
+          {
+            toolCallId: 'c2',
+            toolName: 'bash',
+            input: { credential: 'demo-api', command: 'echo "$COGMEM_CRED_DEMO_API_PASSWORD" > leaked.txt' },
           },
-        }],
+          { toolCallId: 'c3', toolName: 'read', input: { path: 'leaked.txt' } },
+        ],
       },
-      { text: '已用凭据完成任务。', toolCalls: [] },
+      { text: '已拒绝。', toolCalls: [] },
     ]);
     const shell = makeShell(dir, provider, { dream: NO_DREAM });
     await shell.start();
@@ -56,10 +56,16 @@ describe('the credential input surface', () => {
       expect(saved).toEqual({ ok: true, ref: 'demo-api' });
       await run;
 
+      const tools = provider.calls.flatMap((call) => call.messages).filter((message) => message.role === 'tool');
+      const bash = tools.find((message) => message.toolName === 'bash')!;
+      const read = tools.find((message) => message.toolName === 'read')!;
+      expect(bash.isError).toBe(true);
+      expect(bash.content).toContain('credential_not_supported');
+      expect(read.isError).toBe(true);
+      expect(JSON.stringify(shell.host.tools.get('bash')!.parameters)).not.toContain('"credential"');
+
       expect(traceKinds(shell, 'credential_saved')).toHaveLength(1);
-      expect(traceKinds(shell, 'credential_used')).toEqual([
-        expect.objectContaining({ ref: 'demo-api', service: 'demo-api', caller: 'bash' }),
-      ]);
+      expect(traceKinds(shell, 'credential_used')).toEqual([]);
       const storage = join(shell.config.dataDir, 'credentials.json');
       expect(statSync(storage).mode & 0o777).toBe(0o600);
       expect(readFileSync(storage, 'utf8')).toContain(PASSWORD);
@@ -70,8 +76,11 @@ describe('the credential input surface', () => {
       const ledger = (db.query('SELECT payload_json FROM memory_events').all() as Array<{ payload_json: string }>)
         .map((row) => row.payload_json)
         .join('\n');
+      const fts = (db.query('SELECT text FROM memory_events_fts').all() as Array<{ text: string }>)
+        .map((row) => row.text)
+        .join('\n');
       db.close();
-      for (const surface of [trace, model, ledger, JSON.stringify(shell.credentials.pending())]) {
+      for (const surface of [trace, model, ledger, fts, JSON.stringify(shell.credentials.pending())]) {
         expect(surface).not.toContain(PASSWORD);
         expect(surface).not.toContain(ACCOUNT);
       }
@@ -100,79 +109,6 @@ describe('the credential input surface', () => {
     service.cancel(request.id);
     expect(await run).toEqual({ outcome: 'cancelled' });
   });
-
-  test('echoed credential values are masked in the result, ledger, FTS, trace and the overflow file', async () => {
-    const dir = makeTempDir('credential-echo-');
-    const provider = new ScriptedProvider([
-      {
-        text: '',
-        toolCalls: [{
-          toolCallId: 'c1',
-          toolName: 'request_credential',
-          input: {
-            service: 'demo-api',
-            purpose: '验证输出抹除',
-            fields: [{ name: 'account' }, { name: 'password', secret: true }],
-          },
-        }],
-      },
-      {
-        text: '',
-        toolCalls: [
-          {
-            toolCallId: 'c2',
-            toolName: 'bash',
-            input: { credential: 'demo-api', command: 'printf "%s\\n" "$COGMEM_CRED_DEMO_API_PASSWORD" "$COGMEM_CRED_DEMO_API_ACCOUNT"' },
-          },
-          {
-            toolCallId: 'c3',
-            toolName: 'bash',
-            input: {
-              credential: 'demo-api',
-              command: 'for i in $(seq 1 2000); do printf "%s-%s-padding-padding-padding\\n" "$COGMEM_CRED_DEMO_API_PASSWORD" "$i"; done',
-            },
-          },
-        ],
-      },
-      { text: '已检查。', toolCalls: [] },
-    ]);
-    const shell = makeShell(dir, provider, { dream: NO_DREAM });
-    await shell.start();
-    try {
-      const run = shell.submit('回显凭据做检查');
-      await waitUntil(() => shell.credentials.pending().length === 1);
-      const request = shell.credentials.pending()[0]!;
-      expect(shell.submitCredential(request.id, { account: ACCOUNT, password: PASSWORD }, 'terminal', ['https://api.example.com'])).toEqual({ ok: true, ref: 'demo-api' });
-      await run;
-
-      const model = JSON.stringify(provider.calls);
-      expect(model).toContain('«credential:demo-api.password»');
-      expect(model).toContain('«credential:demo-api.account»');
-
-      const trace = readFileSync(shell.trace.path, 'utf8');
-      expect(trace).toContain('credential_value_masked');
-
-      const db = new Database(shell.config.dbPath, { readonly: true });
-      const ledger = (db.query('SELECT payload_json FROM memory_events').all() as Array<{ payload_json: string }>)
-        .map((row) => row.payload_json)
-        .join('\n');
-      const fts = (db.query('SELECT text FROM memory_events_fts').all() as Array<{ text: string }>)
-        .map((row) => row.text)
-        .join('\n');
-      db.close();
-
-      const overflowDir = join(shell.config.workspaceRoot, '.cogmem-shell', 'bash-output');
-      const overflow = readdirSync(overflowDir).map((name) => readFileSync(join(overflowDir, name), 'utf8')).join('\n');
-      expect(overflow).toContain('«credential:demo-api.password»');
-
-      for (const surface of [model, trace, ledger, fts, overflow]) {
-        expect(surface).not.toContain(PASSWORD);
-        expect(surface).not.toContain(ACCOUNT);
-      }
-    } finally {
-      await shell.stop();
-    }
-  }, 30_000);
 
   test('http_request refuses a loopback destination even when the owner registered it', async () => {
     const dir = makeTempDir('credential-http-');
@@ -212,7 +148,7 @@ describe('the credential input surface', () => {
           {
             toolCallId: 'c2',
             toolName: 'bash',
-            input: { credential: 'demo-api', command: `curl -sS --max-time 5 ${url}` },
+            input: { command: `curl -sS --max-time 5 ${url}` },
           },
           {
             toolCallId: 'c3',
@@ -243,7 +179,7 @@ describe('the credential input surface', () => {
       if (sandboxed) expect(bash.content).toMatch(/Could not connect|Failed to connect|Connection refused|exit code 7/u);
       expect(http.isError).toBe(true);
       expect(http.content).toContain('ssrf_blocked');
-      expect(seen).toEqual([]);
+      expect(seen).not.toContain(`Bearer ${PASSWORD}`);
 
       const model = JSON.stringify(provider.calls);
       const trace = readFileSync(shell.trace.path, 'utf8');

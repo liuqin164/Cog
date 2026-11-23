@@ -263,18 +263,6 @@ function resolveBashTimeoutMs(args: unknown): number {
   return timeoutMs;
 }
 
-function credentialRef(args: unknown): string | undefined {
-  const raw = (args as Record<string, unknown> | undefined)?.['credential'];
-  if (raw === undefined) return undefined;
-  if (typeof raw !== 'string' || raw.trim() === '') throw new Error('invalid_arguments: "credential" must be a non-empty string');
-  return raw.trim();
-}
-
-function credentialEnvName(ref: string, field: string): string {
-  const part = (value: string): string => value.toUpperCase().replace(/[^A-Z0-9]+/gu, '_').replace(/^_+|_+$/gu, '');
-  return `COGMEM_CRED_${part(ref)}_${part(field)}`;
-}
-
 function injectCredentialFields(value: string, fields: Record<string, string>): string {
   return value.replace(CREDENTIAL_PLACEHOLDER, (_match, name: string) => {
     const field = fields[name];
@@ -488,40 +476,22 @@ function definitions(
     {
       name: 'bash',
       replay: 'never',
-      description: 'Run a bash command in the workspace, 30s timeout by default. It runs with no network access and sees only system directories and the workspace: the shell data directory and the operator home are not mounted, and only a small variable allowlist reaches the child. stdout/stderr are combined; the last 2000 lines or 50 KiB (whichever is hit first) are returned, and the full text is written under .cogmem-shell/bash-output/ and named in the result. A non-zero exit is an error. The optional `timeout` is in seconds. Set `credential` to a reference from request_credential to have the host inject its fields as COGMEM_CRED_<REF>_<FIELD> environment variables; do not print them.',
+      description: 'Run a bash command in the workspace, 30s timeout by default. It runs with no network access and sees only system directories and the workspace: the shell data directory and the operator home are not mounted, and only a small variable allowlist reaches the child. stdout/stderr are combined; the last 2000 lines or 50 KiB (whichever is hit first) are returned, and the full text is written under .cogmem-shell/bash-output/ and named in the result. A non-zero exit is an error. The optional `timeout` is in seconds. Credentials are never passed to bash; use http_request.',
       parameters: {
         type: 'object',
         properties: {
           command: { type: 'string' },
           timeout: { type: 'number' },
-          credential: { type: 'string' },
         },
         required: ['command'],
       },
-      execute({ toolCallId, args, signal }) {
+      execute({ args, signal }) {
+        if (args !== undefined && args !== null && typeof args === 'object' && 'credential' in args) {
+          throw new Error('credential_not_supported: bash no longer takes a credential; use http_request with credentialRef');
+        }
         const command = asString(args, 'command');
         const timeoutMs = resolveBashTimeoutMs(args);
         const env = bashEnv(sandbox !== undefined, cliConfigPath);
-        const credential = credentialRef(args);
-        let masks: CredentialMask[] = [];
-        if (credential !== undefined) {
-          if (!credentials) throw new Error('credential_unavailable: this shell has no credential service');
-          const values = credentials.use(credential, 'bash', { toolCallId });
-          for (const [field, value] of Object.entries(values)) env[credentialEnvName(credential, field)] = value;
-          masks = credentials.masksFor?.(toolCallId) ?? [];
-        }
-        const mask = (text: string): string => {
-          const result = maskCredentialValues(text, masks);
-          if (result.hits > 0) {
-            ledger.trace?.append('credential_value_masked', {
-              tool: 'bash',
-              ref: credential,
-              fields: result.fields,
-              replacements: result.hits,
-            });
-          }
-          return result.text;
-        };
         return new Promise<ToolOutcome>((resolvePromise, rejectPromise) => {
           const child = sandbox
             ? spawn('bwrap', sandboxArgs(workspaceRoot, sandbox.dataDir, command), { cwd: workspaceRoot, signal, stdio: ['ignore', 'pipe', 'pipe'], env })
@@ -542,11 +512,10 @@ function definitions(
                 dataDir: sandbox.dataDir,
               });
             }
-            const capped = capBashOutput(mask(output), workspaceRoot);
+            const capped = capBashOutput(output, workspaceRoot);
             const parts = [capped];
             if (note) parts.push(note);
             if (offNote) parts.push(offNote);
-            credentials?.forgetMasks?.(toolCallId);
             resolvePromise({ output: parts.join('\n\n'), isError });
           };
           timer = setTimeout(() => {
@@ -578,8 +547,7 @@ function definitions(
             settled = true;
             clearTimeout(timer);
             sandbox?.trace?.append('bash_sandbox_failed', { message: error.message });
-            credentials?.forgetMasks?.(toolCallId);
-            rejectPromise(new Error(mask(error.message)));
+            rejectPromise(new Error(error.message));
           });
           child.on('close', (code) => {
             if (code === null) settle('Command terminated without an exit code', true);
