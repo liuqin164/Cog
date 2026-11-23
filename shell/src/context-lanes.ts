@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { digestAnchors, type SessionContextItem, type SessionDigestEntry, type SessionToolCall, type SessionTurn } from 'cogmem';
 import type { CompanionShell } from './app.ts';
+import { previousSessionLaneId } from './config.ts';
 import { SecretRedactor } from './kernel-host.ts';
 import { currentPluginDossiers, type PluginDossier } from './plugins/self-install.ts';
 import type { TraceRecord } from './trace.ts';
@@ -428,6 +429,14 @@ export class ContextLanes {
         agentId: this.shell.config.agentId,
         sessionId: this.shell.config.sessionId,
       }).turns;
+      const previous = previousSessionLaneId(this.shell.config.sessionId);
+      if (previous) {
+        turns = [...this.shell.backend.sessionTurns({
+          projectId: this.shell.config.projectId,
+          agentId: this.shell.config.agentId,
+          sessionId: previous,
+        }).turns, ...turns];
+      }
     } catch (error) {
       this.shell.trace.append('task_stub_failed', {
         assignmentId: pending.assignmentId,

@@ -23,6 +23,7 @@ export interface SessionContextPluginConfig {
   agentId: string;
   projectId: string;
   sessionId: string;
+  previousSessionId?: () => string | undefined;
   /** The model route's sweet spot, read at request time so a route switch takes effect. */
   targetTokens: () => number;
   /** The provider's measured estimate/actual ratio, so the lanes and the fit share one ruler (#439). */
@@ -60,10 +61,12 @@ export function sessionContextPlugin(config: SessionContextPluginConfig): Native
       const assemble = (recall: SessionContextItem[], recent: string[], runId?: string, cachedDigest?: SessionContextAssembly['digest'], query?: string, toolNames?: readonly string[], toolTokens = 0, model?: string): SessionContextAssembly => {
         const factor = config.calibrationFactor?.(model) ?? 1;
         const laneTarget = Math.max(1, Math.floor(config.targetTokens() / (factor > 0 ? factor : 1)) - toolTokens - TOOL_RESULT_RESERVE);
+        const previousSessionId = config.previousSessionId?.();
         return backend.assembleSessionContext({
           projectId: config.projectId,
           agentId: config.agentId,
           sessionId: config.sessionId,
+          ...(previousSessionId ? { previousSessionId } : {}),
           targetTokens: laneTarget,
           tailTurns: config.tailTurns,
           excludeTurnIds: runId ? [`${runId}:0`] : undefined,

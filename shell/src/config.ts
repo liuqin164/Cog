@@ -25,6 +25,15 @@ export function sessionLaneId(baseSessionId: string, now: number, timeZone: stri
   return `${baseSessionId}:${localDateFor(now, timeZone)}`;
 }
 
+export function previousSessionLaneId(sessionId: string): string | undefined {
+  const index = sessionId.lastIndexOf(':');
+  if (index <= 0) return undefined;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(sessionId.slice(index + 1));
+  if (!match) return undefined;
+  const previous = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]) - 1));
+  return `${sessionId.slice(0, index)}:${previous.toISOString().slice(0, 10)}`;
+}
+
 export interface RunBudget {
   maxTurnsPerRun: number;
   maxTokensPerRun: number;

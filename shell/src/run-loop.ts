@@ -178,11 +178,12 @@ export class RunLoop {
     await this.shell.machine.dispatch(dispatchTrigger, { runId, reason });
 
     try {
+      const sessionId = this.shell.pinRunSession();
       let summary: RunSummary;
       try {
         summary = await this.shell.runtime!.run({
           runId,
-          sessionId: this.shell.config.sessionId,
+          sessionId,
           userText: text,
           origin,
           ...(sourceRefs === undefined ? {} : { sourceRefs }),
@@ -232,6 +233,7 @@ export class RunLoop {
       throw error;
     } finally {
       this.shell.hideAssignmentContext = false;
+      this.shell.releaseRunSession();
     }
   }
 

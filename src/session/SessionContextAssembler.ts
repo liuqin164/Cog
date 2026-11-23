@@ -62,6 +62,7 @@ export const SESSION_CONTEXT_DECISION_FIELDS = [
 export interface SessionContextItem {
   id: string;
   text: string;
+  sourceSession?: string;
   sourceRefs?: string[];
   /** The ledger row's speaker, when the item came from a conversation turn (#324). */
   speaker?: ConversationSpeaker;
@@ -89,6 +90,7 @@ export interface AssembleSessionContextInput {
   projectId: string;
   agentId: string;
   sessionId: string;
+  previousSessionId?: string;
   /** The sweet spot for this model, read from the model configuration. Never a kernel constant. */
   targetTokens: number;
   /** System / identity / rules. Never paraphrased; trimmed last. */
@@ -391,11 +393,12 @@ function buildLanes(input: AssembleSessionContextInput, digest: SessionDigest): 
       text: entry.text,
       speaker: entry.speaker,
       sourceRefs: entry.sourceRefs,
+      ...(entry.sessionId !== input.sessionId ? { sourceSession: entry.sessionId } : {}),
       ...(stubIds.has(entry.entryId) || entry.kind === 'deep' ? { anchorEvent: entry.sourceRefs[0] } : {}),
     })),
     working_set: workingItems,
     recall: [...(input.recall ?? [])],
-    tail: digest.tail.map((turn) => ({ id: turn.eventId, text: turn.text, speaker: turn.speaker, sourceRefs: [turn.eventId] })),
+    tail: digest.tail.map((turn) => ({ id: turn.eventId, text: turn.text, speaker: turn.speaker, sourceRefs: [turn.eventId], ...(turn.sessionId !== input.sessionId ? { sourceSession: turn.sessionId } : {}) })),
   };
   itemsByLane.working_set = [
     ...workingItems,
@@ -566,7 +569,8 @@ function renderDigestLane(items: SessionContextItem[]): string {
  */
 function renderItemLine(item: SessionContextItem): string {
   const speaker = item.speaker === undefined ? '' : `${item.speaker}: `;
-  return `- ${speaker}${serializeUntrustedLaneText(item.text).replace(/\n/gu, '\n  ')}`;
+  const source = item.sourceSession === undefined ? '' : `[from ${serializeUntrustedMemory(item.sourceSession, 160)}] `;
+  return `- ${speaker}${source}${serializeUntrustedLaneText(item.text).replace(/\n/gu, '\n  ')}`;
 }
 
 function mergeTaskStubs(digest: SessionDigest, stubs: readonly SessionDigestEntry[]): SessionDigest {

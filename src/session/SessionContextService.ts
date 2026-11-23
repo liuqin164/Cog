@@ -13,7 +13,7 @@ import type Database from 'bun:sqlite';
 
 import { TraceStore } from '../observability/TraceStore.js';
 import { TraceWriter } from '../observability/TraceWriter.js';
-import { buildSessionDigest, type SessionDigest } from './SessionDigest.js';
+import { buildSessionDigest, SESSION_DIGEST_TAIL_TURNS, type SessionDigest } from './SessionDigest.js';
 import {
   compileSessionDeepCards,
   mergeDeepCardEntries,
@@ -22,7 +22,7 @@ import {
   type SessionDeepCompileRunResult,
 } from './SessionDeepCards.js';
 import { requireSessionText } from './SessionErrors.js';
-import { readSessionTurns, SESSION_DIGEST_MAX_TURNS, type SessionTurn } from './SessionLedger.js';
+import { readSessionTurns, SESSION_DIGEST_MAX_TURNS, type SessionTurn, type SessionTurnRead } from './SessionLedger.js';
 import { recallSession, type SessionRecallInput, type SessionRecallPage } from './SessionRecall.js';
 import type { TextGenerateFn } from '../models/ModelRole.js';
 import {
@@ -41,6 +41,7 @@ export interface SessionDigestInput {
   projectId: string;
   agentId: string;
   sessionId: string;
+  previousSessionId?: string;
   /** How many recent turns stay verbatim. */
   tailTurns?: number;
 }
@@ -62,7 +63,7 @@ export class SessionContextService {
 
   digest(input: SessionDigestInput): SessionDigest {
     const { projectId, agentId, sessionId } = requireScope(input);
-    const read = readSessionTurns(this.db, { projectId, agentId, sessionId, limit: SESSION_DIGEST_MAX_TURNS });
+    const read = readDigestTurns(this.db, { ...input, projectId, agentId, sessionId, limit: SESSION_DIGEST_MAX_TURNS });
     const digest = buildSessionDigest(read.turns, { sessionId, tailTurns: input.tailTurns, truncated: read.truncated });
     return {
       ...digest,
@@ -85,9 +86,8 @@ export class SessionContextService {
   assemble(input: AssembleSessionContextInput): SessionContextAssembly {
     const { projectId, agentId, sessionId } = requireScope(input);
     const digest = input.cachedDigest ?? (() => {
-      const read = readSessionTurns(this.db, { projectId, agentId, sessionId, limit: SESSION_DIGEST_MAX_TURNS });
-      const excluded = new Set(input.excludeTurnIds ?? []);
-      const turns = excluded.size === 0 ? read.turns : read.turns.filter((turn) => !excluded.has(turn.turnId));
+      const read = readDigestTurns(this.db, { ...input, projectId, agentId, sessionId, limit: SESSION_DIGEST_MAX_TURNS });
+      const turns = read.turns;
       const built = buildSessionDigest(turns, { sessionId, tailTurns: input.tailTurns, truncated: read.truncated });
       return {
         ...built,
@@ -180,6 +180,33 @@ export class SessionContextService {
       // The returned `decisionTrace` is authoritative; the stored row is the audit copy.
     }
   }
+}
+
+function readDigestTurns(
+  db: Database,
+  input: { projectId: string; agentId: string; sessionId: string; previousSessionId?: string; tailTurns?: number; limit: number; excludeTurnIds?: readonly string[] },
+): SessionTurnRead {
+  const read = readSessionTurns(db, {
+    projectId: input.projectId,
+    agentId: input.agentId,
+    sessionId: input.sessionId,
+    limit: input.limit,
+  });
+  const excluded = new Set(input.excludeTurnIds ?? []);
+  const turns = excluded.size === 0 ? read.turns : read.turns.filter((turn) => !excluded.has(turn.turnId));
+  const tailTurns = input.tailTurns ?? SESSION_DIGEST_TAIL_TURNS;
+  const previousSessionId = input.previousSessionId;
+  if (previousSessionId === undefined || previousSessionId === input.sessionId || turns.length >= tailTurns) {
+    return { turns, truncated: read.truncated };
+  }
+  const previous = readSessionTurns(db, {
+    projectId: input.projectId,
+    agentId: input.agentId,
+    sessionId: previousSessionId,
+    limit: tailTurns - turns.length,
+  });
+  if (previous.turns.length === 0) return { turns, truncated: read.truncated };
+  return { turns: [...previous.turns, ...turns], truncated: read.truncated };
 }
 
 function requireScope(input: { projectId: string; agentId: string; sessionId: string }): {
