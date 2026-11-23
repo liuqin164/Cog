@@ -64,9 +64,9 @@ export interface ObservatoryCredentialField {
 }
 
 export interface ObservatoryCredentialFace {
-  pending(): Array<{ id: string; service: string; purpose: string; fields: ObservatoryCredentialField[]; requestedBy: string; createdAt: number }>;
-  refs(): Array<{ ref: string; service: string; createdAt: number }>;
-  submit(id: string, values: Record<string, string>, surface: string): { ok: true; ref: string } | { ok: false; reason: string };
+  pending(): Array<{ id: string; service: string; purpose: string; fields: ObservatoryCredentialField[]; requestedBy: string; createdAt: number; allowedOrigins?: string[] }>;
+  refs(): Array<{ ref: string; service: string; createdAt: number; allowedOrigins?: string[] }>;
+  submit(id: string, values: Record<string, string>, surface: string, allowedOrigins?: string[]): { ok: true; ref: string } | { ok: false; reason: string };
   cancel(id: string, surface: string): boolean;
   revoke(ref: string): boolean;
 }
@@ -447,7 +447,10 @@ export function createObservatoryRoutes(
               if (typeof value === 'string') values[key] = value;
             }
           }
-          const result = options.credentials.submit(typeof body.id === 'string' ? body.id : '', values, 'web');
+          const allowedOrigins = Array.isArray(body.allowedOrigins)
+            ? body.allowedOrigins.filter((entry): entry is string => typeof entry === 'string')
+            : undefined;
+          const result = options.credentials.submit(typeof body.id === 'string' ? body.id : '', values, 'web', allowedOrigins);
           return result.ok
             ? jsonResponse(result, 200, acceptEncoding)
             : jsonResponse({ ok: false, error: result.reason }, 400, acceptEncoding);

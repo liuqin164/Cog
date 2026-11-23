@@ -52,7 +52,7 @@ describe('the credential input surface', () => {
       const request = shell.credentials.pending()[0]!;
       expect(request.service).toBe('demo-api');
       expect(request.fields.map((field) => field.name)).toEqual(['account', 'password']);
-      const saved = shell.submitCredential(request.id, { account: ACCOUNT, password: PASSWORD }, 'terminal');
+      const saved = shell.submitCredential(request.id, { account: ACCOUNT, password: PASSWORD }, 'terminal', ['https://api.example.com']);
       expect(saved).toEqual({ ok: true, ref: 'demo-api' });
       await run;
 
@@ -142,7 +142,7 @@ describe('the credential input surface', () => {
       const run = shell.submit('回显凭据做检查');
       await waitUntil(() => shell.credentials.pending().length === 1);
       const request = shell.credentials.pending()[0]!;
-      expect(shell.submitCredential(request.id, { account: ACCOUNT, password: PASSWORD }, 'terminal')).toEqual({ ok: true, ref: 'demo-api' });
+      expect(shell.submitCredential(request.id, { account: ACCOUNT, password: PASSWORD }, 'terminal', ['https://api.example.com'])).toEqual({ ok: true, ref: 'demo-api' });
       await run;
 
       const model = JSON.stringify(provider.calls);
@@ -174,7 +174,7 @@ describe('the credential input surface', () => {
     }
   }, 30_000);
 
-  test('http_request sends a stored credential from the host while bash stays offline under bwrap', async () => {
+  test('http_request refuses a loopback destination even when the owner registered it', async () => {
     const dir = makeTempDir('credential-http-');
     const sandboxed = bwrapUsable();
     const seen: string[] = [];
@@ -192,6 +192,7 @@ describe('the credential input surface', () => {
       },
     });
     const url = `http://127.0.0.1:${server.port}/check`;
+    const origin = `http://127.0.0.1:${server.port}`;
     const provider = new ScriptedProvider([
       {
         text: '',
@@ -232,7 +233,7 @@ describe('the credential input surface', () => {
       const run = shell.submit('用 demo-api 完成一次请求');
       await waitUntil(() => shell.credentials.pending().length === 1);
       const request = shell.credentials.pending()[0]!;
-      expect(shell.submitCredential(request.id, { account: ACCOUNT, password: PASSWORD }, 'terminal')).toEqual({ ok: true, ref: 'demo-api' });
+      expect(shell.submitCredential(request.id, { account: ACCOUNT, password: PASSWORD }, 'terminal', [origin])).toEqual({ ok: true, ref: 'demo-api' });
       await run;
 
       const tools = provider.calls.flatMap((call) => call.messages).filter((message) => message.role === 'tool');
@@ -240,15 +241,9 @@ describe('the credential input surface', () => {
       const http = tools.find((message) => message.toolName === 'http_request')!;
       expect(bash.isError).toBe(sandboxed);
       if (sandboxed) expect(bash.content).toMatch(/Could not connect|Failed to connect|Connection refused|exit code 7/u);
-      expect(http.isError).toBe(false);
-      expect(http.content).toContain('HTTP 200');
-      expect(http.content).toContain('«credential:demo-api.password»');
-      expect(http.content).toContain('«credential:demo-api.account»');
-      expect(seen).toContain(`Bearer ${PASSWORD}`);
-      if (sandboxed) expect(seen).toEqual([`Bearer ${PASSWORD}`]);
-      expect(traceKinds(shell, 'credential_used')).toContainEqual(
-        expect.objectContaining({ ref: 'demo-api', service: 'demo-api', caller: 'http_request' }),
-      );
+      expect(http.isError).toBe(true);
+      expect(http.content).toContain('ssrf_blocked');
+      expect(seen).toEqual([]);
 
       const model = JSON.stringify(provider.calls);
       const trace = readFileSync(shell.trace.path, 'utf8');
@@ -293,7 +288,7 @@ describe('the credential input surface', () => {
       fields: [{ name: 'token', secret: true }],
     });
     const request = service.pending()[0]!;
-    expect(service.submit(request.id, { token: 'token-before-revoke' }, 'web')).toEqual({ ok: true, ref: 'revoke-demo' });
+    expect(service.submit(request.id, { token: 'token-before-revoke' }, 'web', ['https://revoke.example'])).toEqual({ ok: true, ref: 'revoke-demo' });
     expect(await run).toEqual({ outcome: 'saved', ref: 'revoke-demo' });
     expect(service.use('revoke-demo', 'bash')).toEqual({ token: 'token-before-revoke' });
     expect(service.revoke('revoke-demo')).toBe(true);

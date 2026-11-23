@@ -56,9 +56,9 @@ export interface HttpFaceOptions {
 }
 
 export interface HttpCredentialFace {
-  pending(): Array<{ id: string; service: string; purpose: string; fields: Array<{ name: string; label?: string; secret?: boolean }>; requestedBy: string; createdAt: number }>;
-  refs(): Array<{ ref: string; service: string; createdAt: number }>;
-  submit(id: string, values: Record<string, string>, surface: string): { ok: true; ref: string } | { ok: false; reason: string };
+  pending(): Array<{ id: string; service: string; purpose: string; fields: Array<{ name: string; label?: string; secret?: boolean }>; requestedBy: string; createdAt: number; allowedOrigins?: string[] }>;
+  refs(): Array<{ ref: string; service: string; createdAt: number; allowedOrigins?: string[] }>;
+  submit(id: string, values: Record<string, string>, surface: string, allowedOrigins?: string[]): { ok: true; ref: string } | { ok: false; reason: string };
   cancel(id: string, surface: string): boolean;
   revoke(ref: string): boolean;
 }

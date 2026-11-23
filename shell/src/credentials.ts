@@ -9,12 +9,14 @@ export interface CredentialRequestInput {
   purpose: string;
   fields: CredentialField[];
   requestedBy?: string;
+  allowedOrigins?: string[];
 }
 
 export interface CredentialRef {
   ref: string;
   service: string;
   createdAt: number;
+  allowedOrigins: string[];
 }
 
 export interface CredentialPending {
@@ -24,6 +26,7 @@ export interface CredentialPending {
   fields: CredentialField[];
   requestedBy: string;
   createdAt: number;
+  allowedOrigins: string[];
 }
 
 export type CredentialOutcome = { outcome: 'saved'; ref: string } | { outcome: 'cancelled' };
@@ -99,6 +102,26 @@ function normalizeFields(input: unknown): CredentialField[] {
   });
 }
 
+function normalizeOrigins(input: unknown): string[] {
+  if (input === undefined) return [];
+  if (!Array.isArray(input)) throw new Error('invalid_credential_origin: allowed origins must be an array');
+  const origins: string[] = [];
+  for (const entry of input) {
+    if (typeof entry !== 'string' || entry.trim() === '') throw new Error('invalid_credential_origin: each origin must be a non-empty string');
+    let url: URL;
+    try {
+      url = new URL(entry.trim());
+    } catch {
+      throw new Error(`invalid_credential_origin: ${entry}`);
+    }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error(`invalid_credential_origin: ${entry} must use http or https`);
+    if (url.username !== '' || url.password !== '') throw new Error(`invalid_credential_origin: ${entry} carries embedded credentials`);
+    if (url.pathname !== '/' || url.search !== '' || url.hash !== '') throw new Error(`invalid_credential_origin: ${entry} must be scheme://host[:port]`);
+    if (!origins.includes(url.origin)) origins.push(url.origin);
+  }
+  return origins;
+}
+
 function slug(value: string, fallback: string): string {
   const result = value.toLowerCase().replace(/[^a-z0-9]+/gu, '-').replace(/^-+|-+$/gu, '').slice(0, 24);
   return result === '' ? fallback : result;
@@ -116,10 +139,10 @@ export class CredentialVault {
   }
 
   list(): CredentialRef[] {
-    return this.load().map(({ ref, service, createdAt }) => ({ ref, service, createdAt }));
+    return this.load().map(({ ref, service, createdAt, allowedOrigins }) => ({ ref, service, createdAt, allowedOrigins: allowedOrigins ?? [] }));
   }
 
-  save(service: string, fields: CredentialField[], values: Record<string, string>): CredentialRef {
+  save(service: string, fields: CredentialField[], values: Record<string, string>, allowedOrigins: string[]): CredentialRef {
     const entries = this.load();
     const base = slug(service, 'credential');
     let ref = base;
@@ -128,17 +151,35 @@ export class CredentialVault {
       ref,
       service,
       createdAt: this.now(),
+      allowedOrigins,
       values: Object.fromEntries(fields.map((field) => [field.name, values[field.name]!])),
     };
     this.store([...entries, record]);
-    return { ref, service, createdAt: record.createdAt };
+    return { ref, service, createdAt: record.createdAt, allowedOrigins };
   }
 
-  use(ref: string, caller: string): Record<string, string> {
+  use(ref: string, caller: string, target?: { url?: string }): Record<string, string> {
     const record = this.load().find((entry) => entry.ref === ref);
     if (!record) {
       this.trace.append('credential_use_refused', { ref, caller, reason: 'not_found' }, this.now());
       throw new Error(`credential_not_found: ${ref}`);
+    }
+    if (target?.url !== undefined) {
+      const allowed = record.allowedOrigins ?? [];
+      if (allowed.length === 0) {
+        this.trace.append('credential_use_refused', { ref, caller, reason: 'origin_unregistered' }, this.now());
+        throw new Error(`credential_origin_unregistered: ${ref} has no registered origin; re-register it with the host it may be sent to`);
+      }
+      let origin: string;
+      try {
+        origin = new URL(target.url).origin;
+      } catch {
+        origin = '';
+      }
+      if (!allowed.includes(origin)) {
+        this.trace.append('credential_use_refused', { ref, caller, reason: 'origin_mismatch', origin }, this.now());
+        throw new Error(`credential_origin_refused: ${origin} is not an allowed origin for ${ref}`);
+      }
     }
     this.trace.append('credential_used', { ref, service: record.service, caller }, this.now());
     return { ...record.values };
@@ -207,6 +248,7 @@ export class CredentialService {
     const service = text(input.service, 'service');
     const purpose = text(input.purpose, 'purpose');
     const fields = normalizeFields(input.fields);
+    const allowedOrigins = normalizeOrigins(input.allowedOrigins);
     if (!allowed) {
       this.trace.append('credential_request_refused', { service, reason: 'no_owner' }, this.now());
       throw new Error('credential_request_unavailable: only a user-present work run can ask for a credential');
@@ -220,13 +262,13 @@ export class CredentialService {
       command: '',
       args: service,
       reason: purpose,
-      credential: { service, purpose, fields },
+      credential: { service, purpose, fields, ...(allowedOrigins.length > 0 ? { allowedOrigins } : {}) },
       status: 'pending',
       createdAt: at,
     };
     let resolve!: (outcome: CredentialOutcome) => void;
     const promise = new Promise<CredentialOutcome>((done) => { resolve = done; });
-    const entry: PendingCredential = { id, input: { service, purpose, fields, requestedBy }, proposal, promise, resolve, ...(signal ? { signal } : {}) };
+    const entry: PendingCredential = { id, input: { service, purpose, fields, allowedOrigins, requestedBy }, proposal, promise, resolve, ...(signal ? { signal } : {}) };
     if (signal) {
       entry.onAbort = () => this.cancel(id, 'terminal');
       signal.addEventListener('abort', entry.onAbort, { once: true });
@@ -238,7 +280,7 @@ export class CredentialService {
     return promise;
   }
 
-  submit(id: string, values: Record<string, string>, surface: string): CredentialSubmission {
+  submit(id: string, values: Record<string, string>, surface: string, allowedOrigins?: unknown): CredentialSubmission {
     if (surface !== 'terminal' && surface !== 'web') {
       this.trace.append('credential_submit_refused', { id, surface, reason: 'untrusted_surface' }, this.now());
       return { ok: false, reason: 'channel_collection_refused' };
@@ -262,9 +304,20 @@ export class CredentialService {
         return { ok: false, reason: 'empty_field' };
       }
     }
+    let origins: string[];
+    try {
+      origins = normalizeOrigins(allowedOrigins);
+    } catch (error) {
+      this.trace.append('credential_submit_refused', { id, surface, reason: 'invalid_origin' }, this.now());
+      return { ok: false, reason: error instanceof Error ? error.message : 'invalid_credential_origin' };
+    }
+    if (origins.length === 0) {
+      this.trace.append('credential_submit_refused', { id, surface, reason: 'origin_required' }, this.now());
+      return { ok: false, reason: 'credential_origin_required' };
+    }
     let ref: string;
     try {
-      ref = this.vault.save(pending.input.service, pending.input.fields, values).ref;
+      ref = this.vault.save(pending.input.service, pending.input.fields, values, origins).ref;
     } catch (error) {
       this.trace.append('credential_save_failed', { id, surface, reason: error instanceof Error ? error.message : String(error) }, this.now());
       return { ok: false, reason: 'credential_store_failed' };
@@ -300,6 +353,7 @@ export class CredentialService {
       fields: input.fields,
       requestedBy: input.requestedBy,
       createdAt: proposal.createdAt,
+      allowedOrigins: input.allowedOrigins ?? [],
     }));
   }
 
@@ -319,13 +373,13 @@ export class CredentialService {
     return this.vault.revoke(ref);
   }
 
-  use(ref: string, caller: string, toolCallId?: string): Record<string, string> {
-    const values = this.vault.use(ref, caller);
-    if (toolCallId !== undefined) {
+  use(ref: string, caller: string, options?: { toolCallId?: string; url?: string }): Record<string, string> {
+    const values = this.vault.use(ref, caller, options?.url === undefined ? undefined : { url: options.url });
+    if (options?.toolCallId !== undefined) {
       const masks = Object.entries(values)
         .filter(([, value]) => value.length >= 4)
         .map(([field, value]) => ({ ref, field, value }));
-      this.masksByCall.set(toolCallId, [...(this.masksByCall.get(toolCallId) ?? []), ...masks]);
+      this.masksByCall.set(options.toolCallId, [...(this.masksByCall.get(options.toolCallId) ?? []), ...masks]);
     }
     return values;
   }

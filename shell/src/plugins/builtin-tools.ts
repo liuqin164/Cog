@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process';
+import { lookup as dnsLookup } from 'node:dns/promises';
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
@@ -6,6 +7,7 @@ import { occasionMaterialOf, occasionVisibility, type MemoryEvent, type MemoryKe
 import { maskCredentialValues, type CredentialMask } from '../credentials.ts';
 import type { TraceLog } from '../trace.ts';
 import type { NativePlugin, ToolDefinition, ToolOutcome } from './host.ts';
+import { fetchPinned, validateRemoteUrl, type LookupAddress } from './web.ts';
 
 const MAX_READ_BYTES = 256 * 1024;
 /** Pi's bash output cap: 2000 lines or 50 KiB, whichever is hit first (`truncate.js:13-14`). */
@@ -17,6 +19,15 @@ const MAX_BASH_TIMEOUT_MS = 2_147_483_647;
 const BASH_OUTPUT_DIR = '.cogmem-shell/bash-output';
 const HTTP_TIMEOUT_MS = 30_000;
 const CREDENTIAL_PLACEHOLDER = /\{\{([a-z][a-z0-9_]*)\}\}/gu;
+const FROZEN_INPUTS = new WeakMap<object, unknown>();
+
+function freezeInput(input: unknown): unknown {
+  return input === null || typeof input !== 'object' ? input : JSON.parse(JSON.stringify(input));
+}
+
+function frozenInput(args: unknown): unknown {
+  return args !== null && typeof args === 'object' ? FROZEN_INPUTS.get(args) ?? args : args;
+}
 
 export interface BuiltinToolsConfig {
   workspaceRoot: string;
@@ -35,9 +46,14 @@ export interface BuiltinToolsConfig {
   /** One successful `mem:` read; the shell counts it for the context trace's drill metric (#268). */
   onMemoryRead?: (eventId: string) => void;
   credentials?: {
-    use(ref: string, caller: string, toolCallId?: string): Record<string, string>;
+    use(ref: string, caller: string, options?: { toolCallId?: string; url?: string }): Record<string, string>;
     masksFor?(toolCallId: string): CredentialMask[];
     forgetMasks?(toolCallId: string): void;
+  };
+  http?: {
+    lookup?: (hostname: string) => Promise<LookupAddress[]>;
+    fetch?: (input: string | URL, init?: RequestInit, pin?: LookupAddress) => Promise<Response>;
+    allowLoopback?: boolean;
   };
 }
 
@@ -400,6 +416,7 @@ function definitions(
   cliConfigPath?: string,
   credentials?: BuiltinToolsConfig['credentials'],
   scope?: { projectId?: string; occasion?: () => Occasion },
+  http: BuiltinToolsConfig['http'] = {},
 ): ToolDefinition[] {
   const sandbox = sandboxed && dataDir !== undefined ? { dataDir, trace: ledger.trace } : undefined;
   // The shell always has a data dir, so a bare test host without one is not a degradation to
@@ -489,7 +506,7 @@ function definitions(
         let masks: CredentialMask[] = [];
         if (credential !== undefined) {
           if (!credentials) throw new Error('credential_unavailable: this shell has no credential service');
-          const values = credentials.use(credential, 'bash', toolCallId);
+          const values = credentials.use(credential, 'bash', { toolCallId });
           for (const [field, value] of Object.entries(values)) env[credentialEnvName(credential, field)] = value;
           masks = credentials.masksFor?.(toolCallId) ?? [];
         }
@@ -575,7 +592,7 @@ function definitions(
     {
       name: 'http_request',
       replay: 'never',
-      description: 'Send one HTTP request from the host with a stored credential. Pass the reference returned by request_credential as credentialRef. Header values may contain {{field}} placeholders; the host replaces each with that credential field before sending, so the value never enters the conversation. Returns "HTTP <status>" and the response body capped at 256 KiB, with any echo of a credential value masked. Redirects are refused.',
+      description: 'Send one HTTP request from the host with a stored credential. Pass the reference returned by request_credential as credentialRef. The request only goes to an origin the owner registered for that credential; loopback, private, link-local and reserved destinations are refused. Header values may contain {{field}} placeholders; the host replaces each with that credential field before sending, so the value never enters the conversation. Returns "HTTP <status>" and the response body capped at 256 KiB, with any echo of a credential value masked. Redirects are refused.',
       parameters: {
         type: 'object',
         properties: {
@@ -588,12 +605,15 @@ function definitions(
         required: ['credentialRef', 'url'],
       },
       async execute({ toolCallId, args, signal }) {
-        const ref = asString(args, 'credentialRef');
-        const url = asString(args, 'url');
-        const protocol = new URL(url).protocol;
-        if (protocol !== 'http:' && protocol !== 'https:') throw new Error('invalid_arguments: "url" must use http or https');
+        const input = frozenInput(args);
+        const ref = asString(input, 'credentialRef');
+        const url = asString(input, 'url');
         if (!credentials) throw new Error('credential_unavailable: this shell has no credential service');
-        const values = credentials.use(ref, 'http_request', toolCallId);
+        const target = await validateRemoteUrl(url, {
+          lookup: http.lookup ?? ((hostname: string) => dnsLookup(hostname, { all: true })),
+          allowLoopback: http.allowLoopback === true,
+        });
+        const values = credentials.use(ref, 'http_request', { url: target.url.href, toolCallId });
         const masks = credentials.masksFor?.(toolCallId) ?? [];
         const mask = (text: string): string => {
           const result = maskCredentialValues(text, masks);
@@ -609,19 +629,20 @@ function definitions(
         };
         try {
           const headers = Object.fromEntries(
-            Object.entries(credentialHeaders(args)).map(([name, value]) => [name, injectCredentialFields(value, values)]),
+            Object.entries(credentialHeaders(input)).map(([name, value]) => [name, injectCredentialFields(value, values)]),
           );
-          const method = httpMethod(args);
-          const body = httpBody(args);
+          const method = httpMethod(input);
+          const body = httpBody(input);
           const signals = [AbortSignal.timeout(HTTP_TIMEOUT_MS)];
           if (signal) signals.push(signal);
-          const response = await fetch(url, {
+          const send = http.fetch ?? ((target: string | URL, init: RequestInit, pin?: LookupAddress) => (pin ? fetchPinned(target, init, pin) : fetch(target, init)));
+          const response = await send(target.url, {
             method,
             headers,
             ...(body !== undefined ? { body } : {}),
             redirect: 'error',
             signal: AbortSignal.any(signals),
-          });
+          }, target.pin);
           const text = mask(await response.text());
           const bytes = Buffer.byteLength(text, 'utf8');
           const shown = bytes <= MAX_READ_BYTES
@@ -644,13 +665,18 @@ export function builtinToolsPlugin(): NativePlugin {
     name: 'builtin-tools',
     provide: ['builtinTools'],
     apply(ctx, config) {
-      const { workspaceRoot, dataDir, cliConfigPath, trace, kernel, projectId, occasion, onMemoryRead, credentials } = config as BuiltinToolsConfig;
+      const { workspaceRoot, dataDir, cliConfigPath, trace, kernel, projectId, occasion, onMemoryRead, credentials, http } = config as BuiltinToolsConfig;
       const sandboxed = dataDir !== undefined && bwrapUsable();
       if (dataDir !== undefined && !sandboxed) trace?.append('bash_sandbox_unavailable', { dataDir, reason: 'bwrap_not_usable' });
       if (sandboxed) trace?.append('bash_sandbox_network', { network: 'unshared' });
-      for (const definition of definitions(workspaceRoot, dataDir, sandboxed, { kernel, trace, onMemoryRead }, cliConfigPath, credentials, { projectId, occasion })) {
+      for (const definition of definitions(workspaceRoot, dataDir, sandboxed, { kernel, trace, onMemoryRead }, cliConfigPath, credentials, { projectId, occasion }, http)) {
         ctx.registerTool(definition, { builtin: true });
       }
+      ctx.on('beforeToolCall', (event: { toolName?: string; input?: unknown }) => {
+        if (event?.toolName === 'http_request' && event.input !== null && typeof event.input === 'object') {
+          FROZEN_INPUTS.set(event.input, freezeInput(event.input));
+        }
+      });
       ctx.on('afterToolCall', (event: { tool?: { toolCallId?: string; toolName?: string }; result?: { output?: string } }) => {
         const toolCallId = event?.tool?.toolCallId;
         if (!toolCallId || typeof event.result?.output !== 'string' || !credentials?.masksFor) return undefined;

@@ -58,7 +58,7 @@ export type AttachClientMessage =
   /** The user's answer to a command proposal (spec §7): Enter or Esc on the element. */
   | { t: 'command-confirm'; id: string }
   | { t: 'command-discard'; id: string }
-  | { t: 'credential-submit'; id: string; values: Record<string, string> }
+  | { t: 'credential-submit'; id: string; values: Record<string, string>; allowedOrigins?: string[] }
   | { t: 'credential-cancel'; id: string }
   | { t: 'withdraw' }
   | { t: 'wake' }
@@ -89,7 +89,7 @@ export interface AttachShell {
   confirmProposal(id: string): Promise<{ ok: boolean; proposal?: CommandProposal; reason?: string }>;
   /** The user's discard of a command proposal; it is retired and never runs. */
   discardProposal(id: string): CommandProposal | undefined;
-  submitCredential(id: string, values: Record<string, string>, surface?: string): CredentialSubmission;
+  submitCredential(id: string, values: Record<string, string>, surface?: string, allowedOrigins?: string[]): CredentialSubmission;
   cancelCredential(id: string, surface?: string): boolean;
   withdrawSteering(): string | undefined;
   sleep(): Promise<void>;
@@ -235,7 +235,7 @@ export class AttachServer {
         this.options.shell.discardProposal(message.id);
         break;
       case 'credential-submit': {
-        const result = this.options.shell.submitCredential(message.id, message.values, 'terminal');
+        const result = this.options.shell.submitCredential(message.id, message.values, 'terminal', message.allowedOrigins);
         if (!result.ok) {
           this.send(socket, { t: 'event', name: 'companion_command_result', payload: { name: 'credential', text: `凭据未保存：${result.reason}`, receipt: true } });
         }

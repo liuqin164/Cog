@@ -30,6 +30,7 @@ export interface CredentialRequestSpec {
   service: string;
   purpose: string;
   fields: CredentialField[];
+  allowedOrigins?: string[];
 }
 
 export interface CommandProposal {
