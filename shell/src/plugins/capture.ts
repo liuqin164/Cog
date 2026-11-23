@@ -1,4 +1,4 @@
-import { CONVERSATION_CAPTURE_LANE, KernelAgentMemoryBackend, type MemoryEvent, type MemoryKernel } from 'cogmem';
+import { CONVERSATION_CAPTURE_LANE, KernelAgentMemoryBackend, type AgentTurnReceipt, type MemoryEvent, type MemoryKernel } from 'cogmem';
 import type { RunSummary } from '../state/agent-loop.ts';
 import { SecretRedactor } from '../kernel-host.ts';
 import type { TraceLog } from '../trace.ts';
@@ -27,11 +27,6 @@ export interface CaptureServiceOptions {
   channel?: () => string;
   redactor?: SecretRedactor;
   trace?: TraceLog;
-  /**
-   * The shell's ingest gate (`/pause`). Read at every write, never cached: a turn that started before
-   * the pause must not slip its write in after it, and a resume must take effect on the next write
-   * without reopening anything.
-   */
   paused?: () => boolean;
 }
 
@@ -42,6 +37,7 @@ export interface CaptureResult {
   toolCallEventIds: string[];
   toolResultEventIds: string[];
   redactionCount: number;
+  receipt?: AgentTurnReceipt;
 }
 
 export interface CapturedTurn {
@@ -185,7 +181,7 @@ export class CaptureService {
     const { backend, agentId, projectId, sessionId } = this.options;
     const channel = this.options.channel?.();
     const assistantEventId = captured.assistantEventIds.at(-1);
-    await backend.rememberTurnWithResult({
+    const result = await backend.rememberTurnWithResult({
       agentId,
       projectId,
       workspaceId: projectId,
@@ -212,6 +208,7 @@ export class CaptureService {
       toolCallEventIds: captured.toolCallEventIds,
       toolResultEventIds: captured.toolResultEventIds,
       redactionCount: captured.redactionCount,
+      ...(result.receipt ? { receipt: result.receipt } : {}),
     };
   }
 
@@ -311,6 +308,7 @@ export class CaptureService {
       toolCallEventIds,
       toolResultEventIds,
       redactionCount,
+      ...(result.receipt ? { receipt: result.receipt } : {}),
     };
   }
 
@@ -434,14 +432,6 @@ export interface CapturePluginConfig {
   paused?: () => boolean;
 }
 
-/**
- * The capture plugin: it accumulates the raw message and tool stream (`message_end`,
- * `tool_execution_*`) and flushes the finished run on `agent_end`.
- *
- * The stream is the point (guidance conflict #6): capture reads the events the model actually
- * produced, before any compaction or projection, and only the flush writes to the kernel. It is a
- * plugin rather than core so a channel that should not be recorded simply does not load it.
- */
 export function capturePlugin(config: CapturePluginConfig): NativePlugin {
   return {
     name: 'capture',
@@ -452,6 +442,7 @@ export function capturePlugin(config: CapturePluginConfig): NativePlugin {
       const kernel = ctx.getService<MemoryKernel>('kernel');
       const clock = ctx.getService<{ localDate(at?: number): string }>('clock');
       const trace = ctx.getService<TraceLog>('trace');
+      const eventBus = ctx.getService<{ emit(name: string, payload: unknown): unknown }>('eventBus');
       const service = new CaptureService({
         backend,
         kernel,
@@ -635,7 +626,7 @@ export function capturePlugin(config: CapturePluginConfig): NativePlugin {
         const threadId = `companion-day:${clock.localDate()}`;
         try {
           if (origin === 'user' && buffer?.userEventId) {
-            await service.finalizeRun(summary, threadId, {
+            const result = await service.finalizeRun(summary, threadId, {
               userEventId: buffer.userEventId,
               assistantEventIds: buffer.assistantEventIds,
               toolCallEventIds: buffer.toolCallEventIds,
@@ -643,9 +634,11 @@ export function capturePlugin(config: CapturePluginConfig): NativePlugin {
               redactionCount: buffer.redactionCount,
               userText: buffer.primaryUserText ?? buffer.userText,
             });
+            if (result.receipt) await eventBus.emit('commitment_receipt', result.receipt);
             previousToolResultEventIds = toolResultEventIds;
           } else {
-            await service.captureRun(summary, threadId);
+            const result = await service.captureRun(summary, threadId);
+            if (result.receipt) await eventBus.emit('commitment_receipt', result.receipt);
           }
         } catch (error) {
           trace?.append('capture_failed', {

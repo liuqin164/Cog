@@ -1,12 +1,3 @@
-/**
- * The view model: everything the TUI draws, and the only code that turns the shell's event stream
- * into it.
- *
- * The TUI is a view, not a second brain: every entry here comes from an event the shell already
- * emitted (`message_*`, `tool_execution_*`, `companion_transition`, …). Nothing in this file calls a
- * tool, decides a transition or writes memory, which is what keeps a crashed TUI harmless to the
- * resident process and keeps the two processes from disagreeing about what happened.
- */
 import { type RenderEnv, type Row, cellWidth, seg } from './frame.ts';
 import { renderMarkdown } from './markdown.ts';
 import type { CommandProposal } from '../proposals.ts';
@@ -35,30 +26,14 @@ export interface StatusState {
   showWorkspace: boolean;
   contextTokens: number;
   contextSweetSpot: number;
-  /** The newest six-lane assembly; `null` until a request has been assembled. */
   contextLanes?: LaneAssemblyView | null;
-  /** The projection counts behind that assembly (#268); `null` with no assembly. */
   contextMetrics?: ContextMetrics | null;
-  /**
-   * The provider's own prompt-cache account for the run in flight (#165 round 21). `null` when the
-   * provider reported no cache field, and null is drawn as nothing: a provider that never reports
-   * caching must not read as one that always misses. It is `null` rather than absent because this
-   * crosses the attach socket as JSON, and JSON drops an `undefined` — the next run's "no report"
-   * would then leave the previous run's ratio on screen as if it were this run's.
-   */
   promptCache?: { hit: number; miss: number; percent: number } | null;
   costTokens: number;
   timeZone: string;
-  /** #328: the configured do-not-disturb window, absent when it is off. */
   quietWindow?: { startHour: number; endHour: number; active: boolean };
-  /** `off` means bash runs without bwrap; the status overlay says so instead of hiding it (#284). */
   sandbox?: 'on' | 'off';
-  /** `/pause`: the status bar shows it while it is true, because a silent pause looks like a bug. */
   capturePaused?: boolean;
-  /**
-   * A paused run (#228): what it waits for and the one line that says so. The status bar draws it,
-   * because "the run stopped and nobody said why" is the failure this pause exists to avoid.
-   */
   suspended?: { kind: 'budget' | 'question'; text: string };
 }
 
@@ -80,7 +55,6 @@ export interface ToolBlock {
   status: 'running' | 'ok' | 'error';
   startedAt: number;
   endedAt?: number;
-  /** A failed block opens on the error line by default; the user can still collapse it. */
   expanded: boolean;
 }
 
@@ -89,18 +63,13 @@ export type TranscriptEntry =
   | { kind: 'assistant'; id: string; text: string; emergenceReason?: string }
   | { kind: 'tool'; id: string; block: ToolBlock }
   | { kind: 'notice'; id: string; text: string; tone: 'info' | 'warn' }
-  /**
-   * The third visual style (spec §7): a system receipt for a command the shell ran. It is not agent
-   * speech and not a banner — it is the shell telling the user what a command did, so it lives in the
-   * transcript where the command was typed and reads differently from both.
-   */
-  | { kind: 'receipt'; id: string; text: string }
-  /**
-   * The agent's offer of a command (spec §7, #165 round 22). The receipt's visual family, but
-   * actionable: while pending it is the element Enter executes and Esc discards; executed, discarded
-   * or refused it is a receipt of that decision and nothing more. It is never a message: the command
-   * text is structured state, not something the model said.
-   */
+  | {
+    kind: 'receipt';
+    id: string;
+    text: string;
+    sourceEventId?: string;
+    actions?: Array<{ action: 'confirm' | 'intention' | 'forget'; label: string }>;
+  }
   | { kind: 'proposal'; id: string; proposal: CommandProposal };
 
 export interface PresenceReport {
@@ -109,10 +78,6 @@ export interface PresenceReport {
   dreams: Array<{ localDate: string; summary: string; eventCount: number }>;
   emergence: Array<{ id: string; text: string; reason: string }>;
   commitments: Array<{ candidateId: string; title: string; status: string; updatedAt: number }>;
-  /**
-   * The upgrade that ran while nobody was attached (#165). It is here because "an upgrade happened
-   * and nobody said how it went" is the failure this report exists to prevent.
-   */
   upgrade?: { line: string; status: string };
   nextWakeAt?: number;
   nextWakeReason?: string;
@@ -146,10 +111,6 @@ export interface CredentialPrompt {
 }
 
 export const MAX_TOOL_OUTPUT_ROWS = 12;
-/**
- * The transcript mirrored for attached views (and the TUI's own view) is bounded (#226). The ledger
- * is the unbounded record; a view only has to show the recent conversation.
- */
 export const MAX_TRANSCRIPT_ENTRIES = 500;
 
 export class TuiView {
@@ -176,12 +137,7 @@ export class TuiView {
   scrollTop = 0;
   newMessages = false;
   selected = -1;
-  /** The highlighted row in the derived `/` palette. */
   paletteIndex = 0;
-  /**
-   * Entries whose rendered rows may be stale. The transcript cache reads and clears this: it is the
-   * difference between an O(1) scroll frame and a rescan of ten thousand immutable messages.
-   */
   readonly dirty = new Set<string>();
   /** Set while the attached resident is unreachable or degraded; rendered as a banner. */
   degradedReason?: string;
@@ -306,6 +262,14 @@ export class TuiView {
         break;
       case 'companion_command_result':
         this.commandResult = { name: String(event.payload?.name ?? ''), text: String(event.payload?.text ?? '') };
+        if (this.commandResult.name === 'receipt') {
+          for (const entry of this.entries) {
+            if (entry.kind === 'receipt' && entry.actions) {
+              entry.actions = undefined;
+              this.dirty.add(entry.id);
+            }
+          }
+        }
         // The receipt style is the resident's call (`CommandReply.receipt`), not a second list here,
         // so an unknown `/foo` shows as a receipt on this face too instead of being swallowed.
         if (event.payload?.receipt === true) this.push({ kind: 'receipt', id: this.id(), text: this.commandResult.text });
@@ -318,6 +282,22 @@ export class TuiView {
         break;
       case 'companion_snapshot_note':
         this.snapshotNote = String(event.payload?.note ?? '');
+        break;
+      case 'commitment_receipt':
+        if (typeof event.payload?.text === 'string' && event.payload.text) {
+          this.push({
+            kind: 'receipt',
+            id: this.id(),
+            text: event.payload.text,
+            ...(typeof event.payload.sourceEventId === 'string' ? { sourceEventId: event.payload.sourceEventId } : {}),
+            actions: Array.isArray(event.payload.actions)
+              ? event.payload.actions.map((action: string) => ({
+                action,
+                label: ({ confirm: '对', intention: '只是打算，不用提醒', forget: '别记' } as Record<string, string>)[action] ?? action,
+              }))
+              : undefined,
+          });
+        }
         break;
       default:
         break;
@@ -460,6 +440,14 @@ export class TuiView {
     return undefined;
   }
 
+  pendingReceipt(): Extract<TranscriptEntry, { kind: 'receipt' }> | undefined {
+    for (let index = this.entries.length - 1; index >= 0; index -= 1) {
+      const entry = this.entries[index];
+      if (entry.kind === 'receipt' && entry.sourceEventId && entry.actions?.length) return entry;
+    }
+    return undefined;
+  }
+
   push(entry: TranscriptEntry): void {
     this.entries.push(entry);
     this.dirty.add(entry.id);
@@ -579,6 +567,9 @@ export function flattenEntry(entry: TranscriptEntry, width: number, env: RenderE
     lines.forEach((line, index) => {
       rows.push(index === 0 ? [seg(marker, 'accent'), seg(line, 'plain')] : [seg('  ', 'dim'), seg(line, 'plain')]);
     });
+    if (entry.actions?.length) {
+      rows.push([seg('  ', 'dim'), seg(entry.actions.map((action, index) => `${index + 1} ${action.label}`).join(' · '), 'dim')]);
+    }
     rows.push([]);
     return rows;
   }

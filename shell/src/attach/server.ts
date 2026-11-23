@@ -1,11 +1,3 @@
-/**
- * The resident-side half of `cog`: a control socket in the shell's data directory that streams the
- * shell's own event bus and accepts input.
- *
- * The TUI is a separate process on purpose. The spec's hard line is that a TUI crash must not touch
- * the resident, and the only way to make that true is to make the TUI killable — so nothing here
- * awaits a client, and a client that dies mid-write is dropped, never propagated.
- */
 import { createServer, type Server, type Socket } from 'node:net';
 import { chmodSync, existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -16,7 +8,6 @@ import type { CommandProposal } from '../proposals.ts';
 import type { CredentialSubmission } from '../credentials.ts';
 import { TuiView, type PresenceReport, type StatusState, type TranscriptEntry, type WorkState } from '../tui/view.ts';
 
-/** Every event the TUI consumes. One list, so a new event is forwarded by adding it here. */
 export const TUI_EVENTS = [
   'message_start',
   'message_update',
@@ -36,6 +27,7 @@ export const TUI_EVENTS = [
   'companion_command_proposal',
   'companion_model_routes',
   'companion_snapshot_note',
+  'commitment_receipt',
 ] as const;
 
 export interface AttachSnapshot {
@@ -58,19 +50,14 @@ export type AttachClientMessage =
   /** The user's answer to a command proposal (spec §7): Enter or Esc on the element. */
   | { t: 'command-confirm'; id: string }
   | { t: 'command-discard'; id: string }
+  | { t: 'commitment-receipt'; sourceEventId: string; action: 'confirm' | 'intention' | 'forget' }
   | { t: 'credential-submit'; id: string; values: Record<string, string>; allowedOrigins?: string[] }
   | { t: 'credential-cancel'; id: string }
   | { t: 'withdraw' }
   | { t: 'wake' }
   | { t: 'detach' }
-  // The install's first-wake probe (#203): a deterministic write / recall the resident runs on its
-  // own in-process kernel, because the installer is out of process and a second kernel on the same
-  // file is the two-writer case CONCURRENT_ACCESS.md forbids. `turnId` is the probe's token, so a
-  // replay of the same attempt is a replay instead of a second row.
   | { t: 'probe-remember'; text: string; turnId?: string }
   | { t: 'probe-recall'; query: string }
-  // The install's semantic probe (#280): a real vector through the resident's embedder, so a
-  // degraded worker cannot pass the self-check on lexical recall alone.
   | { t: 'probe-embed'; text: string };
 
 export type AttachServerMessage =
@@ -79,16 +66,16 @@ export type AttachServerMessage =
   | { t: 'probe'; op: 'remember' | 'recall' | 'embed'; ok: boolean; text: string; dimensions?: number }
   | { t: 'bye'; reason: string };
 
-/** What the server needs from the shell; `CompanionShell` implements it. */
 export interface AttachShell {
   submit(text: string, channel?: string): Promise<unknown>;
   wakeFromSleep(): Promise<void>;
-  /** One dispatch for core and plugin commands alike; an unknown name answers with a receipt. */
   runCommand(name: string, args?: string): Promise<CommandReply>;
-  /** The user's confirmation of a command proposal; the only path that runs one. */
   confirmProposal(id: string): Promise<{ ok: boolean; proposal?: CommandProposal; reason?: string }>;
-  /** The user's discard of a command proposal; it is retired and never runs. */
   discardProposal(id: string): CommandProposal | undefined;
+  reviewCommitmentReceipt(input: {
+    sourceEventId: string;
+    action: 'confirm' | 'intention' | 'forget';
+  }): { text: string };
   submitCredential(id: string, values: Record<string, string>, surface?: string, allowedOrigins?: string[]): CredentialSubmission;
   cancelCredential(id: string, surface?: string): boolean;
   withdrawSteering(): string | undefined;
@@ -101,7 +88,6 @@ export interface AttachShell {
   modelRoutes(): string[];
   pluginCommands(): Array<{ name: string; description?: string; argumentHint?: string }>;
   snapshotNote(): string | undefined;
-  /** Called when the attached-client count changes, so the shell can date its own absence. */
   attachChanged(count: number): void;
   probeRemember(text: string, turnId?: string): Promise<{ ok: boolean; text: string }>;
   probeRecall(query: string): Promise<{ ok: boolean; text: string }>;
@@ -234,6 +220,14 @@ export class AttachServer {
       case 'command-discard':
         this.options.shell.discardProposal(message.id);
         break;
+      case 'commitment-receipt': {
+        const result = this.options.shell.reviewCommitmentReceipt({
+          sourceEventId: message.sourceEventId,
+          action: message.action,
+        });
+        this.sendCommandReply(socket, 'receipt', { text: result.text, receipt: true });
+        break;
+      }
       case 'credential-submit': {
         const result = this.options.shell.submitCredential(message.id, message.values, 'terminal', message.allowedOrigins);
         if (!result.ok) {

@@ -438,6 +438,8 @@ export {
   type AgentTurnIngestMode,
   type AgentTurnMemory,
   type AgentTurnMemoryResult,
+  type AgentTurnReceipt,
+  type AgentTurnReceiptAction,
   type CreateMemoryUsageReceiptInput,
   type KernelAgentMemoryBackendOptions,
   type MemoryUsageReceipt,

@@ -27,6 +27,24 @@ export type AgentTurnCompileReason =
   | 'raw_then_dream'
   | 'duplicate_turn';
 
+export type AgentTurnReceiptKind = 'commitment' | 'intention';
+export type AgentTurnReceiptAction = 'confirm' | 'intention' | 'forget';
+
+export interface AgentTurnReceipt {
+  receiptId: string;
+  kind: AgentTurnReceiptKind;
+  provenance: 'rule_extraction';
+  content: string;
+  owner?: 'user' | 'agent' | 'third-party';
+  dueAt?: number;
+  dueCondition?: string;
+  confidence: 'explicit' | 'tentative';
+  sourceEventId: string;
+  timeZone: string;
+  text: string;
+  actions: readonly AgentTurnReceiptAction[];
+}
+
 export interface AgentTurnMemory {
   agentId: string;
   projectId: string;
@@ -53,20 +71,9 @@ export interface AgentTurnMemoryResult {
   compiled: boolean;
   rawEventIds: string[];
   compiledNeuronId?: string;
-  /**
-   * This turn was already recorded under the caller's turn id, so nothing was written.
-   * `compiled` then reports what *this* call did — nothing — not what the first call did;
-   * the first call's compilation already exists and is not repeated.
-   */
   duplicate?: boolean;
-  /**
-   * The turn id the caller supplied, echoed back.
-   *
-   * Present only when the caller named the turn: it is their identity being acknowledged,
-   * and echoing a synthesized one would acknowledge something they never said. Retrying
-   * with this value is what makes the retry a replay (#113).
-   */
   turnId?: string;
+  receipt?: AgentTurnReceipt;
 }
 
 export interface AgentRecallQuery {
@@ -224,47 +231,18 @@ export interface AgentRecallItem {
   whyMatched?: string;
   canAnswerExactQuote?: boolean;
   trust?: typeof TOOL_OBSERVATION_TRUST;
-  /**
-   * Present when this item's text has been through redaction: how many values were
-   * removed and how many characters they held. Without it a caller cannot tell an
-   * altered text from the text that was written (#115).
-   */
   redaction?: { count: number; chars: number };
-  /**
-   * Present when this item came from another agent's shared collection (#67). It is a reference, not
-   * this agent's memory: the field is what lets a renderer separate the two with evidence, instead of
-   * inferring it from the text.
-   */
   shared?: { sourceHost: string; collection: string };
 }
 
-/**
- * Atlas node types worth returning as recall items.
- *
- * One list, because there were two: the two call sites kept their own copy, both named
- * dimensions the projection does not emit for a conversation, and the compiled lane
- * therefore returned nothing for every query (measured: `evidenceFor` found 4 nodes and
- * recall reported `navigation: 0` for the same text).
- *
- * `raw_event` is deliberately absent: the raw-ledger lane already answers with those, and
- * a card reading "assistant 2026-11-01" is not an answer.
- */
 export const ATLAS_RECALL_NODE_TYPES: readonly string[] = [
   'episode', 'entity', 'topic', 'issue', 'actor', 'event', 'task', 'object', 'location', 'state', 'project', 'time',
 ];
 
-/** A recall result before the single exit adds what the kernel knows about the index. */
 export type RecallCoreResult = Omit<AgentRecallResult, 'semanticIndex'>;
 
 export interface AgentRecallResult {
   recallMode: 'raw_ledger_fallback' | 'atlas_facet_recall' | 'atlas_raw_grounded_recall' | 'social_turn_suppressed';
-  /**
-   * Whether a semantic index was available for this answer.
-   *
-   * False means `memory` is `rule_only`: nothing is vectorised, so every answer here came
-   * from literal matching over the raw ledger, and a paraphrase that shares no words with
-   * the memory will not find it.
-   */
   semanticIndex: boolean;
   items: AgentRecallItem[];
   fallbackUsed: boolean;
@@ -272,7 +250,6 @@ export interface AgentRecallResult {
   atlasCards?: MemoryAtlasCard[];
   relatedButNotSelected?: MemoryAtlasRelatedCard[];
   relaxationTrace?: MemoryAtlasRelaxationStep[];
-  /** Present on all kernel-produced results. Optional for source compatibility with external result mocks. */
   decisionTrace?: AgentRecallDecisionTrace;
 }
 
@@ -299,33 +276,11 @@ export interface AgentRecallDecisionTrace {
     atlas?: number;
   };
   selectedCount: number;
-  /**
-   * The occasion this recall was answered in, resolved from the connection's binding (#162).
-   * `occasionBinding` says whether a registered binding existed; an unbound connection is
-   * `public`, the strictest occasion.
-   */
   occasion?: Occasion;
   occasionBinding?: 'bound' | 'unbound';
-  /**
-   * What this recall withheld and why, one entry per reason.
-   *
-   * A gate that only removes things is indistinguishable from a memory that was never there, so
-   * every suppression names itself: the query carried nothing to look up (`residue_empty`), the
-   * entry is itself a social turn (`entry_social`), a raw-lane hit rested only on high-frequency
-   * words (`no_discriminative_hit`), or a grey-zone query's results fell below the relevance floor
-   * (`grey_below_floor`).
-   */
   suppressed?: Array<{ reason: RecallSuppressionReason; count: number }>;
-  /** Shared items this recall appended, and how many the shared budget turned away (#67). Counts only. */
   sharedCount?: number;
   sharedDropped?: number;
-  /**
-   * Why a recall that returned nothing returned nothing.
-   *
-   * `scope_filtered` means the question does match stored turns, but they belong to another agent
-   * identity: those turns are invisible here, and a silent 0 reads as "nothing was remembered".
-   * Counts only — never another identity's content.
-   */
   zeroExplanation?: ZeroExplanation;
 }
 
@@ -339,19 +294,12 @@ export type RecallSuppressionReason =
   | 'entry_social'
   | 'no_discriminative_hit'
   | 'grey_below_floor'
-  // A real (non-probe) question with no content character or word in common with the entry (#321).
   | 'below_relevance_floor'
-  // Occasion scope (#162): private/high material outside `private`, or third-party material in
-  // `public`. Both name themselves rather than vanishing.
   | 'occasion_private_tier'
   | 'occasion_third_party'
-  // A conversation turn holding a secret: written verbatim, marked, and not injected by default.
   | 'secret_bearing_withheld'
-  // Life information (health, money, papers, family): written and marked, not injected by default.
   | 'life_sensitivity_withheld'
   | 'profile_superseded'
-  // Phase projection (#130), off by default: an item too old for the default lane, and one shown as a gist
-  // rather than in full. Both are reported so a caller can tell "not remembered" from "not shown here".
   | 'phase_dormant'
   | 'phase_gist';
 
@@ -387,16 +335,7 @@ export interface AgentRecallBeliefTouch {
 }
 
 export interface KernelAgentMemoryBackendOptions {
-  /**
-   * The connection's registered channel binding (#162). The host obtains it from
-   * `kernel.occasionScope.register(...)` at connection setup. Absent means the connection is
-   * unbound and answers as `public`.
-   */
   binding?: ChannelBinding;
-  /**
-   * The identity this connection speaks for. The soul face is bound to it, so a connection cannot
-   * ask for another agent's soul; absent means the soul face refuses with `agent_id_required`.
-   */
   agentId?: string;
 }
 

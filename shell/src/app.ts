@@ -1,11 +1,3 @@
-/**
- * Assembly: the three core pieces (state machine, plugin host, kernel connection) wired to the
- * plugins that carry every capability.
- *
- * The app is also the only place that knows the transition triggers' meanings — a message wakes the
- * shell, a due intent re-injects the clock, the cage's overrun leaves RUNNING. Plugins decide
- * behaviour; the app decides which transition that behaviour is.
- */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ChannelContract, createMemoryKernel, KernelAgentMemoryBackend, ModelRegistry, type ChannelSession, type EmbeddingProvider, type MemoryKernel, type ModelRoleConfig, type ModelRoleName, type ModelTextUsage, type Occasion, type SessionContextAssembly, type SurfacingSource } from 'cogmem';
@@ -74,10 +66,6 @@ export interface CompanionShellOptions {
   modelRegistry?: ModelRegistry;
   /** The re-embed migration path for a brain written before an embedding role existed. */
   embeddingProvider?: EmbeddingProvider;
-  /**
-   * Production starts the local embedder in the background. Tests and embedders that supply their
-   * own provider leave it off, so constructing a shell never loads a model or touches the network.
-   */
   embedding?: boolean;
   now?: () => number;
   tick?: boolean;
@@ -117,11 +105,6 @@ export function defaultPlugins(config: DefaultPluginConfig): DefaultPluginEntry[
   ];
 }
 
-/**
- * The kernel's embedding role is what `semanticIndexEnabled()` reads. The role has no "local model"
- * value, so the honest switch is the one the kernel already uses: `deterministic_local` while no
- * vectors exist, and a real provider only after the model has loaded and re-embedding can run.
- */
 class ShellModelRegistry extends ModelRegistry {
   embeddingReady = false;
   routeTarget?: () => ModelRoute | undefined;
@@ -210,19 +193,8 @@ export class CompanionShell implements ShellControl, AttachShell {
   runTier: CageTier = 'autonomous';
   currentRunUserText = '';
   currentChannel = 'terminal';
-  /**
-   * The provider's own prompt-cache account for the run in flight (#165 round 21): `hit` is what the
-   * endpoint reported served from cache, `miss` the remainder of the prompt, `percent` their ratio.
-   * Absent until a provider reports a cache field — and absent is shown as nothing, never as 0%, so a
-   * provider that never reports caching cannot look like a provider that always misses. Round 17's
-   * estimate is not this number and never fills it.
-   */
   promptCache?: { hit: number; miss: number; percent: number };
   runStartedAt?: number;
-  /**
-   * The killed run's prompt, rebuilt from the session log at recovery (#210). Delivery is a product
-   * decision the shell does not make; holding it means the interrupted turn is reconstructable.
-   */
   interrupted?: { runId: string; text: string; chars: number };
   /** An upgrade outcome already spoken by this process; attaches read it once, then it is gone. */
   lastUpgrade?: UpgradeOutcome;
@@ -316,6 +288,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       projectTimeZone: this.config.timeZone,
       snapshotsDir: join(this.config.dataDir, 'snapshots'),
       exportsDir: join(this.config.dataDir, 'exports'),
+      receiptsEnabled: this.config.receipts,
       modelRegistry: registry,
       ...(embeddingProvider ? { embeddingProvider } : {}),
     });
@@ -993,6 +966,9 @@ export class CompanionShell implements ShellControl, AttachShell {
         void this.host.bus.emit('terminal_print', { text: `${event.message.content}\n` });
       }
     });
+    this.host.bus.on('commitment_receipt', (receipt: { text?: string }) => {
+      if (receipt?.text) void this.host.bus.emit('terminal_print', { text: `${receipt.text}\n` });
+    });
     this.terminal = this.host.hasService('terminal') ? this.host.getService<TerminalChannel>('terminal') : undefined;
   }
 
@@ -1218,6 +1194,31 @@ export class CompanionShell implements ShellControl, AttachShell {
       };
     } catch (error) {
       return { text: `顺延失败：${error instanceof Error ? error.message : String(error)}`, receipt: true };
+    }
+  }
+
+  reviewCommitmentReceipt(input: {
+    projectId?: string;
+    sourceEventId: string;
+    action: 'confirm' | 'intention' | 'forget';
+    content?: string;
+    dueAt?: number;
+    surface?: string;
+  }): CommandReply {
+    try {
+      const result = this.kernel.reviewCommitmentReceipt({
+        ...input,
+        projectId: input.projectId ?? this.config.projectId,
+        actor: 'owner',
+      });
+      const text = input.action === 'confirm'
+        ? `已确认承诺${result.commitment ? `：${result.commitment.content}` : ''}`
+        : input.action === 'intention'
+          ? '已转为打算，不再提醒。'
+          : '已不记这条。';
+      return { text, receipt: true };
+    } catch (error) {
+      return { text: `回执处理失败：${error instanceof Error ? error.message : String(error)}`, receipt: true };
     }
   }
 

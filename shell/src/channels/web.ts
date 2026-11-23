@@ -20,6 +20,14 @@ export interface WebChannelShell {
   discardProposal(id: string): unknown;
   acknowledgeSurfacing(candidateId: string): void;
   snooze(minutes: number, commitmentId?: string): { text: string };
+  reviewCommitmentReceipt(input: {
+    projectId: string;
+    sourceEventId: string;
+    action: 'confirm' | 'intention' | 'forget';
+    content?: string;
+    dueAt?: number;
+    surface?: string;
+  }): { text: string };
 }
 
 export interface WebChannelBackend {
@@ -123,6 +131,11 @@ export class WebChannel {
       return this.onCommitment(request);
     }
 
+    if (url.pathname === `${PREFIX}/receipt`) {
+      if (request.method !== 'POST') return this.methodNotAllowed('POST');
+      return this.onReceipt(request);
+    }
+
     return new Response('not_found', { status: 404 });
   };
 
@@ -138,6 +151,10 @@ export class WebChannel {
       if (payload?.message?.role === 'assistant' && typeof payload.message.content === 'string' && payload.message.content !== '') {
         this.broadcast('reply_end', { text: payload.message.content, provenance: this.provenance() });
       }
+      return;
+    }
+    if (name === 'commitment_receipt') {
+      this.broadcast('receipt', payload);
       return;
     }
     if (name === 'companion_command_proposal') {
@@ -234,6 +251,27 @@ export class WebChannel {
     if (body.action !== 'snooze') return this.options.routes.jsonResponse({ error: 'invalid_action' }, 400);
     const minutes = typeof body.minutes === 'number' && Number.isFinite(body.minutes) ? Math.max(1, Math.round(body.minutes)) : 60;
     const result = this.options.shell.snooze(minutes, commitmentId);
+    return this.options.routes.jsonResponse({ ok: true, text: result.text });
+  }
+
+  private async onReceipt(request: Request): Promise<Response> {
+    const refused = this.options.routes.refuseWrite(request, this.options.token, request.headers.get('accept-encoding'));
+    if (refused) return refused;
+    const body = await this.options.routes.readJsonBody(request);
+    if (!body) return this.options.routes.jsonResponse({ error: 'invalid_json' }, 400);
+    const sourceEventId = typeof body.sourceEventId === 'string' ? body.sourceEventId : '';
+    const action = body.action;
+    if (!sourceEventId || (action !== 'confirm' && action !== 'intention' && action !== 'forget')) {
+      return this.options.routes.jsonResponse({ error: 'invalid_receipt_action' }, 400);
+    }
+    const result = this.options.shell.reviewCommitmentReceipt({
+      projectId: this.options.projectId,
+      sourceEventId,
+      action,
+      ...(typeof body.content === 'string' ? { content: body.content } : {}),
+      ...(typeof body.dueAt === 'number' ? { dueAt: body.dueAt } : {}),
+      surface: 'web',
+    });
     return this.options.routes.jsonResponse({ ok: true, text: result.text });
   }
 
@@ -391,7 +429,7 @@ export function webChannelPlugin(options: WebChannelPluginOptions): NativePlugin
         config: [],
         status: () => ({ state: 'connected', detail: '本页由 Web 渠道提供' }),
       });
-      for (const name of ['message_update', 'message_end', 'companion_command_proposal', 'companion_emergence', 'companion_transition']) {
+      for (const name of ['message_update', 'message_end', 'companion_command_proposal', 'companion_emergence', 'companion_transition', 'commitment_receipt']) {
         ctx.on(name, (payload: any) => channel.onBusEvent(name, payload));
       }
       ctx.dispose(() => {

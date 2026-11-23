@@ -35,6 +35,7 @@ export interface MemoryKernelOptions {
   turnRelationReviewer?: TurnRelationAdvisoryReviewer;
   episodeBoundary?: Partial<EpisodeBoundaryConfig>;
   projectTimeZone?: string;
+  receiptsEnabled?: boolean;
   configDiagnostics?: ConfigDiagnosticLike[];
   /** F19 (#196): where nightly whole-brain snapshots are written. Unset takes none. */
   snapshotsDir?: string;

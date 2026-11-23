@@ -16,6 +16,8 @@ export {
   type AgentTurnIngestMode,
   type AgentTurnMemory,
   type AgentTurnMemoryResult,
+  type AgentTurnReceipt,
+  type AgentTurnReceiptAction,
   type KernelAgentMemoryBackendOptions,
 } from './AgentMemoryBackend.js';
 

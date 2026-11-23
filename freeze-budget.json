@@ -10,7 +10,7 @@
   "lines": {
     "shell/src": 7510,
     "shell/src/attach": 457,
-    "shell/src/channels": 1222,
+    "shell/src/channels": 1289,
     "shell/src/embedding": 840,
     "shell/src/install": 2495,
     "shell/src/model": 360,
@@ -44,7 +44,7 @@
     "src/episode": 3987,
     "src/events": 274,
     "src/factory": 1536,
-    "src/governance": 1231,
+    "src/governance": 1236,
     "src/graph": 59,
     "src/health": 396,
     "src/host": 19,
