@@ -920,6 +920,61 @@ export class EventStore {
     return row ? this.mapRow(row) : null;
   }
 
+  getEventsByIds(eventIds: readonly string[]): MemoryEvent[] {
+    const ids = [...new Set(eventIds)];
+    if (ids.length === 0) return [];
+    const rows = this.db.query(`
+      SELECT ${MEMORY_EVENT_COLUMNS}
+      FROM memory_events
+      WHERE event_id IN (${ids.map(() => '?').join(',')})
+    `).all(...ids) as any[];
+    const byId = new Map(rows.map((row) => [row.event_id, this.mapRow(row)]));
+    return ids.map((id) => byId.get(id)).filter((event): event is MemoryEvent => Boolean(event));
+  }
+
+  getLatestSessionIds(
+    options: {
+      projectId?: string;
+      workspaceId?: string;
+      startTime?: number;
+      endTime?: number;
+      excludeSessionIds?: readonly string[];
+    },
+    limit: number,
+  ): string[] {
+    const conditions = ['session_id IS NOT NULL'];
+    const params: Array<string | number> = [];
+    if (options.projectId !== undefined) {
+      conditions.push(`COALESCE(project_id, '') = ?`);
+      params.push(options.projectId);
+    }
+    if (options.workspaceId !== undefined) {
+      conditions.push('workspace_id = ?');
+      params.push(options.workspaceId);
+    }
+    if (options.startTime !== undefined) {
+      conditions.push('occurred_at >= ?');
+      params.push(options.startTime);
+    }
+    if (options.endTime !== undefined) {
+      conditions.push('occurred_at < ?');
+      params.push(options.endTime);
+    }
+    if (options.excludeSessionIds?.length) {
+      conditions.push(`session_id NOT IN (${options.excludeSessionIds.map(() => '?').join(',')})`);
+      params.push(...options.excludeSessionIds);
+    }
+    const rows = this.db.prepare(`
+      SELECT session_id
+      FROM memory_events
+      WHERE ${conditions.join(' AND ')}
+      GROUP BY session_id
+      ORDER BY MAX(COALESCE(global_seq, 0)) DESC, MAX(occurred_at) DESC
+      LIMIT ?
+    `).all(...params, Math.max(1, limit)) as Array<{ session_id: string }>;
+    return rows.map((row) => row.session_id);
+  }
+
   /**
    * One thread's events in thread order.
    *

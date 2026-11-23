@@ -1323,12 +1323,14 @@ export class AgentRecallEngine {
     limit: number
   ): AgentRecallItem[] {
     let candidateLimit = Math.min(Math.max(limit * 8, RAW_LANE_CANDIDATE_FLOOR), RAW_LANE_CANDIDATE_CAP);
+    const semanticIds = this.kernel.nearestRawEventIds(
+      this.effectiveQueryText(query) || queryPlan.primarySearchText,
+      query.projectId,
+      RAW_LANE_CANDIDATE_CAP,
+    );
     for (;;) {
-      const semanticIds = this.kernel
-        .nearestRawEventIds(this.effectiveQueryText(query) || queryPlan.primarySearchText, query.projectId, candidateLimit);
-      const semanticEvents = semanticIds
-        .map((eventId) => this.kernel.eventStore.getEvent(eventId))
-        .filter((event): event is MemoryEvent => Boolean(event));
+      const rankedSemanticIds = semanticIds.slice(0, candidateLimit);
+      const semanticEvents = this.kernel.eventStore.getEventsByIds(rankedSemanticIds);
       const lexicalEvents = this.searchRawEventsByQueryPlan(queryPlan, query, candidateLimit);
       const searchedEvents = [
         ...semanticEvents,
@@ -1337,7 +1339,7 @@ export class AgentRecallEngine {
       const rawEvents = queryPlan.intent === 'forensic_quote'
         ? this.dedupeRawEventsByTurnPreferUser(searchedEvents)
         : this.dedupeRawEventsByTurnPreferCue(searchedEvents, queryPlan);
-      const semanticRank = new Map(semanticIds.map((eventId, index) => [eventId, index + 1]));
+      const semanticRank = new Map(rankedSemanticIds.map((eventId, index) => [eventId, index + 1]));
       const lexicalRank = new Map(lexicalEvents.map((event, index) => [event.eventId, index + 1]));
       const fusedScore = (event: MemoryEvent): number => (
         (semanticRank.has(event.eventId) ? 1 / (RRF_K + semanticRank.get(event.eventId)!) : 0)
@@ -1535,21 +1537,28 @@ export class AgentRecallEngine {
   }
 
   private findPreviousSessionId(query: AgentRecallQuery): string | undefined {
-    const page = this.kernel.eventStore.queryEvents(1, 1000, {
-      projectId: query.projectId !== undefined ? [query.projectId] : undefined,
-      workspaceId: query.workspaceId ? [query.workspaceId] : undefined,
+    const currentSessionIds = [query.sessionId, query.excludeSessionId]
+      .filter((value): value is string => Boolean(value));
+    const sessionIds = this.kernel.eventStore.getLatestSessionIds({
+      projectId: query.projectId,
+      workspaceId: query.workspaceId,
       startTime: query.startTime,
       endTime: query.endTime,
-    });
-    const currentSessionIds = new Set([query.sessionId, query.excludeSessionId].filter((value): value is string => !!value));
-    const sessionIds = new Set<string>();
-    for (const event of page.records) {
-      if (!event.sessionId || currentSessionIds.has(event.sessionId)) continue;
-      if (!isAgentRawEvent(event, query.agentId)) continue;
-      if (this.isOperationalNoiseRawEvent(event)) continue;
-      sessionIds.add(event.sessionId);
+      excludeSessionIds: currentSessionIds,
+    }, 8);
+    for (const sessionId of sessionIds) {
+      const page = this.kernel.eventStore.queryEvents(1, 24, {
+        projectId: query.projectId !== undefined ? [query.projectId] : undefined,
+        workspaceId: query.workspaceId ? [query.workspaceId] : undefined,
+        sessionId: [sessionId],
+        startTime: query.startTime,
+        endTime: query.endTime,
+      });
+      if (page.records.some((event) => isAgentRawEvent(event, query.agentId) && !this.isOperationalNoiseRawEvent(event))) {
+        return sessionId;
+      }
     }
-    return sessionIds.values().next().value;
+    return undefined;
   }
 
   private getSessionEvents(sessionId: string, query: AgentRecallQuery, limit: number): MemoryEvent[] {

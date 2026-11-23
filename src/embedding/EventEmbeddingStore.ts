@@ -5,7 +5,21 @@ export interface EventEmbeddingHit {
   score: number;
 }
 
+interface CachedVector {
+  vector: Float32Array;
+  occurredAt: number;
+  seq: number;
+}
+
+interface EmbeddingCache {
+  dimensions: number;
+  maxSeq: number;
+  vectors: Map<string, CachedVector>;
+}
+
 export class EventEmbeddingStore {
+  private readonly caches = new Map<string, EmbeddingCache>();
+
   constructor(private readonly db: Database, private readonly minSimilarity = 0.5) {}
 
   upsert(eventId: string, modelId: string, vector: Float32Array, projectId: string | undefined): void {
@@ -15,6 +29,20 @@ export class EventEmbeddingStore {
       INSERT OR REPLACE INTO memory_event_embeddings(event_id,model_id,dimensions,vector_blob,project_id,updated_at)
       VALUES(?,?,?,?,?,?)
     `).run(eventId, modelId, vector.length, blob, projectId ?? '', Date.now());
+    const keys = [this.cacheKey(projectId, modelId), this.cacheKey(undefined, modelId)]
+      .filter((key) => this.caches.get(key)?.dimensions === vector.length);
+    if (keys.length === 0) return;
+    const event = this.db.prepare(`
+      SELECT COALESCE(global_seq, 0) AS seq, occurred_at AS occurredAt
+      FROM memory_events
+      WHERE event_id = ?
+    `).get(eventId) as { seq: number; occurredAt: number } | null;
+    if (!event) return;
+    for (const key of keys) {
+      const cache = this.caches.get(key)!;
+      cache.vectors.set(eventId, { vector: new Float32Array(vector), occurredAt: event.occurredAt, seq: event.seq });
+      cache.maxSeq = Math.max(cache.maxSeq, event.seq);
+    }
   }
 
   findNearest(
@@ -24,22 +52,47 @@ export class EventEmbeddingStore {
     modelId: string,
   ): EventEmbeddingHit[] {
     if (vector.length === 0) return [];
-    const rows = this.db.prepare(`
-      SELECT event_id, vector_blob FROM memory_event_embeddings
-      WHERE model_id=? AND dimensions=? AND (? IS NULL OR COALESCE(project_id,'')=?)
-    `).all(modelId, vector.length, projectId ?? null, projectId ?? '') as Array<{ event_id: string; vector_blob: Uint8Array }>;
-    return rows
-      .map((row) => ({
-        eventId: row.event_id,
-        score: cosine(vector, new Float32Array(
-          row.vector_blob.buffer,
-          row.vector_blob.byteOffset,
-          row.vector_blob.byteLength / 4,
-        )),
-      }))
+    const cache = this.loadCache(projectId, modelId, vector.length);
+    return [...cache.vectors.entries()]
+      .map(([eventId, entry]) => ({ eventId, score: cosine(vector, entry.vector) }))
       .filter((hit) => hit.score >= this.minSimilarity)
       .sort((left, right) => right.score - left.score)
       .slice(0, Math.max(1, limit));
+  }
+
+  private cacheKey(projectId: string | undefined, modelId: string): string {
+    return `${projectId ?? ''}\u0000${modelId}`;
+  }
+
+  private loadCache(projectId: string | undefined, modelId: string, dimensions: number): EmbeddingCache {
+    const key = this.cacheKey(projectId, modelId);
+    const cached = this.caches.get(key);
+    const cache = cached?.dimensions === dimensions
+      ? cached
+      : { dimensions, maxSeq: -1, vectors: new Map<string, CachedVector>() };
+    const rows = this.db.prepare(`
+      SELECT emb.event_id AS eventId, emb.vector_blob AS vectorBlob,
+             COALESCE(e.global_seq, 0) AS seq, e.occurred_at AS occurredAt
+      FROM memory_event_embeddings emb
+      JOIN memory_events e ON e.event_id = emb.event_id
+      WHERE emb.model_id=? AND emb.dimensions=? AND (? IS NULL OR COALESCE(emb.project_id,'')=?)
+        AND COALESCE(e.global_seq, 0) > ?
+    `).all(modelId, dimensions, projectId ?? null, projectId ?? '', cache.maxSeq) as Array<{
+      eventId: string;
+      vectorBlob: Uint8Array;
+      seq: number;
+      occurredAt: number;
+    }>;
+    for (const row of rows) {
+      cache.vectors.set(row.eventId, {
+        vector: new Float32Array(row.vectorBlob.buffer, row.vectorBlob.byteOffset, row.vectorBlob.byteLength / 4),
+        occurredAt: row.occurredAt,
+        seq: row.seq,
+      });
+      cache.maxSeq = Math.max(cache.maxSeq, row.seq);
+    }
+    if (cache !== cached) this.caches.set(key, cache);
+    return cache;
   }
 
   getProgress(projectId?: string): { total: number; completed: number; failed: number } {
