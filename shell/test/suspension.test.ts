@@ -177,8 +177,9 @@ describe('a question pause (#228)', () => {
       expect(shell.machine.runtime.suspension).toBeUndefined();
       expect(shell.machine.runtime.openAssignment).toBeUndefined();
       // The question travelled into the resumed run's prompt, so the answer has something to attach to.
-      expect(provider.calls[2].systemPrompt).toContain('<pending-question>');
-      expect(provider.calls[2].systemPrompt).toContain('用 A 还是 B？');
+      const resumed = [provider.calls[2].systemPrompt, asText(provider.calls[2].messages)].join('\n');
+      expect(resumed).toContain('<pending-question>');
+      expect(resumed).toContain('用 A 还是 B？');
       expect(shell.trace.read().some((record) => record.kind === 'suspension_answered')).toBe(true);
     } finally {
       await shell.stop();

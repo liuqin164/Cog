@@ -54,4 +54,21 @@ export {
   type SessionContextServiceOptions,
   type SessionDigestInput,
 } from './SessionContextService.js';
+export {
+  SESSION_DEEP_MAX_CARDS_IN_LANE,
+  SESSION_DEEP_MAX_CARDS_PER_RUN,
+  SESSION_DEEP_MIN_TURNS,
+  SESSION_DEEP_SEGMENT_GAP_MS,
+  buildDeepCardEntry,
+  compileSessionDeepCards,
+  createSessionDeepCompiler,
+  deepCardEntryId,
+  mergeDeepCardEntries,
+  planDeepSegments,
+  readDeepCardEntries,
+  type SessionDeepCompileRunInput,
+  type SessionDeepCompileRunResult,
+  type SessionDeepScope,
+  type SessionDeepSegment,
+} from './SessionDeepCards.js';
 export { SESSION_CONTEXT_ERROR_CODES, sessionError, type SessionContextErrorCode } from './SessionErrors.js';

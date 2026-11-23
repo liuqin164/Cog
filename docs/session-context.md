@@ -15,8 +15,8 @@ below and fails when code and contract disagree. Version: `SESSION_CONTEXT_CONTR
 
 1. **Digest.** A turn that slides out of the verbatim tail becomes an entry in a compiled document.
    The mechanical builder is pure rule: it quotes the ledger row and attaches its `sourceRefs`; it
-   never calls a model. The deep builder is declared as `SessionDeepCompiler` and runs at the
-   DREAMING boundary; no caller wires one this round.
+   never calls a model. The deep builder implements `SessionDeepCompiler` and runs at the DREAMING
+   boundary, compiling each closed work segment into one episode card.
 2. **Recall.** The session ledger, paged newest first by time, topic or keyword. The text is the
    row's own text. The scope is the agent's captured session, so another agent's turns never enter
    the page.
@@ -48,8 +48,8 @@ hot path. It does not decide when the shell should speak; F6 does that.
 ## Lanes (frozen)
 
 Rendered in this order, every turn. The priority column is the fill order: higher wins when the
-budget is tight. A `stable` lane's rendered bytes are the provider's cache prefix and must not change
-between assemblies at the same budget.
+budget is tight. A `stable` lane is never downgraded and must not change between assemblies at the
+same budget; the digest is also prefix-stable while included, but may still be downgraded.
 
 | Lane | Priority | Stable | On budget pressure |
 |---|---|---|---|
@@ -57,14 +57,35 @@ between assemblies at the same budget.
 | `profile` | 50 | yes | trimmed after the other lanes are pointers |
 | `digest` | 10 | no | becomes a browse-only pointer |
 | `working_set` | 20 | no | becomes a browse-only pointer |
-| `recall` | 45 | no | becomes a browse-only pointer last |
 | `tail` | 40 | no | becomes a browse-only pointer |
+| `recall` | 45 | no | becomes a browse-only pointer last |
 
-The render order and the fill order are deliberately different. `tail` renders last because new
-turns append there, but it outranks the digest and the working set: the recent verbatim words are
-the continuity anchor. `recall` is sacrificed last because it is the lane the product exists for;
-the digest is sacrificed first because it only grows. `pinned` and `profile` lead both lists because
-they are the prefix a provider can cache.
+The render order and the fill order are deliberately different. `recall` renders last because it
+changes every turn; it is sacrificed last because it is the lane the product exists for. `tail`
+renders after the working set because the recent verbatim words are the continuity anchor, and it
+outranks the digest and the working set. The digest is sacrificed first because it only grows.
+
+## Cache prefix (#475)
+
+`pinned`, `profile` and the digest lane are the bytes a provider can cache. The shell keeps
+`pinned` and `profile` as the fixed system prompt, then opens the block before the newest user line
+with the digest; the remaining lanes and the per-turn time block follow, with the time block last.
+The stable prefix therefore continues across the message boundary without making the first system
+message grow. The digest renders entries in ascending `occurredAt` with `entryId` as the tie-break,
+so a new mechanical turn, task stub or episode card appends at the end of the lane instead of
+inserting into it. The digest's `stable` flag is `no` only because budget pressure may still
+downgrade it to a pointer; while it is included, its earlier bytes do not change between
+assemblies. The one deliberate exception is the #322 rotation: when the 512-turn window rolls, the
+oldest entries leave the front and the prefix is rebuilt.
+
+`recall` is rendered last because it is the lane that changes on every turn. Moving it behind the
+tail costs no semantics: both lanes are after the digest, and the recall block keeps its own
+envelope and keys.
+
+The shell sends one stable `prompt_cache_key` per project, agent and session. The local mg gateway
+only exposes the provider's prefix cache when that key is present; without it every request is an
+exact-match miss. The key is sanitized to `[A-Za-z0-9_.-]` because the gateway ignores keys with
+other characters.
 
 After the downgrade pass, freed budget is **backfilled** (#316): a lane that became a pointer is
 given back its newest items, highest-priority lane first, until the assembly is within `targetTokens`
@@ -179,6 +200,49 @@ item the caller marked — stays in `working_set` verbatim. A stub whose quoted 
 constraint is itself marked `protected` by the same rule, so budget pressure trims around it rather
 than folding it.
 
+## Episode cards (#474)
+
+The DREAMING boundary compiles closed conversation segments into episode cards. The card is an
+index: it never replaces, rewrites or deletes a ledger row.
+
+**Segmentation is deterministic.** The compiler reads the session's newest
+`SESSION_DIGEST_MAX_TURNS` turns in ledger order and splits them on two rules:
+
+- a `task_event` row whose metadata says `kind: "task-procedure"` closes the segment it ends; that
+  segment is a declared task and is left to its #263 task stub, so one paragraph never becomes both
+  a stub and a card;
+- otherwise, two consecutive turns more than `SESSION_DEEP_SEGMENT_GAP_MS` apart (30 minutes) start
+  a new segment, and the gap between the newest turn and the compiler's `now` closes the last
+  segment.
+
+Only closed segments with at least `SESSION_DEEP_MIN_TURNS` turns (8) become cards. The compiler
+creates at most `SESSION_DEEP_MAX_CARDS_PER_RUN` (8) per tick and the lane shows the newest
+`SESSION_DEEP_MAX_CARDS_IN_LANE` (24). A card id derives from the segment's first event
+(`digest:card:<eventId>`), and a unique `(project, agent, session, segment)` key makes a re-run of
+the same Dream idempotent. A model-less kernel produces the same card deterministically.
+
+**Card fields.** The text carries `做了什么` (what the run accomplished), `遗留问题` (unclosed
+items; the memory model may cite an F16 promise), `锚点` (every `digestAnchors` fragment from the
+covered turns) and `指针` (a sampled set of covered `digest:evt-…` ids plus `mem:` keys for the
+first and last turn). The entry's `sourceRefs` is the complete covered event set; `occurredAt` is
+the compile instant, so the card appends after the turns it covers and before any later turn.
+
+A model answer is accepted only when every `digestAnchors` fragment in `做了什么` and `遗留问题`
+is a literal substring of the covered ledger text; otherwise the deterministic card is used. The
+`锚点` line is built from the ledger text by construction. Model calls use the existing `memory`
+role and add no configuration surface.
+
+**Entry, expansion, drill-down.** A card enters the digest lane as `kind: "deep"` and renders its
+first `anchorEvent`. The #253 auto-expansion matches a card by its keys or its anchor line; when the
+request names one, the card is also placed in `working_set` with `autoExpanded: true`. Every
+pointer key is a literal `read mem:<eventId>` key into the covered turn. The lane reads the newest
+cards for the project and agent across sessions, so the next local day's session (a new lane id,
+#467) still opens with yesterday's cards; each entry keeps the `sessionId` of the turns it covers.
+
+**Forget.** `session_deep_cards` is classified as project-owned derived data. A range forget deletes
+every card whose `source_refs_json` overlaps the erased event set, and a project forget deletes by
+`project_id`; the card is registered in `DerivedErasureRegistry` until the #470 lineage table lands.
+
 ## The whole request (#319)
 
 The six lanes fit the material the assembler builds; they do not see the tool results the model
@@ -199,11 +263,11 @@ text: this is a request re-assembly, not deletion and not a second fold mechanis
 | Field | Means |
 |---|---|
 | `entryId` | Stable id derived from the ledger event (`digest:<eventId>`). |
-| `kind` | `turn` for the mechanical builder; `deep` is reserved for the DREAMING compiler. |
+| `kind` | `turn` for the mechanical builder; `deep` for a DREAMING-boundary episode card. |
 | `sessionId` | The session the entry belongs to. |
 | `occurredAt` | The turn's instant, from the ledger. |
 | `speaker` | One of the frozen conversation speakers. |
-| `text` | The ledger row's exact text. Never a summary, never a re-rendering. |
+| `text` | The ledger row's exact text for `turn`; the compiled card for `deep`. |
 | `sourceRefs` | The ledger event id(s) the entry quotes. |
 | `anchor` | True when `text` contains a number, a quoted span or a named person. |
 
@@ -213,7 +277,8 @@ A decision, a number or a name may appear in the digest only as the exact text t
 The mechanical builder satisfies this by construction: `text` is the row's text, not a rewrite.
 `digestAnchors(text)` names the risky fragments (numbers with separators, quoted spans, and a person
 introduced by 叫/名叫/名字是) so a reader and the contract test can compare them against the source
-turn. A deep entry that paraphrases an anchor is a contract violation, not a quality preference.
+turn. A deep entry that paraphrases an anchor is rejected before it is stored, and the deterministic
+card is written instead.
 
 ## Recall modes (frozen)
 

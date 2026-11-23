@@ -625,6 +625,9 @@ export abstract class KernelServices {
     // them, so a restart re-surfaces F2 intentions and F6 candidates without the session face
     // importing either module.
     this.sessionContext = new SessionContextService(db, {
+      deepGenerate: () => this.modelRegistry.isRuleOnly('memory')
+        ? undefined
+        : this.modelRegistry.getTextGenerator('memory'),
       openLoops: ({ projectId, agentId, now }) => {
         const items: SessionContextItem[] = [];
         for (const intention of this.wakeIntentions.list({ projectId, agentId, statuses: ['pending'] })) {

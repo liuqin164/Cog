@@ -834,6 +834,19 @@ export class MemoryKernel extends KernelServices {
 
   async runDreamTick(options: DreamTickOptions = {}): Promise<DreamTickResult> {
     const result = await this.dreamScheduler.tick(options);
+    let deepCards: { created: number; error?: string };
+    try {
+      const compiled = await this.sessionContext.compileEpisodeCards({
+        projectId: options.projectId,
+        now: options.now,
+      });
+      deepCards = {
+        created: compiled.created.length,
+        ...(compiled.failures.length > 0 ? { error: compiled.failures.join('; ') } : {}),
+      };
+    } catch (error) {
+      deepCards = { created: 0, error: error instanceof Error ? error.message : String(error) };
+    }
     // The compile-done producer for the Dream pass. A skipped tick still emitted one: "the pass
     // finished and had nothing to do" is exactly what a waiter must be able to distinguish from
     // "the pass never ran".
@@ -850,7 +863,7 @@ export class MemoryKernel extends KernelServices {
         candidateCount: result.candidateCount,
       },
     });
-    return result;
+    return { ...result, deepCards };
   }
 
   /**

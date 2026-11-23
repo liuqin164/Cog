@@ -60,6 +60,7 @@ const MIGRATION_TABLES = [
   'topic_aliases','topic_nodes','topic_operations','topic_relations',
   
   'user_session_runtime','web_session_tokens',
+  'session_deep_cards',
   'file_assets','file_blocks','file_chunks','file_chunk_edges','user_insights',
   'soul_versions',
 ] as const;
@@ -78,6 +79,7 @@ const MIGRATION_PROJECT_OWNED = [
   
   'user_session_runtime',
   'web_session_tokens',
+  'session_deep_cards',
   'file_assets','user_insights',
 ] as const;
 const MIGRATION_PROVENANCE_OWNED = [

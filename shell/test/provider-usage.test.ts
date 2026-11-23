@@ -71,6 +71,37 @@ async function turnFor(body: unknown): Promise<ModelTurn> {
 const ENV = defaultRenderEnv({ TERM: 'xterm-256color' } as NodeJS.ProcessEnv);
 
 describe('the provider usage parser: both cache shapes, and their absence', () => {
+  test('a configured cache key rides on the request, enabling the gateway prefix cache', async () => {
+    let seen: Record<string, unknown> | undefined;
+    const server = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      fetch: async (request) => {
+        seen = await request.json() as Record<string, unknown>;
+        return new Response(JSON.stringify(reply()), { status: 200, headers: { 'content-type': 'application/json' } });
+      },
+    });
+    try {
+      const provider = new MgModelProvider({
+        baseUrl: `http://127.0.0.1:${server.port}/v1`,
+        apiKey: 'sk-test',
+        model: 'test-model',
+        timeoutMs: 3_000,
+        cacheKey: 'project-agent-session',
+      }, 'mg');
+      await provider.complete({
+        messages: [{ role: 'user', content: 'hi' }],
+        tools: [],
+        systemPrompt: 'probe',
+        model: 'test-model',
+        signal: AbortSignal.timeout(3_000),
+      });
+      expect(seen?.prompt_cache_key).toBe('project-agent-session');
+    } finally {
+      server.stop(true);
+    }
+  });
+
   test('DeepSeek shape: prompt_cache_hit_tokens / prompt_cache_miss_tokens ride back as reported', async () => {
     const turn = await turnFor(reply({ prompt_tokens: 1_000, completion_tokens: 20, prompt_cache_hit_tokens: 768, prompt_cache_miss_tokens: 232 }));
     expect(turn.usage).toEqual({ input: 1_000, output: 20, cacheHit: 768, cacheMiss: 232 });

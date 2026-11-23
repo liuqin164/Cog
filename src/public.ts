@@ -228,7 +228,7 @@ export type {
  *
  * The written contract is `docs/session-context.md`: the frozen lane order and priority, the
  * digest entry shape, the recall modes and the refusals. The mechanical digest calls no model; the
- * DREAMING-boundary compiler is declared as a port and not wired this round.
+ * DREAMING-boundary compiler writes episode cards through the existing memory role.
  * @beta @since 5.0.0
  */
 export {
@@ -239,6 +239,10 @@ export {
   SESSION_CONTEXT_LANES,
   SESSION_CONTEXT_LANE_PRIORITY,
   SESSION_CONTEXT_STABLE_LANES,
+  SESSION_DEEP_MAX_CARDS_IN_LANE,
+  SESSION_DEEP_MAX_CARDS_PER_RUN,
+  SESSION_DEEP_MIN_TURNS,
+  SESSION_DEEP_SEGMENT_GAP_MS,
   SESSION_DIGEST_ENTRY_FIELDS,
   SESSION_DIGEST_ENTRY_KINDS,
   SESSION_DIGEST_MAX_TURNS,
@@ -250,6 +254,7 @@ export {
   SessionContextService,
   assembleSessionContext,
   buildSessionDigest,
+  compileSessionDeepCards,
   digestAnchors,
   recallSession,
   readSessionToolCalls,
@@ -268,7 +273,11 @@ export type {
   SessionContextLaneStatus,
   SessionContextServiceOptions,
   SessionDeepCompileInput,
+  SessionDeepCompileRunInput,
+  SessionDeepCompileRunResult,
   SessionDeepCompiler,
+  SessionDeepScope,
+  SessionDeepSegment,
   SessionDigest,
   SessionDigestEntry,
   SessionDigestEntryKind,

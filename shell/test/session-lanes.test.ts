@@ -70,7 +70,7 @@ describe('the six-lane assembly (#249 A5)', () => {
     }
   }, 30_000);
 
-  test('lanes render in the frozen pinned → profile → digest → working_set → recall → tail order', async () => {
+  test('lanes render in the frozen pinned → profile → digest → working_set → tail → recall order', async () => {
     const provider = new ScriptedProvider([{ text: '收到一。', toolCalls: [] }, { text: '收到二。', toolCalls: [] }, { text: '收到三。', toolCalls: [] }]);
     const shell = makeShell(makeTempDir('lanes-order-'), provider, { dream: NO_DREAM, tailTurns: 2 });
     await shell.start();
@@ -92,10 +92,9 @@ describe('the six-lane assembly (#249 A5)', () => {
       const view = shell.currentStatus().contextLanes!;
       expect(view.lanes.map((lane) => lane.lane)).toEqual([...SESSION_CONTEXT_LANES]);
 
-      // The provider sees the non-stable lanes in that same order: the kernel's render order, not a
-      // plugin's insertion order.
+      // The provider sees the digest first in the block, then the remaining lanes in render order.
       const last = asText(provider.calls.at(-1)!.messages);
-      const positions = (['digest', 'working_set', 'recall', 'tail'] as const).map((lane) => last.indexOf(`[${lane}]`));
+      const positions = (['digest', 'working_set', 'tail', 'recall'] as const).map((lane) => last.indexOf(`[${lane}]`));
       expect(positions.every((position) => position >= 0)).toBe(true);
       expect([...positions].sort((left, right) => left - right)).toEqual(positions);
       // The stable prefix is the pinned lane verbatim, so the provider's cache prefix starts there.
@@ -268,8 +267,10 @@ describe('the six-lane assembly (#249 A5)', () => {
       await shell.submit('看一眼时间');
       expect(provider.calls).toHaveLength(2);
       expect(provider.calls[1]!.systemPrompt).toBe(provider.calls[0]!.systemPrompt);
-      expect(provider.calls[0]!.systemPrompt).toContain('now: 2026-11-18T21:59Z');
-      expect(provider.calls[0]!.systemPrompt).not.toContain('.861');
+      const first = [provider.calls[0]!.systemPrompt, asText(provider.calls[0]!.messages)].join('\n');
+      expect(first).toContain('now: 2026-11-18T21:59Z');
+      const timeBlock = first.slice(first.indexOf('<time-context>'), first.indexOf('</time-context>'));
+      expect(timeBlock).not.toContain('.861');
     } finally {
       await shell.stop();
     }

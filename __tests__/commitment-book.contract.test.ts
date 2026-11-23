@@ -502,7 +502,7 @@ describe("the agent's own promise arrives in its wake assembly", () => {
     expect(working.items.some((item) => item.text.includes('承诺：') && item.text.includes('结果'))).toBe(true);
     expect(working.items.find((item) => item.text.includes('承诺：'))?.sourceRefs?.length).toBeGreaterThan(0);
     // F14's lane order is untouched: this entered through its open-loop port, not a new lane.
-    expect(assembly.lanes.map((lane) => lane.lane)).toEqual(['pinned', 'profile', 'digest', 'working_set', 'recall', 'tail']);
+    expect(assembly.lanes.map((lane) => lane.lane)).toEqual(['pinned', 'profile', 'digest', 'working_set', 'tail', 'recall']);
   });
 });
 

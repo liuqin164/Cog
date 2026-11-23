@@ -141,7 +141,7 @@ The value is quotable exactly because the block carries the raw turn. "Why do yo
 
 Each family is 24 generated scenarios, reproducible from a fixed seed; Cog's 91.7% is 22 of 24. This is synthetic data, not LongMemEval; the method, the other families, and where the default path loses are in [BENCHMARKS.md](BENCHMARKS.md).
 
-**Context is budgeted.** A turn's context is assembled from six lanes — pinned, profile, digest, working set, recall, tail — and fitted to a fixed target from the model route (10,800 tokens for the built-in default), not a share of the provider window. When a lane does not fit, the lowest-priority lane becomes a browse-only pointer that keeps its item count and the newest 20 ledger keys, while a lane carrying a correction, promise, intention or prohibition keeps those protected items verbatim; freed budget is then handed back to the surviving content, newest first, and the text stays one recall away. It is never silently dropped or paraphrased.
+**Context is budgeted.** A turn's context is assembled from six lanes — pinned, profile, digest, working set, tail, recall — and fitted to a fixed target from the model route (10,800 tokens for the built-in default), not a share of the provider window. When a lane does not fit, the lowest-priority lane becomes a browse-only pointer that keeps its item count and the newest 20 ledger keys, while a lane carrying a correction, promise, intention or prohibition keeps those protected items verbatim; freed budget is then handed back to the surviving content, newest first, and the text stays one recall away. It is never silently dropped or paraphrased.
 
 ## Your control
 
