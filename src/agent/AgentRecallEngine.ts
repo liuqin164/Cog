@@ -97,6 +97,9 @@ export class AgentRecallEngine {
     query = this.withRelativeDates(query);
     const rewrite = this.rewriteBackReference(query);
     if (rewrite?.anchorText) query = { ...query, anchorText: rewrite.anchorText };
+    if (rewrite?.followUp && rewrite.kind === 'previous_session' && rewrite.anchorTime !== undefined) {
+      query = { ...query, startTime: Math.max(query.startTime ?? 0, rewrite.anchorTime) };
+    }
     query = this.scopeExcludedSessionTail(query);
     const { result, suppressedIds } = this.recallPrivate(query);
     const answered = this.withSharedLane(query, result);
@@ -125,15 +128,21 @@ export class AgentRecallEngine {
     const detection = detectBackReference(query.query);
     if (!detection) return undefined;
     try {
-      const anchorText = this.backReferenceAnchor(query, detection.kind);
-      return { ...detection, anchorText, terms: anchorText === '' ? [] : anchorText.split(/\s+/u).filter(Boolean) };
+      const anchor = this.backReferenceAnchor(query, detection.kind);
+      return {
+        ...detection,
+        anchorText: anchor.text,
+        anchorTime: anchor.occurredAt,
+        terms: anchor.text === '' ? [] : anchor.text.split(/\s+/u).filter(Boolean),
+      };
     } catch {
       return undefined;
     }
   }
 
-  private backReferenceAnchor(query: AgentRecallQuery, kind: BackReferenceRewrite['kind']): string {
+  private backReferenceAnchor(query: AgentRecallQuery, kind: BackReferenceRewrite['kind']): { text: string; occurredAt?: number } {
     const terms = new Set<string>();
+    let occurredAt: number | undefined;
     const scopeQuery = { ...query, sessionId: undefined, excludeSessionId: undefined, excludeSessionBeforeTurnSeq: undefined };
     const addText = (text: string | undefined): void => {
       if (!text) return;
@@ -149,6 +158,7 @@ export class AgentRecallEngine {
         .filter((candidate) => candidate.role === 'user' || candidate.role === 'assistant')
         .filter((candidate) => this.hasReadableEventText(candidate) && inScope(candidate))
         .slice(-4)) {
+        occurredAt = occurredAt === undefined ? event.occurredAt : Math.min(occurredAt, event.occurredAt);
         addText(this.rawEventText(event));
       }
     } else {
@@ -177,7 +187,7 @@ export class AgentRecallEngine {
       }
       for (const id of this.lastCanonicalIds) terms.add(id);
     }
-    return [...terms].filter((term) => term.length >= 2).slice(0, 12).join(' ');
+    return { text: [...terms].filter((term) => term.length >= 2).slice(0, 12).join(' '), occurredAt };
   }
 
   private finishBackReference(
@@ -187,7 +197,7 @@ export class AgentRecallEngine {
     gateWithheld: boolean,
   ): AgentRecallResult {
     if (!rewrite) return result;
-    const ordered = rewrite.kind !== 'state_follow_up' || result.items.length < 2
+    const ordered = !rewrite.followUp || result.items.length < 2
       ? result
       : {
           ...result,

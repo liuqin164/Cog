@@ -124,7 +124,13 @@ test('year and half-year relative windows keep their civil boundaries (#464)', (
   expect(window('上周')).toEqual(['2026-11-09', '2026-11-16']);
   expect(window('上个月')).toEqual(['2026-10-01', '2026-11-01']);
   expect(window('3天前')).toEqual(['2026-11-17', '2026-11-18']);
-  expect(window('刚才')).toEqual(['2026-11-20', '2026-11-21']);
+});
+
+test('刚才 is a sliding two-hour window, not a civil day (#491)', () => {
+  const now = Date.parse('2026-11-24T00:05:00+09:00');
+  const range = relativeDateRange('刚才', { now, timeZone: TOKYO })!;
+  expect(range.from).toBe(now - 2 * 60 * 60 * 1000);
+  expect(range.to).toBe(now + 1);
 });
 
 test('a yearless facet day falls back to last year when its month is still ahead (#464)', () => {
