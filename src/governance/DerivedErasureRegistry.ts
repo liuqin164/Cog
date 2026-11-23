@@ -1,5 +1,6 @@
 import type Database from 'bun:sqlite';
 
+import { LINEAGE_TABLES } from './DerivationLedger.js';
 import { PRIVACY_SCHEMA_CLASSIFICATION } from './PrivacyDeletionRegistry.js';
 
 export interface DerivedEraseContext {
@@ -303,6 +304,18 @@ export function eraseDerivedOf(context: DerivedEraseContext): Record<string, num
       WHERE EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(message_neuron_ids_json) THEN message_neuron_ids_json ELSE '[]' END) WHERE value IN (SELECT id FROM ${EVENT}))`).run();
   }
 
+  if (hasTable('memory_derivations')) {
+    for (const kind of LINEAGE_TABLES) {
+      const primaryKey = (db.prepare(`PRAGMA table_info("${kind}")`).all() as Array<{ name: string; pk: number }>)
+        .find((column) => column.pk === 1)?.name;
+      if (!primaryKey) continue;
+      run(kind, `DELETE FROM ${kind}
+        WHERE "${primaryKey}" IN (
+          SELECT derived_id FROM memory_derivations
+          WHERE derived_kind=? AND source_event_id IN (SELECT id FROM ${EVENT})
+        )`, [kind]);
+    }
+  }
   for (const [table, sql] of RULES) run(table, sql);
   if (wholeProject) {
     for (const [table, sql] of SCOPE_RULES) run(table, sql, [scope]);
