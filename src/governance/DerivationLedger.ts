@@ -19,7 +19,7 @@ export const DERIVATION_INDEX_SQLS = [
 export const LINEAGE_TABLES = [
   'beliefs','compiled_events','deep_write_summaries',
   'facts','memory_bindings','memory_clusters','memory_frames',
-  'memory_timeline_entries','prospective_memories',
+  'memory_timeline_entries','prospective_memories','session_deep_cards',
 ] as const;
 
 const REBUILDABLE_TABLES = [

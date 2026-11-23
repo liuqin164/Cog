@@ -51,7 +51,7 @@
     "src/install": 1328,
     "src/intention": 1009,
     "src/lexicon": 891,
-    "src/migrations": 2674,
+    "src/migrations": 2688,
     "src/models": 420,
     "src/observability": 628,
     "src/observatory": 5717,
@@ -84,6 +84,6 @@
   "tools": 14,
   "commands": 23,
   "states": 6,
-  "tables": 87,
+  "tables": 88,
   "exportSymbols": 810
 }

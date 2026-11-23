@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { join } from 'node:path';
 
+import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
 import { createMemoryKernel } from '../src/factory.js';
 import { DERIVATION_CLASSIFICATION, LINEAGE_TABLES, registerDerivation } from '../src/governance/DerivationLedger.js';
 import { FINAL_TABLES } from '../src/migrations/v3_7_4/FinalSchemaDefinition.js';
@@ -128,7 +129,8 @@ test('#470 every wired store write registers its derivation', () => {
       project_id: string | null;
     }>;
     const registered = new Set(rows.map((row) => `${row.derived_kind}:${row.derived_id}:${row.source_event_id}`));
-    expect([...new Set(rows.map((row) => row.derived_kind))].sort()).toEqual([...LINEAGE_TABLES].sort());
+    const scenarioKinds = LINEAGE_TABLES.filter((kind) => kind !== 'session_deep_cards');
+    expect([...new Set(rows.map((row) => row.derived_kind))].sort()).toEqual([...scenarioKinds].sort());
     for (const entry of [
       `facts:${fact!.factId}:${event.eventId}`,
       `compiled_events:${compiled!.eventId}:${event.eventId}`,
@@ -143,6 +145,46 @@ test('#470 every wired store write registers its derivation', () => {
     expect(rows.every((row) => row.project_id === projectId)).toBe(true);
     expect(() => registerDerivation(db, { kind: 'memory_derivations', derivedId: 'x', sourceEventIds: [event.eventId] }))
       .toThrow('derivation_kind_unregistered:memory_derivations');
+  } finally {
+    kernel.close();
+  }
+}, 30_000);
+
+test('#479 a compiled deep card is registered and forgotten with its source events', async () => {
+  const kernel = createMemoryKernel({ dbPath: join(makeTempDir('lineage-card-'), 'memory.sqlite'), projectTimeZone: 'UTC' });
+  const projectId = 'card-lineage-project';
+  const agentId = 'card-lineage-agent';
+  const sessionId = 'card-lineage-session';
+  const base = Date.UTC(2026, 10, 23, 1);
+  const backend = new KernelAgentMemoryBackend(kernel);
+  try {
+    for (let index = 0; index < 24; index += 1) {
+      await backend.captureConversationTurn({
+        projectId,
+        agentId,
+        sessionId,
+        channel: 'terminal',
+        speaker: index % 2 === 0 ? 'owner' : 'agent',
+        text: `card lineage turn ${index}`,
+        occurredAt: base + index * 1_000,
+      });
+    }
+    await kernel.runDreamTick({ projectId, now: base + 24_000 + 30 * 60_000 + 1_000 });
+    const db = kernel.factStore.getDatabase();
+    const card = kernel.sessionContext.digest({ projectId, agentId, sessionId }).entries.find((entry) => entry.kind === 'deep');
+    expect(card).toBeTruthy();
+    const rows = db.prepare(`SELECT derived_id, source_event_id, project_id FROM memory_derivations WHERE derived_kind='session_deep_cards'`).all() as Array<{
+      derived_id: string;
+      source_event_id: string;
+      project_id: string | null;
+    }>;
+    expect(rows.map((row) => row.derived_id)).toEqual(card!.sourceRefs.map(() => card!.entryId));
+    expect(new Set(rows.map((row) => row.source_event_id))).toEqual(new Set(card!.sourceRefs));
+    expect(rows.every((row) => row.project_id === projectId)).toBe(true);
+
+    kernel.sovereignty.deleteRange({ projectId, start: base - 1_000, end: base + 24_000 + 1_000 });
+    expect(Number((db.prepare(`SELECT COUNT(*) AS c FROM session_deep_cards WHERE entry_id=?`).get(card!.entryId) as { c: number }).c)).toBe(0);
+    expect(Number((db.prepare(`SELECT COUNT(*) AS c FROM memory_derivations WHERE derived_kind='session_deep_cards' AND derived_id=?`).get(card!.entryId) as { c: number }).c)).toBe(0);
   } finally {
     kernel.close();
   }

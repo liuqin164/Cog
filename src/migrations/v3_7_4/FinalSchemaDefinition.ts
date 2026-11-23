@@ -10,6 +10,20 @@ export interface FinalSchemaObject {
 export const FINAL_TABLES: readonly FinalSchemaObject[] = [
   { type: "table", name: "memory_derivations", table: "memory_derivations", sql: DERIVATION_TABLE_SQL },
 
+  { type: "table", name: "session_deep_cards", table: "session_deep_cards", sql: `CREATE TABLE session_deep_cards (
+        entry_id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        segment_key TEXT NOT NULL,
+        occurred_at INTEGER NOT NULL,
+        speaker TEXT NOT NULL,
+        text TEXT NOT NULL,
+        source_refs_json TEXT NOT NULL,
+        anchor INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+      )` },
+
   { type: "table", name: "facts", table: "facts", sql: `CREATE TABLE facts (
         fact_id TEXT PRIMARY KEY,
         neuron_id TEXT NOT NULL,
