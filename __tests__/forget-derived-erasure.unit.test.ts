@@ -269,13 +269,72 @@ test('#422 an episode that crosses the window is erased whole', () => {
   }
 });
 
+test('#500 a row referenced only through relatedEventIds is erased by the ledger', () => {
+  const kernel = createMemoryKernel({ dbPath: join(makeTempDir('forget-lineage-'), 'memory.sqlite'), projectTimeZone: 'UTC' });
+  const projectId = 'lineage-window';
+  const base = Date.UTC(2026, 2, 4, 9);
+  try {
+    const deleted = kernel.recordRawEvent({
+      projectId,
+      threadId: 'lineage-thread',
+      sessionId: 'lineage-session',
+      role: 'user',
+      content: 'lineage deleted source',
+      occurredAt: base,
+    });
+    const kept = kernel.recordRawEvent({
+      projectId,
+      threadId: 'lineage-thread',
+      sessionId: 'lineage-session',
+      role: 'assistant',
+      content: 'lineage surviving source',
+      occurredAt: base + 10 * 60_000,
+    });
+    kernel.memoryBindingStore.upsertTopic({ projectId, topicPath: 'lineage/topic', topicType: 'concept', now: base });
+    const binding = kernel.memoryBindingStore.insertBinding({
+      eventId: kept.eventId,
+      relatedEventIds: [deleted.eventId],
+      projectId,
+      topicPath: 'lineage/topic',
+      bindingType: 'about',
+      confidence: 0.9,
+      source: 'deterministic',
+      signal: 'lineage',
+      claimKey: 'lineage',
+      createdAt: base,
+    });
+    const db = kernel.factStore.getDatabase();
+    expect((db.prepare(`SELECT event_id FROM memory_bindings WHERE binding_id=?`).get(binding.bindingId) as { event_id: string }).event_id).toBe(kept.eventId);
+    expect((db.prepare(`SELECT COUNT(*) AS c FROM memory_derivations WHERE derived_kind='memory_bindings' AND derived_id=? AND source_event_id=?`)
+      .get(binding.bindingId, deleted.eventId) as { c: number }).c).toBe(1);
+
+    kernel.sovereignty.deleteRange({ projectId, start: base - 1_000, end: base + 60_000 });
+
+    expect(Number((db.prepare(`SELECT COUNT(*) AS c FROM memory_bindings WHERE binding_id=?`).get(binding.bindingId) as { c: number }).c)).toBe(0);
+    expect(Number((db.prepare(`SELECT COUNT(*) AS c FROM memory_derivations WHERE derived_kind='memory_bindings' AND derived_id=? AND source_event_id=?`)
+      .get(binding.bindingId, deleted.eventId) as { c: number }).c)).toBe(0);
+    expect(kernel.eventStore.getEvent(deleted.eventId)).toBeFalsy();
+    expect(kernel.eventStore.getEvent(kept.eventId)).toBeTruthy();
+  } finally {
+    kernel.close();
+  }
+});
+
 function rowsHolding(db: Database, needle: string): string[] {
   const hits: string[] = [];
-  const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all() as Array<{ name: string }>;
+  const tables = db.prepare(`SELECT name,sql FROM sqlite_master WHERE type='table'`).all() as Array<{ name: string; sql: string | null }>;
+  const ftsTables = tables.filter(({ sql }) => /CREATE VIRTUAL TABLE.*USING fts5/iu.test(sql ?? '')).map(({ name }) => name);
+  const ftsShadowTables = new Set(ftsTables.flatMap((name) => ['data', 'idx', 'content', 'docsize', 'config'].map((suffix) => `${name}_${suffix}`)));
   for (const { name } of tables) {
+    if (ftsTables.includes(name)) {
+      const row = db.prepare(`SELECT COUNT(*) AS c FROM "${name}" WHERE "${name}" MATCH ?`).get(needle) as { c: number };
+      if (Number(row.c) > 0) hits.push(`${name}.fts_match:${row.c}`);
+      continue;
+    }
+    if (ftsShadowTables.has(name)) continue;
     const columns = db.prepare(`PRAGMA table_info("${name}")`).all() as Array<{ name: string }>;
     for (const column of columns) {
-      const row = db.prepare(`SELECT COUNT(*) AS c FROM "${name}" WHERE instr(CAST("${column.name}" AS TEXT), ?) > 0`).get(needle) as { c: number };
+      const row = db.prepare(`SELECT COUNT(*) AS c FROM "${name}" WHERE instr(lower(CAST("${column.name}" AS TEXT)), ?) > 0`).get(needle.toLowerCase()) as { c: number };
       if (Number(row.c) > 0) hits.push(`${name}.${column.name}:${row.c}`);
     }
   }

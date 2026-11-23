@@ -1,5 +1,6 @@
 import type Database from 'bun:sqlite';
 
+import { registerDerivation } from '../governance/DerivationLedger.js';
 import type { TextGenerateFn } from '../models/ModelRole.js';
 import { digestAnchors, type SessionDeepCompileInput, type SessionDeepCompiler, type SessionDigestEntry } from './SessionDigest.js';
 import { readSessionTurns, SESSION_DIGEST_MAX_TURNS, type SessionTurn } from './SessionLedger.js';
@@ -269,7 +270,15 @@ function insertCard(
     card.anchor ? 1 : 0,
     now,
   ).changes;
-  return Number(changes ?? 0) > 0;
+  if (Number(changes ?? 0) === 0) return false;
+  registerDerivation(db, {
+    kind: 'session_deep_cards',
+    derivedId: card.entryId,
+    sourceEventIds: card.sourceRefs,
+    projectId: scope.projectId,
+    createdAt: now,
+  });
+  return true;
 }
 
 function existingCardIds(db: Database, scope: SessionDeepScope): Set<string> {

@@ -22,7 +22,7 @@ import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, re
 import { dirname, join, resolve } from 'node:path';
 
 import type { CommitmentBook } from '../commitment/CommitmentBook.js';
-import { eraseDerivedOf, gcInvalidatedAtlasRows } from '../governance/DerivedErasureRegistry.js';
+import { assertDerivedErasureCovered, eraseDerivedOf, gcInvalidatedAtlasRows } from '../governance/DerivedErasureRegistry.js';
 import type { IntentionBook } from '../intention/IntentionBook.js';
 import type { ProcedureCompiler } from '../procedure/ProcedureCompiler.js';
 import type { ProfileCompiler, ProfileEntry } from '../profile/ProfileCompiler.js';
@@ -357,6 +357,7 @@ export class MemorySovereigntyService {
     if (!Number.isFinite(input.start) || !Number.isFinite(input.end) || input.start >= input.end) {
       throw error('invalid_sovereignty_range');
     }
+    assertDerivedErasureCovered((this.ports.db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`).all() as Array<{ name: string }>).map((row) => row.name));
     const recovered = this.runPendingErase(scope);
     // Range ids, not range events: a decade-size window is 200k rows, and holding every parsed
     // payload to delete them is what took the resident toward MemoryMax. The scan stays paged.

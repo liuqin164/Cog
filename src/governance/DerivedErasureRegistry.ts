@@ -1,5 +1,6 @@
 import type Database from 'bun:sqlite';
 
+import { LINEAGE_TABLES } from './DerivationLedger.js';
 import { PRIVACY_SCHEMA_CLASSIFICATION } from './PrivacyDeletionRegistry.js';
 
 export interface DerivedEraseContext {
@@ -22,7 +23,7 @@ function jsonHit(column: string): string {
   return `EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(${column}) THEN ${column} ELSE '[]' END) WHERE value IN (SELECT id FROM ${EVENT}))`;
 }
 
-const RULES: ReadonlyArray<readonly [string, string]> = [
+export const ERASURE_RULES: ReadonlyArray<readonly [string, string]> = [
   ['session_deep_cards', `DELETE FROM session_deep_cards
     WHERE ${jsonHit('source_refs_json')}`],
   ['memory_action_frame_evidence', `DELETE FROM memory_action_frame_evidence
@@ -161,15 +162,14 @@ const SCOPE_RULES: ReadonlyArray<readonly [string, string]> = [
   ['memory_atlas_projection_state', `DELETE FROM memory_atlas_projection_state WHERE COALESCE(project_id,'')=?`],
 ];
 
-const KEEP = new Set([
+export const ERASURE_KEEP = new Set([
   '_meta', '_schema_migrations', 'dream_ledger_state',
   'event_sequence_counters', 'memory_event_fts_state', 'governance_audit_log', 'soul_versions',
   'pipeline_runs', 'pipeline_step_timings', 'pipeline_nonfatal_events',
   'ingestion_source_cursors', 'ingestion_processed_records', 'import_source_anchors',
-  'memory_atlas_documents', 'memory_frames', 'memory_events',
+  'memory_atlas_documents', 'memory_events',
   'memory_topics',
   'project_branches', 'topology_membership', 'cognitive_nodes', 'trace_events',
-  'memory_event_cjk_terms', 'memory_event_embeddings', 'memory_events_fts',
 ]);
 
 const SCOPE_HANDLED = new Set([
@@ -186,9 +186,9 @@ const SCOPE_HANDLED = new Set([
 
 export function assertDerivedErasureCovered(tables: readonly string[]): void {
   const declared = new Set<string>([
-    ...RULES.map(([table]) => table),
+    ...ERASURE_RULES.map(([table]) => table),
     ...SCOPE_RULES.map(([table]) => table),
-    ...KEEP,
+    ...ERASURE_KEEP,
     ...SCOPE_HANDLED,
   ]);
   const unknown = tables.filter((table) => {
@@ -303,7 +303,19 @@ export function eraseDerivedOf(context: DerivedEraseContext): Record<string, num
       WHERE EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(message_neuron_ids_json) THEN message_neuron_ids_json ELSE '[]' END) WHERE value IN (SELECT id FROM ${EVENT}))`).run();
   }
 
-  for (const [table, sql] of RULES) run(table, sql);
+  if (hasTable('memory_derivations')) {
+    for (const kind of LINEAGE_TABLES) {
+      const primaryKey = (db.prepare(`PRAGMA table_info("${kind}")`).all() as Array<{ name: string; pk: number }>)
+        .find((column) => column.pk === 1)?.name;
+      if (!primaryKey) continue;
+      run(kind, `DELETE FROM ${kind}
+        WHERE "${primaryKey}" IN (
+          SELECT derived_id FROM memory_derivations
+          WHERE derived_kind=? AND source_event_id IN (SELECT id FROM ${EVENT})
+        )`, [kind]);
+    }
+  }
+  for (const [table, sql] of ERASURE_RULES) run(table, sql);
   if (wholeProject) {
     for (const [table, sql] of SCOPE_RULES) run(table, sql, [scope]);
     run('memory_topics', `DELETE FROM memory_topics WHERE COALESCE(project_id,'')=?`, [scope]);

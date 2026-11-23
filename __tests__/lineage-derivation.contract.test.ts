@@ -1,8 +1,10 @@
 import { expect, test } from 'bun:test';
 import { join } from 'node:path';
 
+import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
 import { createMemoryKernel } from '../src/factory.js';
 import { DERIVATION_CLASSIFICATION, LINEAGE_TABLES, registerDerivation } from '../src/governance/DerivationLedger.js';
+import { ERASURE_KEEP, ERASURE_RULES, assertDerivedErasureCovered } from '../src/governance/DerivedErasureRegistry.js';
 import { FINAL_TABLES } from '../src/migrations/v3_7_4/FinalSchemaDefinition.js';
 import { deterministicFrameFallback } from '../src/semantic/DeterministicFrameFallback.js';
 import { SummaryStore } from '../src/store/SummaryStore.js';
@@ -128,7 +130,8 @@ test('#470 every wired store write registers its derivation', () => {
       project_id: string | null;
     }>;
     const registered = new Set(rows.map((row) => `${row.derived_kind}:${row.derived_id}:${row.source_event_id}`));
-    expect([...new Set(rows.map((row) => row.derived_kind))].sort()).toEqual([...LINEAGE_TABLES].sort());
+    const scenarioKinds = LINEAGE_TABLES.filter((kind) => kind !== 'session_deep_cards');
+    expect([...new Set(rows.map((row) => row.derived_kind))].sort()).toEqual([...scenarioKinds].sort());
     for (const entry of [
       `facts:${fact!.factId}:${event.eventId}`,
       `compiled_events:${compiled!.eventId}:${event.eventId}`,
@@ -147,3 +150,94 @@ test('#470 every wired store write registers its derivation', () => {
     kernel.close();
   }
 }, 30_000);
+
+test('#479 a compiled deep card is registered and forgotten with its source events', async () => {
+  const kernel = createMemoryKernel({ dbPath: join(makeTempDir('lineage-card-'), 'memory.sqlite'), projectTimeZone: 'UTC' });
+  const projectId = 'card-lineage-project';
+  const agentId = 'card-lineage-agent';
+  const sessionId = 'card-lineage-session';
+  const base = Date.UTC(2026, 10, 23, 1);
+  const backend = new KernelAgentMemoryBackend(kernel);
+  try {
+    for (let index = 0; index < 24; index += 1) {
+      await backend.captureConversationTurn({
+        projectId,
+        agentId,
+        sessionId,
+        channel: 'terminal',
+        speaker: index % 2 === 0 ? 'owner' : 'agent',
+        text: `card lineage turn ${index}`,
+        occurredAt: base + index * 1_000,
+      });
+    }
+    await kernel.runDreamTick({ projectId, now: base + 24_000 + 30 * 60_000 + 1_000 });
+    const db = kernel.factStore.getDatabase();
+    const card = kernel.sessionContext.digest({ projectId, agentId, sessionId }).entries.find((entry) => entry.kind === 'deep');
+    expect(card).toBeTruthy();
+    const rows = db.prepare(`SELECT derived_id, source_event_id, project_id FROM memory_derivations WHERE derived_kind='session_deep_cards'`).all() as Array<{
+      derived_id: string;
+      source_event_id: string;
+      project_id: string | null;
+    }>;
+    expect(rows.map((row) => row.derived_id)).toEqual(card!.sourceRefs.map(() => card!.entryId));
+    expect(new Set(rows.map((row) => row.source_event_id))).toEqual(new Set(card!.sourceRefs));
+    expect(rows.every((row) => row.project_id === projectId)).toBe(true);
+
+    kernel.sovereignty.deleteRange({ projectId, start: base - 1_000, end: base + 24_000 + 1_000 });
+    expect(Number((db.prepare(`SELECT COUNT(*) AS c FROM session_deep_cards WHERE entry_id=?`).get(card!.entryId) as { c: number }).c)).toBe(0);
+    expect(Number((db.prepare(`SELECT COUNT(*) AS c FROM memory_derivations WHERE derived_kind='session_deep_cards' AND derived_id=?`).get(card!.entryId) as { c: number }).c)).toBe(0);
+  } finally {
+    kernel.close();
+  }
+}, 30_000);
+
+test('#501 the runtime schema is classified and every lineage table has an erasure rule', async () => {
+  const kernel = createMemoryKernel({ dbPath: join(makeTempDir('lineage-runtime-'), 'memory.sqlite'), projectTimeZone: 'UTC' });
+  const projectId = 'runtime-lineage-project';
+  const agentId = 'runtime-lineage-agent';
+  const sessionId = 'runtime-lineage-session';
+  const base = Date.UTC(2026, 10, 23, 1);
+  const backend = new KernelAgentMemoryBackend(kernel);
+  try {
+    for (let index = 0; index < 24; index += 1) {
+      await backend.captureConversationTurn({
+        projectId,
+        agentId,
+        sessionId,
+        channel: 'terminal',
+        speaker: index % 2 === 0 ? 'owner' : 'agent',
+        text: `runtime lineage turn ${index}`,
+        occurredAt: base + index * 1_000,
+      });
+    }
+    kernel.bindRawEvents({ projectId });
+    await kernel.runDreamTick({ projectId, now: base + 24_000 + 30 * 60_000 + 1_000 });
+    const db = kernel.factStore.getDatabase();
+    const ruleTables = ERASURE_RULES.map(([table]) => table);
+    for (const table of LINEAGE_TABLES) expect(ruleTables, table).toContain(table);
+    expect([...ERASURE_KEEP].filter((table) => ruleTables.includes(table))).toEqual([]);
+    const tables = (db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`).all() as Array<{ name: string }>).map((row) => row.name);
+    expect(tables).toContain('session_deep_cards');
+    assertDerivedErasureCovered(tables);
+    db.exec(`CREATE TABLE unregistered_derived_probe (id TEXT)`);
+    expect(() => assertDerivedErasureCovered([...tables, 'unregistered_derived_probe'])).toThrow('derived_erasure_unclassified:unregistered_derived_probe');
+    db.exec(`DROP TABLE unregistered_derived_probe`);
+  } finally {
+    kernel.close();
+  }
+}, 30_000);
+
+test('#501 /forget refuses a runtime table with no erasure rule', () => {
+  const kernel = createMemoryKernel({ dbPath: join(makeTempDir('lineage-forget-'), 'memory.sqlite'), projectTimeZone: 'UTC' });
+  const projectId = 'runtime-guard-project';
+  const base = Date.UTC(2026, 10, 23, 1);
+  try {
+    const db = kernel.factStore.getDatabase();
+    kernel.recordRawEvent({ projectId, threadId: 'runtime-guard', role: 'user', content: 'guard', occurredAt: base });
+    db.exec(`CREATE TABLE rogue_derived (id TEXT)`);
+    expect(() => kernel.sovereignty.deleteRange({ projectId, start: base - 1, end: base + 1 })).toThrow('derived_erasure_unclassified:rogue_derived');
+    db.exec(`DROP TABLE rogue_derived`);
+  } finally {
+    kernel.close();
+  }
+});
