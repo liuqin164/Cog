@@ -133,6 +133,10 @@ export interface ExecutedToolCall {
 
 const MAX_NESTED_TOOL_DEPTH = 8;
 
+function snapshotInput(input: unknown): unknown {
+  return input === null || typeof input !== 'object' ? input : JSON.parse(JSON.stringify(input));
+}
+
 /**
  * Consecutive turns without user-visible text or a new tool result before the run is declared idle
  * (#241). Four is longer than the usual silent stretch of a real task (read, edit, test, fix) and,
@@ -165,35 +169,23 @@ export async function refuseTruncatedCall(context: ToolCallPipelineContext, call
   return result;
 }
 
-/**
- * One tool call through the same steps whether the model or another tool issued it: `beforeToolCall`
- * (where the cage's whitelist lives), execution, `afterToolCall`.
- *
- * A nested call emits no events and adds no messages — Pi's `runToolCall` contract — but it does pass
- * the hooks, which is what stops a tool from side-stepping the cage by calling a sibling directly.
- */
 export async function executeToolCall(
   context: ToolCallPipelineContext,
   call: ToolCall,
   options: { emitEvents: boolean; depth?: number } = { emitEvents: true },
 ): Promise<ExecutedToolCall> {
   const depth = options.depth ?? 0;
-  // Pi emits `tool_execution_start` before `prepareToolCall` — that is, before argument validation
-  // and `beforeToolCall` — so every call the model issued pairs, blocked and failed ones included
-  // (`agent-loop.js:380-390,419-426`). The end alone left the ledger an observation with no call,
-  // the mirror of the dangling pair round 15 closed. The hooks also live inside this try because Pi
-  // turns a throwing `beforeToolCall` into that call's error result (`:539-545`); outside it, the
-  // throw would escape with a start and no end.
-  if (options.emitEvents) await emitToolStart(context, call);
+  const view = { ...call, input: snapshotInput(call.input) };
+  if (options.emitEvents) await emitToolStart(context, view);
   let result: ToolResult;
   let terminate = false;
   try {
     const before = await context.bus.emit('beforeToolCall', {
       type: 'beforeToolCall',
-      toolCall: call,
-      toolCallId: call.toolCallId,
-      toolName: call.toolName,
-      input: call.input,
+      toolCall: view,
+      toolCallId: view.toolCallId,
+      toolName: view.toolName,
+      input: view.input,
     }, { runId: context.runId });
     if (before?.block) {
       result = { toolCallId: call.toolCallId, toolName: call.toolName, output: before.reason ?? 'blocked', isError: true, blocked: { reason: before.reason ?? 'blocked' } };
@@ -209,7 +201,7 @@ export async function executeToolCall(
         return nested.result;
       };
       result = await context.tools.invoke(call.toolName, call, { runId: context.runId, signal: context.signal, runToolCall: nest });
-      const after = await context.bus.emit('afterToolCall', { type: 'afterToolCall', tool: call, result }, { runId: context.runId });
+      const after = await context.bus.emit('afterToolCall', { type: 'afterToolCall', tool: view, result }, { runId: context.runId });
       if (after && typeof after === 'object' && 'result' in after) result = after.result as ToolResult;
       terminate = Boolean(after && typeof after === 'object' && 'terminate' in after && after.terminate);
     }

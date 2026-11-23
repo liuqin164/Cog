@@ -20,15 +20,6 @@ const MAX_BASH_TIMEOUT_MS = 2_147_483_647;
 const BASH_OUTPUT_DIR = '.cogmem-shell/bash-output';
 const HTTP_TIMEOUT_MS = 30_000;
 const CREDENTIAL_PLACEHOLDER = /\{\{([a-z][a-z0-9_]*)\}\}/gu;
-const FROZEN_INPUTS = new WeakMap<object, unknown>();
-
-function freezeInput(input: unknown): unknown {
-  return input === null || typeof input !== 'object' ? input : JSON.parse(JSON.stringify(input));
-}
-
-function frozenInput(args: unknown): unknown {
-  return args !== null && typeof args === 'object' ? FROZEN_INPUTS.get(args) ?? args : args;
-}
 
 export interface BuiltinToolsConfig {
   workspaceRoot: string;
@@ -594,7 +585,7 @@ function definitions(
         required: ['credentialRef', 'url'],
       },
       async execute({ toolCallId, args, signal }) {
-        const input = frozenInput(args);
+        const input = args;
         const ref = asString(input, 'credentialRef');
         const url = asString(input, 'url');
         if (!credentials) throw new Error('credential_unavailable: this shell has no credential service');
@@ -662,11 +653,6 @@ export function builtinToolsPlugin(): NativePlugin {
       for (const definition of definitions(workspaceRoot, dataDir, sandboxed, { kernel, trace, onMemoryRead }, cliConfigPath, credentials, { projectId, occasion }, http)) {
         ctx.registerTool(definition, { builtin: true });
       }
-      ctx.on('beforeToolCall', (event: { toolName?: string; input?: unknown }) => {
-        if (event?.toolName === 'http_request' && event.input !== null && typeof event.input === 'object') {
-          FROZEN_INPUTS.set(event.input, freezeInput(event.input));
-        }
-      });
       ctx.on('afterToolCall', (event: { tool?: { toolCallId?: string; toolName?: string }; result?: { output?: string } }) => {
         const toolCallId = event?.tool?.toolCallId;
         if (!toolCallId || typeof event.result?.output !== 'string' || !credentials?.masksFor) return undefined;

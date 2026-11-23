@@ -120,6 +120,43 @@ describe('native plugin host (Cordis-style)', () => {
     await expect(late.start()).rejects.toBeInstanceOf(ServiceConflictError);
   });
 
+  test('an untrusted plugin cannot provide a reserved service or register over an existing provider', async () => {
+    const host = new PluginHost();
+    host.providers.set('taken', 1);
+    const failures: unknown[] = [];
+    host.register({
+      name: 'untrusted-provide',
+      apply(ctx) {
+        try { ctx.provide('memory', {}); } catch (error) { failures.push(error); }
+      },
+    }, {}, { trusted: false });
+    host.register({
+      name: 'untrusted-provider',
+      apply(ctx) {
+        try { ctx.registerProvider('taken', 2); } catch (error) { failures.push(error); }
+      },
+    }, {}, { trusted: false });
+    host.register({
+      name: 'untrusted-reserved-provider',
+      apply(ctx) {
+        try { ctx.registerProvider('credentials', 3); } catch (error) { failures.push(error); }
+      },
+    }, {}, { trusted: false });
+    host.register({
+      name: 'trusted',
+      apply(ctx) {
+        ctx.provide('memory', { trusted: true });
+        ctx.registerProvider('taken', 4);
+      },
+    });
+    await host.start();
+    expect(String(failures[0])).toContain('plugin_service_reserved: plugin "untrusted-provide" may not provide reserved service "memory"');
+    expect(failures[1]).toBeInstanceOf(ServiceConflictError);
+    expect(String(failures[2])).toContain('plugin_service_reserved: plugin "untrusted-reserved-provider" may not register reserved provider "credentials"');
+    expect(host.providers.get('taken')).toBe(4);
+    expect(host.getService<{ trusted: boolean }>('memory')).toEqual({ trusted: true });
+  });
+
   test('tool names register once; the builtin four cannot be overridden', async () => {
     const host = new PluginHost();
     host.register({

@@ -1,10 +1,3 @@
-/**
- * The plugin host: one registry, one event bus, one service table.
- *
- * Native Cordis-style plugins (`apply(ctx, config)`, `provide`, `inject`, `dispose`) land here, and
- * the conflict rules are the host's: a tool name registers once, the builtin tools are not silently
- * overridden, and same-event hooks run in registration order with the first block winning.
- */
 import { EventBus, type BusHandler, type BusResult } from '../bus.ts';
 import type { ToolResult } from '../state/agent-loop.ts';
 
@@ -453,6 +446,9 @@ export class PluginHost {
         },
       },
       provide(service: string, value: unknown) {
+        if (!record.trusted && RESERVED_PLUGIN_SERVICES.includes(service)) {
+          throw new PluginDependencyError(`plugin_service_reserved: plugin "${name}" may not provide reserved service "${service}"`);
+        }
         if (host.services.has(service)) throw new ServiceConflictError(service, host.services.get(service)!.source, name);
         if (!record.provided.includes(service)) record.provided.push(service);
         host.services.set(service, { value, source: name });
@@ -499,6 +495,12 @@ export class PluginHost {
         }
       },
       registerProvider(providerName: string, value: unknown) {
+        if (!record.trusted && RESERVED_PLUGIN_SERVICES.includes(providerName)) {
+          throw new PluginDependencyError(`plugin_service_reserved: plugin "${name}" may not register reserved provider "${providerName}"`);
+        }
+        if (!record.trusted && host.providers.has(providerName)) {
+          throw new ServiceConflictError(providerName, 'an existing provider', name);
+        }
         host.providers.set(providerName, value);
       },
       dispose(fn: () => void | Promise<void>) {

@@ -486,6 +486,47 @@ describe('plugin proposals reject the boundaries before anything is loaded', () 
     }
   });
 
+  test('the heuristic scan catches the unlisted write forms and the card stops promising a miss is safe', async () => {
+    const shell = makeShell(makeTempDir('plugin-self-install-scan-'), new ScriptedProvider([{ text: 'ok', toolCalls: [] }]));
+    await shell.start();
+    const cases: Array<[string, string, string, boolean]> = [
+      ['fs', `import { readFileSync } from 'fs';\nexport default { name: 'scan-fs', apply() { readFileSync('/etc/hostname'); } };`, 'node:fs', false],
+      ['fs-promises', `import { readFile } from 'node:fs/promises';\nexport default { name: 'scan-fs-promises', apply() { readFile('/etc/hostname'); } };`, 'node:fs', false],
+      ['dynamic-import', `export default { name: 'scan-dynamic-import', apply() { return import('node:fs'); } };`, 'dynamic import()', true],
+      ['bun-file', `export default { name: 'scan-bun-file', apply() { return Bun.file('/etc/hostname'); } };`, 'Bun.file', false],
+      ['bun-write', `export default { name: 'scan-bun-write', apply() { return Bun.write('/tmp/x', 'x'); } };`, 'Bun.write', false],
+      ['sqlite', `import { Database } from 'bun:sqlite';\nexport default { name: 'scan-sqlite', apply() { return Database; } };`, 'bun:sqlite', false],
+      ['net', `import { connect } from 'node:net';\nexport default { name: 'scan-net', apply() { return connect; } };`, 'node:net', false],
+      ['child-process', `import { spawn } from 'node:child_process';\nexport default { name: 'scan-child', apply() { return spawn; } };`, 'node:child_process', false],
+      ['global-this', `export default { name: 'scan-global', apply() { return globalThis['fe' + 'tch']; } };`, 'globalThis', false],
+      ['eval', `export default { name: 'scan-eval', apply() { return eval('1'); } };`, 'eval', true],
+      ['function', `export default { name: 'scan-function', apply() { return Function('return 1'); } };`, 'Function', true],
+    ];
+    try {
+      for (const [label, source, api, highRisk] of cases) {
+        const proposed = shell.pluginProposals.propose({
+          name: `scan-${label}`,
+          purpose: '扫描漏报',
+          source,
+          permissions: { provide: [], inject: [], data: [] },
+        });
+        expect(proposed.accepted).toBe(true);
+        const record = kinds(shell, 'plugin_proposed').find((entry) => entry.name === `scan-${label}`);
+        expect(record?.sensitiveApis).toContain(api);
+        if (highRisk) expect(record?.highRiskApis).toContain(api);
+      }
+      const first = shell.pluginProposals.get(kinds(shell, 'plugin_proposed')[0]?.id as string);
+      const detail = (first?.detail ?? []).join('\n');
+      expect(detail).toContain('启发式扫描，未命中不代表安全');
+      expect(detail).toContain('与你相同的文件和网络权限');
+      expect(detail).not.toContain('未命中 node:fs/process.env/credentials/Bun.spawn/fetch');
+      const flagged = shell.pluginProposals.pending().find((proposal) => proposal.name === 'scan-eval');
+      expect((flagged?.detail ?? []).join('\n')).toContain('eval（高风险）');
+    } finally {
+      await shell.stop();
+    }
+  });
+
   test('loading a pending proposal is refused, so the companion cannot self-approve', async () => {
     const shell = makeShell(makeTempDir('plugin-self-install-unapproved-'), new ScriptedProvider([{ text: 'ok', toolCalls: [] }]));
     await shell.start();

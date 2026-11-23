@@ -98,16 +98,25 @@ function reservedNameInSource(source: string): string | undefined {
   return undefined;
 }
 
-const SENSITIVE_APIS: ReadonlyArray<{ name: string; pattern: RegExp }> = [
-  { name: 'node:fs', pattern: /(?:from\s*|require\s*\(\s*)['"]node:fs['"]/u },
+const SENSITIVE_APIS: ReadonlyArray<{ name: string; pattern: RegExp; highRisk?: true }> = [
+  { name: 'node:fs', pattern: /(?:from\s*|require\s*\(\s*)['"](?:node:)?fs(?:\/promises)?['"]/u },
   { name: 'process.env', pattern: /\bprocess\.env\b/u },
   { name: 'credentials', pattern: /\bcredentials\b/u },
   { name: 'Bun.spawn', pattern: /\bBun\.spawn\b/u },
+  { name: 'Bun.file', pattern: /\bBun\.file\b/u },
+  { name: 'Bun.write', pattern: /\bBun\.write\b/u },
+  { name: 'bun:sqlite', pattern: /['"]bun:sqlite['"]/u },
+  { name: 'node:net', pattern: /(?:from\s*|require\s*\(\s*)['"]node:net['"]/u },
+  { name: 'node:child_process', pattern: /(?:from\s*|require\s*\(\s*)['"]node:child_process['"]/u },
+  { name: 'globalThis', pattern: /\bglobalThis\s*[.\[]/u },
   { name: 'fetch', pattern: /\bfetch\s*\(/u },
+  { name: 'dynamic import()', pattern: /\bimport\s*\(/u, highRisk: true },
+  { name: 'eval', pattern: /\beval\s*\(/u, highRisk: true },
+  { name: 'Function', pattern: /\b(?:new\s+)?Function\s*\(/u, highRisk: true },
 ];
 
-function sensitiveApisInSource(source: string): string[] {
-  return SENSITIVE_APIS.filter((entry) => entry.pattern.test(source)).map((entry) => entry.name);
+function sensitiveApisInSource(source: string): ReadonlyArray<{ name: string; highRisk?: true }> {
+  return SENSITIVE_APIS.filter((entry) => entry.pattern.test(source));
 }
 
 export class PluginProposals {
@@ -262,7 +271,8 @@ export class PluginProposals {
         `源码：${entry}（${sourceBytes} 字节，sha256 ${sourceSha256.slice(0, 12)}）`,
         `权限：provide=[${permissions.provide.join(', ')}] inject=[${permissions.inject.join(', ')}] data=[${permissions.data.join(', ')}]`,
         '运行面：常驻进程内，文件与网络可及；权限面是声明，不是沙箱',
-        `静态扫描：${sensitive.length > 0 ? sensitive.join(', ') : '未命中 node:fs/process.env/credentials/Bun.spawn/fetch'}`,
+        '静态扫描：启发式扫描，未命中不代表安全；插件在常驻进程内拥有与你相同的文件和网络权限',
+        `扫描命中：${sensitive.length > 0 ? sensitive.map((entry) => (entry.highRisk ? `${entry.name}（高风险）` : entry.name)).join(', ') : '无已知模式'}`,
         `摘除：${removal}`,
       ],
     };
@@ -276,7 +286,8 @@ export class PluginProposals {
       sourceBytes,
       sourceSha256,
       permissions,
-      sensitiveApis: sensitive,
+      sensitiveApis: sensitive.map((entry) => entry.name),
+      highRiskApis: sensitive.filter((entry) => entry.highRisk === true).map((entry) => entry.name),
       ...(limitations ? { limitations } : {}),
       removal,
     }, at);
