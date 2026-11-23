@@ -4,6 +4,7 @@ import type { CompanionShell } from './app.ts';
 import { rotateLogFile, SERVICE_LOG_MAX_BYTES } from './log-rotation.ts';
 import { formatBytes, memoryPressureAction, readMemoryUsage } from './memory.ts';
 import { enqueueAway } from './presence.ts';
+import { settleWithin } from './run-loop.ts';
 
 const DREAM_RETRY_BASE_MS = 5 * 60_000;
 const DREAM_RETRY_CAP_MS = 30 * 60_000;
@@ -68,6 +69,7 @@ export class ResidentTick {
   private backfillInFlight = false;
   private inPlaceDream = false;
   private tickInFlight = false;
+  private tickPromise?: Promise<void>;
   private lastFreshnessPassAt?: number;
   private embeddingRowCursor = 0;
   private bindingSeqCursor?: number;
@@ -80,11 +82,18 @@ export class ResidentTick {
       return;
     }
     this.tickInFlight = true;
+    const work = this.tickOnce(at);
+    this.tickPromise = work;
     try {
-      await this.tickOnce(at);
+      await work;
     } finally {
       this.tickInFlight = false;
+      if (this.tickPromise === work) this.tickPromise = undefined;
     }
+  }
+
+  async settle(timeoutMs: number): Promise<boolean> {
+    return await settleWithin([this.tickPromise], timeoutMs);
   }
 
   private async tickOnce(at: number): Promise<void> {
