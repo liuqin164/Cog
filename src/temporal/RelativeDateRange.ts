@@ -30,7 +30,10 @@ export function relativeDateRange(
   const daysAgo = query.match(/(\d{1,3})\s*(?:天|日)\s*(?:前|以前)|(\d{1,3})\s+days?\s+ago/i);
   if (daysAgo) return dayRange(-Number(daysAgo[1] ?? daysAgo[2]));
   if (/前天|day before yesterday/i.test(query)) return dayRange(-2);
-  if (/刚才|刚刚|方才|just now|moments ago/i.test(query)) return dayRange(0);
+  if (/刚才|刚刚|方才|just now|moments ago/i.test(query)) {
+    const now = options.now ?? Date.now();
+    return { from: now - 7_200_000, to: now + 1, expression: 'just now' };
+  }
   const lowerQuery = query.toLowerCase();
   const relative = Object.entries(TEMPORAL_KEYWORDS).find(([keyword]) => lowerQuery.includes(keyword))?.[1].relative;
   if (!relative) return undefined;
