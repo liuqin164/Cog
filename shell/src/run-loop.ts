@@ -47,7 +47,12 @@ export class RunLoop {
       return undefined;
     }
     if (this.shell.statusFace.dailyBudgetExceeded()) this.shell.statusFace.announceDailyBudget('user_message');
-    if (this.shell.machine.state === 'SUSPENDED') return this.submitWhileSuspended(text, channel, onRunStart);
+    if (this.shell.machine.state === 'SUSPENDED') {
+      return this.shell.residentTick.duringDreamHold(async () => {
+        if (this.shell.machine.state !== 'SUSPENDED') return this.submit(text, channel, onRunStart);
+        return this.submitWhileSuspended(text, channel, onRunStart);
+      });
+    }
     this.shell.clock!.markInteraction(this.shell.now());
     this.shell.residentTick.observeSurfacingReply(text);
     const id = this.enqueueInbound(text, channel, 'queued', undefined, onRunStart);

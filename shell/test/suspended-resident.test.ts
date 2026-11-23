@@ -108,4 +108,61 @@ describe('a suspended resident keeps its background work (#437)', () => {
       await shell.stop();
     }
   }, 30_000);
+
+  test('a reply waits for the in-place dream pass that is already running', async () => {
+    const clock = { now: T0 };
+    const scripted = new ScriptedProvider([
+      { text: 'working', toolCalls: [{ toolCallId: 'c1', toolName: 'read', input: { path: 'missing.txt' } }], usage: { input: 1_500, output: 1 } },
+      { text: '答', toolCalls: [] },
+    ]);
+    const shell = await suspend(clock, scripted);
+    try {
+      let dreamed = false;
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      let started!: () => void;
+      const startedDream = new Promise<void>((resolve) => { started = resolve; });
+      const dream = (shell as unknown as { dream: { integrate: (localDate: string) => Promise<unknown> } }).dream;
+      dream.integrate = async (localDate: string) => {
+        started();
+        await gate;
+        dreamed = true;
+        return { localDate, eventCount: 0, sourceRefs: [], summary: 'gated', kernelNightRan: false, memoryModelUsed: false };
+      };
+      const backup = shell.kernel.backup as unknown as { snapshot: () => Promise<unknown> };
+      backup.snapshot = async () => undefined;
+      (shell.residentTick as unknown as { dreamDecision: () => unknown }).dreamDecision = () => ({
+        start: true,
+        reason: 'idle_and_backlog',
+        night: false,
+        idleMs: null,
+        idleMinMs: 0,
+        backlogMin: 0,
+        backlogEvents: 0,
+        backlogEpisodes: 0,
+      });
+
+      clock.now += 1_000;
+      const tick = shell.tick(clock.now);
+      await startedDream;
+      const callsBefore = scripted.calls.length;
+      const submitted = shell.submit('回答');
+      await Bun.sleep(20);
+      expect(dreamed).toBe(false);
+      expect(shell.state).toBe('SUSPENDED');
+      expect(scripted.calls.length).toBe(callsBefore);
+
+      release();
+      await tick;
+      const summary = await submitted;
+      expect(summary?.stopReason).toBe('run_complete');
+      expect(dreamed).toBe(true);
+      expect(scripted.calls.length).toBe(callsBefore + 1);
+      expect(shell.trace.read().some((record) => record.kind === 'dream_complete')).toBe(true);
+      expect(shell.trace.read().some((record) => record.kind === 'illegal_transition')).toBe(false);
+      expect(shell.state).toBe('IDLE');
+    } finally {
+      await shell.stop();
+    }
+  }, 30_000);
 });

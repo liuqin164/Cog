@@ -68,6 +68,8 @@ export class ResidentTick {
   freshness?: FreshnessReadings;
   private backfillInFlight = false;
   private inPlaceDream = false;
+  private dreamHold = 0;
+  private readonly dreamIdleWaiters = new Set<() => void>();
   private tickInFlight = false;
   private tickPromise?: Promise<void>;
   private lastFreshnessPassAt?: number;
@@ -75,6 +77,16 @@ export class ResidentTick {
   private bindingSeqCursor?: number;
 
   constructor(private readonly shell: CompanionShell) {}
+
+  async duringDreamHold<T>(work: () => Promise<T>): Promise<T> {
+    this.dreamHold += 1;
+    try {
+      if (this.inPlaceDream) await new Promise<void>((resolve) => this.dreamIdleWaiters.add(resolve));
+      return await work();
+    } finally {
+      this.dreamHold -= 1;
+    }
+  }
 
   async tick(at = this.shell.now()): Promise<void> {
     if (this.tickInFlight) {
@@ -111,6 +123,7 @@ export class ResidentTick {
       if (this.inPlaceDream) return;
       await this.backfillFreshness(at);
       this.deferDueWakeIntent(at);
+      if (this.dreamHold > 0) return;
       const dream = this.dreamDecision(at);
       this.traceDreamDecision(dream, at);
       if (dream.start) {
@@ -120,6 +133,8 @@ export class ResidentTick {
           await this.maybeSnapshot(at);
         } finally {
           this.inPlaceDream = false;
+          for (const resolve of this.dreamIdleWaiters) resolve();
+          this.dreamIdleWaiters.clear();
         }
         return;
       }
