@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import type Database from 'bun:sqlite';
 import { join } from 'node:path';
 
@@ -755,6 +755,147 @@ describe('verbatim anchors are set members and truncation respects code points (
     expect(card!.text).toContain('😀');
     expect(card!.text).not.toContain('\uFFFD');
     expect(hasLoneSurrogate(card!.text)).toBe(false);
+  });
+});
+
+describe('Dream card compilation carries a persisted watermark (#519)', () => {
+  test('a skipped tick with no new rows reads no turns and lists no scope', async () => {
+    const dir = makeTempDir('cogmem-deep-watermark-idle-');
+    const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.sqlite'), projectTimeZone: 'UTC' });
+    const backend = new KernelAgentMemoryBackend(kernel);
+    const projectId = 'wm-idle-project';
+    const agentId = 'wm-idle-agent';
+    const sessionId = 'wm-idle-session';
+    try {
+      for (let index = 0; index < 24; index += 1) {
+        await backend.captureConversationTurn({
+          projectId, agentId, sessionId, channel: 'terminal',
+          speaker: index % 2 === 0 ? 'owner' : 'agent',
+          text: `第 ${index} 轮：继续整理文档。`,
+          occurredAt: T0 + index * 1_000,
+        });
+      }
+      const first = await kernel.runDreamTick({ projectId, now: T0 + 24_000 + GAP + 1_000 });
+      expect(first.skipped).toBe(true);
+      expect(first.deepCards?.created).toBe(1);
+
+      const query = spyOn(kernel.factStore.getDatabase(), 'query');
+      try {
+        const idle = await kernel.runDreamTick({ projectId, now: T0 + 24_000 + GAP + 2_000 });
+        expect(idle.skipped).toBe(true);
+        expect(idle.deepCards?.created).toBe(0);
+        const sql = query.mock.calls.map((call) => String(call[0]));
+        expect(sql.some((text) => text.includes('$.metadata.captureLane'))).toBe(false);
+        expect(sql.some((text) => text.includes('$.text'))).toBe(false);
+        expect(sql.some((text) => text.includes("raw_event_type = 'task_event'"))).toBe(false);
+      } finally {
+        query.mockRestore();
+      }
+    } finally {
+      kernel.close();
+    }
+  });
+
+  test('a new batch is compiled from the watermark and keeps the old card untouched', async () => {
+    const dir = makeTempDir('cogmem-deep-watermark-new-');
+    const kernel = createMemoryKernel({ dbPath: join(dir, 'memory.sqlite'), projectTimeZone: 'UTC' });
+    const backend = new KernelAgentMemoryBackend(kernel);
+    const projectId = 'wm-new-project';
+    const agentId = 'wm-new-agent';
+    const sessionId = 'wm-new-session';
+    const oldIds: string[] = [];
+    const newIds: string[] = [];
+    const later = T0 + 24_000 + GAP + 60_000;
+    try {
+      for (let index = 0; index < 24; index += 1) {
+        const captured = await backend.captureConversationTurn({
+          projectId, agentId, sessionId, channel: 'terminal',
+          speaker: index % 2 === 0 ? 'owner' : 'agent',
+          text: `第 ${index} 轮：继续整理文档。`,
+          occurredAt: T0 + index * 1_000,
+        });
+        oldIds.push(captured.eventId);
+      }
+      const first = await kernel.runDreamTick({ projectId, now: T0 + 24_000 + GAP + 1_000 });
+      expect(first.deepCards?.created).toBe(1);
+
+      for (let index = 0; index < 10; index += 1) {
+        const captured = await backend.captureConversationTurn({
+          projectId, agentId, sessionId, channel: 'terminal',
+          speaker: index % 2 === 0 ? 'owner' : 'agent',
+          text: `第 ${24 + index} 轮：第二天继续核对文档。`,
+          occurredAt: later + index * 1_000,
+        });
+        newIds.push(captured.eventId);
+      }
+      const query = spyOn(kernel.factStore.getDatabase(), 'query');
+      let secondCreated = 0;
+      try {
+        const second = await kernel.runDreamTick({ projectId, now: later + 10_000 + GAP + 1_000 });
+        secondCreated = second.deepCards?.created ?? 0;
+        const reads = query.mock.calls.map((call) => String(call[0]))
+          .filter((text) => text.includes("json_extract(payload_json, '$.text')"));
+        expect(reads.some((text) => text.includes('COALESCE(global_seq, 0) > ?'))).toBe(true);
+      } finally {
+        query.mockRestore();
+      }
+      expect(secondCreated).toBe(1);
+
+      const cards = kernel.sessionContext.digest({ projectId, agentId, sessionId })
+        .entries.filter((entry) => entry.kind === 'deep');
+      expect(cards).toHaveLength(2);
+      const oldCard = cards.find((card) => card.sourceRefs[0] === oldIds[0]);
+      const newCard = cards.find((card) => card.sourceRefs[0] === newIds[0]);
+      expect(oldCard?.sourceRefs).toEqual(oldIds);
+      expect(newCard?.sourceRefs).toEqual(newIds);
+      expect(newCard?.text).toContain('做了什么：');
+    } finally {
+      kernel.close();
+    }
+  });
+
+  test('the watermark survives a restart and still refuses an idle scan', async () => {
+    const dir = makeTempDir('cogmem-deep-watermark-restart-');
+    const dbPath = join(dir, 'memory.sqlite');
+    const projectId = 'wm-restart-project';
+    const agentId = 'wm-restart-agent';
+    const sessionId = 'wm-restart-session';
+    let kernel = createMemoryKernel({ dbPath, projectTimeZone: 'UTC' });
+    try {
+      const backend = new KernelAgentMemoryBackend(kernel);
+      for (let index = 0; index < 24; index += 1) {
+        await backend.captureConversationTurn({
+          projectId, agentId, sessionId, channel: 'terminal',
+          speaker: index % 2 === 0 ? 'owner' : 'agent',
+          text: `第 ${index} 轮：继续整理文档。`,
+          occurredAt: T0 + index * 1_000,
+        });
+      }
+      const first = await kernel.runDreamTick({ projectId, now: T0 + 24_000 + GAP + 1_000 });
+      expect(first.deepCards?.created).toBe(1);
+    } finally {
+      kernel.close();
+    }
+
+    kernel = createMemoryKernel({ dbPath, projectTimeZone: 'UTC' });
+    try {
+      const query = spyOn(kernel.factStore.getDatabase(), 'query');
+      try {
+        const idle = await kernel.sessionContext.compileEpisodeCards({
+          projectId,
+          now: T0 + 24_000 + GAP + 2_000,
+        });
+        expect(idle.scopes).toBe(0);
+        expect(idle.created).toHaveLength(0);
+        const sql = query.mock.calls.map((call) => String(call[0]));
+        expect(sql.some((text) => text.includes('$.metadata.captureLane'))).toBe(false);
+        expect(sql.some((text) => text.includes('$.text'))).toBe(false);
+      } finally {
+        query.mockRestore();
+      }
+    } finally {
+      kernel.close();
+    }
   });
 });
 

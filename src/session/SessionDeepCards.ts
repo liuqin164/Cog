@@ -29,6 +29,17 @@ export interface SessionDeepCompileRunResult {
   failures: string[];
 }
 
+interface DeepScopeState {
+  closedSeq: number;
+  seenSeq: number;
+  seenAt: number;
+}
+
+interface DeepState {
+  lastSeq: Record<string, number>;
+  scopes: Record<string, DeepScopeState>;
+}
+
 export interface SessionDeepSegment {
   turns: SessionTurn[];
   declared: boolean;
@@ -44,6 +55,7 @@ interface CardRow {
 }
 
 const CARD_TABLE = 'session_deep_cards';
+const DEEP_STATE_KEY = 'session_deep_state';
 
 function initCardTable(db: Database): void {
   db.exec(`
@@ -226,22 +238,61 @@ export async function compileSessionDeepCards(
 ): Promise<SessionDeepCompileRunResult> {
   initCardTable(db);
   const now = input.now ?? Date.now();
-  const scopes = input.agentId && input.sessionId && input.projectId
-    ? [{ projectId: input.projectId, agentId: input.agentId, sessionId: input.sessionId }]
-    : listDeepScopes(db, input.projectId);
-  const result: SessionDeepCompileRunResult = { created: [], scopes: scopes.length, declaredSkipped: 0, failures: [] };
+  const state = readDeepState(db);
+  const explicit = input.agentId && input.sessionId && input.projectId
+    ? { projectId: input.projectId, agentId: input.agentId, sessionId: input.sessionId }
+    : undefined;
+  const cursorKey = input.projectId ?? '*';
+  const cursor = state.lastSeq[cursorKey] ?? 0;
+  const maxSeq = explicit ? cursor : maxEventSeq(db);
+  const scopes = new Map<string, SessionDeepScope>();
+  if (explicit) scopes.set(scopeKey(explicit), explicit);
+  if (!explicit && maxSeq > cursor) {
+    for (const row of discoverScopes(db, cursor, input.projectId)) {
+      if (!row.projectId || !row.sessionId || !row.agentId) continue;
+      const scope = { projectId: row.projectId, agentId: row.agentId, sessionId: row.sessionId };
+      const key = scopeKey(scope);
+      if (row.seq > (state.scopes[key]?.seenSeq ?? 0)) scopes.set(key, scope);
+    }
+  }
+  if (!explicit) {
+    for (const [key, watermark] of Object.entries(state.scopes)) {
+      if (scopes.has(key)) continue;
+      if (input.projectId !== undefined && !key.startsWith(`${input.projectId}\u0000`)) continue;
+      if (watermark.seenSeq <= watermark.closedSeq || now - watermark.seenAt <= SESSION_DEEP_SEGMENT_GAP_MS) continue;
+      const scope = parseScopeKey(key);
+      if (scope) scopes.set(key, scope);
+    }
+  }
+  const result: SessionDeepCompileRunResult = { created: [], scopes: 0, declaredSkipped: 0, failures: [] };
+  let dirty = false;
+  let complete = true;
   let remaining = Math.max(0, input.maxCards ?? SESSION_DEEP_MAX_CARDS_PER_RUN);
-  for (const scope of scopes) {
-    if (remaining <= 0) break;
+  for (const [key, scope] of scopes) {
+    if (remaining <= 0) {
+      complete = false;
+      break;
+    }
+    result.scopes += 1;
     try {
-      const made = await compileScope(db, scope, now, input.generateText, remaining);
+      const made = await compileScope(
+        db, scope, now, input.generateText, remaining,
+        state.scopes[key] ?? { closedSeq: 0, seenSeq: 0, seenAt: 0 },
+      );
+      state.scopes[key] = made.next;
       result.created.push(...made.created);
       result.declaredSkipped += made.declaredSkipped;
       remaining -= made.created.length;
+      dirty = true;
     } catch (error) {
       result.failures.push(error instanceof Error ? error.message : String(error));
     }
   }
+  if (!explicit && complete && result.failures.length === 0 && maxSeq > cursor) {
+    state.lastSeq[cursorKey] = maxSeq;
+    dirty = true;
+  }
+  if (dirty) writeDeepState(db, state);
   return result;
 }
 
@@ -251,9 +302,14 @@ async function compileScope(
   now: number,
   generateText: TextGenerateFn | undefined,
   limit: number,
-): Promise<{ created: SessionDigestEntry[]; declaredSkipped: number }> {
-  const read = readSessionTurns(db, { ...scope, limit: SESSION_DIGEST_MAX_TURNS });
-  const taskEnds = readTaskEnds(db, scope);
+  watermark: DeepScopeState,
+): Promise<{ created: SessionDigestEntry[]; declaredSkipped: number; next: DeepScopeState }> {
+  const read = readSessionTurns(db, {
+    ...scope,
+    limit: SESSION_DIGEST_MAX_TURNS,
+    ...(watermark.closedSeq > 0 ? { afterGlobalSeq: watermark.closedSeq } : {}),
+  });
+  const taskEnds = readTaskEnds(db, scope, watermark.closedSeq);
   const taskStarts = readTaskStarts(db, scope);
   const planned = planDeepSegments(read.turns, taskEnds, now, undefined, taskStarts);
   const segments = read.truncated ? planned.slice(1) : planned;
@@ -295,7 +351,17 @@ async function compileScope(
       existing.add(segmentKey);
     }
   }
-  return { created, declaredSkipped };
+  const last = read.turns[read.turns.length - 1];
+  const closed = lastClosedTurn(read.turns, taskEnds, taskStarts, now);
+  return {
+    created,
+    declaredSkipped,
+    next: {
+      closedSeq: Math.max(watermark.closedSeq, closed?.globalSeq ?? 0),
+      seenSeq: Math.max(watermark.seenSeq, last?.globalSeq ?? 0),
+      seenAt: Math.max(watermark.seenAt, last?.occurredAt ?? 0),
+    },
+  };
 }
 
 function insertCard(
@@ -346,35 +412,91 @@ function deepSegmentKey(segment: SessionDeepSegment): string {
   return `${segment.turns[0]!.eventId}:${segment.turns[segment.turns.length - 1]!.eventId}`;
 }
 
-function listDeepScopes(db: Database, projectId?: string): SessionDeepScope[] {
-  const rows = db.query(`
-    SELECT project_id AS projectId, session_id AS sessionId,
+function lastClosedTurn(
+  turns: readonly SessionTurn[],
+  taskEnds: readonly number[],
+  taskStarts: readonly number[],
+  now: number,
+): SessionTurn | undefined {
+  let closed: SessionTurn | undefined;
+  for (let index = 0; index < turns.length; index += 1) {
+    const turn = turns[index]!;
+    const next = turns[index + 1];
+    const cut = (times: readonly number[]) =>
+      times.some((at) => at >= turn.occurredAt && (next === undefined || at < next.occurredAt));
+    const gap = next === undefined
+      ? now - turn.occurredAt > SESSION_DEEP_SEGMENT_GAP_MS
+      : next.occurredAt - turn.occurredAt > SESSION_DEEP_SEGMENT_GAP_MS;
+    if (cut(taskEnds) || cut(taskStarts) || gap) closed = turn;
+  }
+  return closed;
+}
+
+function scopeKey(scope: SessionDeepScope): string {
+  return `${scope.projectId}\u0000${scope.agentId}\u0000${scope.sessionId}`;
+}
+
+function parseScopeKey(key: string): SessionDeepScope | undefined {
+  const [projectId, agentId, sessionId] = key.split('\u0000');
+  return projectId && agentId && sessionId ? { projectId, agentId, sessionId } : undefined;
+}
+
+function maxEventSeq(db: Database): number {
+  const row = db.query('SELECT COALESCE(MAX(global_seq), 0) AS value FROM memory_events').get() as { value: number } | null;
+  return Number(row?.value ?? 0);
+}
+
+function discoverScopes(
+  db: Database,
+  afterSeq: number,
+  projectId?: string,
+): Array<{ seq: number; projectId: string | null; sessionId: string | null; agentId: string | null }> {
+  return db.query(`
+    SELECT COALESCE(global_seq, 0) AS seq, project_id AS projectId, session_id AS sessionId,
       json_extract(payload_json, '$.metadata.sourceAgent') AS agentId
     FROM memory_events
-    WHERE event_type = 'RAW_EVENT_RECORDED'
+    WHERE COALESCE(global_seq, 0) > ?
+      AND event_type = 'RAW_EVENT_RECORDED'
       AND json_valid(payload_json)
       AND json_extract(payload_json, '$.metadata.captureLane') = 'conversation'
       ${projectId === undefined ? '' : 'AND project_id = ?'}
-    GROUP BY project_id, session_id, agentId
-  `).all(...(projectId === undefined ? [] : [projectId])) as Array<{ projectId: string; sessionId: string; agentId: string | null }>;
-  return rows
-    .filter((row) => row.projectId && row.sessionId && row.agentId)
-    .map((row) => ({ projectId: row.projectId, sessionId: row.sessionId, agentId: row.agentId! }));
+  `).all(...(projectId === undefined ? [afterSeq] : [afterSeq, projectId])) as Array<{
+    seq: number;
+    projectId: string | null;
+    sessionId: string | null;
+    agentId: string | null;
+  }>;
 }
 
-function readTaskEnds(db: Database, scope: SessionDeepScope): number[] {
+function readDeepState(db: Database): DeepState {
+  const row = db.query('SELECT value FROM _meta WHERE key = ?').get(DEEP_STATE_KEY) as { value: string } | null;
+  if (!row) return { lastSeq: {}, scopes: {} };
+  try {
+    const parsed = JSON.parse(row.value) as Partial<DeepState>;
+    return { lastSeq: parsed.lastSeq ?? {}, scopes: parsed.scopes ?? {} };
+  } catch {
+    return { lastSeq: {}, scopes: {} };
+  }
+}
+
+function writeDeepState(db: Database, state: DeepState): void {
+  db.query('INSERT OR REPLACE INTO _meta (key, value) VALUES (?, ?)').run(DEEP_STATE_KEY, JSON.stringify(state));
+}
+
+function readTaskEnds(db: Database, scope: SessionDeepScope, afterSeq = 0): number[] {
   const base = baseSessionId(scope.sessionId);
   const source = `${scope.agentId}:${base}`;
   const rows = db.query(`
     SELECT occurred_at FROM memory_events
     WHERE event_type = 'RAW_EVENT_RECORDED'
+      AND COALESCE(global_seq, 0) > ?
       AND project_id = ?
       AND raw_event_type = 'task_event'
       AND json_valid(payload_json)
       AND json_extract(payload_json, '$.metadata.kind') = 'task-procedure'
       AND (session_id = ? OR substr(session_id, 1, length(?) + 1) = ? || ':')
       AND (source_id = ? OR substr(source_id, 1, length(?) + 1) = ? || ':')
-  `).all(scope.projectId, base, base, base, source, source, source) as Array<{ occurred_at: number }>;
+  `).all(afterSeq, scope.projectId, base, base, base, source, source, source) as Array<{ occurred_at: number }>;
   return rows.map((row) => row.occurred_at);
 }
 

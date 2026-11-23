@@ -46,8 +46,8 @@ export interface SessionTurnReadInput {
   agentId: string;
   sessionId: string;
   limit?: number;
-  /** Channel-history cursor: only rows older than this ledger sequence. */
   beforeGlobalSeq?: number;
+  afterGlobalSeq?: number;
 }
 
 /** One `tool_call` row: the task's own trajectory, as captured, with no model summary. */
@@ -103,12 +103,14 @@ const LANE_SQL = `
 export function readSessionTurns(db: Database, input: SessionTurnReadInput): SessionTurnRead {
   const limit = Math.max(1, Math.min(Math.trunc(input.limit ?? SESSION_LEDGER_MAX_TURNS), SESSION_LEDGER_MAX_TURNS));
   const before = input.beforeGlobalSeq;
+  const after = input.afterGlobalSeq;
   const rows = db
     .query(`
       SELECT * FROM (
         SELECT ${TURN_COLUMNS}
         FROM memory_events
         WHERE ${LANE_SQL}
+          ${after === undefined ? '' : 'AND COALESCE(global_seq, 0) > ?'}
           ${before === undefined ? '' : `AND (
             occurred_at < (SELECT occurred_at FROM memory_events WHERE global_seq = ?)
             OR (occurred_at = (SELECT occurred_at FROM memory_events WHERE global_seq = ?)
@@ -123,6 +125,7 @@ export function readSessionTurns(db: Database, input: SessionTurnReadInput): Ses
       input.projectId,
       input.sessionId,
       `${input.agentId}:${input.sessionId}`,
+      ...(after === undefined ? [] : [after]),
       ...(before === undefined ? [] : [before, before, before]),
       limit + 1,
     ) as TurnRow[];
