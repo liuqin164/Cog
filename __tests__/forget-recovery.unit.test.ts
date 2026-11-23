@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { createMemoryKernel } from '../src/factory.js';
@@ -113,6 +113,107 @@ test('#423 wal_checkpoint(TRUNCATE) reads its result instead of assuming it ran'
     expect(checkpointTruncate(kernel.factStore.getDatabase())).toBe(true);
   } finally {
     reader.close();
+    kernel.close();
+  }
+});
+
+function ftsDataContains(db: Database, needle: string): boolean {
+  const rows = db.prepare(`SELECT block FROM memory_atlas_fts_data`).all() as Array<{ block: Uint8Array }>;
+  return rows.some((row) => Buffer.from(row.block).includes(Buffer.from(needle)));
+}
+
+test('#502 Atlas rebuild and GC run before optimize/VACUUM, leaving no FTS segment bytes', () => {
+  const dir = makeTempDir('forget-fts-order-');
+  const dbPath = join(dir, 'memory.sqlite');
+  const projectId = 'fts-erase-order';
+  const base = Date.now() - 60_000;
+  const marker = 'zzuniqueterm9f3c7';
+  const kernel = createMemoryKernel({ dbPath, projectTimeZone: 'UTC' });
+  try {
+    const event = kernel.recordRawEvent({
+      projectId,
+      threadId: 'fts-thread',
+      role: 'user',
+      content: `${marker} hello world`,
+      occurredAt: base,
+    });
+    const db = kernel.factStore.getDatabase();
+    db.prepare(`INSERT INTO memory_atlas_documents (
+      node_id, project_id, node_type, source_id, label, summary, confidence,
+      support_count, status, occurred_at, evidence_event_ids_json, metadata_json, updated_at
+    ) VALUES (?, ?, 'raw_event', ?, ?, ?, 1, 0, 'active', ?, '[]', '{}', ?)`)
+      .run(`raw_event:${event.eventId}`, projectId, event.eventId, marker, `${marker} summary`, base, base);
+    kernel.memoryAtlasStore.refreshFtsProject(projectId);
+    expect(ftsDataContains(db, marker)).toBe(true);
+
+    const service = kernel.sovereignty as unknown as {
+      ports: { profile: { compile(input: unknown): unknown }; procedures: { compile(input: unknown): unknown }; commitments: { compile(input: unknown): unknown }; intentions: { compile(input: unknown): unknown }; rebuildAtlas?: (scope: string) => unknown };
+      eraseFreedPages(): boolean;
+    };
+    const order: string[] = [];
+    for (const key of ['profile', 'procedures', 'commitments', 'intentions'] as const) {
+      const compile = service.ports[key].compile.bind(service.ports[key]);
+      service.ports[key].compile = (input) => {
+        order.push(key);
+        return compile(input);
+      };
+    }
+    const rebuildAtlas = service.ports.rebuildAtlas!.bind(service.ports);
+    service.ports.rebuildAtlas = (scope) => {
+      order.push('atlas');
+      return rebuildAtlas(scope);
+    };
+    const eraseFreedPages = service.eraseFreedPages.bind(service);
+    service.eraseFreedPages = () => {
+      order.push('erase');
+      return eraseFreedPages();
+    };
+
+    kernel.sovereignty.deleteRange({ projectId, start: base - 1, end: base + 1 });
+
+    expect(order).toContain('atlas');
+    expect(order[order.length - 1]).toBe('erase');
+    expect(order.indexOf('erase')).toBeGreaterThan(order.indexOf('profile'));
+    expect(order.indexOf('erase')).toBeGreaterThan(order.indexOf('procedures'));
+    expect(order.indexOf('erase')).toBeGreaterThan(order.indexOf('commitments'));
+    expect(order.indexOf('erase')).toBeGreaterThan(order.indexOf('intentions'));
+    expect(order.indexOf('erase')).toBeGreaterThan(order.indexOf('atlas'));
+    expect(ftsDataContains(db, marker)).toBe(false);
+    expect(readFileSync(dbPath).includes(Buffer.from(marker))).toBe(false);
+  } finally {
+    kernel.close();
+  }
+});
+
+test('#502 the pending marker survives an erase that did not settle, and clears after the retry', () => {
+  const dir = makeTempDir('forget-fts-marker-');
+  const dbPath = join(dir, 'memory.sqlite');
+  const projectId = 'fts-erase-marker';
+  const base = Date.now() - 60_000;
+  const kernel = createMemoryKernel({ dbPath, projectTimeZone: 'UTC' });
+  try {
+    const db = kernel.factStore.getDatabase();
+    kernel.recordRawEvent({
+      projectId,
+      threadId: 'fts-marker-thread',
+      role: 'user',
+      content: 'fts marker retry token',
+      occurredAt: base,
+    });
+    const service = kernel.sovereignty as unknown as { eraseFreedPages(): boolean };
+    const eraseFreedPages = service.eraseFreedPages.bind(service);
+    service.eraseFreedPages = () => false;
+
+    const first = kernel.sovereignty.deleteRange({ projectId, start: base - 1, end: base + 1 });
+    expect(first.artifacts.notCovered.length).toBeGreaterThan(0);
+    const pending = db.prepare(`SELECT value FROM _meta WHERE key=?`).get(`sovereignty.pending_erase:${projectId}`) as { value: string } | null;
+    expect(pending).toBeTruthy();
+    expect(JSON.parse(pending!.value).walSettled).toBe(false);
+
+    service.eraseFreedPages = eraseFreedPages;
+    kernel.sovereignty.deleteRange({ projectId, start: base + DAY, end: base + DAY + 1 });
+    expect(db.prepare(`SELECT value FROM _meta WHERE key=?`).get(`sovereignty.pending_erase:${projectId}`)).toBeNull();
+  } finally {
     kernel.close();
   }
 });

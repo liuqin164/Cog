@@ -810,11 +810,19 @@ export class MemorySovereigntyService {
   private runPendingErase(scope: string): { auditId: string; deleted: Record<string, number>; artifacts: SovereigntyArtifactCoverage } | undefined {
     const pending = this.readPendingErase(scope);
     if (!pending) return undefined;
-    if (!pending.walSettled) pending.walSettled = this.eraseFreedPages();
     if (!pending.artifactsDone) {
       pending.artifacts = mergeCoverage(pending.artifacts, this.removeAffectedArtifacts(pending.cutoff));
       pending.artifactsDone = true;
     }
+    if (scope) {
+      this.ports.profile.compile({ projectId: scope, now: this.now() });
+      this.ports.procedures.compile({ projectId: scope, now: this.now() });
+      this.ports.commitments.compile({ projectId: scope, now: this.now() });
+      this.ports.intentions.compile({ projectId: scope, now: this.now() });
+    }
+    this.ports.rebuildAtlas?.(scope);
+    gcInvalidatedAtlasRows(this.ports.db, scope);
+    pending.walSettled = this.eraseFreedPages();
     if (!pending.walSettled) {
       pending.artifacts = {
         ...pending.artifacts,
@@ -825,14 +833,6 @@ export class MemorySovereigntyService {
     const details = { start: pending.start, end: pending.end, counts: pending.deleted, artifacts: pending.artifacts };
     if (this.auditExists(pending.auditId)) this.updateAudit(pending.auditId, details);
     else this.writeAudit('delete_range', scope, details, pending.reason, pending.auditId);
-    if (scope) {
-      this.ports.profile.compile({ projectId: scope, now: this.now() });
-      this.ports.procedures.compile({ projectId: scope, now: this.now() });
-      this.ports.commitments.compile({ projectId: scope, now: this.now() });
-      this.ports.intentions.compile({ projectId: scope, now: this.now() });
-    }
-    this.ports.rebuildAtlas?.(scope);
-    gcInvalidatedAtlasRows(this.ports.db, scope);
     if (pending.walSettled) this.clearPendingErase(scope);
     return { auditId: pending.auditId, deleted: pending.deleted, artifacts: pending.artifacts };
   }
