@@ -40,6 +40,7 @@ export interface DreamTickResult {
   semanticProcessorFailedCount: number;
   semanticProcessorReason?: string;
   semanticProcessorError?: string;
+  deepCards?: { created: number; error?: string };
 }
 
 export class DreamScheduler {

@@ -392,16 +392,17 @@ function buildLanes(input: AssembleSessionContextInput, digest: SessionDigest): 
       text: entry.text,
       speaker: entry.speaker,
       sourceRefs: entry.sourceRefs,
-      // Only a task-exit stub carries its key into the lane (#263). An ordinary digest entry's
-      // `sourceRefs[0]` is still the row it quotes; the stub is the one that must stay drillable
-      // after the task's working set is gone.
-      ...(stubIds.has(entry.entryId) ? { anchorEvent: entry.sourceRefs[0] } : {}),
+      ...(stubIds.has(entry.entryId) || entry.kind === 'deep' ? { anchorEvent: entry.sourceRefs[0] } : {}),
     })),
     working_set: workingItems,
     recall: [...(input.recall ?? [])],
     tail: digest.tail.map((turn) => ({ id: turn.eventId, text: turn.text, speaker: turn.speaker, sourceRefs: [turn.eventId] })),
   };
-  itemsByLane.working_set = [...workingItems, ...expandStubs(input, itemsByLane, protectedIds)];
+  itemsByLane.working_set = [
+    ...workingItems,
+    ...expandStubs(input, itemsByLane, protectedIds),
+    ...expandDeepCards(input, digest, workingItems, protectedIds),
+  ];
   const lanes: SessionContextLane[] = SESSION_CONTEXT_LANES.map((lane) => {
     const items = itemsByLane[lane].map((item) => isProtected(item, protectedIds) ? { ...item, protected: true } : item);
     const text = renderLane(lane, items);
@@ -473,6 +474,44 @@ function stubMatches(item: SessionContextItem, haystack: string): boolean {
     .some((term) => haystack.includes(normalizeMatchText(term)));
 }
 
+function expandDeepCards(
+  input: AssembleSessionContextInput,
+  digest: SessionDigest,
+  workingItems: readonly SessionContextItem[],
+  protectedIds: ReadonlySet<string>,
+): SessionContextItem[] {
+  const haystack = normalizeMatchText((input.recentText ?? []).join('\n'));
+  if (!haystack) return [];
+  const presentIds = new Set(workingItems.map((item) => item.id));
+  const presentText = new Set(workingItems.map((item) => item.text));
+  const items: SessionContextItem[] = [];
+  for (const entry of digest.entries) {
+    if (entry.kind !== 'deep' || presentIds.has(entry.entryId) || presentText.has(entry.text)) continue;
+    if (isProtected({ id: entry.entryId, text: entry.text, sourceRefs: entry.sourceRefs }, protectedIds)) continue;
+    if (!deepCardMatches(entry, haystack)) continue;
+    items.push({
+      id: entry.entryId,
+      text: entry.text,
+      sourceRefs: entry.sourceRefs,
+      anchorEvent: entry.sourceRefs[0],
+      whyMatched: 'deep_card',
+      autoExpanded: true,
+    });
+  }
+  return items;
+}
+
+function deepCardMatches(entry: SessionDigestEntry, haystack: string): boolean {
+  if (entry.sourceRefs.some((ref) => haystack.includes(normalizeMatchText(ref)))) return true;
+  const anchors = entry.text
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith('指针：'))
+    .join('\n');
+  return digestAnchors(anchors)
+    .filter((term) => term.length >= 2)
+    .some((term) => haystack.includes(normalizeMatchText(term)));
+}
+
 /** The experiment's normalization (#254): full-width to half-width, lower case, no whitespace. */
 function normalizeMatchText(text: string): string {
   return text.normalize('NFKC').toLowerCase().replace(/[\s\u3000]+/gu, '');
@@ -531,14 +570,14 @@ function renderItemLine(item: SessionContextItem): string {
   return `- ${speaker}${serializeUntrustedLaneText(item.text).replace(/\n/gu, '\n  ')}`;
 }
 
-/**
- * A task-exit stub replaces an ordinary digest entry with the same `entryId` instead of duplicating
- * it. The stub is the same ledger row, plus the key the exit needs to keep visible.
- */
 function mergeTaskStubs(digest: SessionDigest, stubs: readonly SessionDigestEntry[]): SessionDigest {
   if (stubs.length === 0) return digest;
   const stubIds = new Set(stubs.map((stub) => stub.entryId));
-  return { ...digest, entries: [...digest.entries.filter((entry) => !stubIds.has(entry.entryId)), ...stubs] };
+  return {
+    ...digest,
+    entries: [...digest.entries.filter((entry) => !stubIds.has(entry.entryId)), ...stubs]
+      .sort((left, right) => left.occurredAt - right.occurredAt || left.entryId.localeCompare(right.entryId)),
+  };
 }
 
 function renderRecallLane(items: SessionContextItem[]): string {
@@ -599,9 +638,9 @@ function browseKeys(items: readonly SessionContextItem[]): string[] {
   return items.map(browseKey).filter((id): id is string => id !== undefined);
 }
 
-/** The digest's frozen `entryId` is `digest:<eventId>`; both shapes name the same ledger row. */
 function browseEventId(id: string): string | undefined {
   if (id.startsWith('evt-')) return id;
+  if (id.startsWith('digest:card:')) return id.slice('digest:card:'.length);
   if (id.startsWith('digest:evt-')) return id.slice('digest:'.length);
   return undefined;
 }

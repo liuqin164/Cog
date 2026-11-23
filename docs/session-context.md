@@ -15,8 +15,8 @@ below and fails when code and contract disagree. Version: `SESSION_CONTEXT_CONTR
 
 1. **Digest.** A turn that slides out of the verbatim tail becomes an entry in a compiled document.
    The mechanical builder is pure rule: it quotes the ledger row and attaches its `sourceRefs`; it
-   never calls a model. The deep builder is declared as `SessionDeepCompiler` and runs at the
-   DREAMING boundary; no caller wires one this round.
+   never calls a model. The deep builder implements `SessionDeepCompiler` and runs at the DREAMING
+   boundary, compiling each closed work segment into one episode card.
 2. **Recall.** The session ledger, paged newest first by time, topic or keyword. The text is the
    row's own text. The scope is the agent's captured session, so another agent's turns never enter
    the page.
@@ -179,6 +179,49 @@ item the caller marked — stays in `working_set` verbatim. A stub whose quoted 
 constraint is itself marked `protected` by the same rule, so budget pressure trims around it rather
 than folding it.
 
+## Episode cards (#474)
+
+The DREAMING boundary compiles closed conversation segments into episode cards. The card is an
+index: it never replaces, rewrites or deletes a ledger row.
+
+**Segmentation is deterministic.** The compiler reads the session's newest
+`SESSION_DIGEST_MAX_TURNS` turns in ledger order and splits them on two rules:
+
+- a `task_event` row whose metadata says `kind: "task-procedure"` closes the segment it ends; that
+  segment is a declared task and is left to its #263 task stub, so one paragraph never becomes both
+  a stub and a card;
+- otherwise, two consecutive turns more than `SESSION_DEEP_SEGMENT_GAP_MS` apart (30 minutes) start
+  a new segment, and the gap between the newest turn and the compiler's `now` closes the last
+  segment.
+
+Only closed segments with at least `SESSION_DEEP_MIN_TURNS` turns (8) become cards. The compiler
+creates at most `SESSION_DEEP_MAX_CARDS_PER_RUN` (8) per tick and the lane shows the newest
+`SESSION_DEEP_MAX_CARDS_IN_LANE` (24). A card id derives from the segment's first event
+(`digest:card:<eventId>`), and a unique `(project, agent, session, segment)` key makes a re-run of
+the same Dream idempotent. A model-less kernel produces the same card deterministically.
+
+**Card fields.** The text carries `做了什么` (what the run accomplished), `遗留问题` (unclosed
+items; the memory model may cite an F16 promise), `锚点` (every `digestAnchors` fragment from the
+covered turns) and `指针` (a sampled set of covered `digest:evt-…` ids plus `mem:` keys for the
+first and last turn). The entry's `sourceRefs` is the complete covered event set; `occurredAt` is
+the compile instant, so the card appends after the turns it covers and before any later turn.
+
+A model answer is accepted only when every `digestAnchors` fragment in `做了什么` and `遗留问题`
+is a literal substring of the covered ledger text; otherwise the deterministic card is used. The
+`锚点` line is built from the ledger text by construction. Model calls use the existing `memory`
+role and add no configuration surface.
+
+**Entry, expansion, drill-down.** A card enters the digest lane as `kind: "deep"` and renders its
+first `anchorEvent`. The #253 auto-expansion matches a card by its keys or its anchor line; when the
+request names one, the card is also placed in `working_set` with `autoExpanded: true`. Every
+pointer key is a literal `read mem:<eventId>` key into the covered turn. The lane reads the newest
+cards for the project and agent across sessions, so the next local day's session (a new lane id,
+#467) still opens with yesterday's cards; each entry keeps the `sessionId` of the turns it covers.
+
+**Forget.** `session_deep_cards` is classified as project-owned derived data. A range forget deletes
+every card whose `source_refs_json` overlaps the erased event set, and a project forget deletes by
+`project_id`; the card is registered in `DerivedErasureRegistry` until the #470 lineage table lands.
+
 ## The whole request (#319)
 
 The six lanes fit the material the assembler builds; they do not see the tool results the model
@@ -199,11 +242,11 @@ text: this is a request re-assembly, not deletion and not a second fold mechanis
 | Field | Means |
 |---|---|
 | `entryId` | Stable id derived from the ledger event (`digest:<eventId>`). |
-| `kind` | `turn` for the mechanical builder; `deep` is reserved for the DREAMING compiler. |
+| `kind` | `turn` for the mechanical builder; `deep` for a DREAMING-boundary episode card. |
 | `sessionId` | The session the entry belongs to. |
 | `occurredAt` | The turn's instant, from the ledger. |
 | `speaker` | One of the frozen conversation speakers. |
-| `text` | The ledger row's exact text. Never a summary, never a re-rendering. |
+| `text` | The ledger row's exact text for `turn`; the compiled card for `deep`. |
 | `sourceRefs` | The ledger event id(s) the entry quotes. |
 | `anchor` | True when `text` contains a number, a quoted span or a named person. |
 
@@ -213,7 +256,8 @@ A decision, a number or a name may appear in the digest only as the exact text t
 The mechanical builder satisfies this by construction: `text` is the row's text, not a rewrite.
 `digestAnchors(text)` names the risky fragments (numbers with separators, quoted spans, and a person
 introduced by 叫/名叫/名字是) so a reader and the contract test can compare them against the source
-turn. A deep entry that paraphrases an anchor is a contract violation, not a quality preference.
+turn. A deep entry that paraphrases an anchor is rejected before it is stored, and the deterministic
+card is written instead.
 
 ## Recall modes (frozen)
 

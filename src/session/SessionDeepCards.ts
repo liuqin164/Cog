@@ -1,0 +1,419 @@
+import type Database from 'bun:sqlite';
+
+import type { TextGenerateFn } from '../models/ModelRole.js';
+import { digestAnchors, type SessionDeepCompileInput, type SessionDeepCompiler, type SessionDigestEntry } from './SessionDigest.js';
+import { readSessionTurns, SESSION_DIGEST_MAX_TURNS, type SessionTurn } from './SessionLedger.js';
+
+export const SESSION_DEEP_SEGMENT_GAP_MS = 30 * 60_000;
+export const SESSION_DEEP_MIN_TURNS = 8;
+export const SESSION_DEEP_MAX_CARDS_IN_LANE = 24;
+export const SESSION_DEEP_MAX_CARDS_PER_RUN = 8;
+
+export interface SessionDeepScope {
+  projectId: string;
+  agentId: string;
+  sessionId: string;
+}
+
+export interface SessionDeepCompileRunInput extends Partial<SessionDeepScope> {
+  now?: number;
+  generateText?: TextGenerateFn;
+  maxCards?: number;
+}
+
+export interface SessionDeepCompileRunResult {
+  created: SessionDigestEntry[];
+  scopes: number;
+  declaredSkipped: number;
+  failures: string[];
+}
+
+export interface SessionDeepSegment {
+  turns: SessionTurn[];
+  declared: boolean;
+}
+
+interface CardRow {
+  entry_id: string;
+  session_id: string;
+  occurred_at: number;
+  text: string;
+  source_refs_json: string;
+  anchor: number;
+}
+
+const CARD_TABLE = 'session_deep_cards';
+
+function initCardTable(db: Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ${CARD_TABLE} (
+      entry_id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      segment_key TEXT NOT NULL,
+      occurred_at INTEGER NOT NULL,
+      speaker TEXT NOT NULL,
+      text TEXT NOT NULL,
+      source_refs_json TEXT NOT NULL,
+      anchor INTEGER NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS ${CARD_TABLE}_segment
+      ON ${CARD_TABLE} (project_id, agent_id, session_id, segment_key);
+  `);
+}
+
+export function planDeepSegments(
+  turns: readonly SessionTurn[],
+  taskEnds: readonly number[],
+  now: number,
+  gapMs = SESSION_DEEP_SEGMENT_GAP_MS,
+): SessionDeepSegment[] {
+  const segments: SessionDeepSegment[] = [];
+  let current: SessionTurn[] = [];
+  for (let index = 0; index < turns.length; index += 1) {
+    const turn = turns[index]!;
+    current.push(turn);
+    const next = turns[index + 1];
+    const boundary = taskEnds.some((at) => at > turn.occurredAt && (next === undefined || at <= next.occurredAt));
+    const gap = next === undefined
+      ? now - turn.occurredAt > gapMs
+      : next.occurredAt - turn.occurredAt > gapMs;
+    if (!boundary && !gap) continue;
+    if (current.length >= SESSION_DEEP_MIN_TURNS) segments.push({ turns: current, declared: boundary });
+    current = [];
+  }
+  return segments;
+}
+
+export function deepCardEntryId(first: SessionDigestEntry): string {
+  return `digest:card:${first.sourceRefs[0] ?? first.entryId}`;
+}
+
+export function buildDeepCardEntry(
+  input: SessionDeepCompileInput,
+  did: string,
+  open: string,
+): SessionDigestEntry {
+  const first = input.entries[0]!;
+  const last = input.entries[input.entries.length - 1]!;
+  const sourceRefs = [...new Set(input.entries.flatMap((entry) => entry.sourceRefs))];
+  const text = renderCardText(input.entries, did, open);
+  return {
+    entryId: deepCardEntryId(first),
+    kind: 'deep',
+    sessionId: input.sessionId,
+    occurredAt: input.now,
+    speaker: 'agent',
+    text,
+    sourceRefs,
+    anchor: digestAnchors(text).length > 0,
+  };
+}
+
+export function createSessionDeepCompiler(generateText: TextGenerateFn): SessionDeepCompiler {
+  return {
+    async compile(input: SessionDeepCompileInput): Promise<SessionDigestEntry[]> {
+      const source = input.entries.map((entry) => entry.text).join('\n');
+      let did = deterministicDid(input.entries);
+      let open = deterministicOpen(input.entries);
+      try {
+        const parsed = parseCompiledCard(await generateText(DEEP_CARD_SYSTEM_PROMPT, deepCardUserPrompt(input.entries)));
+        if (parsed && anchorsVerbatim(`${parsed.did}\n${parsed.open}`, source)) {
+          did = parsed.did;
+          open = parsed.open;
+        }
+      } catch {
+        return [buildDeepCardEntry(input, did, open)];
+      }
+      return [buildDeepCardEntry(input, did, open)];
+    },
+  };
+}
+
+export function readDeepCardEntries(
+  db: Database,
+  scope: SessionDeepScope,
+  limit = SESSION_DEEP_MAX_CARDS_IN_LANE,
+): SessionDigestEntry[] {
+  if (!tableExists(db)) return [];
+  const rows = db.query(`
+    SELECT * FROM (
+      SELECT entry_id, session_id, occurred_at, text, source_refs_json, anchor
+      FROM ${CARD_TABLE}
+      WHERE project_id = ? AND agent_id = ?
+      ORDER BY occurred_at DESC, entry_id DESC
+      LIMIT ?
+    )
+    ORDER BY occurred_at ASC, entry_id ASC
+  `).all(scope.projectId, scope.agentId, limit) as CardRow[];
+  return rows.map((row) => ({
+    entryId: row.entry_id,
+    kind: 'deep' as const,
+    sessionId: row.session_id,
+    occurredAt: row.occurred_at,
+    speaker: 'agent' as const,
+    text: row.text,
+    sourceRefs: parseRefs(row.source_refs_json),
+    anchor: row.anchor === 1,
+  }));
+}
+
+export function mergeDeepCardEntries(
+  entries: readonly SessionDigestEntry[],
+  cards: readonly SessionDigestEntry[],
+): SessionDigestEntry[] {
+  return [...entries, ...cards].sort((left, right) =>
+    left.occurredAt - right.occurredAt || left.entryId.localeCompare(right.entryId));
+}
+
+export async function compileSessionDeepCards(
+  db: Database,
+  input: SessionDeepCompileRunInput = {},
+): Promise<SessionDeepCompileRunResult> {
+  initCardTable(db);
+  const now = input.now ?? Date.now();
+  const scopes = input.agentId && input.sessionId && input.projectId
+    ? [{ projectId: input.projectId, agentId: input.agentId, sessionId: input.sessionId }]
+    : listDeepScopes(db, input.projectId);
+  const result: SessionDeepCompileRunResult = { created: [], scopes: scopes.length, declaredSkipped: 0, failures: [] };
+  let remaining = Math.max(0, input.maxCards ?? SESSION_DEEP_MAX_CARDS_PER_RUN);
+  for (const scope of scopes) {
+    if (remaining <= 0) break;
+    try {
+      const made = await compileScope(db, scope, now, input.generateText, remaining);
+      result.created.push(...made.created);
+      result.declaredSkipped += made.declaredSkipped;
+      remaining -= made.created.length;
+    } catch (error) {
+      result.failures.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+  return result;
+}
+
+async function compileScope(
+  db: Database,
+  scope: SessionDeepScope,
+  now: number,
+  generateText: TextGenerateFn | undefined,
+  limit: number,
+): Promise<{ created: SessionDigestEntry[]; declaredSkipped: number }> {
+  const read = readSessionTurns(db, { ...scope, limit: SESSION_DIGEST_MAX_TURNS });
+  const taskEnds = readTaskEnds(db, scope);
+  const segments = planDeepSegments(read.turns, taskEnds, now);
+  const existing = existingCardIds(db, scope);
+  const created: SessionDigestEntry[] = [];
+  let declaredSkipped = 0;
+  for (const segment of segments) {
+    if (created.length >= limit) break;
+    if (segment.declared) {
+      declaredSkipped += 1;
+      continue;
+    }
+    const entries = segment.turns.map((turn) => ({
+      entryId: `digest:${turn.eventId}`,
+      kind: 'turn' as const,
+      sessionId: turn.sessionId,
+      occurredAt: turn.occurredAt,
+      speaker: turn.speaker,
+      text: turn.text,
+      sourceRefs: [turn.eventId],
+      anchor: digestAnchors(turn.text).length > 0,
+    }));
+    const cardId = deepCardEntryId(entries[0]!);
+    if (existing.has(cardId)) continue;
+    const compileInput: SessionDeepCompileInput = { ...scope, entries, now };
+    const compiler = generateText ? createSessionDeepCompiler(generateText) : undefined;
+    let card: SessionDigestEntry;
+    if (compiler) {
+      try {
+        card = (await compiler.compile(compileInput))[0] ?? buildDeepCardEntry(compileInput, deterministicDid(entries), deterministicOpen(entries));
+      } catch {
+        card = buildDeepCardEntry(compileInput, deterministicDid(entries), deterministicOpen(entries));
+      }
+    } else {
+      card = buildDeepCardEntry(compileInput, deterministicDid(entries), deterministicOpen(entries));
+    }
+    if (insertCard(db, scope, card, segment, now)) {
+      created.push(card);
+      existing.add(card.entryId);
+    }
+  }
+  return { created, declaredSkipped };
+}
+
+function insertCard(
+  db: Database,
+  scope: SessionDeepScope,
+  card: SessionDigestEntry,
+  segment: SessionDeepSegment,
+  now: number,
+): boolean {
+  const segmentKey = `${segment.turns[0]!.eventId}:${segment.turns[segment.turns.length - 1]!.eventId}`;
+  const changes = db.query(`
+    INSERT OR IGNORE INTO ${CARD_TABLE}
+      (entry_id, project_id, agent_id, session_id, segment_key, occurred_at, speaker, text, source_refs_json, anchor, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    card.entryId,
+    scope.projectId,
+    scope.agentId,
+    scope.sessionId,
+    segmentKey,
+    card.occurredAt,
+    card.speaker,
+    card.text,
+    JSON.stringify(card.sourceRefs),
+    card.anchor ? 1 : 0,
+    now,
+  ).changes;
+  return Number(changes ?? 0) > 0;
+}
+
+function existingCardIds(db: Database, scope: SessionDeepScope): Set<string> {
+  const rows = db.query(`
+    SELECT entry_id FROM ${CARD_TABLE}
+    WHERE project_id = ? AND agent_id = ? AND session_id = ?
+  `).all(scope.projectId, scope.agentId, scope.sessionId) as Array<{ entry_id: string }>;
+  return new Set(rows.map((row) => row.entry_id));
+}
+
+function listDeepScopes(db: Database, projectId?: string): SessionDeepScope[] {
+  const rows = db.query(`
+    SELECT project_id AS projectId, session_id AS sessionId,
+      json_extract(payload_json, '$.metadata.sourceAgent') AS agentId
+    FROM memory_events
+    WHERE event_type = 'RAW_EVENT_RECORDED'
+      AND json_valid(payload_json)
+      AND json_extract(payload_json, '$.metadata.captureLane') = 'conversation'
+      ${projectId === undefined ? '' : 'AND project_id = ?'}
+    GROUP BY project_id, session_id, agentId
+  `).all(...(projectId === undefined ? [] : [projectId])) as Array<{ projectId: string; sessionId: string; agentId: string | null }>;
+  return rows
+    .filter((row) => row.projectId && row.sessionId && row.agentId)
+    .map((row) => ({ projectId: row.projectId, sessionId: row.sessionId, agentId: row.agentId! }));
+}
+
+function readTaskEnds(db: Database, scope: SessionDeepScope): number[] {
+  const rows = db.query(`
+    SELECT occurred_at FROM memory_events
+    WHERE event_type = 'RAW_EVENT_RECORDED'
+      AND project_id = ?
+      AND COALESCE(session_id, '') = ?
+      AND COALESCE(source_id, '') = ?
+      AND raw_event_type = 'task_event'
+      AND json_valid(payload_json)
+      AND json_extract(payload_json, '$.metadata.kind') = 'task-procedure'
+  `).all(scope.projectId, scope.sessionId, `${scope.agentId}:${scope.sessionId}`) as Array<{ occurred_at: number }>;
+  return rows.map((row) => row.occurred_at);
+}
+
+const DEEP_CARD_SYSTEM_PROMPT = [
+  'You compile one episode card from a closed run of conversation turns.',
+  'Reply with exactly one JSON object: {"did":"...","open":"..."} and nothing else.',
+  '"did" says what the run accomplished in one to three sentences. "open" lists unresolved items, one per line, or an empty string.',
+  'Any number, quoted span, person name, or decision that you mention must be copied character for character from the turns. Never paraphrase those fragments.',
+  'Write in the same language as the turns.',
+].join('\n');
+
+function deepCardUserPrompt(entries: readonly SessionDigestEntry[]): string {
+  const lines: string[] = ['Turns:'];
+  let used = 0;
+  for (const entry of entries) {
+    const text = entry.text.replace(/\s+/gu, ' ').trim().slice(0, 300);
+    const line = `[${entry.sourceRefs[0] ?? entry.entryId}] ${entry.speaker}: ${text}`;
+    if (used + line.length > 8_000) break;
+    used += line.length;
+    lines.push(line);
+  }
+  return lines.join('\n');
+}
+
+function parseCompiledCard(raw: string): { did: string; open: string } | undefined {
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+  if (start < 0 || end <= start) return undefined;
+  try {
+    const parsed = JSON.parse(raw.slice(start, end + 1)) as { did?: unknown; open?: unknown };
+    return typeof parsed.did === 'string' && typeof parsed.open === 'string'
+      ? { did: parsed.did, open: parsed.open }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function anchorsVerbatim(card: string, source: string): boolean {
+  return digestAnchors(card).every((anchor) => source.includes(anchor));
+}
+
+function deterministicDid(entries: readonly SessionDigestEntry[]): string {
+  const picked = [
+    entries.find((entry) => entry.speaker === 'owner'),
+    [...entries].reverse().find((entry) => entry.speaker === 'agent'),
+    entries[entries.length - 1],
+  ];
+  const seen = new Set<string>();
+  const lines: string[] = [];
+  for (const entry of picked) {
+    if (!entry) continue;
+    const line = entry.text.split('\n').map((part) => part.trim()).find(Boolean);
+    if (!line || seen.has(line)) continue;
+    seen.add(line);
+    lines.push(line.slice(0, 180));
+  }
+  return lines.join('；') || '无';
+}
+
+const OPEN_MARKERS = /(待办|待定|未完成|遗留|下一步|回头|下次|TODO)/u;
+
+function deterministicOpen(entries: readonly SessionDigestEntry[]): string {
+  const lines: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    for (const rawLine of entry.text.split('\n')) {
+      const line = rawLine.trim();
+      if (!line || !OPEN_MARKERS.test(line) || seen.has(line)) continue;
+      seen.add(line);
+      lines.push(line.slice(0, 160));
+      if (lines.length >= 3) return lines.join('；');
+    }
+  }
+  return lines.join('；') || '无';
+}
+
+function renderCardText(entries: readonly SessionDigestEntry[], did: string, open: string): string {
+  const first = entries[0]!;
+  const last = entries[entries.length - 1]!;
+  const anchors = [...new Set(entries.flatMap((entry) => digestAnchors(entry.text)))].slice(0, 12);
+  const pointers = sample(entries.map((entry) => entry.entryId), 10);
+  const primary = [first.sourceRefs[0], last.sourceRefs[0]].filter((id): id is string => typeof id === 'string');
+  return [
+    '情节卡（本段）',
+    `做了什么：${did.trim() || '无'}`,
+    `遗留问题：${open.trim() || '无'}`,
+    `锚点：${anchors.join('、') || '无'}`,
+    `指针：${pointers.join('、')}（共 ${entries.length} 条）；${primary.map((id) => `mem:${id}`).join('、')}`,
+  ].join('\n');
+}
+
+function sample<T>(items: readonly T[], limit: number): T[] {
+  if (items.length <= limit) return [...items];
+  const stride = (items.length - 1) / (limit - 1);
+  return Array.from({ length: limit }, (_, index) => items[Math.round(index * stride)]!);
+}
+
+function parseRefs(value: string): string[] {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((ref): ref is string => typeof ref === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function tableExists(db: Database): boolean {
+  return Boolean(db.query(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(CARD_TABLE));
+}

@@ -23,6 +23,8 @@ function jsonHit(column: string): string {
 }
 
 const RULES: ReadonlyArray<readonly [string, string]> = [
+  ['session_deep_cards', `DELETE FROM session_deep_cards
+    WHERE ${jsonHit('source_refs_json')}`],
   ['memory_action_frame_evidence', `DELETE FROM memory_action_frame_evidence
     WHERE event_id IN (SELECT id FROM ${EVENT})
        OR action_id IN (SELECT action_id FROM memory_action_frames WHERE episode_id IN (SELECT id FROM ${EPISODE}))`],
@@ -142,6 +144,7 @@ const RULES: ReadonlyArray<readonly [string, string]> = [
 ];
 
 const SCOPE_RULES: ReadonlyArray<readonly [string, string]> = [
+  ['session_deep_cards', `DELETE FROM session_deep_cards WHERE COALESCE(project_id,'')=?`],
   ['context_activation_receipts', `DELETE FROM context_activation_receipts WHERE COALESCE(project_id,'')=?`],
   ['context_strategy_outcomes', `DELETE FROM context_strategy_outcomes WHERE COALESCE(project_id,'')=?`],
   ['memory_action_frames', `DELETE FROM memory_action_frames WHERE COALESCE(project_id,'')=?`],

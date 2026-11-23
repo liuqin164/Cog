@@ -1,13 +1,13 @@
 /**
  * The session digest: the compiled document the context window is a view of (#191).
  *
- * Two feeds, and only one of them exists this round:
+ * Two feeds:
  *
  * - **Mechanical, at the turn boundary.** A turn that slides out of the verbatim tail becomes a
  *   digest entry. No model, no summary: the entry quotes the ledger row exactly. The entry's
  *   `sourceRefs` point back at the row, so the digest is an index rather than a claim to trust.
- * - **Deep, at the DREAMING boundary.** Declared as {@link SessionDeepCompiler}; no caller wires a
- *   model this round. The interface is the shape the night worker will implement.
+ * - **Deep, at the DREAMING boundary.** {@link SessionDeepCompiler} runs once per closed work
+ *   segment and stores one episode card; `SessionDeepCards` owns the segment plan and persistence.
  *
  * Anchor discipline: a decision, a number or a name may appear in a digest entry only as the exact
  * text the ledger holds. The mechanical builder cannot paraphrase because it never rewrites the
@@ -30,7 +30,6 @@ export const SESSION_DIGEST_ENTRY_FIELDS = [
   'anchor',
 ] as const;
 
-/** The two ways an entry can be produced. `deep` is declared, not wired this round. */
 export const SESSION_DIGEST_ENTRY_KINDS = ['turn', 'deep'] as const;
 export type SessionDigestEntryKind = (typeof SESSION_DIGEST_ENTRY_KINDS)[number];
 
@@ -68,10 +67,6 @@ export interface SessionDeepCompileInput {
   now: number;
 }
 
-/**
- * The DREAMING-boundary deep compiler's shape. Declared for the night worker; no implementation and
- * no caller this round, so the mechanical path stays model-free.
- */
 export interface SessionDeepCompiler {
   compile(input: SessionDeepCompileInput): Promise<SessionDigestEntry[]>;
 }

@@ -14,9 +14,17 @@ import type Database from 'bun:sqlite';
 import { TraceStore } from '../observability/TraceStore.js';
 import { TraceWriter } from '../observability/TraceWriter.js';
 import { buildSessionDigest, type SessionDigest } from './SessionDigest.js';
+import {
+  compileSessionDeepCards,
+  mergeDeepCardEntries,
+  readDeepCardEntries,
+  type SessionDeepCompileRunInput,
+  type SessionDeepCompileRunResult,
+} from './SessionDeepCards.js';
 import { requireSessionText } from './SessionErrors.js';
 import { readSessionTurns, SESSION_DIGEST_MAX_TURNS, type SessionTurn } from './SessionLedger.js';
 import { recallSession, type SessionRecallInput, type SessionRecallPage } from './SessionRecall.js';
+import type { TextGenerateFn } from '../models/ModelRole.js';
 import {
   assembleSessionContext,
   type AssembleSessionContextInput,
@@ -43,6 +51,7 @@ export interface SessionContextServiceOptions {
    * wires this to the services that own them; the session face does not import either one.
    */
   openLoops?: (input: { projectId: string; agentId: string; sessionId: string; now: number }) => SessionContextItem[];
+  deepGenerate?: () => TextGenerateFn | undefined;
 }
 
 export class SessionContextService {
@@ -51,11 +60,21 @@ export class SessionContextService {
 
   constructor(private readonly db: Database, private readonly options: SessionContextServiceOptions = {}) {}
 
-  /** The mechanical digest and the verbatim tail. No model is called. */
   digest(input: SessionDigestInput): SessionDigest {
     const { projectId, agentId, sessionId } = requireScope(input);
     const read = readSessionTurns(this.db, { projectId, agentId, sessionId, limit: SESSION_DIGEST_MAX_TURNS });
-    return buildSessionDigest(read.turns, { sessionId, tailTurns: input.tailTurns, truncated: read.truncated });
+    const digest = buildSessionDigest(read.turns, { sessionId, tailTurns: input.tailTurns, truncated: read.truncated });
+    return {
+      ...digest,
+      entries: mergeDeepCardEntries(digest.entries, readDeepCardEntries(this.db, { projectId, agentId, sessionId })),
+    };
+  }
+
+  async compileEpisodeCards(input: SessionDeepCompileRunInput = {}): Promise<SessionDeepCompileRunResult> {
+    return compileSessionDeepCards(this.db, {
+      ...input,
+      generateText: input.generateText ?? this.options.deepGenerate?.(),
+    });
   }
 
   /** The session ledger, paged verbatim. */
@@ -63,14 +82,17 @@ export class SessionContextService {
     return recallSession(this.db, input);
   }
 
-  /** The per-turn projection: lanes in frozen order, fitted to `targetTokens`. */
   assemble(input: AssembleSessionContextInput): SessionContextAssembly {
     const { projectId, agentId, sessionId } = requireScope(input);
     const digest = input.cachedDigest ?? (() => {
       const read = readSessionTurns(this.db, { projectId, agentId, sessionId, limit: SESSION_DIGEST_MAX_TURNS });
       const excluded = new Set(input.excludeTurnIds ?? []);
       const turns = excluded.size === 0 ? read.turns : read.turns.filter((turn) => !excluded.has(turn.turnId));
-      return buildSessionDigest(turns, { sessionId, tailTurns: input.tailTurns, truncated: read.truncated });
+      const built = buildSessionDigest(turns, { sessionId, tailTurns: input.tailTurns, truncated: read.truncated });
+      return {
+        ...built,
+        entries: mergeDeepCardEntries(built.entries, readDeepCardEntries(this.db, { projectId, agentId, sessionId })),
+      };
     })();
     const openLoops = [...(input.openLoops ?? []), ...this.openLoops({ projectId, agentId, sessionId })];
     const protectedIds = [
