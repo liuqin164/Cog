@@ -791,6 +791,23 @@ describe('handing off to the supervisor', () => {
     expect(refused.detail).toContain('cgroup');
   });
 
+  test('darwin is refused before any service-manager command', async () => {
+    const dataDir = makeDataDir();
+    const request = makeRequest(dataDir, treeOfThisProcess(), '/staged', { serviceMode: true, platform: 'darwin' });
+    const runs: string[][] = [];
+    let detached = false;
+
+    const refused = await spawnUpgradeSupervisor(request, '/tmp/request.json', {
+      run: async (command, args) => { runs.push([command, ...args]); return result(0); },
+      spawnDetached: () => { detached = true; return 1234; },
+    });
+
+    expect(refused.ok).toBe(false);
+    expect(refused.detail).toContain('macOS');
+    expect(runs).toEqual([]);
+    expect(detached).toBe(false);
+  });
+
   test('the unit path is derived from the platform, and a unit on disk is what marks a service install', () => {
     const dataDir = makeDataDir();
     const request = makeRequest(dataDir, '/tree', '/tree2', { homeDir: dataDir, platform: 'linux' });

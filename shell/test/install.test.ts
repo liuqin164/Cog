@@ -75,6 +75,7 @@ function makeHarness(options: {
   shellDir?: string;
   /** Overrides where the workspace sits, given the harness's own temp root (e.g. `(dir) => dir`). */
   workspaceRoot?: (dir: string) => string;
+  platform?: string;
 } = { probeOk: true }): Harness {
   const dir = makeTempDir();
   const dataDir = join(dir, 'data');
@@ -131,7 +132,7 @@ function makeHarness(options: {
     shellDir: options.shellDir ?? SHELL_DIR,
     bunPath: '/usr/local/bin/bun',
     cwd: workspace,
-    platform: 'linux',
+    platform: options.platform ?? 'linux',
     homeDir: dir,
     hooks,
   });
@@ -289,6 +290,20 @@ describe('model probe diagnosis', () => {
 });
 
 describe('the six-step install', () => {
+  test('macOS is refused at preflight, before any uname or service command', async () => {
+    const harness = makeHarness({ probeOk: true, platform: 'darwin' });
+
+    expect(await harness.installer.run()).toBe(1);
+
+    const state = JSON.parse(readFileSync(join(harness.dataDir, 'install.json'), 'utf8')) as { done: string[]; failedAt?: string };
+    expect(state.done).toEqual([]);
+    expect(state.failedAt).toBe('preflight');
+    const output = harness.io.lines.join('\n');
+    expect(output).toContain('不支持的平台：macOS');
+    expect(output).toContain('只支持 Linux');
+    expect(harness.calls).toEqual([]);
+  });
+
   test('the rhythm step refuses a zero-length dream window and says why', async () => {
     const io = createScriptedIO(['小海', 'UTC', '3', '3', '', 'y']);
     const harness = makeHarness({ probeOk: true, io, flags: { yes: false } });
@@ -552,12 +567,12 @@ describe('the six-step install', () => {
   });
 
   test('parser keeps booleans and values in their own slots', () => {
-    const flags = parseInstallFlags(['--yes', '--skip-service', '--data', '/tmp/d', '--http-port', '17338', '--platform', 'darwin']);
+    const flags = parseInstallFlags(['--yes', '--skip-service', '--data', '/tmp/d', '--http-port', '17338', '--platform', 'linux']);
     expect(flags.yes).toBe(true);
     expect(flags.skipService).toBe(true);
     expect(flags.dataDir).toBe('/tmp/d');
     expect(flags.httpPort).toBe(17338);
-    expect(flags.platform).toBe('darwin');
+    expect(flags.platform).toBe('linux');
   });
 
   test('--yes without a model route fails before the probe and names every missing flag', async () => {

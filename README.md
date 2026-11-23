@@ -36,7 +36,7 @@ cog
 2. **place** — the data directory, an empty kernel database, and the default soul.
 3. **model** — the model route, its key, one real chat call, and the vector provider (the local model by default).
 4. **rhythm** — timezone, the Dream window, and an optional quiet window.
-5. **resident** — a user-level service (systemd user unit on Linux, launchd agent on macOS; no sudo), then `doctor` and the observatory address.
+5. **resident** — a user-level systemd service (no sudo), then `doctor` and the observatory address.
 6. **awake** — write a probe memory through the resident, restart it, and recall the probe. A failure here means the install did not happen.
 
 After `cogmem install`, `cogmem` works directly: data commands resolve the companion's own database,
@@ -70,9 +70,8 @@ is nothing to launch by hand unless you want to.
 
 - `cog` attaches to the resident and opens the terminal interface. When no resident is running it
   starts one first, with the same data directory and workspace.
-- On Linux the resident is a systemd **user** unit; on macOS it is a launchd **agent**. Both are
-  user-level, so they do not need root and they come back after a reboot when the service manager
-  is enabled.
+- The resident is a systemd **user** unit. It is user-level, so it does not need root and it comes
+  back after a reboot when the service manager is enabled.
 - `cogmem doctor` is the check: it reads the running resident's `/health` and reports kernel
   identity, database path, loopback bind, memory cap, context assembly, the service/process and
   whether the bash tool is isolated. It never opens `memory.sqlite` itself.
@@ -84,14 +83,13 @@ is nothing to launch by hand unless you want to.
 | | Support |
 | --- | --- |
 | Linux | systemd user units. The installer sets `MemoryHigh` and `MemoryMax` on the unit and reports RSS against them. |
-| macOS | launchd user agents. launchd has no per-service RSS ceiling, so the installer cannot set a cap; `doctor` reports the reading and says the limit is absent. |
-| Windows | Not supported. `cogmem install` refuses the platform at preflight, before any install step runs. |
+| macOS | Not supported in 5.0. `install.sh` and `cogmem install` refuse the platform before any install step runs. |
+| Windows | Not supported. `install.sh` and `cogmem install` refuse the platform before any install step runs. |
 | Runtime | Bun only. The package declares `engines.bun`; Node is not a supported runtime for the resident. |
 
-macOS has no bubblewrap (`bwrap`), so the bash tool has no isolation boundary there. The
-companion stays usable and says so instead of pretending: `/status` and `doctor` report
-`sandbox: off`, and startup writes `bash_sandbox_unavailable` to the trace. On Linux the installer
-probes bwrap and, when it works, the bash tool runs inside it.
+The installer probes bubblewrap (`bwrap`) and, when it works, the bash tool runs inside it. When
+the probe fails the companion stays usable and says so instead of pretending: `/status` and
+`doctor` report `sandbox: off`, and startup writes `bash_sandbox_unavailable` to the trace.
 
 An agent installing it for you can follow the same path — give it this prompt and nothing else:
 

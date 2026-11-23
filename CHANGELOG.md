@@ -2,6 +2,14 @@
 
 ## 5.0.0 (unreleased)
 
+- **macOS is declared unsupported (#468).** `install.sh` and `cogmem install` refuse Darwin at the
+  platform guard, before bun, the package manager, a plist or `launchctl` is touched, and the upgrade
+  handoff refuses a non-Linux request before any service-manager command. README, `docs/install.md`
+  and `docs/agent-install.md` now name Linux (systemd user service) as the only supported platform.
+  The darwin branches in spawn/supervisor stay untouched; supporting macOS later is a new ticket.
+  User-visible effect, in one line: installing or upgrading Cog on macOS stops with a clear refusal
+  instead of half-writing a LaunchAgent.
+
 - **The `cogmem/internal` subpath is gone (#469).** The shell now imports the loopback observatory
   and installer step helpers from the `cogmem` entry, so `src/public.ts` gains those symbols and
   `src/internal.ts` is deleted. Four modules that only `./internal` re-exported had no other

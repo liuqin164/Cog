@@ -16,6 +16,21 @@ log() {
   printf 'cogmem: %s\n' "$*"
 }
 
+platform_guard() {
+  case "$(uname -s)" in
+    Linux) ;;
+    Darwin)
+      log "macOS is not supported by Cogmem 5.0. Nothing was installed."
+      log "Supported platform: Linux (systemd user service)."
+      exit 1
+      ;;
+    *)
+      log "Unsupported platform: $(uname -s). Cogmem 5.0 supports Linux only. Nothing was installed."
+      exit 1
+      ;;
+  esac
+}
+
 need_cmd() {
   command -v "$1" >/dev/null 2>&1
 }
@@ -167,6 +182,7 @@ print_next_steps() {
 }
 
 main() {
+  platform_guard
   ensure_bun
   ensure_install_home
 

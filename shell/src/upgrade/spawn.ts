@@ -50,6 +50,10 @@ export async function spawnUpgradeSupervisor(
   requestPath: string,
   deps: SpawnSupervisorDeps,
 ): Promise<SpawnSupervisorResult> {
+  if (request.platform !== 'linux') {
+    const label = request.platform === 'darwin' ? 'macOS' : request.platform;
+    return { ok: false, detail: `平台 ${label} 不受支持：Cogmem 5.0 只支持 Linux，升级已拒绝，服务未动。` };
+  }
   const entry = supervisorEntryPath(request.fromTree);
   const command = [request.bunPath, entry, '--request', requestPath];
   const env = { ...process.env, ...parseEnvFile(request.envFile) } as Record<string, string>;

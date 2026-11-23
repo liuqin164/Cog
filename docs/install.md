@@ -218,15 +218,15 @@ is in [`shell/UPGRADE.md`](https://github.com/liuqin164/Cog/blob/main/shell/UPGR
 
 ## 5. Platforms
 
-The resident is a user-level service: a systemd user unit on Linux, a launchd agent on macOS. It
-does not need root. Windows is not supported; `cogmem install` refuses the platform at preflight,
-before any install step runs, rather than half-installing. The runtime is Bun; the package declares
-`engines.bun` and does not support Node for the resident.
+The resident is a user-level systemd service on Linux. It does not need root. macOS and Windows are
+not supported in 5.0; `install.sh` and `cogmem install` refuse those platforms before any install
+step runs, rather than half-installing. The runtime is Bun; the package declares `engines.bun` and
+does not support Node for the resident.
 
-macOS has no bubblewrap (`bwrap`), so the bash tool has no isolation boundary there. The companion
-stays usable and reports the fact: `/status` and `doctor` show `sandbox: off`, and startup writes
-`bash_sandbox_unavailable` to the trace. On Linux the installer probes bwrap; when it is missing,
-the same report appears and the hint names the package to install.
+The installer probes bubblewrap (`bwrap`). When it is missing, the bash tool has no isolation
+boundary: the companion stays usable and reports the fact, `/status` and `doctor` show
+`sandbox: off`, startup writes `bash_sandbox_unavailable` to the trace, and the hint names the
+package to install.
 
 The Linux unit runs with `ProtectSystem=strict` and `ProtectHome=read-only`; the workspace and the
 data directory are the only writable paths, carved out with `ReadWritePaths` because both may live
