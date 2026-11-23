@@ -31,6 +31,7 @@
     "prepublishOnly": "bun run typecheck && bun run build && bun test __tests__ && bun run leak:check && npm pack --dry-run --json",
     "type": "tsc -p tsconfig.json --noEmit",
     "test": "bun test __tests__",
+    "lint:test-timing": "bun scripts/test-timing-lint.ts",
     "ci:status": "bun scripts/ci-status.ts",
     "leak:check": "bun scripts/leak-check.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",

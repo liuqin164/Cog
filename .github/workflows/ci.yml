@@ -34,6 +34,8 @@ jobs:
         run: bun scripts/budget-check.ts
       - name: Reachability
         run: bun run reachability
+      - name: Test timing
+        run: bun run lint:test-timing
       - run: bun run prepublishOnly
       # `shell/` is a private package that lives inside this repo and is deliberately outside the
       # npm tarball (`files` in package.json), so `prepublishOnly` — typecheck, build, test, pack —

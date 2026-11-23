@@ -39,7 +39,7 @@ test('a low-similarity semantic hit does not displace an exact lexical hit', asy
       assistantText: 'Understood.',
       ingestMode: 'raw_archive_only',
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await kernel.flushEventEmbeddings();
     const db = kernel.factStore.getDatabase();
     for (const eventId of [...unrelated.rawEventIds, ...exact.rawEventIds]) {
       db.query('DELETE FROM memory_event_embeddings WHERE event_id = ?').run(eventId);

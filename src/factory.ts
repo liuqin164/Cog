@@ -214,6 +214,12 @@ const HIGH_PRIVILEGE_CANDIDATE_TYPES = ['preferences', 'user_preference', 'long_
 export type * from './factory/KernelOptions.js';
 
 export class MemoryKernel extends KernelServices {
+  private readonly embeddingJobs = new Set<Promise<void>>();
+
+  async flushEventEmbeddings(): Promise<void> {
+    await Promise.all(this.embeddingJobs);
+  }
+
   async initialize(skipWarmup = true): Promise<void> {
     if (this.initialized) return;
     void skipWarmup;
@@ -281,7 +287,7 @@ export class MemoryKernel extends KernelServices {
     const embedDocument = this.embeddingProvider.embedBatch
       ? this.embeddingProvider.embedBatch([content]).then(([vector]) => vector)
       : this.embeddingProvider.embed(content);
-    embedDocument
+    const job = embedDocument
       .then((vector) => {
         if (vector.length !== this.embeddingProvider!.dimensions) {
           throw new Error(`Embedding dimension mismatch for ${this.embeddingProvider!.modelId}: expected ${this.embeddingProvider!.dimensions}, got ${vector.length}`);
@@ -300,6 +306,8 @@ export class MemoryKernel extends KernelServices {
           details: { eventId },
         });
       });
+    this.embeddingJobs.add(job);
+    void job.finally(() => this.embeddingJobs.delete(job));
   }
 
   nearestRawEventIds(query: string, projectId: string | undefined, limit: number): string[] {
