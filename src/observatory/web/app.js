@@ -1787,11 +1787,22 @@ function renderCredentials() {
       form.append(el('label', { class: 'hint', text: field.label || field.name }));
       form.append(input);
     }
+    const origins = el('input', {
+      class: 'soul-token',
+      type: 'text',
+      placeholder: 'https://api.example.com（多个用逗号分隔）',
+      autocomplete: 'off',
+      spellcheck: 'false',
+    });
+    origins.value = (request.allowedOrigins ?? []).join(', ');
+    form.append(el('label', { class: 'hint', text: '允许请求的主机' }));
+    form.append(origins);
     const save = el('button', { type: 'button', class: 'primary', text: '保存到保险库' });
     save.addEventListener('click', () => {
       const values = {};
       for (const field of fields) values[field.name] = field.input.value;
-      void saveCredential(request.id, values);
+      const allowedOrigins = origins.value.split(',').map((entry) => entry.trim()).filter(Boolean);
+      void saveCredential(request.id, values, allowedOrigins);
     });
     const cancel = el('button', { type: 'button', text: '取消' });
     cancel.addEventListener('click', () => { void cancelCredential(request.id); });
@@ -1805,7 +1816,8 @@ function renderCredentials() {
   for (const entry of refs) {
     const item = el('li', { class: 'soul-version' });
     item.append(el('span', { class: 'v', text: entry.ref }));
-    item.append(el('span', { class: 'meta', text: `${entry.service} · ${stamp(entry.createdAt)}` }));
+    const origins = (entry.allowedOrigins ?? []).join(', ');
+    item.append(el('span', { class: 'meta', text: `${entry.service}${origins ? ` · ${origins}` : ''} · ${stamp(entry.createdAt)}` }));
     const revoke = el('button', { type: 'button', text: '撤销' });
     revoke.addEventListener('click', () => {
       if (confirm(`撤销 ${entry.ref}？撤销后使用会立即失败。`)) void revokeCredential(entry.ref);
@@ -1833,10 +1845,10 @@ async function loadCredentials() {
   }
 }
 
-async function saveCredential(id, values) {
+async function saveCredential(id, values, allowedOrigins) {
   state.credentialsError = null;
   try {
-    await postJson('credentials/submit', { id, values });
+    await postJson('credentials/submit', { id, values, allowedOrigins });
     await loadCredentials();
   } catch (error) {
     state.credentialsError = error.message;

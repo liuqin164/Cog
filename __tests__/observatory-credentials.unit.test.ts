@@ -23,8 +23,8 @@ const face = {
     createdAt: 1_000,
   }],
   refs: () => [{ ref: 'demo-api', service: 'demo-api', createdAt: 1_000 }],
-  submit: (id: string, values: Record<string, string>, surface: string) => {
-    calls.push({ op: 'submit', id, values, surface });
+  submit: (id: string, values: Record<string, string>, surface: string, allowedOrigins?: string[]) => {
+    calls.push({ op: 'submit', id, values, surface, allowedOrigins });
     return { ok: true as const, ref: 'demo-api' };
   },
   cancel: (id: string, surface: string) => {
@@ -76,7 +76,7 @@ describe('the observatory credential face (#383)', () => {
     const refused = await post('/credentials/submit', { id: 'credential-1', values: { account: 'alice', password: 'pw' } }, { [OBSERVATORY_TOKEN_HEADER]: 'wrong' });
     expect(refused.status).toBe(403);
     expect(calls).toHaveLength(0);
-    const saved = await post('/credentials/submit', { id: 'credential-1', values: { account: 'alice', password: 'password-value' } });
+    const saved = await post('/credentials/submit', { id: 'credential-1', values: { account: 'alice', password: 'password-value' }, allowedOrigins: ['https://api.example.com'] });
     expect(saved.status).toBe(200);
     expect(await saved.json()).toEqual({ ok: true, ref: 'demo-api' });
     expect(calls.at(-1)).toEqual({
@@ -84,6 +84,7 @@ describe('the observatory credential face (#383)', () => {
       id: 'credential-1',
       values: { account: 'alice', password: 'password-value' },
       surface: 'web',
+      allowedOrigins: ['https://api.example.com'],
     });
   });
 

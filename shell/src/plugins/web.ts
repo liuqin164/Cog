@@ -214,7 +214,7 @@ function isLoopbackAddress(address: string): boolean {
   return groups !== null && groups.slice(0, 7).every((group) => group === 0) && groups[7] === 1;
 }
 
-interface ValidateOptions {
+export interface ValidateOptions {
   lookup: (hostname: string) => Promise<LookupAddress[]>;
   allowLoopback: boolean;
 }
@@ -319,7 +319,7 @@ export function fetchPinned(input: string | URL, init: RequestInit | undefined, 
       else init.signal.addEventListener('abort', abort, { once: true });
       request.on('close', () => init.signal?.removeEventListener('abort', abort));
     }
-    request.end();
+    request.end(init?.body as string | Uint8Array | undefined);
   });
 }
 

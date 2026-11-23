@@ -110,10 +110,14 @@ describe('the terminal credential wizard (#383)', () => {
       expect(sent).toEqual([]);
       input.emit('data', 's3cret');
       input.emit('data', '\r');
+      expect(sent).toEqual([]);
+      input.emit('data', 'https://api.example.com');
+      input.emit('data', '\r');
       expect(sent).toEqual([{
         t: 'credential-submit',
         id: 'credential-key-1',
         values: { account: 'alice', password: 's3cret' },
+        allowedOrigins: ['https://api.example.com'],
       }]);
       expect((app as unknown as { view: TuiView }).view.credential).toBeUndefined();
     } finally {

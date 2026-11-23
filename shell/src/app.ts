@@ -1286,8 +1286,8 @@ export class CompanionShell implements ShellControl, AttachShell {
     return this.proposalsHandlers.currentProposals();
   }
 
-  submitCredential(id: string, values: Record<string, string>, surface = 'terminal'): CredentialSubmission {
-    return this.credentials.submit(id, values, surface);
+  submitCredential(id: string, values: Record<string, string>, surface = 'terminal', allowedOrigins?: string[]): CredentialSubmission {
+    return this.credentials.submit(id, values, surface, allowedOrigins);
   }
 
   cancelCredential(id: string, surface = 'terminal'): boolean {

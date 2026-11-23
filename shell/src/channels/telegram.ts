@@ -521,6 +521,7 @@ export function telegramChannelPlugin(options: TelegramChannelPluginOptions): Na
             purpose: '连接 Telegram 渠道',
             requestedBy: 'web:channels',
             fields: configFields,
+            allowedOrigins: ['https://api.telegram.org'],
           });
           const request = credentials.pending().find((entry) => !before.has(entry.id));
           return request ? { ok: true, requestId: request.id } : { ok: false, error: 'credential_request_failed' };

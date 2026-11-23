@@ -47,6 +47,7 @@ export class TuiApp {
     service: string;
     purpose: string;
     fields: CredentialField[];
+    allowedOrigins?: string[];
     index: number;
     values: Record<string, string>;
     value: string;
@@ -236,6 +237,7 @@ export class TuiApp {
       service: spec.service,
       purpose: spec.purpose,
       fields: spec.fields,
+      allowedOrigins: spec.allowedOrigins,
       index: 0,
       values: {},
       value: '',
@@ -250,16 +252,16 @@ export class TuiApp {
     const credential = this.credential;
     if (!credential) return;
     const field = credential.fields[credential.index];
-    if (!field) return;
+    const originsStep = field === undefined;
     this.view.credential = {
       id: credential.id,
       service: credential.service,
       purpose: credential.purpose,
-      prompt: `请输入${field.label ?? field.name}`,
+      prompt: originsStep ? '允许请求的主机（如 https://api.example.com，逗号分隔）' : `请输入${field.label ?? field.name}`,
       index: credential.index,
-      total: credential.fields.length,
+      total: credential.fields.length + 1,
       value: credential.value,
-      secret: field.secret === true,
+      secret: field?.secret === true,
       ...(credential.error ? { error: credential.error } : {}),
     };
   }
@@ -303,17 +305,24 @@ export class TuiApp {
       this.scheduleRender();
       return;
     }
-    const field = credential.fields[credential.index]!;
-    credential.values[field.name] = credential.value;
-    credential.index += 1;
-    credential.value = '';
-    credential.error = undefined;
-    if (credential.index < credential.fields.length) {
+    const field = credential.fields[credential.index];
+    if (field !== undefined) {
+      credential.values[field.name] = credential.value;
+      credential.index += 1;
+      credential.value = credential.index === credential.fields.length ? (credential.allowedOrigins ?? []).join(', ') : '';
+      credential.error = undefined;
       this.refreshCredential();
       this.scheduleRender();
       return;
     }
-    this.client.send({ t: 'credential-submit', id: credential.id, values: credential.values });
+    const allowedOrigins = credential.value.split(',').map((entry) => entry.trim()).filter(Boolean);
+    if (allowedOrigins.length === 0) {
+      credential.error = '至少登记一个允许的主机。';
+      this.refreshCredential();
+      this.scheduleRender();
+      return;
+    }
+    this.client.send({ t: 'credential-submit', id: credential.id, values: credential.values, allowedOrigins });
     this.clearCredential();
     this.scheduleRender();
   }

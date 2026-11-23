@@ -108,7 +108,7 @@ async function connectTelegram(base: string, fake: ReturnType<typeof startFakeTe
   expect(begun.status).toBe(200);
   const { requestId } = await begun.json() as { requestId: string };
   expect((await channelState(base)).config).toEqual([{ name: 'token', label: 'Bot Token', secret: true }]);
-  const submitted = await post(base, '/observatory/credentials/submit', { id: requestId, values: { token: TOKEN } });
+  const submitted = await post(base, '/observatory/credentials/submit', { id: requestId, values: { token: TOKEN }, allowedOrigins: ['https://api.telegram.org'] });
   expect(submitted.status).toBe(200);
   const saved = await submitted.json() as { ok: boolean; ref: string };
   expect(saved.ok).toBe(true);
@@ -286,7 +286,7 @@ describe('telegram channel plugin (F12)', () => {
     try {
       const begun = await post(base, '/observatory/channels/telegram/begin', {});
       const { requestId } = await begun.json() as { requestId: string };
-      const submitted = await post(base, '/observatory/credentials/submit', { id: requestId, values: { token: TOKEN } });
+      const submitted = await post(base, '/observatory/credentials/submit', { id: requestId, values: { token: TOKEN }, allowedOrigins: ['https://api.telegram.org'] });
       const saved = await submitted.json() as { ref: string };
       await post(base, '/observatory/channels/telegram/start', { ref: saved.ref });
       const pairing = await waitChannelState(base, 'pairing');
