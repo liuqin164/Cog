@@ -41,6 +41,16 @@ describe('steering visibility (spec §5, §10.2)', () => {
   });
 });
 
+describe('failed inbound visibility (#533)', () => {
+  test('a failed line is a resend hint and clears with the count', () => {
+    const view = fixtureView('IDLE');
+    view.applyEvent({ name: 'companion_status', payload: { status: { failedInbound: 1 } } });
+    expect(text(view)).toContain('1 条未送达 · Enter 重发');
+    view.applyEvent({ name: 'companion_status', payload: { status: { failedInbound: 0 } } });
+    expect(text(view)).not.toContain('未送达');
+  });
+});
+
 describe('scroll follow (spec §3)', () => {
   test('scrolling up stops the pull to the bottom and the footer says a message arrived', () => {
     const view = fixtureView('IDLE');

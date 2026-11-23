@@ -3,7 +3,7 @@ import type { CompanionShell } from './app.ts';
 import { estimateBudgetGrant, type CageTier } from './plugins/cage.ts';
 import type { RunSummary } from './state/agent-loop.ts';
 import type { Suspension } from './state/checkpoint.ts';
-import { classifyEndpointFailure } from './state/retry.ts';
+import { classifyEndpointFailure, isRetryableRunError } from './state/retry.ts';
 import type { Trigger } from './state/table.ts';
 
 const MAX_ASSIGNMENT_FINDINGS = 600;
@@ -70,6 +70,22 @@ export class RunLoop {
     }
     if (result instanceof Error) throw result;
     return result;
+  }
+
+  resendFailedInbound(id?: string, onRunStart?: (runId: string) => void): { ok: boolean; text: string; id?: string } {
+    const failed = (this.shell.machine.runtime.inboundQueue ?? []).filter((entry) => entry.status === 'failed');
+    const entry = id === undefined ? failed.at(-1) : failed.find((item) => item.id === id);
+    if (!entry) return { ok: false, text: '没有可重发的未送达消息。' };
+    this.dropInbound(entry.id);
+    this.shell.statusFace.emitStatus();
+    this.shell.trace.append('inbound_resend', { id: entry.id, channel: entry.channel });
+    void this.submit(entry.text, entry.channel, onRunStart).catch((error) => {
+      this.shell.trace.append('inbound_resend_failed', {
+        id: entry.id,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    });
+    return { ok: true, text: `已重发未送达消息（${entry.channel}）。`, id: entry.id };
   }
 
   private async submitWhileSuspended(text: string, channel: string, onRunStart?: (runId: string) => void): Promise<RunSummary | undefined> {
@@ -187,6 +203,9 @@ export class RunLoop {
       if (summary.stopReason === 'run_error' && summary.error?.startsWith('model_timeout:')) this.announceModelTimeout(summary);
       if (summary.stopReason === 'run_error' && summary.error?.startsWith('no_progress:')) this.announceNoProgress(summary);
       if (summary.stopReason === 'run_error' && summary.error?.startsWith('mg_gateway_error:')) this.announceProviderFailure(summary);
+      if (trigger === 'message_received' && summary.stopReason === 'run_error' && isRetryableRunError(summary.error ?? '')) {
+        this.enqueueInbound(text, channel ?? this.shell.currentChannel, 'failed', summary.error);
+      }
       await this.shell.machine.dispatch(outcome, { reason: summary.error ?? reason, runId });
       if (this.shell.machine.state === 'SUSPENDED' && this.shell.machine.runtime.suspension?.kind === 'budget') {
         this.shell.proposalsHandlers.offerResume(this.shell.machine.runtime.suspension.id);
@@ -240,6 +259,10 @@ export class RunLoop {
       if (failed.length > MAX_FAILED_INBOUND) queue = queue.filter((item) => item !== failed[0]);
     }
     this.shell.machine.updateRuntime({ inboundQueue: queue });
+    if (status === 'failed') {
+      this.shell.statusFace.emitStatus();
+      void this.shell.host.bus.emit('companion_inbound_failed', { id: entry.id, channel, error });
+    }
     this.shell.trace.append(status === 'failed' ? 'inbound_failed_retained' : 'inbound_queued', {
       id: entry.id,
       channel,
@@ -258,7 +281,6 @@ export class RunLoop {
     const message = error instanceof Error ? error.message : String(error);
     try {
       this.enqueueInbound(text, channel, 'failed', message);
-      this.shell.statusFace.emitStatus();
     } catch (nested) {
       this.shell.trace.append('inbound_retention_failed', {
         channel,

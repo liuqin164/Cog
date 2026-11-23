@@ -334,4 +334,51 @@ describe('web channel plugin (F12)', () => {
       await shell.stop();
     }
   }, 60_000);
+
+  test('a failed turn offers a web resend button that resends once', async () => {
+    const dir = makeTempDir('web-channel-resend-');
+    const dataDir = join(dir, 'data');
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(join(dataDir, 'observatory-token'), `${TOKEN}\n`, { mode: 0o600 });
+    writePluginRegistry(dataDir, ['builtin:web-channel']);
+    const provider = new ScriptedProvider([
+      () => {
+        throw new Error('mg_gateway_error: 503 provider down');
+      },
+      { text: '重发成功。', toolCalls: [] },
+    ]);
+    const shell = makeShell(dir, provider, {
+      dataDir,
+      dbPath: join(dataDir, 'memory.sqlite'),
+      plugins: ['builtin:web-channel'],
+      dream: NO_DREAM,
+      http: { enabled: true, port: 0, hostname: '127.0.0.1' },
+    });
+    await shell.start();
+    const base = shell.httpUrl!;
+    const reader = (await fetch(`${base}/channel/web/events`)).body!.getReader();
+    const sse = new Sse(reader);
+    try {
+      const script = await (await fetch(`${base}/channel/web/app.js`)).text();
+      expect(script).toContain('/channel/web/resend');
+      expect(script).toContain('重发');
+
+      expect((await post(base, '/channel/web/send', { text: 'web 这句' })).status).toBe(202);
+      const failure = await sse.wait('resend');
+      expect(failure.id).toMatch(/^inbound-/);
+
+      const resent = await post(base, '/channel/web/resend', { id: failure.id });
+      expect(await resent.json()).toMatchObject({ ok: true });
+      expect(await sse.wait('reply_end')).toMatchObject({ text: '重发成功。' });
+      expect(provider.calls).toHaveLength(2);
+
+      const again = await post(base, '/channel/web/resend', { id: failure.id });
+      expect(await again.json()).toMatchObject({ ok: false });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(provider.calls).toHaveLength(2);
+    } finally {
+      await reader.cancel().catch(() => {});
+      await shell.stop();
+    }
+  }, 60_000);
 });

@@ -156,6 +156,82 @@ describe('messages that arrive while a run cannot take them', () => {
       await shell.stop();
     }
   }, 60_000);
+
+  test('retryable run_error keeps the original line as failed; a fatal one does not', async () => {
+    const dir = makeTempDir();
+    const provider = new ScriptedProvider([
+      () => {
+        throw new Error('mg_gateway_error: 503 service unavailable');
+      },
+      () => {
+        throw new Error('mg_gateway_error: 429 too many requests');
+      },
+      () => {
+        throw new Error('model_timeout: whole turn exceeded');
+      },
+      () => {
+        throw new Error('mg_gateway_error: 401 unauthorized');
+      },
+    ]);
+    const shell = makeShell(dir, provider);
+    await shell.start();
+    try {
+      for (const line of ['这句 503', '这句 429', '这句超时']) {
+        const summary = await shell.submit(line);
+        expect(summary?.stopReason).toBe('run_error');
+      }
+      const failed = shell.machine.runtime.inboundQueue?.filter((entry) => entry.status === 'failed') ?? [];
+      expect(failed.map((entry) => entry.text)).toEqual(['这句 503', '这句 429', '这句超时']);
+      expect(shell.currentStatus().failedInbound).toBe(3);
+
+      const saved = JSON.parse(readFileSync(join(dir, 'data', 'checkpoint.json'), 'utf8')) as {
+        runtime: { inboundQueue: Array<{ id: string; text?: string; textId?: string; status: string }> };
+      };
+      const stored = saved.runtime.inboundQueue.filter((entry) => entry.status === 'failed');
+      expect(stored).toHaveLength(3);
+      expect(stored.some((entry) => entry.text !== undefined)).toBe(false);
+      expect(stored.every((entry) => typeof entry.textId === 'string')).toBe(true);
+      expect(shell.stateLedger.read(stored[0]!.textId!)).toBe('这句 503');
+
+      const fatal = await shell.submit('这句 401');
+      expect(fatal?.stopReason).toBe('run_error');
+      expect(shell.machine.runtime.inboundQueue?.filter((entry) => entry.status === 'failed')).toHaveLength(3);
+    } finally {
+      await shell.stop();
+    }
+  }, 60_000);
+
+  test('/resend resends by inbound id exactly once', async () => {
+    const dir = makeTempDir();
+    const provider = new ScriptedProvider([
+      () => {
+        throw new Error('mg_gateway_error: 503 provider down');
+      },
+      { text: '补上了', toolCalls: [] },
+    ]);
+    const shell = makeShell(dir, provider);
+    await shell.start();
+    try {
+      const summary = await shell.submit('这句要重发');
+      expect(summary?.stopReason).toBe('run_error');
+      const failed = shell.machine.runtime.inboundQueue?.filter((entry) => entry.status === 'failed') ?? [];
+      expect(failed).toHaveLength(1);
+      const id = failed[0]!.id;
+
+      const resent = await shell.runCommand('resend');
+      expect(resent.text).toContain('已重发');
+      await waitUntil(() => provider.calls.length === 2);
+      expect(provider.calls[1]!.messages.map((message) => message.content).join('\n')).toContain('这句要重发');
+
+      const again = await shell.runCommand('resend', id);
+      expect(again.text).toContain('没有可重发的未送达消息');
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(provider.calls).toHaveLength(2);
+      expect(shell.currentStatus().failedInbound).toBe(0);
+    } finally {
+      await shell.stop();
+    }
+  }, 60_000);
 });
 
 describe('waking and blank input', () => {

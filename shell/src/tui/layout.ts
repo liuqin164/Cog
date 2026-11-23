@@ -189,8 +189,10 @@ export function renderTui(view: TuiView, editor: LineEditor, size: TuiSize, env:
   const contentLines = Math.max(1, Math.min(MAX_INPUT_LINES, inputRows.length));
   const inputHeight = view.credential ? 3 : contentLines + 2;
   const queueRows = view.queued.length > 0 ? 1 : 0;
+  const failedRows = (view.status.failedInbound ?? 0) > 0 ? 1 : 0;
+  const extraRows = queueRows + failedRows;
   const workRows = view.work.active ? 1 : 0;
-  const transcriptHeight = Math.max(1, height - 2 - queueRows - inputHeight);
+  const transcriptHeight = Math.max(1, height - 2 - extraRows - inputHeight);
   const contentHeight = Math.max(1, transcriptHeight - workRows);
 
   const rows: Row[] = [];
@@ -220,6 +222,7 @@ export function renderTui(view: TuiView, editor: LineEditor, size: TuiSize, env:
     for (let index = 0; index < workRows; index += 1) rows.push(workRow(view, width, env));
   }
 
+  if (failedRows > 0) rows.push(failedRow(view, width));
   if (queueRows > 0) rows.push(queueRow(view, width));
   rows.push(...(view.credential ? credentialBox(view.credential, width, env) : inputBox(editor, width, contentLines, inputRows, env)));
   rows.push(footerRow(view, width, env));
@@ -320,6 +323,11 @@ function queueRow(view: TuiView, width: number): Row {
   return [seg(` ${truncate(text, Math.max(1, width - 2))}`, 'warn')];
 }
 
+function failedRow(view: TuiView, width: number): Row {
+  const text = `${view.status.failedInbound} 条未送达 · Enter 重发`;
+  return [seg(` ${truncate(text, Math.max(1, width - 2))}`, 'error')];
+}
+
 function inputBox(editor: LineEditor, width: number, contentLines: number, inputRows: string[], env: RenderEnv): Row[] {
   const g = boxGlyphs(env);
   const inner = Math.max(1, width - 2);
@@ -410,16 +418,18 @@ export function inputCursorPosition(view: TuiView, editor: LineEditor, size: Tui
   if (width < MIN_WIDTH || height < MIN_HEIGHT) return undefined;
   if (view.credential) {
     const queueRows = view.queued.length > 0 ? 1 : 0;
-    const transcriptHeight = Math.max(1, height - 2 - queueRows - 3);
-    const boxTop = 1 + transcriptHeight + queueRows;
+    const failedRows = (view.status.failedInbound ?? 0) > 0 ? 1 : 0;
+    const transcriptHeight = Math.max(1, height - 2 - queueRows - failedRows - 3);
+    const boxTop = 1 + transcriptHeight + queueRows + failedRows;
     const shown = view.credential.secret ? '' : view.credential.value;
     return { row: boxTop + 2, column: 2 + cellWidth(view.credential.prompt) + 1 + cellWidth(shown) };
   }
   const inputRows = editor.displayRows(Math.max(1, width - 4));
   const contentLines = Math.max(1, Math.min(MAX_INPUT_LINES, inputRows.length));
   const queueRows = view.queued.length > 0 ? 1 : 0;
-  const transcriptHeight = Math.max(1, height - 2 - queueRows - (contentLines + 2));
-  const boxTop = 1 + transcriptHeight + queueRows;
+  const failedRows = (view.status.failedInbound ?? 0) > 0 ? 1 : 0;
+  const transcriptHeight = Math.max(1, height - 2 - queueRows - failedRows - (contentLines + 2));
+  const boxTop = 1 + transcriptHeight + queueRows + failedRows;
   const cursor = editor.cursorPosition(Math.max(1, width - 4));
   const start = Math.max(0, Math.min(cursor.row - contentLines + 1, Math.max(0, inputRows.length - contentLines)));
   return { row: boxTop + 2 + (cursor.row - start), column: 4 + cursor.column };

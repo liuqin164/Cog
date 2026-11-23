@@ -270,6 +270,28 @@ function emergenceCard(event) {
   scroll();
 }
 
+function resendCard(event) {
+  const card = el('div', 'notice');
+  card.append(el('div', '', '模型线路故障，这句我没回答。'));
+  const actions = el('div', '');
+  const button = el('button', '', '重发');
+  button.type = 'button';
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    try {
+      const result = await post('/channel/web/resend', { id: event.id });
+      card.replaceChildren(el('div', '', result.text));
+      scroll();
+    } catch (error) {
+      addNotice(`重发失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  });
+  actions.append(button);
+  card.append(actions);
+  messages.append(card);
+  scroll();
+}
+
 function openModal(url) {
   modalFrame.src = url;
   modal.classList.remove('hidden');
@@ -317,6 +339,9 @@ function connect() {
   });
   stream.addEventListener('emergence', (event) => {
     emergenceCard(JSON.parse(event.data));
+  });
+  stream.addEventListener('resend', (event) => {
+    resendCard(JSON.parse(event.data));
   });
   stream.addEventListener('state', (event) => {
     const payload = JSON.parse(event.data);

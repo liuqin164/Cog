@@ -24,6 +24,7 @@ export const RESERVED_CORE_COMMANDS: readonly string[] = [
   'wake',
   'surfacing',
   'status',
+  'resend',
   'context',
   'sleep',
   'dream',

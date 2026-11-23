@@ -65,6 +65,12 @@ export function classifyEndpointFailure(message: string): EndpointFailureKind {
   }
 }
 
+export function isRetryableRunError(message: string): boolean {
+  const kind = classifyEndpointFailure(message);
+  if (kind === 'rate_limit' || kind === 'timeout') return true;
+  return kind === 'http' && /(?<![a-z0-9])5\d\d(?![a-z0-9])/iu.test(message);
+}
+
 export type FailurePlan =
   | { action: 'retry'; attempt: number; delayMs: number; kind: 'retryable' }
   | { action: 'recover_overflow'; attempt: number; delayMs: number; kind: 'overflow' }

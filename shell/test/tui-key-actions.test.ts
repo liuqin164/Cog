@@ -36,7 +36,7 @@ interface Started {
   exits: string[];
 }
 
-async function started(lifecycle: Lifecycle, entries: TranscriptEntry[] = []): Promise<Started> {
+async function started(lifecycle: Lifecycle, entries: TranscriptEntry[] = [], status: Record<string, unknown> = {}): Promise<Started> {
   const input = new FakeInput();
   const sent: unknown[] = [];
   const exits: string[] = [];
@@ -44,7 +44,7 @@ async function started(lifecycle: Lifecycle, entries: TranscriptEntry[] = []): P
     send: (message: unknown) => void sent.push(message),
     close: () => {},
   } as unknown as AttachClient;
-  const snapshot = { status: { lifecycle }, entries, queued: [], work: {}, commands: [] } as unknown as AttachSnapshot;
+  const snapshot = { status: { lifecycle, ...status }, entries, queued: [], work: {}, commands: [] } as unknown as AttachSnapshot;
   const app = new TuiApp({
     socketPath: '/nonexistent/attach.sock',
     input: input as unknown as ReadStream,
@@ -107,6 +107,18 @@ describe('Enter on a selected tool block (#197)', () => {
       expect(tool.block.expanded).toBe(false);
       expect(frame()).toContain('▸ bash ls -la');
       expect(frame()).not.toContain('file-a');
+    } finally {
+      app.stop('test');
+    }
+  });
+});
+
+describe('Enter on the failed-inbound hint (#533)', () => {
+  test('an empty input on an idle view asks the resident to resend', async () => {
+    const { app, input, sent } = await started('IDLE', [], { failedInbound: 1 });
+    try {
+      input.emit('data', '\r');
+      expect(sent).toEqual([{ t: 'command', name: 'resend', args: '' }]);
     } finally {
       app.stop('test');
     }

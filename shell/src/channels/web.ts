@@ -16,6 +16,7 @@ const STATIC_FILES: Record<string, { file: string; type: string }> = {
 export interface WebChannelShell {
   submit(text: string, channel?: string): Promise<unknown>;
   runCommand(name: string, args?: string): Promise<{ text: string }>;
+  resendFailedInbound?(id?: string): { ok: boolean; text: string };
   confirmProposal(id: string): Promise<{ ok: boolean; reason?: string; proposal?: { resultText?: string } }>;
   discardProposal(id: string): unknown;
   acknowledgeSurfacing(candidateId: string): void;
@@ -137,6 +138,11 @@ export class WebChannel {
       return this.onReceipt(request);
     }
 
+    if (url.pathname === `${PREFIX}/resend`) {
+      if (request.method !== 'POST') return this.methodNotAllowed('POST');
+      return this.onResend(request);
+    }
+
     return new Response('not_found', { status: 404 });
   };
 
@@ -176,6 +182,11 @@ export class WebChannel {
     if (name === 'companion_status') {
       this.failedInbound = typeof payload?.status?.failedInbound === 'number' ? payload.status.failedInbound : 0;
       this.broadcast('state', { state: payload?.status?.lifecycle, failed: this.failedInbound });
+      return;
+    }
+    if (name === 'companion_inbound_failed') {
+      if (payload?.channel !== 'web' || typeof payload?.id !== 'string') return;
+      this.broadcast('resend', { id: payload.id, error: payload.error });
     }
   }
 
@@ -241,6 +252,16 @@ export class WebChannel {
       ok: result.ok,
       text: result.ok ? (result.proposal?.resultText ?? '已执行。') : (result.reason ?? '未执行。'),
     });
+  }
+
+  private async onResend(request: Request): Promise<Response> {
+    const refused = this.options.routes.refuseWrite(request, this.options.token, request.headers.get('accept-encoding'));
+    if (refused) return refused;
+    const body = await this.options.routes.readJsonBody(request);
+    if (!body) return this.options.routes.jsonResponse({ error: 'invalid_json' }, 400);
+    const id = typeof body.id === 'string' && body.id !== '' ? body.id : undefined;
+    const result = this.options.shell.resendFailedInbound?.(id) ?? { ok: false, text: '没有可重发的未送达消息。' };
+    return this.options.routes.jsonResponse(result);
   }
 
   private async onCommitment(request: Request): Promise<Response> {
@@ -435,7 +456,7 @@ export function webChannelPlugin(options: WebChannelPluginOptions): NativePlugin
         config: [],
         status: () => ({ state: 'connected', detail: '本页由 Web 渠道提供' }),
       });
-      for (const name of ['message_update', 'message_end', 'companion_command_proposal', 'companion_emergence', 'companion_transition', 'commitment_receipt', 'companion_status']) {
+      for (const name of ['message_update', 'message_end', 'companion_command_proposal', 'companion_emergence', 'companion_transition', 'commitment_receipt', 'companion_status', 'companion_inbound_failed']) {
         ctx.on(name, (payload: any) => channel.onBusEvent(name, payload));
       }
       ctx.dispose(() => {

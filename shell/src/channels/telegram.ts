@@ -9,6 +9,7 @@ import type { ChannelRegistry } from './registry.ts';
 
 export interface TelegramShell {
   submit(text: string, channel?: string, onRunStart?: (runId: string) => void): Promise<unknown>;
+  resendFailedInbound?(id?: string, onRunStart?: (runId: string) => void): { ok: boolean; text: string };
   confirmProposal(id: string): Promise<{ ok: boolean; reason?: string; proposal?: { resultText?: string } }>;
   discardProposal(id: string): unknown;
   reviewCommitmentReceipt(input: {
@@ -139,7 +140,6 @@ export class TelegramChannel {
   private disposed = false;
   private offset = 0;
   private replyRuns = new Set<string>();
-  private resendTexts = new Map<string, string>();
   private failures = 0;
   private lastError?: string;
 
@@ -198,7 +198,6 @@ export class TelegramChannel {
     if (previous && previous !== credential) this.options.credentials.revoke(previous);
     this.session = undefined;
     this.replyRuns.clear();
-    this.resendTexts.clear();
     this.config = { apiBase: this.config.apiBase, credential };
     this.persist();
     this.state = 'pairing';
@@ -216,7 +215,6 @@ export class TelegramChannel {
     if (this.config.credential) this.options.credentials.revoke(this.config.credential);
     this.session = undefined;
     this.replyRuns.clear();
-    this.resendTexts.clear();
     this.pairingCode = undefined;
     this.pairingExpiresAt = 0;
     this.state = 'disconnected';
@@ -232,18 +230,14 @@ export class TelegramChannel {
       const runId = ctx?.runId;
       if (typeof runId !== 'string' || !this.replyRuns.delete(runId)) return;
       const summary = payload?.summary;
-      if (summary?.stopReason === 'run_error') {
-        const userText = summary.userText;
-        if (typeof userText === 'string' && userText !== '') {
-          this.resendTexts.set(runId, userText);
-          if (this.resendTexts.size > 20) this.resendTexts.delete(this.resendTexts.keys().next().value!);
-        }
-        const reason = typeof summary.error === 'string' && summary.error !== '' ? `原因：${summary.error.slice(0, 200)}` : '';
-        void this.send(`模型线路故障，这句我没回答。${reason}`, { inline_keyboard: [[{ text: '重发', callback_data: `resend:${runId}` }]] });
-        return;
-      }
       const text = summary?.lastAssistantText;
       if (typeof text === 'string' && text !== '') void this.send(text);
+      return;
+    }
+    if (name === 'companion_inbound_failed') {
+      if (payload?.channel !== this.session?.channelId || typeof payload?.id !== 'string') return;
+      const reason = typeof payload.error === 'string' && payload.error !== '' ? `原因：${payload.error.slice(0, 200)}` : '';
+      void this.send(`模型线路故障，这句我没回答。${reason}`, { inline_keyboard: [[{ text: '重发', callback_data: `resend:${payload.id}` }]] });
       return;
     }
     if (name === 'companion_command_proposal') {
@@ -462,16 +456,9 @@ export class TelegramChannel {
       return;
     }
     if (action === 'resend') {
-      const resend = this.resendTexts.get(id);
-      if (resend === undefined) {
-        this.options.trace.append('telegram_resend_refused', { accountId, id });
-        await this.answer(query.id, '没有可重发的原文。');
-        return;
-      }
-      this.resendTexts.delete(id);
-      this.options.trace.append('telegram_resend', { accountId, id });
-      await this.answer(query.id, '重发中。');
-      this.submitText(resend, this.session?.channelId ?? `telegram:${this.config.ownerId}`);
+      const result = this.options.shell.resendFailedInbound?.(id, (runId) => this.replyRuns.add(runId)) ?? { ok: false, text: '没有可重发的原文。' };
+      this.options.trace.append('telegram_resend', { accountId, id, ok: result.ok });
+      await this.answer(query.id, result.ok ? '重发中。' : result.text);
       return;
     }
     let text: string;
@@ -595,7 +582,7 @@ export function telegramChannelPlugin(options: TelegramChannelPluginOptions): Na
           return { ok: true };
         },
       });
-      for (const name of ['agent_end', 'companion_command_proposal', 'companion_emergence']) {
+      for (const name of ['agent_end', 'companion_inbound_failed', 'companion_command_proposal', 'companion_emergence']) {
         ctx.on(name, (payload: any, busCtx?: { runId?: string }) => channel.onBusEvent(name, payload, busCtx));
       }
       channel.start();

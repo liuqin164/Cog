@@ -190,6 +190,10 @@ export class TuiApp {
         this.scheduleRender();
         return;
       }
+      if ((this.view.status.failedInbound ?? 0) > 0) {
+        this.runCommand('/resend');
+        return;
+      }
       this.view.toggleSelected();
       this.scheduleRender();
       return;

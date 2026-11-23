@@ -395,7 +395,11 @@ describe('telegram channel plugin (F12)', () => {
       expect(failure.body.text).toContain('这句我没回答');
       const resend = failure.body.reply_markup.inline_keyboard[0][0];
       expect(resend.text).toBe('重发');
-      expect(resend.callback_data).toMatch(/^resend:run-/);
+      expect(resend.callback_data).toMatch(/^resend:inbound-/);
+      const failed = shell.machine.runtime.inboundQueue?.filter((entry) => entry.status === 'failed') ?? [];
+      expect(failed).toHaveLength(1);
+      expect(failed[0]).toMatchObject({ text: '这句要重发。', channel: `telegram:${OWNER}`, status: 'failed' });
+      expect(resend.callback_data).toBe(`resend:${failed[0]!.id}`);
 
       const callsBeforeStranger = provider.calls.length;
       fake.push({ update_id: 3, callback_query: { id: 'cb-stranger-resend', data: resend.callback_data, from: { id: STRANGER } } });
@@ -406,6 +410,11 @@ describe('telegram channel plugin (F12)', () => {
 
       fake.push({ update_id: 4, callback_query: { id: 'cb-owner-resend', data: resend.callback_data, from: { id: OWNER } } });
       await waitUntil(() => fake.sent.some((entry) => entry.method === 'sendMessage' && entry.body.text === '重发成功。'));
+      expect(provider.calls).toHaveLength(2);
+
+      fake.push({ update_id: 5, callback_query: { id: 'cb-owner-resend-again', data: resend.callback_data, from: { id: OWNER } } });
+      await waitUntil(() => fake.sent.some((entry) => entry.method === 'answerCallbackQuery' && entry.body.callback_query_id === 'cb-owner-resend-again'));
+      await new Promise((resolve) => setTimeout(resolve, 100));
       expect(provider.calls).toHaveLength(2);
     } finally {
       await shell.stop();

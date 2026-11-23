@@ -80,6 +80,7 @@ export interface CommandHost {
   snooze?(minutes: number, commitmentId?: string): CommandReply;
   /** F2: register the agent's own wake intention. */
   wake?(minutes: number, reason: string): CommandReply;
+  resendFailedInbound?(id?: string): CommandReply;
   /** #328: the configured do-not-disturb window and whether it is open now. */
   quietWindow?(): { startHour: number; endHour: number; active: boolean } | undefined;
   whyReport(): string;
@@ -261,6 +262,15 @@ export const CORE_COMMANDS: readonly CoreCommand[] = [
         ? '勿扰窗：关'
         : `勿扰窗：${String(quiet.startHour).padStart(2, '0')}:00–${String(quiet.endHour).padStart(2, '0')}:00（${quiet.active ? '生效中' : '未生效'}）`;
       return { text: `生命周期 ${state}，checkpoint seq ${seq}，本日 ${costDayTokens} token，${sandboxLine}。${quietLine}。${feedbackLine}。未送达 ${failedInbound} 条。` };
+    },
+  },
+  {
+    name: 'resend',
+    description: '重发未送达的消息',
+    argumentHint: '[id]',
+    surfaces: ['palette', 'resident', 'tui'],
+    run(host, args) {
+      return host.resendFailedInbound?.(args.trim() || undefined) ?? { text: '当前实例不支持重发。', receipt: true };
     },
   },
   {

@@ -1044,6 +1044,11 @@ export class CompanionShell implements ShellControl, AttachShell {
     return this.runLoop.submit(text, channel, onRunStart);
   }
 
+  resendFailedInbound(id?: string, onRunStart?: (runId: string) => void): CommandReply & { ok: boolean } {
+    const result = this.runLoop.resendFailedInbound(id, onRunStart);
+    return { text: result.text, receipt: true, ok: result.ok };
+  }
+
   async wakeFromSleep(): Promise<void> {
     return this.runLoop.wake();
   }
@@ -1344,6 +1349,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   private readonly commandHost: CommandHost = {
     config: () => this.config,
     lifecycle: () => ({ state: this.machine.state, seq: this.machine.seq, costDayTokens: this.machine.runtime.costDayTokens ?? 0, sandbox: this.statusFace.sandboxState(), failedInbound: this.statusFace.failedInbound() }),
+    resendFailedInbound: (id) => this.resendFailedInbound(id),
     contextTokens: () => this.contextTokenEstimate,
     contextToolOutput: () => this.lastToolOutput,
     contextLanes: () => (this.lastLaneAssembly ? laneAssemblyView(this.lastLaneAssembly) : undefined),
