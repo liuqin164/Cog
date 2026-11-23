@@ -3,11 +3,12 @@ import { describe, expect, test } from 'bun:test';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { CredentialService, maskCredentialValues } from '../src/credentials.ts';
+import { bwrapUsable } from '../src/plugins/builtin-tools.ts';
 import { TraceLog } from '../src/trace.ts';
 import { ScriptedProvider, makeShell, makeTempDir, waitUntil } from './helpers.ts';
 
 const NO_DREAM = { windowStartHour: 0, windowEndHour: 1, runKernelNight: false, maxEpisodes: 5 };
-const PASSWORD = 'demo-password-9f3a';
+const PASSWORD = 'demo-password-9f3a!@#';
 const ACCOUNT = 'owner-account-77c1';
 
 function traceKinds(shell: ReturnType<typeof makeShell>, kind: string): Array<Record<string, unknown>> {
@@ -169,6 +170,115 @@ describe('the credential input surface', () => {
         expect(surface).not.toContain(ACCOUNT);
       }
     } finally {
+      await shell.stop();
+    }
+  }, 30_000);
+
+  test('http_request sends a stored credential from the host while bash stays offline under bwrap', async () => {
+    const dir = makeTempDir('credential-http-');
+    const sandboxed = bwrapUsable();
+    const seen: string[] = [];
+    const server = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      fetch(request) {
+        const authorization = request.headers.get('authorization') ?? '';
+        seen.push(authorization);
+        if (authorization !== `Bearer ${PASSWORD}`) return new Response('unauthorized', { status: 401 });
+        return Response.json({
+          account: ACCOUNT,
+          echo: [PASSWORD, Buffer.from(PASSWORD).toString('base64'), encodeURIComponent(PASSWORD)],
+        });
+      },
+    });
+    const url = `http://127.0.0.1:${server.port}/check`;
+    const provider = new ScriptedProvider([
+      {
+        text: '',
+        toolCalls: [{
+          toolCallId: 'c1',
+          toolName: 'request_credential',
+          input: {
+            service: 'demo-api',
+            purpose: '完成一次带凭据的请求',
+            fields: [{ name: 'account' }, { name: 'password', secret: true }],
+          },
+        }],
+      },
+      {
+        text: '',
+        toolCalls: [
+          {
+            toolCallId: 'c2',
+            toolName: 'bash',
+            input: { credential: 'demo-api', command: `curl -sS --max-time 5 ${url}` },
+          },
+          {
+            toolCallId: 'c3',
+            toolName: 'http_request',
+            input: {
+              credentialRef: 'demo-api',
+              url,
+              headers: { Authorization: 'Bearer {{password}}', 'X-Account': '{{account}}' },
+            },
+          },
+        ],
+      },
+      { text: '已完成。', toolCalls: [] },
+    ]);
+    const shell = makeShell(dir, provider, { dream: NO_DREAM });
+    await shell.start();
+    try {
+      const run = shell.submit('用 demo-api 完成一次请求');
+      await waitUntil(() => shell.credentials.pending().length === 1);
+      const request = shell.credentials.pending()[0]!;
+      expect(shell.submitCredential(request.id, { account: ACCOUNT, password: PASSWORD }, 'terminal')).toEqual({ ok: true, ref: 'demo-api' });
+      await run;
+
+      const tools = provider.calls.flatMap((call) => call.messages).filter((message) => message.role === 'tool');
+      const bash = tools.find((message) => message.toolName === 'bash')!;
+      const http = tools.find((message) => message.toolName === 'http_request')!;
+      expect(bash.isError).toBe(sandboxed);
+      if (sandboxed) expect(bash.content).toMatch(/Could not connect|Failed to connect|Connection refused|exit code 7/u);
+      expect(http.isError).toBe(false);
+      expect(http.content).toContain('HTTP 200');
+      expect(http.content).toContain('«credential:demo-api.password»');
+      expect(http.content).toContain('«credential:demo-api.account»');
+      expect(seen).toContain(`Bearer ${PASSWORD}`);
+      if (sandboxed) expect(seen).toEqual([`Bearer ${PASSWORD}`]);
+      expect(traceKinds(shell, 'credential_used')).toContainEqual(
+        expect.objectContaining({ ref: 'demo-api', service: 'demo-api', caller: 'http_request' }),
+      );
+
+      const model = JSON.stringify(provider.calls);
+      const trace = readFileSync(shell.trace.path, 'utf8');
+      const db = new Database(shell.config.dbPath, { readonly: true });
+      const ledger = (db.query('SELECT payload_json FROM memory_events').all() as Array<{ payload_json: string }>)
+        .map((row) => row.payload_json)
+        .join('\n');
+      const fts = (db.query('SELECT text FROM memory_events_fts').all() as Array<{ text: string }>)
+        .map((row) => row.text)
+        .join('\n');
+      db.close();
+      const overflowDir = join(shell.config.workspaceRoot, '.cogmem-shell', 'bash-output');
+      const overflow = existsSync(overflowDir)
+        ? readdirSync(overflowDir).map((name) => readFileSync(join(overflowDir, name), 'utf8')).join('\n')
+        : '';
+      const logFiles = readdirSync(shell.config.dataDir)
+        .filter((name) => name.endsWith('.jsonl') || name.endsWith('.log'))
+        .map((name) => readFileSync(join(shell.config.dataDir, name), 'utf8'))
+        .join('\n');
+
+      for (const surface of [model, trace, ledger, fts, overflow, logFiles]) {
+        expect(surface).not.toContain(PASSWORD);
+        expect(surface).not.toContain(ACCOUNT);
+        expect(surface).not.toContain(Buffer.from(PASSWORD).toString('base64'));
+        expect(surface).not.toContain(encodeURIComponent(PASSWORD));
+        expect(surface).not.toContain(Buffer.from(ACCOUNT).toString('base64'));
+        expect(surface).not.toContain(encodeURIComponent(ACCOUNT));
+      }
+    } finally {
+      server.stop(true);
       await shell.stop();
     }
   }, 30_000);

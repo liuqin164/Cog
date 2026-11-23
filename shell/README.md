@@ -333,7 +333,7 @@ numbers.
 - `src/state/retry.ts` — the failure ladder's classification and backoff, ported from pinned pi-ai.
 - `src/plugins/host.ts` — one registry, one bus; native Cordis-style plugins.
 - `src/plugins/load.ts` — resolves a registry spec (package or path) and registers its native plugin.
-- `src/plugins/*` — clock, recall, dream, emergence (conservative), cage, capture, the four tools,
+- `src/plugins/*` — clock, recall, dream, emergence (conservative), cage, capture, the builtin tools,
   web search/fetch/recall, command-proposals (the `propose_command` tool), mg provider. Dream,
   emergence and recall are plugins like the rest: swap one by not loading it.
 - `src/proposals.ts` — command proposals (spec §7): the registry the agent's tool records into, and the
@@ -440,7 +440,9 @@ under the workspace (the default `<workspace>/.cogmem-shell`) an empty read-only
 `memory.sqlite`, `budgets.json`, `routes.json`, `checkpoint.json` and `plugins.json` are unreadable
 and unwritable from the sandboxed process. A denied write is a tool error and a `bash_sandbox_denied`
 trace record. The network namespace is unshared, so a fetched page cannot instruct bash to send a
-secret out. The child inherits only a small variable allowlist (`PATH`, locale, `TZ`, `TERM`, ...),
+secret out; a stored credential's only network path is the host-side `http_request`, which injects
+its fields into request headers and masks them out of the response. The child inherits only a small
+variable allowlist (`PATH`, locale, `TZ`, `TERM`, ...),
 never API keys or tokens; `HOME` is `/tmp` and `COGMEM_CONFIG` still points at the companion's config,
 which the mask makes unreadable (the in-bash CLI fallback therefore cannot open the database).
 `write`/`edit` refuse the same data-dir paths for the same reason (`path_in_data_dir`). If `bwrap` is

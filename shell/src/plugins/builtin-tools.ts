@@ -1,9 +1,3 @@
-/**
- * The four basic tools, as a plugin with no more privilege than a third-party one.
- *
- * Every tool validates its input at the trust boundary (path inside the workspace, output capped,
- * command timeout) and every output is returned as text for the capture path to redact and mark.
- */
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
@@ -21,6 +15,8 @@ const MAX_OUTPUT_LINES = 2000;
 const BASH_TIMEOUT_MS = 30_000;
 const MAX_BASH_TIMEOUT_MS = 2_147_483_647;
 const BASH_OUTPUT_DIR = '.cogmem-shell/bash-output';
+const HTTP_TIMEOUT_MS = 30_000;
+const CREDENTIAL_PLACEHOLDER = /\{\{([a-z][a-z0-9_]*)\}\}/gu;
 
 export interface BuiltinToolsConfig {
   workspaceRoot: string;
@@ -261,6 +257,40 @@ function credentialRef(args: unknown): string | undefined {
 function credentialEnvName(ref: string, field: string): string {
   const part = (value: string): string => value.toUpperCase().replace(/[^A-Z0-9]+/gu, '_').replace(/^_+|_+$/gu, '');
   return `COGMEM_CRED_${part(ref)}_${part(field)}`;
+}
+
+function injectCredentialFields(value: string, fields: Record<string, string>): string {
+  return value.replace(CREDENTIAL_PLACEHOLDER, (_match, name: string) => {
+    const field = fields[name];
+    if (field === undefined) throw new Error(`credential_field_missing: ${name}`);
+    return field;
+  });
+}
+
+function credentialHeaders(args: unknown): Record<string, string> {
+  const raw = (args as Record<string, unknown> | undefined)?.['headers'];
+  if (raw === undefined) return {};
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw new Error('invalid_arguments: "headers" must be an object of strings');
+  const headers: Record<string, string> = {};
+  for (const [name, value] of Object.entries(raw)) {
+    if (typeof value !== 'string') throw new Error(`invalid_arguments: header "${name}" must be a string`);
+    headers[name] = value;
+  }
+  return headers;
+}
+
+function httpMethod(args: unknown): string {
+  const raw = (args as Record<string, unknown> | undefined)?.['method'];
+  if (raw === undefined) return 'GET';
+  if (typeof raw !== 'string' || !/^[A-Za-z]+$/u.test(raw)) throw new Error('invalid_arguments: "method" must be an HTTP method name');
+  return raw.toUpperCase();
+}
+
+function httpBody(args: unknown): string | undefined {
+  const raw = (args as Record<string, unknown> | undefined)?.['body'];
+  if (raw === undefined) return undefined;
+  if (typeof raw !== 'string') throw new Error('invalid_arguments: "body" must be a string');
+  return raw;
 }
 
 function formatSize(bytes: number): string {
@@ -542,6 +572,69 @@ function definitions(
         });
       },
     },
+    {
+      name: 'http_request',
+      replay: 'never',
+      description: 'Send one HTTP request from the host with a stored credential. Pass the reference returned by request_credential as credentialRef. Header values may contain {{field}} placeholders; the host replaces each with that credential field before sending, so the value never enters the conversation. Returns "HTTP <status>" and the response body capped at 256 KiB, with any echo of a credential value masked. Redirects are refused.',
+      parameters: {
+        type: 'object',
+        properties: {
+          credentialRef: { type: 'string' },
+          url: { type: 'string' },
+          method: { type: 'string' },
+          headers: { type: 'object', additionalProperties: { type: 'string' } },
+          body: { type: 'string' },
+        },
+        required: ['credentialRef', 'url'],
+      },
+      async execute({ toolCallId, args, signal }) {
+        const ref = asString(args, 'credentialRef');
+        const url = asString(args, 'url');
+        const protocol = new URL(url).protocol;
+        if (protocol !== 'http:' && protocol !== 'https:') throw new Error('invalid_arguments: "url" must use http or https');
+        if (!credentials) throw new Error('credential_unavailable: this shell has no credential service');
+        const values = credentials.use(ref, 'http_request', toolCallId);
+        const masks = credentials.masksFor?.(toolCallId) ?? [];
+        const mask = (text: string): string => {
+          const result = maskCredentialValues(text, masks);
+          if (result.hits > 0) {
+            ledger.trace?.append('credential_value_masked', {
+              tool: 'http_request',
+              ref,
+              fields: result.fields,
+              replacements: result.hits,
+            });
+          }
+          return result.text;
+        };
+        try {
+          const headers = Object.fromEntries(
+            Object.entries(credentialHeaders(args)).map(([name, value]) => [name, injectCredentialFields(value, values)]),
+          );
+          const method = httpMethod(args);
+          const body = httpBody(args);
+          const signals = [AbortSignal.timeout(HTTP_TIMEOUT_MS)];
+          if (signal) signals.push(signal);
+          const response = await fetch(url, {
+            method,
+            headers,
+            ...(body !== undefined ? { body } : {}),
+            redirect: 'error',
+            signal: AbortSignal.any(signals),
+          });
+          const text = mask(await response.text());
+          const bytes = Buffer.byteLength(text, 'utf8');
+          const shown = bytes <= MAX_READ_BYTES
+            ? text
+            : `${headBytes(text, MAX_READ_BYTES)}\n\n[response body truncated: showing ${formatSize(MAX_READ_BYTES)} of ${formatSize(bytes)}]`;
+          return { output: `HTTP ${response.status} ${response.statusText}\n\n${shown}`, isError: false };
+        } catch (error) {
+          throw new Error(mask(error instanceof Error ? error.message : String(error)));
+        } finally {
+          credentials.forgetMasks?.(toolCallId);
+        }
+      },
+    },
   ];
 }
 
@@ -574,7 +667,7 @@ export function builtinToolsPlugin(): NativePlugin {
         });
         return { result: { ...event.result, output: masked.text } };
       });
-      ctx.provide('builtinTools', { names: ['read', 'write', 'edit', 'bash'] });
+      ctx.provide('builtinTools', { names: ['read', 'write', 'edit', 'bash', 'http_request'] });
     },
   };
 }

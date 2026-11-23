@@ -2,14 +2,13 @@
  * The plugin host: one registry, one event bus, one service table.
  *
  * Native Cordis-style plugins (`apply(ctx, config)`, `provide`, `inject`, `dispose`) land here, and
- * the conflict rules are the host's: a tool name registers once, the four builtins are not silently
+ * the conflict rules are the host's: a tool name registers once, the builtin tools are not silently
  * overridden, and same-event hooks run in registration order with the first block winning.
  */
 import { EventBus, type BusHandler, type BusResult } from '../bus.ts';
 import type { ToolResult } from '../state/agent-loop.ts';
 
-/** The four names the shell ships; nobody else may register them, and only their own plugin may mark them. */
-export const RESERVED_BUILTIN_TOOLS: readonly string[] = ['read', 'write', 'edit', 'bash'];
+export const RESERVED_BUILTIN_TOOLS: readonly string[] = ['read', 'write', 'edit', 'bash', 'http_request'];
 const BUILTIN_SOURCE = 'plugin:builtin-tools';
 
 /**
