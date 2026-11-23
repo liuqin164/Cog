@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
 
 import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
+import type { AgentRecallResult } from '../src/agent/AgentMemoryTypes.js';
 import { detectBackReference } from '../src/agent/BackReference.js';
 import { createMemoryKernel, type MemoryKernel } from '../src/factory.js';
 import { makeTempDir } from './helpers/tmp.js';
@@ -55,11 +56,8 @@ function seedAtlasAnchor(kernel: MemoryKernel, id: string, label: string): void 
   kernel.memoryAtlasStore.markProjectionClean(PROJECT);
 }
 
-function rewriteTerms(kernel: MemoryKernel): string[] {
-  const row = kernel.factStore.getDatabase()
-    .query('SELECT payload FROM trace_events WHERE event_type = ? ORDER BY rowid DESC LIMIT 1')
-    .get('recall.result') as { payload: string } | null;
-  return (JSON.parse(row!.payload) as { rewrite?: { terms?: string[] } }).rewrite?.terms ?? [];
+function rewriteKeywords(result: AgentRecallResult): string[] {
+  return result.queryPlan?.keywords ?? [];
 }
 
 describe('deterministic back-reference detection (#472)', () => {
@@ -444,7 +442,7 @@ describe('back-reference anchor state (#490)', () => {
         limit: 3,
         now: NOW,
       });
-      backend.recall({
+      const result = backend.recall({
         agentId: AGENT,
         projectId: PROJECT,
         query: '它怎么样了',
@@ -452,7 +450,7 @@ describe('back-reference anchor state (#490)', () => {
         limit: 3,
         now: NOW,
       });
-      expect(rewriteTerms(kernel)).not.toContain('episode:anchor-a');
+      expect(rewriteKeywords(result)).not.toContain('anchor-a');
     } finally {
       kernel.close();
     }
@@ -480,7 +478,7 @@ describe('back-reference anchor state (#490)', () => {
         limit: 3,
         now: NOW,
       });
-      backend.recall({
+      const result = backend.recall({
         agentId: AGENT,
         projectId: PROJECT,
         query: '它怎么样了',
@@ -488,9 +486,9 @@ describe('back-reference anchor state (#490)', () => {
         limit: 3,
         now: NOW,
       });
-      const terms = rewriteTerms(kernel);
-      expect(terms).toContain('episode:anchor-a');
-      expect(terms).not.toContain('episode:anchor-b');
+      const terms = rewriteKeywords(result);
+      expect(terms).toContain('anchor-a');
+      expect(terms).not.toContain('anchor-b');
     } finally {
       kernel.close();
     }
@@ -518,7 +516,7 @@ describe('back-reference anchor state (#490)', () => {
         limit: 3,
         now: NOW,
       });
-      backend.recall({
+      const result = backend.recall({
         agentId: AGENT,
         projectId: PROJECT,
         query: '它怎么样了',
@@ -526,7 +524,7 @@ describe('back-reference anchor state (#490)', () => {
         limit: 3,
         now: NOW,
       });
-      expect(rewriteTerms(kernel)).toContain('episode:anchor-a');
+      expect(rewriteKeywords(result)).toContain('anchor-a');
     } finally {
       kernel.close();
     }
