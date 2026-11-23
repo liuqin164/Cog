@@ -9,7 +9,9 @@ import { createMemoryKernel, type MemoryKernel } from '../src/factory.js';
 import {
   DEGRADATION_DAY_MS,
   DEGRADATION_HOUR_MS,
+  cjkTerms,
   generateDegradationCorpus,
+  localDateOf,
   seedDegradationCorpus,
   type DegradationCorpus,
 } from './fixtures/degradation-corpus.js';
@@ -138,13 +140,58 @@ describe('R05 long-horizon degradation acceleration', () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]!.owner).toBe('user');
     expect(entries[0]!.content).toContain(corpus.anchors.newPromiseCode);
-    expect(entries[0]!.dueAt).toBe(
-      parseCommitmentDue(`我明天把那份文件发你，单据号 ${corpus.anchors.newPromiseCode}。`, promiseAt, corpus.timeZone).dueAt,
-    );
+    expect(entries[0]!.dueAt).toBe(Date.UTC(2026, 7, 31, 9));
 
     const due = entries[0]!.dueAt! + DEGRADATION_HOUR_MS;
     expect(kernel.commitments.surfaceDue({ projectId: corpus.projectId, now: due })).toHaveLength(1);
     expect(kernel.commitments.surfaceDue({ projectId: corpus.projectId, now: due + 1_000 })).toHaveLength(0);
+  });
+
+  test('due instants stay literal for 明天, 下周一 and 这周', () => {
+    const now = Date.UTC(2026, 10, 17, 15, 30);
+    expect(parseCommitmentDue('我明天把方案给你', now, corpus.timeZone).dueAt).toBe(Date.UTC(2026, 10, 19, 9));
+    expect(parseCommitmentDue('我下周一前把方案给你', now, corpus.timeZone).dueAt).toBe(Date.UTC(2026, 10, 23, 9));
+    expect(parseCommitmentDue('我这周把方案给你', now, corpus.timeZone).dueAt).toBe(Date.UTC(2026, 10, 22, 9));
+  });
+
+  test('the newest fifth of the corpus writes through the production path and agrees with the fixture', () => {
+    const db = kernel.factStore.getDatabase();
+    const real = corpus.eventsList[corpus.realPathStart + 1]!;
+    const realRow = db.prepare('SELECT local_date, local_date_source FROM memory_events WHERE event_id = ?')
+      .get(real.eventId) as { local_date: string; local_date_source: string };
+    expect(realRow.local_date).toBe(localDateOf(real.occurredAt, corpus.timeZone));
+    expect(realRow.local_date_source).toBe('generated_project_timezone');
+    const realTerms = (db.prepare('SELECT term FROM memory_event_cjk_terms WHERE event_id = ? ORDER BY term')
+      .all(real.eventId) as Array<{ term: string }>).map((row) => row.term);
+    expect(realTerms).toEqual(cjkTerms(real.text).sort());
+
+    const direct = corpus.eventsList[5]!;
+    const directRow = db.prepare('SELECT local_date, local_date_source FROM memory_events WHERE event_id = ?')
+      .get(direct.eventId) as { local_date: string; local_date_source: string };
+    expect(directRow.local_date).toBe(localDateOf(direct.occurredAt, corpus.timeZone));
+    expect(directRow.local_date_source).toBe('legacy_unknown');
+    const directTerms = (db.prepare('SELECT term FROM memory_event_cjk_terms WHERE event_id = ? ORDER BY term')
+      .all(direct.eventId) as Array<{ term: string }>).map((row) => row.term);
+    expect(directTerms).toEqual(cjkTerms(direct.text).sort());
+
+    const sources = db.prepare(`SELECT local_date_source, COUNT(*) AS value FROM memory_events WHERE event_id LIKE 'evt-r05-%' GROUP BY local_date_source`)
+      .all() as Array<{ local_date_source: string; value: number }>;
+    expect(sources).toEqual([
+      { local_date_source: 'generated_project_timezone', value: corpus.events - corpus.realPathStart },
+      { local_date_source: 'legacy_unknown', value: corpus.realPathStart },
+    ]);
+  });
+
+  test('a 300-hit CJK query returns the newest five first', () => {
+    const hits = corpus.eventsList.filter((event) => event.text.includes('压测'));
+    expect(hits.length).toBeGreaterThanOrEqual(300);
+    const newest = hits.slice(-5).reverse();
+    const found = kernel.eventStore.searchRawEvents('压测', {
+      projectId: corpus.projectId,
+      limit: 5,
+      orderBy: 'relevance',
+    });
+    expect(found.map((event) => event.eventId)).toEqual(newest.map((event) => event.eventId));
   });
 
   test('a correction is immediate, supersedes only the corrected claim, and leaves no receipt flood', () => {
