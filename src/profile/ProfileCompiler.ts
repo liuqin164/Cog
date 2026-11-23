@@ -98,11 +98,7 @@ export const PROFILE_PREFERENCE_PREDICATES = ['likes', 'dislikes', 'prefers', 'a
  */
 export const PROFILE_TRANSIENT_PREDICATES = ['has_issue', 'issue_correction'] as const;
 
-/** A fact row means something current only in these statuses. */
 export const PROFILE_LIVE_FACT_STATUSES = ['verified', 'provisional', 'provisional_enriched'] as const;
-
-const PROFILE_INVALID_FACT_STATUSES = ['superseded', 'archived', 'rejected'] as const;
-const PROFILE_INVALID_BELIEF_STATUSES = ['superseded', 'revoked', 'expired'] as const;
 
 /**
  * An ongoing item is the owner's, so a machine's candidate (`pending`) and every terminal status are
@@ -290,8 +286,8 @@ export class ProfileCompiler {
 
   private compileLedgers(projectId: string, ledgers: ProfileLedger[], now: number): { written: number; entries: number } {
     const candidates = this.derive(projectId, ledgers);
-    const invalidated = ledgers.some((ledger) => ledger === 'facts' || ledger === 'preferences')
-      ? this.invalidatedEvidenceKeys(projectId)
+    const live = ledgers.some((ledger) => ledger === 'facts' || ledger === 'preferences')
+      ? this.liveEvidenceKeys(projectId)
       : undefined;
     const index = this.entryGroups(projectId);
     let written = 0;
@@ -303,7 +299,7 @@ export class ProfileCompiler {
           if (this.writeIfChanged(index, projectId, candidate, now)) ledgerWritten += 1;
         }
         ledgerWritten += this.retireAbsent(
-          index, projectId, ledger, new Set(forLedger.map((candidate) => candidate.key)), invalidated?.get(ledger), now
+          index, projectId, ledger, new Set(forLedger.map((candidate) => candidate.key)), live?.get(ledger), now
         );
         written += ledgerWritten;
         if (ledgerWritten > 0) this.appendReceipt(projectId, ledger, now, forLedger.length, ledgerWritten);
@@ -469,29 +465,18 @@ export class ProfileCompiler {
     return out;
   }
 
-  private invalidatedEvidenceKeys(projectId: string): Map<ProfileLedger, Set<string>> {
+  private liveEvidenceKeys(projectId: string): Map<ProfileLedger, Set<string>> {
     const keys = new Map<ProfileLedger, Set<string>>([
       ['facts', new Set<string>()],
       ['preferences', new Set<string>()],
     ]);
-    const qualified = (entry: { ledger: ProfileLedger; key: string }): string => `${entry.ledger}\u0000${entry.key}`;
-    const live = new Set<string>();
     for (const fact of this.facts.listFactKeysByStatus({ projectId, statuses: [...PROFILE_LIVE_FACT_STATUSES] })) {
       const entry = this.factProfileKey(fact);
-      if (entry) live.add(qualified(entry));
+      if (entry) keys.get(entry.ledger)!.add(entry.key);
     }
     for (const belief of this.beliefs.listBeliefKeysByStatus({ projectId, statuses: ['active'] })) {
       const entry = this.beliefProfileKey(belief);
-      if (entry) live.add(qualified(entry));
-    }
-    const add = (entry: { ledger: ProfileLedger; key: string } | null): void => {
-      if (entry && !live.has(qualified(entry))) keys.get(entry.ledger)!.add(entry.key);
-    };
-    for (const fact of this.facts.listFactKeysByStatus({ projectId, statuses: [...PROFILE_INVALID_FACT_STATUSES] })) {
-      add(this.factProfileKey(fact));
-    }
-    for (const belief of this.beliefs.listBeliefKeysByStatus({ projectId, statuses: [...PROFILE_INVALID_BELIEF_STATUSES] })) {
-      add(this.beliefProfileKey(belief));
+      if (entry) keys.get(entry.ledger)!.add(entry.key);
     }
     return keys;
   }
@@ -626,14 +611,14 @@ export class ProfileCompiler {
 
   private retireAbsent(
     index: Map<string, EntryGroup>, projectId: string, ledger: ProfileLedger,
-    derivedKeys: Set<string>, invalidatedKeys: Set<string> | undefined, now: number
+    derivedKeys: Set<string>, liveKeys: Set<string> | undefined, now: number
   ): number {
     let retired = 0;
     for (const group of index.values()) {
       const current = group.versions[group.versions.length - 1];
       if (!current || group.retired || current.ledger !== ledger) continue;
       if (derivedKeys.has(current.key) || group.lastEventType === 'PROFILE_ENTRY_CORRECTED') continue;
-      if (invalidatedKeys && !invalidatedKeys.has(current.key)) continue;
+      if (liveKeys && liveKeys.has(current.key)) continue;
       this.applyVersion(index, projectId, {
         entryId: current.entryId,
         ledger,

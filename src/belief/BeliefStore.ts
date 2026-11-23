@@ -152,11 +152,11 @@ export class BeliefStore {
   listBeliefKeysByStatus(options: {
     statuses: Array<'active' | 'superseded' | 'revoked' | 'suspect' | 'expired'>;
     projectId?: string;
-  }): Array<{ subject: string; predicate: string; canonicalKey: string }> {
+  }): Array<{ subject: string; predicate: string; canonicalKey: string; sourceType: string; metadata?: Record<string, unknown> }> {
     if (options.statuses.length === 0) return [];
     const queryProject = projectQueryValue(options.projectId);
     const rows = this.db.prepare(`
-      SELECT DISTINCT subject, predicate, canonical_key
+      SELECT DISTINCT subject, predicate, canonical_key, source_type, metadata_json
       FROM beliefs
       WHERE status IN (${options.statuses.map(() => '?').join(', ')})
         AND (? IS NULL OR COALESCE(project_id,'') = ?)
@@ -164,11 +164,15 @@ export class BeliefStore {
       subject: string;
       predicate: string;
       canonical_key: string;
+      source_type: string;
+      metadata_json: string | null;
     }>;
     return rows.map((row) => ({
       subject: row.subject,
       predicate: row.predicate,
       canonicalKey: row.canonical_key,
+      sourceType: row.source_type,
+      metadata: row.metadata_json ? JSON.parse(row.metadata_json) : undefined,
     }));
   }
 
