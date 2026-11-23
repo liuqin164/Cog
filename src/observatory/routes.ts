@@ -97,10 +97,19 @@ export interface ObservatoryCandidateReviewInput {
   reason?: string;
 }
 
+export interface ObservatoryCandidateBatchInput {
+  projectId: string;
+  action: ObservatoryCandidateAction;
+  items: Array<{ candidateId: string; contentHash: string }>;
+  reviewAfter?: number;
+  reason?: string;
+}
+
 export interface ObservatoryCandidateFace {
   readonly readOnly?: boolean;
   list(input: { projectId?: string; limit?: number }): ObservatoryCandidate[];
   review(input: ObservatoryCandidateReviewInput): CandidateReviewResult;
+  reviewBatch(input: ObservatoryCandidateBatchInput): CandidateReviewResult[];
 }
 
 export interface ObservatoryChannelCard {
@@ -511,6 +520,13 @@ export function createObservatoryRoutes(
             }
             parsed.push({ candidateId: record.candidateId, contentHash: record.contentHash });
           }
+          const seen = new Set<string>();
+          for (const item of parsed) {
+            if (seen.has(item.candidateId)) {
+              return jsonResponse({ error: 'duplicate_candidate_id', candidateId: item.candidateId }, 400, acceptEncoding);
+            }
+            seen.add(item.candidateId);
+          }
           const current = new Map(options.candidates.list({ projectId, limit: 500 }).map((candidate) => [candidate.candidateId, candidate.contentHash]));
           for (const item of parsed) {
             if (!current.has(item.candidateId)) return jsonResponse({ error: 'candidate_not_found', candidateId: item.candidateId }, 400, acceptEncoding);
@@ -519,9 +535,9 @@ export function createObservatoryRoutes(
             }
           }
           return jsonResponse({
-            results: parsed.map((item) => ({
-              candidateId: item.candidateId,
-              ...options.candidates!.review({ candidateId: item.candidateId, projectId, action, contentHash: item.contentHash, reviewAfter, reason }),
+            results: options.candidates.reviewBatch({ projectId, action, items: parsed, reviewAfter, reason }).map((result, index) => ({
+              candidateId: parsed[index]!.candidateId,
+              ...result,
             })),
           }, 200, acceptEncoding);
         }

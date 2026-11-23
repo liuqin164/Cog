@@ -2,6 +2,7 @@ import { CONFIRMATION_TTL_MS, type MemoryKernel } from '../factory.js';
 import { candidateContentHash } from '../governance/CandidateReviewService.js';
 import type {
   ObservatoryCandidate,
+  ObservatoryCandidateBatchInput,
   ObservatoryCandidateFace,
   ObservatoryCandidateReviewInput,
 } from './routes.js';
@@ -17,6 +18,8 @@ export function createObservatoryCandidateFace(
   kernel: MemoryKernel,
   options: ObservatoryCandidateFaceOptions = {},
 ): ObservatoryCandidateFace {
+  const db = kernel.factStore.getDatabase();
+
   const pending = (projectId?: string, limit = REVIEW_LIMIT) => kernel.listDreamCandidates({
     projectId,
     statuses: ['needs_confirmation'],
@@ -67,6 +70,17 @@ export function createObservatoryCandidateFace(
     review: (input) => {
       refuseReadOnly();
       return reviewOne(input);
+    },
+    reviewBatch: (input: ObservatoryCandidateBatchInput) => {
+      refuseReadOnly();
+      return db.transaction(() => input.items.map((item) => reviewOne({
+        candidateId: item.candidateId,
+        projectId: input.projectId,
+        action: input.action,
+        contentHash: item.contentHash,
+        reviewAfter: input.reviewAfter,
+        reason: input.reason,
+      })))();
     },
   };
 }
