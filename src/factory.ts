@@ -207,7 +207,7 @@ export type { DreamTickOptions, DreamTickResult } from './dream/index.js';
 export type { EpisodeClosureReceipt, EpisodeDreamStatus, EpisodeListOptions, MemoryEpisode } from './episode/index.js';
 
 const ATLAS_RECALL_REFRESH_MS = 24 * 60 * 60 * 1000;
-const CONFIRMATION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+export const CONFIRMATION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const CONFIRMATION_WARNING_MS = 7 * 24 * 60 * 60 * 1000;
 const CANDIDATE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const HIGH_PRIVILEGE_CANDIDATE_TYPES = ['preferences', 'user_preference', 'long_term_goal', 'boundary', 'failure_lesson'];

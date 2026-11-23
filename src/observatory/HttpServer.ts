@@ -16,7 +16,8 @@
 import { Database } from 'bun:sqlite';
 import { dirname, join } from 'node:path';
 
-import { createMemoryKernel, createMemoryKernelFromConfig, type MemoryKernel } from '../factory.js';
+import { CONFIRMATION_TTL_MS, createMemoryKernel, createMemoryKernelFromConfig, type MemoryKernel } from '../factory.js';
+import { candidateContentHash } from '../governance/CandidateReviewService.js';
 import { ensureUsableTempSpace } from '../utils/SqliteTempDirectory.js';
 import { MemoryObservatory } from './MemoryObservatory.js';
 import { createObservatoryRoutes, OBSERVATORY_PREFIX, type ObservatoryChannelFace, type ObservatoryCredentialFace } from './routes.js';
@@ -84,6 +85,48 @@ export async function startObservatoryServer(options: ObservatoryServerOptions):
       ? readObservatoryToken(dirname(kernel.databasePath))
       : undefined,
     credentials: options.credentials,
+    candidates: {
+      list: ({ projectId, limit = 100 }) => kernel.listDreamCandidates({
+        projectId,
+        statuses: ['needs_confirmation'],
+        limit: Math.max(1, Math.min(limit, 500)),
+      }).map((candidate) => ({
+        ...candidate,
+        expiresAt: candidate.updatedAt + CONFIRMATION_TTL_MS,
+        contentHash: candidateContentHash(candidate.content),
+      })).sort((left, right) => left.expiresAt - right.expiresAt || left.createdAt - right.createdAt),
+      review: ({ candidateId, projectId, action, contentHash, reviewAfter, reason }) => {
+        const candidate = kernel.listDreamCandidates({
+          projectId,
+          statuses: ['needs_confirmation'],
+          limit: 5000,
+        }).find((entry) => entry.candidateId === candidateId);
+        if (!candidate) throw new Error('candidate_not_found');
+        if (candidateContentHash(candidate.content) !== contentHash) throw new Error('candidate_content_changed');
+        let confirmationEventId: string | undefined;
+        if (action === 'promote') {
+          confirmationEventId = kernel.eventStore.append({
+            streamId: `observatory-candidate:${projectId}`,
+            streamType: 'system',
+            eventType: 'SHELL_STATE_RECORDED',
+            projectId,
+            role: 'user',
+            payload: { kind: 'candidate_promote', surface: 'observatory', candidateId },
+          }).eventId;
+        }
+        return kernel.reviewDreamCandidate({
+          candidateId,
+          projectId,
+          action: action === 'promote' ? 'approve' : action,
+          actor: 'owner',
+          reason: reason?.trim() || 'reviewed_in_observatory',
+          confirmationEventId,
+          reviewAfter,
+          surface: 'observatory',
+          expectedContentHash: contentHash,
+        });
+      },
+    },
     channels: options.channels,
   });
 

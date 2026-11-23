@@ -18,6 +18,7 @@
 import { fileURLToPath } from 'node:url';
 
 import { KernelEventStreamError, type KernelEvent, type KernelEventType, type KernelEventStream } from '../events/index.js';
+import type { CandidateReviewResult } from '../governance/CandidateReviewService.js';
 import { SoulError, type SoulSnapshot, type SoulVersion } from '../soul/index.js';
 import type { MemoryObservatory } from './MemoryObservatory.js';
 import { OBSERVATORY_TOKEN_HEADER, observatoryTokensMatch } from './token.js';
@@ -42,6 +43,7 @@ export interface ObservatoryRouteOptions {
    */
   token?: string;
   credentials?: ObservatoryCredentialFace;
+  candidates?: ObservatoryCandidateFace;
   channels?: ObservatoryChannelFace;
   uiSlots?: () => ObservatoryUiSlot[];
   companionName?: () => string;
@@ -67,6 +69,37 @@ export interface ObservatoryCredentialFace {
   submit(id: string, values: Record<string, string>, surface: string): { ok: true; ref: string } | { ok: false; reason: string };
   cancel(id: string, surface: string): boolean;
   revoke(ref: string): boolean;
+}
+
+export interface ObservatoryCandidate {
+  candidateId: string;
+  runId: string;
+  candidateType: string;
+  status: string;
+  confidence: number;
+  content: unknown;
+  statusReason?: string;
+  reviewAfter?: number;
+  expiresAt: number;
+  createdAt: number;
+  updatedAt: number;
+  contentHash: string;
+}
+
+export type ObservatoryCandidateAction = 'promote' | 'reject' | 'defer';
+
+export interface ObservatoryCandidateReviewInput {
+  candidateId: string;
+  projectId: string;
+  action: ObservatoryCandidateAction;
+  contentHash: string;
+  reviewAfter?: number;
+  reason?: string;
+}
+
+export interface ObservatoryCandidateFace {
+  list(input: { projectId?: string; limit?: number }): ObservatoryCandidate[];
+  review(input: ObservatoryCandidateReviewInput): CandidateReviewResult;
 }
 
 export interface ObservatoryChannelCard {
@@ -425,6 +458,82 @@ export function createObservatoryRoutes(
         return jsonResponse({ ok: options.credentials.revoke(typeof body.ref === 'string' ? body.ref : '') }, 200, acceptEncoding);
       } catch (error) {
         return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 500, acceptEncoding);
+      }
+    }
+
+    const candidateRead = url.pathname === '/observatory/candidates';
+    const candidateBatch = url.pathname === '/observatory/candidates/batch';
+    const candidateAction = url.pathname.match(/^\/observatory\/candidates\/([^/]+)\/(promote|reject|defer)$/u);
+    if (candidateRead || candidateBatch || candidateAction) {
+      if (candidateRead && request.method !== 'GET' && request.method !== 'HEAD') {
+        return new Response('method_not_allowed', { status: 405, headers: { allow: 'GET, HEAD' } });
+      }
+      if (!candidateRead && request.method !== 'POST') {
+        return new Response('method_not_allowed', { status: 405, headers: { allow: 'POST' } });
+      }
+      if (!options.candidates) return jsonResponse({ error: 'candidates_unavailable' }, 404, acceptEncoding);
+      if (candidateRead) {
+        const requested = Number(url.searchParams.get('limit') ?? '100');
+        return jsonResponse({
+          candidates: options.candidates.list({
+            projectId: queryParam(url, 'project'),
+            limit: Number.isFinite(requested) ? requested : 100,
+          }),
+        }, 200, acceptEncoding);
+      }
+      const refused = refuseWrite(request, options.token, acceptEncoding);
+      if (refused) return refused;
+      const body = await readJsonBody(request);
+      if (!body) return jsonResponse({ error: 'invalid_json' }, 400, acceptEncoding);
+      const projectId = typeof body.projectId === 'string' ? body.projectId.trim() : '';
+      if (!projectId) return jsonResponse({ error: 'project_id_required' }, 400, acceptEncoding);
+      const reason = typeof body.reason === 'string' ? body.reason : undefined;
+      const reviewAfter = typeof body.reviewAfter === 'number' ? body.reviewAfter : undefined;
+      try {
+        if (candidateBatch) {
+          const action = body.action;
+          if (action !== 'promote' && action !== 'reject' && action !== 'defer') {
+            return jsonResponse({ error: 'invalid_action' }, 400, acceptEncoding);
+          }
+          const items = Array.isArray(body.items) ? body.items : [];
+          if (items.length === 0) return jsonResponse({ error: 'items_required' }, 400, acceptEncoding);
+          if (items.length > 20) return jsonResponse({ error: 'batch_limit_exceeded' }, 400, acceptEncoding);
+          if (body.confirm !== true) return jsonResponse({ error: 'batch_confirmation_required' }, 400, acceptEncoding);
+          const parsed: Array<{ candidateId: string; contentHash: string }> = [];
+          for (const item of items) {
+            const record = item && typeof item === 'object' && !Array.isArray(item) ? item as Record<string, unknown> : null;
+            if (!record || typeof record.candidateId !== 'string' || typeof record.contentHash !== 'string') {
+              return jsonResponse({ error: 'invalid_batch_item' }, 400, acceptEncoding);
+            }
+            parsed.push({ candidateId: record.candidateId, contentHash: record.contentHash });
+          }
+          const current = new Map(options.candidates.list({ projectId, limit: 500 }).map((candidate) => [candidate.candidateId, candidate.contentHash]));
+          for (const item of parsed) {
+            if (!current.has(item.candidateId)) return jsonResponse({ error: 'candidate_not_found', candidateId: item.candidateId }, 400, acceptEncoding);
+            if (current.get(item.candidateId) !== item.contentHash) {
+              return jsonResponse({ error: 'candidate_content_changed', candidateId: item.candidateId }, 400, acceptEncoding);
+            }
+          }
+          return jsonResponse({
+            results: parsed.map((item) => ({
+              candidateId: item.candidateId,
+              ...options.candidates!.review({ candidateId: item.candidateId, projectId, action, contentHash: item.contentHash, reviewAfter, reason }),
+            })),
+          }, 200, acceptEncoding);
+        }
+        const [, rawId, action] = candidateAction!;
+        const contentHash = typeof body.contentHash === 'string' ? body.contentHash.trim() : '';
+        if (!contentHash) return jsonResponse({ error: 'content_hash_required' }, 400, acceptEncoding);
+        return jsonResponse(options.candidates.review({
+          candidateId: decodeURIComponent(rawId!),
+          projectId,
+          action: action as ObservatoryCandidateAction,
+          contentHash,
+          reviewAfter,
+          reason,
+        }), 200, acceptEncoding);
+      } catch (error) {
+        return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400, acceptEncoding);
       }
     }
 

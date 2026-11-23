@@ -44,6 +44,11 @@ const state = {
   soul: null,
   soulLoading: false,
   soulError: null,
+  candidates: null,
+  candidatesLoading: false,
+  candidatesError: null,
+  candidateNotice: null,
+  selectedCandidates: new Set(),
   credentials: null,
   credentialsLoading: false,
   credentialsError: null,
@@ -1258,6 +1263,174 @@ function filterRole(roleId) {
   updateMapStats();
 }
 
+const CANDIDATE_ACTION_LABEL = { promote: '批准', reject: '拒绝', defer: '延期' };
+
+async function loadCandidates() {
+  if (state.demo) {
+    state.candidates = { candidates: [] };
+    state.candidatesLoading = false;
+    state.candidatesError = null;
+    renderClassification();
+    return;
+  }
+  state.candidatesLoading = true;
+  state.candidatesError = null;
+  try {
+    state.candidates = await api('candidates', { project: state.projectId, limit: 200 });
+  } catch (error) {
+    state.candidates = null;
+    state.candidatesError = error.message;
+  } finally {
+    state.candidatesLoading = false;
+    state.selectedCandidates.clear();
+    if (state.view === 'classification') renderClassification();
+  }
+}
+
+function candidateContent(candidate) {
+  const text = typeof candidate.content === 'string' ? candidate.content : JSON.stringify(candidate.content ?? {}, null, 2);
+  return text.length > 260 ? `${text.slice(0, 260)}…` : text;
+}
+
+function candidateExpiry(candidate) {
+  const left = Math.ceil((candidate.expiresAt - Date.now()) / 86_400_000);
+  return left <= 0 ? '已逾期' : left <= 7 ? `${left} 天内过期` : `${stamp(candidate.expiresAt)} 过期`;
+}
+
+async function reviewCandidate(candidate, action) {
+  let reviewAfter;
+  if (action === 'defer') {
+    const days = Number(prompt('延期天数', '7'));
+    if (!Number.isFinite(days) || days <= 0) return;
+    reviewAfter = Date.now() + Math.round(days * 86_400_000);
+  }
+  state.candidateNotice = null;
+  try {
+    await postJson(`candidates/${encodeURIComponent(candidate.candidateId)}/${action}`, {
+      projectId: state.projectId,
+      contentHash: candidate.contentHash,
+      reason: 'star_sea_review',
+      ...(reviewAfter ? { reviewAfter } : {}),
+    });
+    state.candidateNotice = `已${CANDIDATE_ACTION_LABEL[action]} 1 条候选。`;
+    await reload();
+  } catch (error) {
+    state.candidateNotice = error.message;
+    renderClassification();
+  }
+}
+
+async function reviewCandidateBatch(action) {
+  const selected = (state.candidates?.candidates ?? []).filter((candidate) => state.selectedCandidates.has(candidate.candidateId));
+  if (selected.length === 0) {
+    state.candidateNotice = '先勾选候选。';
+    renderClassification();
+    return;
+  }
+  if (selected.length > 20) {
+    state.candidateNotice = '一次最多处理 20 条候选。';
+    renderClassification();
+    return;
+  }
+  let reviewAfter;
+  if (action === 'defer') {
+    const days = Number(prompt('延期天数', '7'));
+    if (!Number.isFinite(days) || days <= 0) return;
+    reviewAfter = Date.now() + Math.round(days * 86_400_000);
+  }
+  const label = CANDIDATE_ACTION_LABEL[action];
+  if (!confirm(`对 ${selected.length} 条候选执行「${label}」？`)) return;
+  state.candidateNotice = null;
+  try {
+    await postJson('candidates/batch', {
+      projectId: state.projectId,
+      action,
+      confirm: true,
+      reason: 'star_sea_batch_review',
+      items: selected.map((candidate) => ({ candidateId: candidate.candidateId, contentHash: candidate.contentHash })),
+      ...(reviewAfter ? { reviewAfter } : {}),
+    });
+    state.candidateNotice = `已${label} ${selected.length} 条候选。`;
+    await reload();
+  } catch (error) {
+    state.candidateNotice = error.message;
+    renderClassification();
+  }
+}
+
+function candidateReviewSection() {
+  const section = el('div', { class: 'section' });
+  section.append(el('h2', { class: 'head', text: '候选审核' }));
+  section.append(el('p', { class: 'dim', text: '待确认候选按过期时间从近到远排列；批准、拒绝、延期都写同一审核账本，审计行 surface=observatory。' }));
+  if (state.candidateNotice) section.append(el('p', { class: 'notice', text: state.candidateNotice }));
+  section.append(el('p', { class: 'hint', text: '写操作需要数据目录下 observatory-token 的令牌；令牌只留在本标签页。' }));
+  section.append(credentialTokenInput());
+  if (state.candidatesLoading && !state.candidates) {
+    section.append(el('div', { class: 'skeleton w60' }), el('div', { class: 'skeleton' }));
+    return section;
+  }
+  if (state.candidatesError) {
+    section.append(el('p', { class: 'dim', text: state.candidatesError }));
+    return section;
+  }
+  const candidates = state.candidates?.candidates ?? [];
+  if (candidates.length === 0) {
+    section.append(el('p', { class: 'dim', text: '没有待确认候选。' }));
+    return section;
+  }
+  const selected = el('span', { class: 'dim', text: '已选 0 条' });
+  const toolbar = el('div', { class: 'soul-toolbar' }, [
+    selected,
+    ...['promote', 'reject', 'defer'].map((action) => el('button', {
+      class: 'chip',
+      type: 'button',
+      text: `批量${CANDIDATE_ACTION_LABEL[action]}`,
+      onclick: () => void reviewCandidateBatch(action),
+    })),
+  ]);
+  section.append(toolbar);
+  const table = el('table', { class: 'audit-table' }, [
+    el('thead', {}, [el('tr', {}, [
+      el('th', { text: '选' }),
+      el('th', { text: '候选' }),
+      el('th', { text: '置信度' }),
+      el('th', { text: '过期' }),
+      el('th', { text: '操作' }),
+    ])]),
+  ]);
+  const body = el('tbody');
+  for (const candidate of candidates) {
+    const checkbox = el('input', {
+      type: 'checkbox',
+      'aria-label': `选择 ${candidate.candidateId}`,
+    });
+    checkbox.addEventListener('change', () => {
+      if (checkbox.checked) state.selectedCandidates.add(candidate.candidateId);
+      else state.selectedCandidates.delete(candidate.candidateId);
+      selected.textContent = `已选 ${state.selectedCandidates.size} 条`;
+    });
+    body.append(el('tr', {}, [
+      el('td', {}, [checkbox]),
+      el('td', {}, [
+        el('div', { class: 'hint', text: `${candidate.candidateType} · ${candidate.candidateId}` }),
+        el('pre', { class: 'json', text: candidateContent(candidate) }),
+        candidate.statusReason ? el('div', { class: 'hint', text: candidate.statusReason }) : null,
+      ]),
+      el('td', { class: 'num', text: Number(candidate.confidence ?? 0).toFixed(2) }),
+      el('td', { text: candidateExpiry(candidate) }),
+      el('td', {}, ['promote', 'reject', 'defer'].map((action) => el('button', {
+        class: action === 'promote' ? 'primary' : 'chip',
+        type: 'button',
+        text: CANDIDATE_ACTION_LABEL[action],
+        onclick: () => void reviewCandidate(candidate, action),
+      }))),
+    ]));
+  }
+  table.append(body);
+  section.append(table);
+  return section;
+}
+
 function renderClassification() {
   const host = $('view-classification');
   host.innerHTML = '';
@@ -1317,6 +1490,7 @@ function renderClassification() {
     })),
   ]);
   audit.append(table);
+  audit.append(candidateReviewSection());
   host.append(audit);
 }
 
@@ -2338,7 +2512,7 @@ function showView(view) {
   if (meta) { $('view-title').textContent = meta[0]; $('view-note').textContent = meta[1]; }
   if (view === 'recalls') renderRecalls();
   if (view === 'timeline') renderTimeline();
-  if (view === 'classification') renderClassification();
+  if (view === 'classification') { void loadCandidates(); renderClassification(); }
   if (view === 'round') renderRound();
   if (view === 'soul') void loadSoul();
   if (view === 'credentials') void loadCredentials();
@@ -2384,7 +2558,7 @@ function applyLoaded() {
   drawMiniMap();
   renderTimeline();
   renderRecalls();
-  if (state.view === 'classification') renderClassification();
+  if (state.view === 'classification') { void loadCandidates(); renderClassification(); }
   if (state.view === 'round') renderRound();
   if (state.view === 'soul') void loadSoul();
   if (state.view === 'credentials') void loadCredentials();

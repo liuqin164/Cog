@@ -1,14 +1,14 @@
 # Memory observatory
 
 A page for looking at a corpus: a 3D star map of the Memory Atlas, the ledger's shape over time, the
-recall decisions that were stored, and the owner's soul editor. `cogmem observatory` serves it on
-`/observatory/` from its own loopback process — the resident the update stops and starts. The read
-path is zero-write; the soul editor's two `POST` routes are its one, deliberately narrow write
-exception (#194).
+recall decisions that were stored, the owner's soul editor, and candidate review. `cogmem observatory`
+serves it on `/observatory/` from its own loopback process — the resident the update stops and starts.
+The read path is zero-write; the soul editor's two `POST` routes and the candidate review `POST`
+routes are its deliberate write exceptions (#194, #473).
 
 ```bash
 cogmem observatory
-# cogmem memory observatory (read-only; soul editor is the one write) on http://127.0.0.1:7337/observatory/
+# cogmem memory observatory (read-only; soul and candidate review are the writes) on http://127.0.0.1:7337/observatory/
 ```
 
 ## The constraints, and where each one is enforced
@@ -18,7 +18,7 @@ cogmem observatory
 | The read path never writes | `openObservatoryDatabase` in `src/observatory/HttpServer.ts` opens a read-only connection; SQLite refuses a write on it. A `:memory:` or `file:`-URI database gets no page at all rather than being handed the kernel's writable handle. `__tests__/observatory.unit.test.ts` hashes the file and its WAL across a full GET/HEAD traversal and reads the observatory's own SQL for write statements. |
 | Loopback only, with no option to change it | `isLoopbackAddress` in `src/observatory/routes.ts`, checked on the socket address of every request, and the URL the process prints always names `127.0.0.1`. The page's process binds loopback (`127.0.0.1`) and every request whose socket address is not loopback is refused. |
 | No rebinding, no cross-site writes | Every route (reads included) requires `Host` to be `127.0.0.1`, `localhost` or `::1`, any port; a rebinding name is `403`. Soul `POST`s additionally require `content-type: application/json` (a preflight), a same-page or absent `Origin`, and `x-observatory-token` matching `<dataDir>/observatory-token` (0600, minted once by the installer). Comparison is constant-time. An install without the file refuses writes with `observatory_write_token_unavailable`. Since #308 there is no token route: the owner pastes the 0600 file's value into the soul editor once per tab, so no local GET hands out the long-lived write token. |
-| Reads, plus the soul governance writes | `createObservatoryRoutes` answers `GET`/`HEAD` everywhere and `POST` only on `/observatory/soul` and `/observatory/soul/rollback`; every other verb is `405` with an `Allow` header. The two soul routes call the kernel's owner-only save/rollback, not the page's read-only handle. `/observatory/events` is `GET`-only (`HEAD` there is `405`, since a stream has no body to omit). |
+| Reads, plus the owner's governance writes | `createObservatoryRoutes` answers `GET`/`HEAD` everywhere and `POST` only on `/observatory/soul`, `/observatory/soul/rollback`, `/observatory/candidates/:id/{promote,reject,defer}` and `/observatory/candidates/batch`; every other verb is `405` with an `Allow` header. The soul routes call the kernel's owner-only save/rollback; the candidate routes call `CandidateReviewService`, the same service `cogmem memory review` uses. `/observatory/events` is `GET`-only (`HEAD` there is `405`, since a stream has no body to omit). |
 | The event stream writes nothing either | `GET /observatory/events` reads the kernel's in-process stream and opens no database connection at all; `__tests__/observatory-events.integration.test.ts` hashes the file across a stream round trip. |
 | Live and demo never mix | Demo mode is a single explicit entry (`?demo=1`), loads `web/demo.json`, never calls the API, and marks every page with a fictional badge and no watermark. |
 
@@ -40,7 +40,7 @@ Chinese characters.
 
 ## Endpoints
 
-All under `/observatory`, all loopback. `GET`/`HEAD` everywhere except the two soul `POST` routes.
+All under `/observatory`, all loopback. `GET`/`HEAD` everywhere except the soul and candidate `POST` routes.
 `project=` defaults to the project with the most events; `agent=` defaults to the merged view for
 the read views, and is required for `/soul`.
 
@@ -56,6 +56,11 @@ the read views, and is required for `/soul`.
 | `/observatory/soul?agent=` | The selected agent's current soul version, version history, latest agent proposal and audit rows. `agent` is required; there is no merged soul view |
 | `POST /observatory/soul` | The owner saves a new version. Body `{ agentId, content, reason? }`; the route supplies `actor: 'user'`. Requires the write token and a JSON body |
 | `POST /observatory/soul/rollback` | The owner appends a new version with an older version's content. Body `{ agentId, version, reason? }`. Same write locks as the save |
+| `/observatory/candidates?project=&limit=` | The `needs_confirmation` queue for the selected project, with each candidate's content, confidence, `reviewAfter`, `expiresAt` and `contentHash`; the nearest expiry comes first |
+| `POST /observatory/candidates/:id/promote` | Approve one candidate. Body `{ projectId, contentHash, reason? }`. The click is recorded as user confirmation, then `CandidateReviewService` promotes it |
+| `POST /observatory/candidates/:id/reject` | Reject one candidate. Body `{ projectId, contentHash, reason? }` |
+| `POST /observatory/candidates/:id/defer` | Defer one candidate. Body `{ projectId, contentHash, reviewAfter, reason? }`; `reviewAfter` must be a future epoch millisecond |
+| `POST /observatory/candidates/batch` | Review up to 20 candidates with one action. Body `{ projectId, action, items: [{ candidateId, contentHash }], confirm: true, reviewAfter?, reason? }`; without `confirm: true` nothing runs |
 
 Bodies are gzipped when the client asks. `watermark` is `max(global_seq)`; the aggregation is cached in
 process memory per `(project, watermark, max(updated_at))` and recomputed when either moves.
@@ -73,10 +78,20 @@ Soul writes use the token from `<dataDir>/observatory-token`; paste it into the 
 once per tab. The page keeps it in `sessionStorage` and sends it as `x-observatory-token` — there is
 no route that reads the file for the page (#308).
 
+## Candidate review
+
+The classification audit shows the `needs_confirmation` queue with its nearest-expiry candidate
+first. The owner can promote, reject or defer one row, or select up to 20 rows and run one action
+after a second confirmation. Every request carries the `contentHash` the page displayed; the server
+refuses a hash that no longer matches the candidate, so a stale page cannot approve content it did
+not show (#473). Promote, reject and defer all land in `CandidateReviewService` and write a
+`deep_write_candidate_reviews` row with `surface = 'observatory'`; promote also appends the owner's
+click as a user confirmation event.
+
 The revised zero-write proof is the same fingerprint method, applied to the whole read path plus the
-soul `GET`: hash the database file and `-wal` before and after a full `GET`/`HEAD` traversal, then
-prove the two soul `POST`s move the fingerprint and write an audit row. Every other `POST` must still
-answer `405`.
+soul and candidate `GET`s: hash the database file and `-wal` before and after a full `GET`/`HEAD`
+traversal, then prove the soul and candidate `POST`s move the fingerprint and write an audit row.
+Every other `POST` must still answer `405`.
 
 Measured on the 20,343-event corpus (14,271 nodes, 17,596 edges): the snapshot is 3,355,038 bytes of
 JSON, 826,039 gzipped, 504 ms cold and 83 ms from cache.

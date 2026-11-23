@@ -394,6 +394,7 @@ export const FINAL_TABLES: readonly FinalSchemaObject[] = [
         target_belief_id TEXT,
         replacement_candidate_id TEXT,
         review_after INTEGER,
+        surface TEXT,
         decision_json TEXT NOT NULL DEFAULT '{}',
         created_at INTEGER NOT NULL,
         FOREIGN KEY(candidate_id) REFERENCES deep_write_candidates(candidate_id)

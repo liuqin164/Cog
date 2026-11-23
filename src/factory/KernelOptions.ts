@@ -90,6 +90,7 @@ export interface DreamCandidateRecord {
   promotionTargetType?: string;
   promotionTargetId?: string;
   statusReason?: string;
+  reviewAfter?: number;
   createdAt: number;
   updatedAt: number;
 }

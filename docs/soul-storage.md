@@ -76,8 +76,9 @@ approves by saving in the star-sea editor, which is the same `actor: 'user'` wri
 
 ## Endpoints (frozen)
 
-All are loopback-only, like every observatory endpoint. The two `POST` routes are the observatory's
-only write exception; every other route answers `GET`/`HEAD` and writes nothing.
+All are loopback-only, like every observatory endpoint. The two `POST` routes are this contract's
+writes; every other soul route answers `GET`/`HEAD` and writes nothing. Candidate review has its own
+write routes (#473).
 
 | Endpoint | Method | Writes | Answer |
 |---|---|---|---|
@@ -142,13 +143,13 @@ estimate and the limit beside the text area, and disables the save button while 
 
 ## Zero-write proof under the revised rule (frozen)
 
-The observatory's read path is still zero-write, with one named exception. The proof hashes the
+The observatory's read path is still zero-write. The proof hashes the
 database file and its `-wal` file before and after a traversal of every `GET`/`HEAD` route,
 including `/observatory/soul`; all hashes must be unchanged. It then calls the two soul `POST`
 routes and requires the fingerprint to move and the audit row to exist. The same test reads the
 observatory's own modules back and refuses a SQL write statement outside the kernel's soul service.
-Every other `POST` must still be `405`. This is the revised contract from #136: only
-`/observatory/soul` and `/observatory/soul/rollback` may write.
+Every other soul `POST` must still be `405`. This is the revised contract from #136:
+`/observatory/soul` and `/observatory/soul/rollback` are the soul writes.
 
 ## What this face does not do
 
