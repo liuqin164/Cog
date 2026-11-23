@@ -31,7 +31,43 @@ test('a relative day window uses the project time zone (#447)', async () => {
     });
 
     const recalled = backend.recall({ projectId: 'p', agentId: 'a', query: '昨天聊的部署窗口是什么', now, limit: 5 });
-    expect(recalled.items.map((item) => item.text)).toEqual(['昨天说的部署窗口是周二凌晨两点。']);
+    const texts = recalled.items.map((item) => item.text);
+    expect(texts[0]).toBe('昨天说的部署窗口是周二凌晨两点。');
+    expect(texts).toContain('今天又提了一次部署窗口。');
+  } finally {
+    kernel.close();
+  }
+});
+
+test('a content query weights the relative window instead of filtering it (#492)', async () => {
+  const kernel = createMemoryKernel({
+    dbPath: join(makeTempDir('recall-relative-soft-'), 'brain.db'),
+    projectTimeZone: TOKYO,
+  });
+  const backend = new KernelAgentMemoryBackend(kernel);
+  const now = Date.parse('2026-11-20T03:00:00.000Z');
+  try {
+    kernel.recordRawEvent({
+      threadId: 't-inside', projectId: 'p', role: 'user', sourceId: 'a',
+      content: '部署窗口定在周二凌晨两点。',
+      occurredAt: Date.parse('2026-11-19T01:00:00.000Z'),
+    });
+    kernel.recordRawEvent({
+      threadId: 't-newer', projectId: 'p', role: 'user', sourceId: 'a',
+      content: '部署窗口又确认了一次。',
+      occurredAt: Date.parse('2026-11-20T01:00:00.000Z'),
+    });
+    kernel.recordRawEvent({
+      threadId: 't-older', projectId: 'p', role: 'user', sourceId: 'a',
+      content: '部署窗口改到周四。',
+      occurredAt: Date.parse('2026-11-17T01:00:00.000Z'),
+    });
+
+    const recalled = backend.recall({ projectId: 'p', agentId: 'a', query: '昨天聊的部署窗口是什么', now, limit: 5 });
+    const texts = recalled.items.map((item) => item.text);
+    expect(texts[0]).toBe('部署窗口定在周二凌晨两点。');
+    expect(texts).toContain('部署窗口又确认了一次。');
+    expect(texts).toContain('部署窗口改到周四。');
   } finally {
     kernel.close();
   }
@@ -131,6 +167,22 @@ test('刚才 is a sliding two-hour window, not a civil day (#491)', () => {
   const range = relativeDateRange('刚才', { now, timeZone: TOKYO })!;
   expect(range.from).toBe(now - 2 * 60 * 60 * 1000);
   expect(range.to).toBe(now + 1);
+});
+
+test('relative windows match the longest phrase and the date nearest the cue verb (#492)', () => {
+  const options = { localDateNow: '2026-11-20', timeZone: TOKYO };
+  const window = (query: string) => {
+    const range = relativeDateRange(query, options);
+    return range && [localDateFor(range.from, TOKYO), localDateFor(range.to, TOKYO)];
+  };
+
+  expect(window('大前天')).toEqual(['2026-11-17', '2026-11-18']);
+  expect(window('上上周')).toEqual(['2026-11-02', '2026-11-09']);
+  expect(window('上上个月')).toEqual(['2026-09-01', '2026-10-01']);
+  expect(window('两天前')).toEqual(['2026-11-18', '2026-11-19']);
+  expect(window('三天前')).toEqual(['2026-11-17', '2026-11-18']);
+  expect(window('我昨天跟你说过我今天要去医院')).toEqual(['2026-11-19', '2026-11-20']);
+  expect(window('今天或者昨天')).toBeUndefined();
 });
 
 test('a yearless facet day falls back to last year when its month is still ahead (#464)', () => {

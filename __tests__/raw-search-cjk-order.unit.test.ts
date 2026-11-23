@@ -55,3 +55,12 @@ test('the LIKE fallback tie-break is newest first on the relevance path', () => 
     .toEqual(ids.slice().reverse());
   instance.close();
 });
+
+test('a capped posting keeps the newest events, not the lowest event ids (#493)', () => {
+  const instance = store();
+  const ids = Array.from({ length: 500 }, (_, index) => append(instance, `第 ${index} 条：部署计划不变。`, `t-${index}`));
+
+  expect(instance.searchRawEvents('部署计划', { projectId: 'p', limit: 10, orderBy: 'relevance' }).map((event) => event.eventId))
+    .toEqual(ids.slice(-10).reverse());
+  instance.close();
+}, 60_000);

@@ -1570,6 +1570,7 @@ export class EventStore {
       FROM memory_event_cjk_terms t
       JOIN memory_events e ON e.event_id = t.event_id
       WHERE t.term = ?${scope.sql}
+      ORDER BY t.global_seq DESC, t.event_id DESC
       LIMIT ?
     `);
     const candidates = new Map<string, { eventId: string; globalSeq: number; matched: number }>();
