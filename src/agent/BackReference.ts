@@ -1,5 +1,5 @@
 import { socialTurnResources } from '../config/LanguagePacks.js';
-import { ZH_REFERENCE_SIGNALS } from '../lexicon/language-packs/zh.js';
+import { ZH_REFERENCE_SIGNALS, ZH_SHORT_REPLY_BINDING } from '../lexicon/language-packs/zh.js';
 import { extractRecallKeywords } from './AgentRecallQueryCompiler.js';
 
 export type BackReferenceKind = 'current_session' | 'previous_session' | 'state_follow_up';
@@ -18,6 +18,7 @@ export interface BackReferenceRewrite extends BackReferenceDetection {
 
 const STATE_FOLLOW_UP = /(后来|然后|结果|现在|最近|它|他|她).{0,8}(怎么样|怎样|如何|进展|状态|结果)/u;
 const PREVIOUS_SESSION = /(上次|上回|昨天|前天|前一天|那天|那次|以前|之前|上一|上个)/u;
+const APPROVAL_REPLY = new RegExp(`^(?:${[...ZH_SHORT_REPLY_BINDING.approved, ...ZH_SHORT_REPLY_BINDING.entitySelection].join('|')}|(?:它|他|她|这个|那个)?(?:挺好|很好|不错|蛮好)|(?:这个|那个|它|他|她|那个东西|这个设备)吧)$`, 'u');
 
 const REFERENCE_TERMS = [...new Set([
   ...Object.values(ZH_REFERENCE_SIGNALS).flat(),
@@ -35,7 +36,7 @@ const STRIP_TERMS = [
 
 export function detectBackReference(query: string): BackReferenceDetection | undefined {
   const text = query.trim();
-  if (text === '') return undefined;
+  if (text === '' || isApprovalShortReply(text)) return undefined;
   const hasReference = socialTurnResources().backReference.test(text)
     || REFERENCE_TERMS.some((term) => text.includes(term))
     || STATE_FOLLOW_UP.test(text);
@@ -46,6 +47,10 @@ export function detectBackReference(query: string): BackReferenceDetection | und
     ? 'previous_session'
     : followUp ? 'state_follow_up' : 'current_session';
   return { kind, followUp, source: 'deterministic_backref' };
+}
+
+function isApprovalShortReply(text: string): boolean {
+  return !/[？?]|怎么样|怎样|如何|进展|状态|后来|然后|结果|现在|最近|呢/u.test(text) && APPROVAL_REPLY.test(text.replace(/[\s\p{P}\p{S}]+/gu, ''));
 }
 
 function stripBackReference(text: string): string {

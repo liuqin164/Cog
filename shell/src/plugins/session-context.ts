@@ -124,6 +124,7 @@ export function sessionContextPlugin(config: SessionContextPluginConfig): Native
                 agentId: config.agentId,
                 projectId: config.projectId,
                 query,
+                recordBackReferenceAnchor: true,
                 excludeSessionId: config.sessionId,
                 excludeSessionTailTurns: config.tailTurns,
                 limit: config.recallLimit ?? 3, ...config.clock(),

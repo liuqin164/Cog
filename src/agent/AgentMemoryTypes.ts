@@ -91,6 +91,7 @@ export interface AgentRecallQuery {
   endTime?: number;
   retrievalPolicy?: StrategyRetrievalPolicy;
   includeProfileLane?: boolean;
+  recordBackReferenceAnchor?: boolean;
 }
 
 export interface AgentRecallSourceAnchor {
