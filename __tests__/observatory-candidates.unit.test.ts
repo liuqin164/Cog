@@ -290,4 +290,29 @@ describe('the observatory candidate review face (#473)', () => {
       expect(kernel.listDreamCandidateReviews({ projectId: PROJECT, candidateId: item.candidateId })).toHaveLength(0);
     }
   });
+
+  test('a failed promote leaves no orphan user confirmation event', async () => {
+    const target = await candidate('cand-batch-4');
+    const count = () => (kernel.factStore.getDatabase().prepare(
+      `SELECT COUNT(*) AS n FROM memory_events WHERE payload_json LIKE '%candidate_promote%'`,
+    ).get() as { n: number }).n;
+    const before = count();
+    const original = kernel.reviewDreamCandidate.bind(kernel);
+    kernel.reviewDreamCandidate = ((input) => {
+      if (input.candidateId === target.candidateId) throw new Error('promotion_failed');
+      return original(input);
+    }) as typeof kernel.reviewDreamCandidate;
+    try {
+      const response = await post(`/candidates/${target.candidateId}/promote`, {
+        projectId: PROJECT,
+        contentHash: target.contentHash,
+      });
+      expect(response.status).toBe(400);
+      expect((await response.json() as { error: string }).error).toBe('promotion_failed');
+    } finally {
+      kernel.reviewDreamCandidate = original;
+    }
+    expect(count()).toBe(before);
+    expect((await candidate(target.candidateId)).status).toBe('needs_confirmation');
+  });
 });

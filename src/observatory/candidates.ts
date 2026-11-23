@@ -69,7 +69,7 @@ export function createObservatoryCandidateFace(
       .sort((left, right) => left.expiresAt - right.expiresAt || left.createdAt - right.createdAt),
     review: (input) => {
       refuseReadOnly();
-      return reviewOne(input);
+      return db.transaction(() => reviewOne(input))();
     },
     reviewBatch: (input: ObservatoryCandidateBatchInput) => {
       refuseReadOnly();
