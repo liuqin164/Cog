@@ -1,50 +1,31 @@
-/**
- * The observatory's own loopback HTTP process.
- *
- * The page used to ride the MCP server's HTTP transport; that face is gone, and this is the service
- * that remains. It answers three pages, their JSON endpoints, and the `/observatory/events` SSE
- * stream of the kernel's event stream (`docs/events.md`), and it binds loopback by default —
- * `createObservatoryRoutes` refuses any request whose socket address is not loopback whatever the
- * bind address is, so a LAN address can only reach the refusal.
- *
- * Read-only is a property of the handle, not of everyone's memory of the SQL: the connection this
- * opens is `readonly: true`, which SQLite refuses to write through. A `:memory:` or `file:`-URI
- * database has no second connection to open, and lending it the kernel's writable handle would make
- * read-only a property of the call site, so that kernel simply gets no page.
- */
-
 import { Database } from 'bun:sqlite';
+import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-import { CONFIRMATION_TTL_MS, createMemoryKernel, createMemoryKernelFromConfig, type MemoryKernel } from '../factory.js';
-import { candidateContentHash } from '../governance/CandidateReviewService.js';
+import { createMemoryKernel, createMemoryKernelFromConfig, type MemoryKernel } from '../factory.js';
 import { ensureUsableTempSpace } from '../utils/SqliteTempDirectory.js';
+import { createObservatoryCandidateFace } from './candidates.js';
 import { MemoryObservatory } from './MemoryObservatory.js';
 import { createObservatoryRoutes, OBSERVATORY_PREFIX, type ObservatoryChannelFace, type ObservatoryCredentialFace } from './routes.js';
 import { readObservatoryToken } from './token.js';
 
 export interface ObservatoryRuntime {
-  /** An already-open kernel. When absent one is opened from `dbPath`, else from the config walk. */
   kernel?: MemoryKernel;
   dbPath?: string;
   configPath?: string;
   cwd?: string;
-  /** The family roster, listed beside the identities the corpus names. */
   connectedAgents?: () => string[];
-  /** The shell's trace file. Defaults to the file beside the memory database, where the resident keeps it. */
   tracePath?: string;
 }
 
 export interface ObservatoryServerOptions extends ObservatoryRuntime {
   port: number;
-  /** Bind address. Defaults to loopback. */
   hostname?: string;
   credentials?: ObservatoryCredentialFace;
   channels?: ObservatoryChannelFace;
 }
 
 export interface ObservatoryServerHandle {
-  /** Always named as loopback: 0.0.0.0 is not a browsable address, and every non-loopback request is refused. */
   url: string;
   port: number;
   stop(): void;
@@ -60,6 +41,9 @@ export async function startObservatoryServer(options: ObservatoryServerOptions):
   const hostname = options.hostname ?? '127.0.0.1';
   const kernel = resolveKernel(options);
   const ownsKernel = !options.kernel;
+  const dataDir = kernel.databasePath && kernel.databasePath !== ':memory:' && !kernel.databasePath.startsWith('file:')
+    ? dirname(kernel.databasePath)
+    : undefined;
 
   const observatoryDb = openObservatoryDatabase(kernel);
   if (observatoryDb === null) {
@@ -78,55 +62,14 @@ export async function startObservatoryServer(options: ObservatoryServerOptions):
     }),
     connectedAgents: options.connectedAgents ?? (() => []),
     tracePath: options.tracePath ?? (kernel.databasePath && kernel.databasePath !== ':memory:' && !kernel.databasePath.startsWith('file:')
-      ? join(dirname(kernel.databasePath), 'shell-events.jsonl')
+      ? join(dataDir!, 'shell-events.jsonl')
       : undefined),
   }), kernel.events, kernel.soul, {
     token: kernel.databasePath && kernel.databasePath !== ':memory:' && !kernel.databasePath.startsWith('file:')
-      ? readObservatoryToken(dirname(kernel.databasePath))
+      ? readObservatoryToken(dataDir!)
       : undefined,
     credentials: options.credentials,
-    candidates: {
-      list: ({ projectId, limit = 100 }) => kernel.listDreamCandidates({
-        projectId,
-        statuses: ['needs_confirmation'],
-        limit: Math.max(1, Math.min(limit, 500)),
-      }).map((candidate) => ({
-        ...candidate,
-        expiresAt: candidate.updatedAt + CONFIRMATION_TTL_MS,
-        contentHash: candidateContentHash(candidate.content),
-      })).sort((left, right) => left.expiresAt - right.expiresAt || left.createdAt - right.createdAt),
-      review: ({ candidateId, projectId, action, contentHash, reviewAfter, reason }) => {
-        const candidate = kernel.listDreamCandidates({
-          projectId,
-          statuses: ['needs_confirmation'],
-          limit: 5000,
-        }).find((entry) => entry.candidateId === candidateId);
-        if (!candidate) throw new Error('candidate_not_found');
-        if (candidateContentHash(candidate.content) !== contentHash) throw new Error('candidate_content_changed');
-        let confirmationEventId: string | undefined;
-        if (action === 'promote') {
-          confirmationEventId = kernel.eventStore.append({
-            streamId: `observatory-candidate:${projectId}`,
-            streamType: 'system',
-            eventType: 'SHELL_STATE_RECORDED',
-            projectId,
-            role: 'user',
-            payload: { kind: 'candidate_promote', surface: 'observatory', candidateId },
-          }).eventId;
-        }
-        return kernel.reviewDreamCandidate({
-          candidateId,
-          projectId,
-          action: action === 'promote' ? 'approve' : action,
-          actor: 'owner',
-          reason: reason?.trim() || 'reviewed_in_observatory',
-          confirmationEventId,
-          reviewAfter,
-          surface: 'observatory',
-          expectedContentHash: contentHash,
-        });
-      },
-    },
+    candidates: createObservatoryCandidateFace(kernel, { readOnly: residentRunning(dataDir) }),
     channels: options.channels,
   });
 
@@ -151,17 +94,23 @@ export async function startObservatoryServer(options: ObservatoryServerOptions):
   };
 }
 
-/**
- * A connection the observatory cannot write through, or null when there is no file to open.
- *
- * `ensureUsableTempSpace` is the same conditional the kernel's own connections use (ADR-0008): the
- * snapshot orders every candidate node, which SQLite spills to a temporary file, and on a host whose
- * temporary directory is not writable that failure is reported as `unable to open database file`.
- */
 function openObservatoryDatabase(kernel: MemoryKernel): { db: Database; close: () => void } | null {
   const path = kernel.databasePath;
   if (!path || path === ':memory:' || path.startsWith('file:')) return null;
   const db = new Database(path, { readonly: true });
   ensureUsableTempSpace(db);
   return { db, close: () => db.close() };
+}
+
+function residentRunning(dataDir: string | undefined): boolean {
+  if (!dataDir) return false;
+  try {
+    const holder = JSON.parse(readFileSync(join(dataDir, 'runtime.lock'), 'utf8')) as { pid?: unknown };
+    const pid = holder.pid;
+    if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) return false;
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
 }

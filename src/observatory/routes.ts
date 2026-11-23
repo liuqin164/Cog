@@ -98,6 +98,7 @@ export interface ObservatoryCandidateReviewInput {
 }
 
 export interface ObservatoryCandidateFace {
+  readonly readOnly?: boolean;
   list(input: { projectId?: string; limit?: number }): ObservatoryCandidate[];
   review(input: ObservatoryCandidateReviewInput): CandidateReviewResult;
 }
@@ -480,6 +481,9 @@ export function createObservatoryRoutes(
             limit: Number.isFinite(requested) ? requested : 100,
           }),
         }, 200, acceptEncoding);
+      }
+      if (options.candidates.readOnly) {
+        return jsonResponse({ error: 'candidates_read_only_resident_running', message: '请在常驻星海操作' }, 409, acceptEncoding);
       }
       const refused = refuseWrite(request, options.token, acceptEncoding);
       if (refused) return refused;
