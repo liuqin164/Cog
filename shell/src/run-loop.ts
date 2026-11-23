@@ -6,7 +6,6 @@ import type { Suspension } from './state/checkpoint.ts';
 import { classifyEndpointFailure } from './state/retry.ts';
 import type { Trigger } from './state/table.ts';
 
-/** The findings handoff is a prompt line, not a transcript: one bounded paragraph. */
 const MAX_ASSIGNMENT_FINDINGS = 600;
 
 /**
@@ -26,7 +25,6 @@ function truncate(text: string, limit: number): string {
 export class RunLoop {
   private readonly inboundResults = new Map<string, RunSummary | Error>();
   private readonly inboundWaiters = new Set<string>();
-  private inDrain = false;
   private drainPromise?: Promise<void>;
   private activeRun?: Promise<RunSummary>;
   private stopping = false;
@@ -54,7 +52,9 @@ export class RunLoop {
     this.inboundWaiters.add(id);
     let result: RunSummary | Error | undefined;
     try {
-      await this.drainInbound();
+      do {
+        await this.drainInbound();
+      } while (this.shouldDrain(id));
     } finally {
       result = this.inboundResults.get(id);
       this.inboundResults.delete(id);
@@ -161,10 +161,7 @@ export class RunLoop {
     const tier = this.budgetTier(trigger);
     this.shell.runTier = tier;
     this.shell.currentRunUserText = text;
-    // The owner's grant widens this one run's cage and is spent when it settles (#228).
     this.shell.cage!.beginRun(runId, tier, tier === 'work' ? (grant ?? this.shell.machine.runtime.openAssignment?.grant) : undefined);
-    // A backed-off autonomous wake still runs (F7's surfacing decision is untouched) but it does not
-    // inherit the work tier or the assignment, so it cannot keep retrying the same continuation.
     this.shell.hideAssignmentContext = trigger === 'emergence_due' && tier === 'autonomous' && this.shell.machine.runtime.openAssignment !== undefined;
     if (this.shell.hideAssignmentContext) {
       const assignment = this.shell.machine.runtime.openAssignment!;
@@ -191,9 +188,6 @@ export class RunLoop {
         this.shell.hideAssignmentContext = false;
       }
       const outcome = this.settleAssignment(summary, tier, trigger);
-      // `agent_end` capture has written this run's rows by the time `run()` returns, so the declared
-      // task end's procedure (#262) and stub (#263) can read them here instead of waiting for the
-      // next request.
       this.shell.contextLanes.materializeTaskProcedure(true);
       this.shell.contextLanes.materializeTaskEndStub(summary.turnId, summary.runId);
       if (summary.stopReason === 'run_error' && summary.error?.startsWith('model_timeout:')) this.announceModelTimeout(summary);
@@ -204,7 +198,7 @@ export class RunLoop {
         this.shell.proposalsHandlers.offerResume(this.shell.machine.runtime.suspension.id);
       }
       this.recoverStrandedSteering(this.shell.currentChannel);
-      await this.drainInbound();
+      await this.drainInbound(true);
       if (!this.stopping && !this.shell.clock!.nextPendingIntent()) this.shell.clock!.scheduleIdleWake();
       return summary;
     } catch (error) {
@@ -222,7 +216,7 @@ export class RunLoop {
       }
       try {
         this.recoverStrandedSteering(this.shell.currentChannel);
-        await this.drainInbound();
+        await this.drainInbound(true);
       } catch (drainError) {
         this.shell.trace.append('inbound_drain_failed', {
           runId,
@@ -281,18 +275,19 @@ export class RunLoop {
     for (const line of lines) this.enqueueInbound(line, channel, 'queued');
   }
 
-  private async drainInbound(): Promise<void> {
-    if (this.inDrain) return;
-    if (this.drainPromise) {
-      await this.drainPromise;
-      return;
+  private async drainInbound(reentrant = false): Promise<void> {
+    if (reentrant && this.drainPromise) return;
+    const work = this.drainPromise ?? this.runInboundQueue();
+    this.drainPromise = work;
+    try {
+      await work;
+    } finally {
+      if (this.drainPromise === work) this.drainPromise = undefined;
     }
-    this.inDrain = true;
-    this.drainPromise = this.runInboundQueue().finally(() => {
-      this.inDrain = false;
-      this.drainPromise = undefined;
-    });
-    await this.drainPromise;
+  }
+
+  private shouldDrain(id: string): boolean {
+    return !this.stopping && this.shell.machine.state !== 'RUNNING' && (this.shell.machine.runtime.inboundQueue ?? []).some((entry) => entry.id === id && entry.status === 'queued');
   }
 
   private async runInboundQueue(): Promise<void> {

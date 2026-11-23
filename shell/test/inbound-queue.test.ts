@@ -64,6 +64,47 @@ describe('messages that arrive while a run cannot take them', () => {
     }
   });
 
+  test('a line submitted while the drain is waking waits for its own result or error', async () => {
+    const dir = makeTempDir();
+    const provider = new ScriptedProvider([{ text: 'first done', toolCalls: [] }]);
+    const shell = makeShell(dir, provider);
+    await shell.start();
+    try {
+      const runtime = (shell as unknown as { runtime: { run: (...args: unknown[]) => Promise<unknown> } }).runtime;
+      const original = runtime.run.bind(runtime);
+      let runs = 0;
+      runtime.run = async (...args) => {
+        runs += 1;
+        if (runs === 2) throw new Error('second failed');
+        return original(...args);
+      };
+      await shell.machine.dispatch('dream_window_open', { reason: 'test' });
+      const dispatch = shell.machine.dispatch.bind(shell.machine);
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      let paused = false;
+      shell.machine.dispatch = (async (trigger, context) => {
+        if (trigger === 'context_injected' && !paused) {
+          paused = true;
+          await gate;
+        }
+        return dispatch(trigger, context);
+      }) as typeof shell.machine.dispatch;
+      const first = shell.submit('first');
+      await waitUntil(() => paused);
+      expect(shell.state).toBe('WAKING');
+      const second = shell.submit('second');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      release();
+      await expect(second).rejects.toThrow('second failed');
+      expect(await first).toMatchObject({ stopReason: 'run_complete' });
+      expect(provider.calls).toHaveLength(1);
+      expect(provider.calls[0].messages.map((message) => message.content).join('\n')).toContain('first');
+    } finally {
+      await shell.stop();
+    }
+  });
+
   test('the queue keeps its text in the ledger and survives a restart', async () => {
     const dir = makeTempDir();
     const provider = new ScriptedProvider([{ text: 'unused', toolCalls: [] }]);
