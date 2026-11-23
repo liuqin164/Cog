@@ -45,6 +45,7 @@ export interface DegradationCorpus {
   projectId: string;
   startAt: number;
   endAt: number;
+  realPathStart: number;
   eventsList: DegradationEvent[];
   anchors: DegradationAnchors;
 }
@@ -148,6 +149,7 @@ export function generateDegradationCorpus(options: DegradationCorpusOptions = {}
     projectId,
     startAt,
     endAt,
+    realPathStart: events - Math.floor(events / 5),
     eventsList,
     anchors: {
       stableEventId: eventsList[0]!.eventId,
@@ -162,12 +164,12 @@ export function generateDegradationCorpus(options: DegradationCorpusOptions = {}
   };
 }
 
-function localDateOf(timestamp: number, timeZone: string): string {
+export function localDateOf(timestamp: number, timeZone: string): string {
   const offset = timeZone === 'Asia/Tokyo' ? 9 * DEGRADATION_HOUR_MS : 0;
   return new Date(timestamp + offset).toISOString().slice(0, 10);
 }
 
-function cjkTerms(text: string): string[] {
+export function cjkTerms(text: string): string[] {
   const terms = new Set<string>();
   for (const run of text.match(/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]+/gu) ?? []) {
     for (let index = 0; index + 2 <= run.length; index += 1) terms.add(run.slice(index, index + 2));
@@ -181,6 +183,7 @@ function sequenceKey(kind: string, projectId: string, id: string): string {
 
 export function seedDegradationCorpus(kernel: MemoryKernel, corpus: DegradationCorpus): void {
   const db = kernel.factStore.getDatabase();
+  const directEvents = corpus.eventsList.slice(0, corpus.realPathStart);
   const insertEvent = db.prepare(`
     INSERT INTO memory_events (
       event_id, global_seq, stream_id, stream_type, event_type, raw_event_type, event_version,
@@ -188,7 +191,7 @@ export function seedDegradationCorpus(kernel: MemoryKernel, corpus: DegradationC
       local_date, local_date_source, thread_seq, turn_id, turn_seq, event_ordinal, role,
       prev_event_id, next_event_id, ordering_confidence, occurred_at, payload_json, payload_hash, created_at
     ) VALUES (?, ?, ?, 'thread', 'RAW_EVENT_RECORDED', ?, 1, ?, ?, ?, 'degradation-fixture', ?, ?, ?,
-      ?, 'generated_project_timezone', ?, ?, ?, 1, ?, NULL, NULL, 'high', ?, ?, ?, ?)
+      ?, 'legacy_unknown', ?, ?, ?, 1, ?, NULL, NULL, 'high', ?, ?, ?, ?)
   `);
   const insertFts = db.prepare(`
     INSERT INTO memory_events_fts (
@@ -200,7 +203,7 @@ export function seedDegradationCorpus(kernel: MemoryKernel, corpus: DegradationC
   `);
   const threadSeq = new Map<string, number>();
   db.transaction(() => {
-    corpus.eventsList.forEach((event, index) => {
+    directEvents.forEach((event, index) => {
       threadSeq.set(event.threadId, index + 1);
       const globalSeq = index + 1;
       const payload = JSON.stringify({ text: event.text, metadata: event.metadata });
@@ -234,7 +237,7 @@ export function seedDegradationCorpus(kernel: MemoryKernel, corpus: DegradationC
     db.prepare(`
       INSERT INTO event_sequence_counters (counter_key, value) VALUES (?, ?)
       ON CONFLICT(counter_key) DO UPDATE SET value = MAX(value, excluded.value)
-    `).run('global', String(corpus.eventsList.length));
+    `).run('global', String(directEvents.length));
     const eventCounter = db.prepare(`
       INSERT INTO event_sequence_counters (counter_key, value) VALUES (?, ?)
       ON CONFLICT(counter_key) DO UPDATE SET value = MAX(value, excluded.value)
@@ -244,5 +247,19 @@ export function seedDegradationCorpus(kernel: MemoryKernel, corpus: DegradationC
       eventCounter.run(sequenceKey('turn', corpus.projectId, threadId), value);
     }
   })();
+  for (const event of corpus.eventsList.slice(corpus.realPathStart)) {
+    kernel.recordRawEvent({
+      eventId: event.eventId,
+      projectId: corpus.projectId,
+      threadId: event.threadId,
+      sessionId: event.sessionId,
+      turnId: event.turnId,
+      role: event.role,
+      rawEventType: event.rawEventType,
+      content: event.text,
+      occurredAt: event.occurredAt,
+      metadata: event.metadata,
+    });
+  }
 }
 
