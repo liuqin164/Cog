@@ -5,6 +5,7 @@ import { normalizeFrameRelations } from '../semantic/RelationConstraintRegistry.
 import { invalidateMemoryEdgeSupportIds } from '../binding/MemoryEdgeMerge.js';
 import { validateMemoryFrame } from '../semantic/MemoryFrameValidator.js';
 import type { MemoryFrameStatus, MemoryFrameV1 } from '../semantic/MemoryFrameTypes.js';
+import { registerDerivation } from '../governance/DerivationLedger.js';
 
 export interface MemoryFrameSaveInput { frame: MemoryFrameV1; sourceFingerprint: string; status?: MemoryFrameStatus; publishStatus?: 'active' | 'needs_confirmation'; now?: number; dreamJobLeaseId?: string; leaseUntil?: number; attemptGeneration?: number; }
 
@@ -20,8 +21,6 @@ export class MemoryFrameStore {
   save(input: MemoryFrameSaveInput): MemoryFrameV1 {
     const retryAttempt = (input as MemoryFrameSaveInput & { retryAttempt?: number }).retryAttempt ?? 0;
     const requestedStatus = input.status ?? input.frame.status ?? 'staged';
-    // Normalise the model's relation names before validating: a name outside the
-    // vocabulary is recorded as RELATED_TO rather than failing the whole frame.
     const frame = normalizeFrameRelations(input.frame);
     const validation = validateMemoryFrame(frame, { allowEmptyEvidence: requestedStatus !== 'active' && frame.sourceAuthority === 'deterministic_fallback', taxonomy: this.taxonomy });
     if (!validation.valid) throw new Error(`invalid_memory_frame:${validation.errors.join(',')}`);
@@ -35,9 +34,6 @@ export class MemoryFrameStore {
       && (existing.dream_job_lease_id ?? undefined) === input.dreamJobLeaseId
       && (existing.attempt_generation ?? undefined) === input.attemptGeneration;
     const storedFrameId = sameOwner ? existing!.frame_id! : (existing ? `${frame.frameId}:${randomUUID()}` : frame.frameId);
-    // A different lease must never reuse the old row's primary key. Keep the
-    // old staged revision intact and give the retry its own deterministic row
-    // identity; same-owner retries remain idempotent.
     const storedFingerprint = input.sourceFingerprint;
     const revisionId = sameOwner ? (existing!.revision_id ?? existing!.frame_id!) : storedFrameId;
     const revisionNumber = sameOwner ? (existing!.revision_number ?? 1) : (existing ? (existing.revision_number ?? 0) + 1 : 1);
@@ -80,6 +76,13 @@ export class MemoryFrameStore {
         if (!sourceId || !targetId) throw new Error('memory_frame_relation_node_missing');
         relation.run(randomUUID(), storedFrameId, sourceId, item.relationType, targetId, item.confidence, JSON.stringify(item.evidenceEventIds), item.validFrom ?? null, item.validTo ?? null);
       }
+      registerDerivation(this.db, {
+        kind: 'memory_frames',
+        derivedId: storedFrameId,
+        sourceEventIds: frame.evidenceEventIds,
+        projectId: frame.projectId,
+        createdAt: now,
+      });
       this.markDirty(frame.projectId, now);
       })();
     } catch (error) {

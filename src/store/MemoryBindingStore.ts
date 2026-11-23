@@ -20,6 +20,7 @@ import {
 } from '../binding/MemoryBindingIdentity.js';
 import { mergeMemoryEdge, reduceMemoryEdges } from '../binding/MemoryEdgeMerge.js';
 import { installRuntimeProvenanceGuards } from '../migrations/v3_7_4/FinalRuntimeGuards.js';
+import { registerDerivation } from '../governance/DerivationLedger.js';
 import { clamp } from '../utils/Values.js';
 
 export interface UpsertMemoryEntityInput {
@@ -241,6 +242,13 @@ export class MemoryBindingStore {
       JSON.stringify(input.relatedEventIds || []),
       now,
     );
+    registerDerivation(this.db, {
+      kind: 'memory_bindings',
+      derivedId: bindingId,
+      sourceEventIds: [input.eventId, ...(input.relatedEventIds || [])],
+      projectId: input.projectId,
+      createdAt: now,
+    });
     return mapBindingRow(this.db.prepare(`SELECT * FROM memory_bindings WHERE binding_id=?`).get(bindingId) as MemoryBindingRow);
   }
 
@@ -294,6 +302,13 @@ export class MemoryBindingStore {
       createdAt,
       now,
     );
+    registerDerivation(this.db, {
+      kind: 'memory_clusters',
+      derivedId: clusterId,
+      sourceEventIds: evidenceEventIds,
+      projectId: input.projectId,
+      createdAt: now,
+    });
 
     return {
       clusterId,

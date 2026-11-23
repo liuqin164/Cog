@@ -1,5 +1,6 @@
 import Database from 'bun:sqlite';
 import { randomUUID } from 'node:crypto';
+import { registerDerivation } from '../governance/DerivationLedger.js';
 
 export type ProspectiveMemoryType = 'intention' | 'commitment' | 'reminder' | 'open_loop' | 'plan';
 export type ProspectiveMemoryStatus = 'pending' | 'confirmed' | 'deferred' | 'rejected' | 'completed' | 'expired';
@@ -107,6 +108,13 @@ export class ProspectiveMemoryService {
       candidateId, projectId, input.candidateType, canonicalKey, title, input.details ?? null,
       input.proposedBy, JSON.stringify(evidenceIds), input.dueAt ?? null, version, now, now,
     );
+    registerDerivation(this.db, {
+      kind: 'prospective_memories',
+      derivedId: candidateId,
+      sourceEventIds: evidenceIds,
+      projectId,
+      createdAt: now,
+    });
     this.recordTransition(candidateId, undefined, 'pending', 'proposed', input.evidenceEventIds[0], now);
     return this.get(candidateId, projectId)!;
   }

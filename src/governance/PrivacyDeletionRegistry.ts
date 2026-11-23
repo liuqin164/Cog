@@ -51,7 +51,7 @@ const MIGRATION_TABLES = [
   'belief_graph_conflicts','belief_graph_evidence','belief_graph_nodes','belief_graph_versions','context_activation_receipts','context_strategy_outcomes',
   'chat_sessions','chat_turns','deep_write_candidate_reviews','deep_write_candidates','deep_write_runs','deep_write_summaries','dream_ledger_state','entity_merge_candidates','entity_resolution_log','event_sequence_counters',
   'episode_boundary_decisions','episode_closure_receipts','episode_cross_refs','episode_dream_attempts','episode_dream_jobs','episode_dream_runs','episode_event_dispositions','episode_ingest_keys','episode_repair_audit',
-  'memory_event_fts_state','memory_event_cjk_terms',
+  'memory_derivations','memory_event_fts_state','memory_event_cjk_terms',
   'governance_audit_log','import_source_anchors','memory_action_frame_evidence','memory_action_frames','memory_atlas_access','memory_atlas_activation','memory_atlas_alias_ambiguities',
   'memory_atlas_alias_supports','memory_atlas_aliases','memory_atlas_documents','memory_atlas_projection_state','memory_atlas_supports','memory_bindings','memory_clusters','memory_edge_supports','memory_edges','memory_entities','memory_entity_scope_identity',
   'memory_event_embeddings','memory_episode_events','memory_episodes','memory_frame_nodes','memory_frame_relations','memory_frame_reviews','memory_frames','memory_governance_audit','memory_governance_operations',
@@ -71,7 +71,7 @@ const MIGRATION_PROJECT_OWNED = [
   'memory_action_frame_evidence','memory_action_frames','memory_atlas_access','memory_atlas_activation',
   'memory_atlas_alias_ambiguities','memory_atlas_alias_supports','memory_atlas_aliases','memory_atlas_documents',
   'memory_atlas_projection_state','memory_atlas_supports','memory_bindings','memory_clusters','memory_edge_supports','memory_edges','memory_entities','memory_entity_scope_identity',
-  'memory_event_embeddings','memory_episodes','memory_frame_reviews','memory_frames','memory_governance_audit','memory_governance_operations',
+  'memory_derivations','memory_event_embeddings','memory_episodes','memory_frame_reviews','memory_frames','memory_governance_audit','memory_governance_operations',
   'memory_governance_plans','memory_timeline_entries','memory_topics',
   'pipeline_nonfatal_events','prospective_memories','re_embedding_progress','topic_aliases','topic_nodes','topic_operations','topic_relations',
   

@@ -1,5 +1,6 @@
 import Database from 'bun:sqlite';
 import { randomUUID } from 'crypto';
+import { registerDerivation } from '../governance/DerivationLedger.js';
 
 export type SummaryScope = 'turn_window' | 'session' | 'day' | 'project';
 export type SummaryStatus = 'provisional' | 'verified' | 'superseded' | 'rejected';
@@ -189,6 +190,13 @@ export class SummaryStore {
       record.createdAt,
       record.updatedAt
     );
+    registerDerivation(this.db, {
+      kind: 'deep_write_summaries',
+      derivedId: record.summaryId,
+      sourceEventIds: record.sourceNeuronIds,
+      projectId: record.projectId,
+      createdAt: record.createdAt,
+    });
     return record;
   }
 

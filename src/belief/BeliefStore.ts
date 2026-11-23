@@ -15,6 +15,7 @@ import { EventStore } from '../store/EventStore.js';
 import { ConditionDslEvaluator } from '../retrieval/ConditionDslEvaluator.js';
 import { projectQueryValue } from '../topology/ProjectScope.js';
 import { installRuntimeProvenanceGuards } from '../migrations/v3_7_4/FinalRuntimeGuards.js';
+import { registerDerivation } from '../governance/DerivationLedger.js';
 
 export class BeliefStore {
   private static readonly SOURCE_TRUST: Record<SourceType, number> = {
@@ -381,6 +382,13 @@ export class BeliefStore {
             createdAt: now
           }
         ]);
+        registerDerivation(this.db, {
+          kind: 'beliefs',
+          derivedId: belief.id,
+          sourceEventIds: [belief.sourceNeuronId, belief.sourceEventId].filter((id): id is string => Boolean(id)),
+          projectId: belief.projectId,
+          createdAt: now,
+        });
       }
     })();
 
