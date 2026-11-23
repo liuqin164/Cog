@@ -3,7 +3,7 @@ import { join } from 'node:path';
 
 import { KernelAgentMemoryBackend } from '../src/agent/AgentMemoryBackend.js';
 import { detectBackReference } from '../src/agent/BackReference.js';
-import { createMemoryKernel } from '../src/factory.js';
+import { createMemoryKernel, type MemoryKernel } from '../src/factory.js';
 import { makeTempDir } from './helpers/tmp.js';
 
 const NOW = Date.UTC(2026, 10, 23, 3, 0, 0);
@@ -29,6 +29,37 @@ async function seedYesterday(backend: KernelAgentMemoryBackend): Promise<void> {
     timestamp: NOW - DAY,
     ingestMode: 'immediate_compile',
   });
+}
+
+function seedAtlasAnchor(kernel: MemoryKernel, id: string, label: string): void {
+  const event = kernel.appendEpisodeMessage({
+    projectId: PROJECT,
+    sessionId: 'atlas-seed',
+    sourceAgent: AGENT,
+    role: 'user',
+    text: label,
+    timestamp: NOW - DAY,
+  });
+  kernel.memoryAtlasStore.upsertDocument({
+    id,
+    projectId: PROJECT,
+    nodeType: 'episode',
+    sourceId: id,
+    label,
+    summary: label,
+    confidence: 0.9,
+    supportCount: 1,
+    status: 'active',
+    evidenceEventIds: [event.eventId],
+  });
+  kernel.memoryAtlasStore.markProjectionClean(PROJECT);
+}
+
+function rewriteTerms(kernel: MemoryKernel): string[] {
+  const row = kernel.factStore.getDatabase()
+    .query('SELECT payload FROM trace_events WHERE event_type = ? ORDER BY rowid DESC LIMIT 1')
+    .get('recall.result') as { payload: string } | null;
+  return (JSON.parse(row!.payload) as { rewrite?: { terms?: string[] } }).rewrite?.terms ?? [];
 }
 
 describe('deterministic back-reference detection (#472)', () => {
@@ -162,6 +193,109 @@ describe('deterministic back-reference detection (#472)', () => {
         .query('SELECT payload FROM trace_events WHERE event_type = ? ORDER BY rowid DESC LIMIT 1')
         .get('recall.result') as { payload: string } | null;
       expect(JSON.parse(row!.payload)).not.toHaveProperty('rewrite');
+    } finally {
+      kernel.close();
+    }
+  });
+});
+
+describe('back-reference anchor state (#490)', () => {
+  test('one session anchor does not leak into another session', () => {
+    const { kernel, backend } = setup();
+    try {
+      seedAtlasAnchor(kernel, 'episode:anchor-a', '海象协议上线窗口');
+      backend.recall({
+        agentId: AGENT,
+        projectId: PROJECT,
+        query: '海象协议上线窗口',
+        excludeSessionId: 'session-a',
+        recordBackReferenceAnchor: true,
+        limit: 3,
+        now: NOW,
+      });
+      backend.recall({
+        agentId: AGENT,
+        projectId: PROJECT,
+        query: '它怎么样了',
+        excludeSessionId: 'session-b',
+        limit: 3,
+        now: NOW,
+      });
+      expect(rewriteTerms(kernel)).not.toContain('episode:anchor-a');
+    } finally {
+      kernel.close();
+    }
+  });
+
+  test('tool searches and background recalls leave the automatic-lane anchor alone', () => {
+    const { kernel, backend } = setup();
+    try {
+      seedAtlasAnchor(kernel, 'episode:anchor-a', '海象协议上线窗口');
+      seedAtlasAnchor(kernel, 'episode:anchor-b', '鲸鱼协议上线窗口');
+      backend.recall({
+        agentId: AGENT,
+        projectId: PROJECT,
+        query: '海象协议上线窗口',
+        excludeSessionId: 'session-a',
+        recordBackReferenceAnchor: true,
+        limit: 3,
+        now: NOW,
+      });
+      backend.recall({
+        agentId: AGENT,
+        projectId: PROJECT,
+        query: '鲸鱼协议上线窗口',
+        excludeSessionId: 'session-a',
+        limit: 3,
+        now: NOW,
+      });
+      backend.recall({
+        agentId: AGENT,
+        projectId: PROJECT,
+        query: '它怎么样了',
+        excludeSessionId: 'session-a',
+        limit: 3,
+        now: NOW,
+      });
+      const terms = rewriteTerms(kernel);
+      expect(terms).toContain('episode:anchor-a');
+      expect(terms).not.toContain('episode:anchor-b');
+    } finally {
+      kernel.close();
+    }
+  });
+
+  test('an empty automatic recall keeps the previous anchor', () => {
+    const { kernel, backend } = setup();
+    try {
+      seedAtlasAnchor(kernel, 'episode:anchor-a', '海象协议上线窗口');
+      backend.recall({
+        agentId: AGENT,
+        projectId: PROJECT,
+        query: '海象协议上线窗口',
+        excludeSessionId: 'session-a',
+        recordBackReferenceAnchor: true,
+        limit: 3,
+        now: NOW,
+      });
+      backend.recall({
+        agentId: AGENT,
+        projectId: PROJECT,
+        query: '完全不存在的主题词',
+        excludeSessionId: 'session-a',
+        recordBackReferenceAnchor: true,
+        limit: 3,
+        now: NOW,
+      });
+      backend.recall({
+        agentId: AGENT,
+        projectId: PROJECT,
+        query: '它怎么样了',
+        excludeSessionId: 'session-a',
+        limit: 3,
+        now: NOW,
+      });
+      expect(rewriteTerms(kernel)).toContain('episode:anchor-a');
     } finally {
       kernel.close();
     }

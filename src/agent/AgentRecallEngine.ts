@@ -89,6 +89,7 @@ const FREQUENT_TERM_MIN = 3;
 const DISCRIMINATIVE_TERM_BUDGET = 8;
 const RAW_LANE_CANDIDATE_FLOOR = 40;
 const RAW_LANE_CANDIDATE_CAP = 200;
+const BACK_REFERENCE_ANCHOR_TTL_MS = 30 * 60_000;
 
 export class AgentRecallEngine {
   constructor(private readonly kernel: MemoryKernel, private readonly binding?: ChannelBinding) {}
@@ -115,11 +116,11 @@ export class AgentRecallEngine {
     const finished = this.finishBackReference(query, rewrite, gated.result);
     this.touchAtlasRecallHits(query, finished);
     this.recordRecallTrace(query, finished, gated.suppressedIds, rewrite);
-    this.rememberCanonicalIds(finished);
+    this.rememberCanonicalIds(query, finished);
     return finished;
   }
 
-  private lastCanonicalIds: string[] = [];
+  private readonly lastCanonicalIds = new Map<string, { ids: string[]; at: number }>();
 
   private withRelativeDates(query: AgentRecallQuery): AgentRecallQuery {
     const timeZone = query.timeZone ?? this.kernel.eventStore.getProjectTimeZone();
@@ -180,7 +181,13 @@ export class AgentRecallEngine {
           if (assistant && user) break;
         }
       }
-      for (const id of this.lastCanonicalIds) terms.add(id);
+      if (sessionId) {
+        const at = query.now ?? Date.now();
+        const stored = this.lastCanonicalIds.get(this.canonicalKey(query, sessionId));
+        if (stored && at - stored.at <= BACK_REFERENCE_ANCHOR_TTL_MS) {
+          for (const id of stored.ids) terms.add(id);
+        }
+      }
     }
     return [...terms].filter((term) => term.length >= 2).slice(0, 12).join(' ');
   }
@@ -220,11 +227,23 @@ export class AgentRecallEngine {
     };
   }
 
-  private rememberCanonicalIds(result: AgentRecallResult): void {
-    this.lastCanonicalIds = result.items
+  private rememberCanonicalIds(query: AgentRecallQuery, result: AgentRecallResult): void {
+    const sessionId = query.excludeSessionId ?? query.sessionId;
+    if (!query.recordBackReferenceAnchor || !sessionId) return;
+    const ids = result.items
       .map((item) => item.canonicalId)
       .filter((id): id is string => typeof id === 'string' && id.trim() !== '')
       .slice(0, 5);
+    if (ids.length === 0) return;
+    const at = query.now ?? Date.now();
+    this.lastCanonicalIds.set(this.canonicalKey(query, sessionId), { ids, at });
+    for (const [key, value] of this.lastCanonicalIds) {
+      if (at - value.at > BACK_REFERENCE_ANCHOR_TTL_MS) this.lastCanonicalIds.delete(key);
+    }
+  }
+
+  private canonicalKey(query: AgentRecallQuery, sessionId: string): string {
+    return `${query.agentId}\u0000${sessionId}`;
   }
 
   private effectiveQueryText(query: AgentRecallQuery): string {
