@@ -179,6 +179,10 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
+function platformLabel(platform: string): string {
+  return platform === 'darwin' ? 'macOS' : platform === 'linux' ? 'Linux' : platform;
+}
+
 export class Installer {
   private readonly io: InstallIO;
   private readonly runner: Runner;
@@ -306,10 +310,11 @@ export class Installer {
       return 0;
     }
     if (this.flags.uninstall) return this.uninstall();
+    this.io.say('Cogmem 自有智能体安装引导（F21）');
+    this.io.say(`平台：${platformLabel(this.choices.platform)}`);
+    if (this.choices.platform !== 'linux') return this.refusePlatform();
     if (this.flags.name !== undefined) this.saveState();
 
-    // An unattended install cannot answer the route question later, so it is refused before the
-    // first step touches disk. mg is not a fallback; a missing flag is named here (#286).
     if (this.flags.yes && !this.state.done.includes('model')) {
       const missing = this.missingYesRoute()
       if (missing.length > 0) {
@@ -320,14 +325,10 @@ export class Installer {
       }
     }
 
-    this.io.say('Cogmem 自有智能体安装引导（F21）');
-    this.io.say(`平台：${this.choices.platform}（Linux）`);
     this.io.say('安全口径：所有服务面仅回环（127.0.0.1）；快照/数据目录 0700；模型钥匙只经安全输入进 0600 配置文件，不打印、不进日志。');
     this.io.say('全新安装：无旧安装分流、无记忆继承、无迁移分支。');
     mkdirSync(this.choices.dataDir, { recursive: true, mode: 0o700 });
     this.announceWorkspaceRisk();
-    // Minted here, not inside `place`: a re-run resumes past completed steps, and an install that
-    // predates #283 still needs the observatory's write token.
     this.ensureObservatoryToken();
 
     const steps: Record<InstallStepId, () => Promise<StepResult>> = {
@@ -378,6 +379,12 @@ export class Installer {
     return 0;
   }
 
+  private refusePlatform(): number {
+    this.io.say(`不支持的平台：${platformLabel(this.choices.platform)}`);
+    this.io.say('Cogmem 5.0 只支持 Linux（systemd 用户服务）；macOS 与 Windows 都不在支持范围，未写入任何服务配置。');
+    return 1;
+  }
+
   private async uninstall(): Promise<number> {
     this.io.say('卸载：停服务、摘单元、保留记忆库。');
     await uninstallService(this.runner, this.serviceSpec(), this.choices.platform as Platform);
@@ -416,23 +423,12 @@ export class Installer {
   // ── Step 0: 预检 ──────────────────────────────────────────────────────────
 
   private async stepPreflight(): Promise<StepResult> {
-    if (this.choices.platform !== 'linux') {
-      const label = this.choices.platform === 'darwin' ? 'macOS' : this.choices.platform;
-      return {
-        ok: false,
-        message: `不支持的平台：${label}`,
-        hint: 'Cogmem 5.0 只支持 Linux（systemd 用户服务）；macOS 与 Windows 都不在支持范围，未写入任何服务配置。',
-      };
-    }
-
     const uname = await this.runner('uname', ['-srm']);
     if (uname.code !== 0) {
       return { ok: false, message: `环境探测失败：uname 退出 ${uname.code}`, hint: uname.stderr.trim() };
     }
     this.io.say(`系统：${uname.stdout.trim()}`);
 
-    // #284: bash isolation needs bubblewrap on Linux. Its absence is not an install blocker — the
-    // shell runs visibly unsandboxed — but the user must learn it here, not from a trace line.
     const sandbox = await this.runner('bwrap', ['--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--', '/bin/true'], { timeoutMs: 2_000 });
     if (sandbox.code === 0) {
       this.io.say('沙箱：bubblewrap 可用（bash 在隔离中运行）');

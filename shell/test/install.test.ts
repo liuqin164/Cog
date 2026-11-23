@@ -290,18 +290,49 @@ describe('model probe diagnosis', () => {
 });
 
 describe('the six-step install', () => {
-  test('macOS is refused at preflight, before any uname or service command', async () => {
+  test('macOS is refused before any state write, plist or launchctl, even when install.json says preflight is done', async () => {
     const harness = makeHarness({ probeOk: true, platform: 'darwin' });
+    mkdirSync(harness.dataDir, { recursive: true });
+    const statePath = join(harness.dataDir, 'install.json');
+    const stateBefore = `${JSON.stringify({
+      schema: 1,
+      done: ['preflight', 'place', 'model', 'rhythm', 'resident', 'awake'],
+      choices: { platform: 'darwin', serviceName: 'cogmem-companion' },
+      updatedAt: 1,
+    }, null, 2)}\n`;
+    writeFileSync(statePath, stateBefore);
 
     expect(await harness.installer.run()).toBe(1);
 
-    const state = JSON.parse(readFileSync(join(harness.dataDir, 'install.json'), 'utf8')) as { done: string[]; failedAt?: string };
-    expect(state.done).toEqual([]);
-    expect(state.failedAt).toBe('preflight');
     const output = harness.io.lines.join('\n');
+    expect(output).toContain('平台：macOS');
     expect(output).toContain('不支持的平台：macOS');
     expect(output).toContain('只支持 Linux');
     expect(harness.calls).toEqual([]);
+    expect(readFileSync(statePath, 'utf8')).toBe(stateBefore);
+    expect(existsSync(join(harness.dataDir, 'observatory-token'))).toBe(false);
+    expect(existsSync(join(harness.dataDir, 'env'))).toBe(false);
+    expect(existsSync(join(harness.dataDir, '..', 'Library', 'LaunchAgents'))).toBe(false);
+  });
+
+  test('--uninstall on macOS is still allowed and removes an old plist', async () => {
+    const harness = makeHarness({ probeOk: true, platform: 'darwin', flags: { uninstall: true } });
+    mkdirSync(harness.dataDir, { recursive: true });
+    writeFileSync(join(harness.dataDir, 'install.json'), `${JSON.stringify({
+      schema: 1,
+      done: ['preflight', 'place', 'model', 'rhythm', 'resident', 'awake'],
+      choices: { platform: 'darwin', serviceName: 'cogmem-companion' },
+      updatedAt: 1,
+    })}\n`);
+    const launchAgents = join(harness.dataDir, '..', 'Library', 'LaunchAgents');
+    const plist = join(launchAgents, `${launchdLabel('cogmem-companion')}.plist`);
+    mkdirSync(launchAgents, { recursive: true });
+    writeFileSync(plist, 'old plist\n');
+
+    expect(await harness.installer.run()).toBe(0);
+
+    expect(existsSync(plist)).toBe(false);
+    expect(harness.calls).toContainEqual({ command: 'launchctl', args: ['bootout', `gui/${process.getuid?.() ?? 501}/${launchdLabel('cogmem-companion')}`] });
   });
 
   test('the rhythm step refuses a zero-length dream window and says why', async () => {
@@ -343,6 +374,7 @@ describe('the six-step install', () => {
     expect(existsSync(join(harness.dataDir, 'routes.json'))).toBe(false);
 
     const output = harness.io.lines.join('\n');
+    expect(output).toContain('平台：Linux');
     expect(output).toContain('默认 soul');
     expect(output).toContain('探活通过');
     expect(output).toContain('doctor 全检');
