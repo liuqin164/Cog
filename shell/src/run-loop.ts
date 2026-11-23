@@ -111,18 +111,7 @@ export class RunLoop {
 
   async settleInFlight(timeoutMs: number): Promise<boolean> {
     this.stopping = true;
-    const run = this.activeRun;
-    if (!run) return true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<false>((resolve) => {
-      timer = setTimeout(() => resolve(false), timeoutMs);
-    });
-    const done = run.then(() => true as const, () => true as const);
-    try {
-      return await Promise.race([done, timeout]);
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
+    return await settleWithin([this.activeRun, this.drainPromise], timeoutMs);
   }
 
   executeRun(
@@ -291,8 +280,8 @@ export class RunLoop {
   }
 
   private async runInboundQueue(): Promise<void> {
-    if (this.stopping) return;
     for (;;) {
+      if (this.stopping) return;
       const entry = (this.shell.machine.runtime.inboundQueue ?? []).find((item) => item.status === 'queued');
       if (!entry) return;
       const state = this.shell.machine.state;
@@ -302,6 +291,7 @@ export class RunLoop {
         if (this.shell.machine.state !== 'IDLE') return;
       }
       if (this.shell.machine.state === 'SUSPENDED') this.shell.proposalsHandlers.supersedeSuspension('new_input');
+      if (this.stopping) return;
       this.dropInbound(entry.id);
       this.beginUserAssignment(entry.text);
       try {
@@ -327,8 +317,6 @@ export class RunLoop {
     if (trigger === 'message_received') return 'work';
     const assignment = this.shell.machine.runtime.openAssignment;
     if (assignment?.origin !== 'user_message') return 'autonomous';
-    // A continuation that keeps failing waits longer (#228); while it waits, an autonomous wake is a
-    // plain surfacing run, not a retry of the assignment.
     if (assignment.nextResumeAt !== undefined && assignment.nextResumeAt > this.shell.now()) return 'autonomous';
     return 'work';
   }
@@ -556,6 +544,18 @@ export class RunLoop {
     return `${text.slice(0, MAX_ASSIGNMENT_FINDINGS - 1)}…`;
   }
 
-  /** One deterministic tick: due intent, then dream window, then the emergence decision point. */
+}
 
+export async function settleWithin(work: Array<Promise<unknown> | undefined>, timeoutMs: number): Promise<boolean> {
+  const pending = work.filter((item): item is Promise<unknown> => item !== undefined);
+  if (pending.length === 0) return true;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      Promise.allSettled(pending).then(() => true),
+      new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs); }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }

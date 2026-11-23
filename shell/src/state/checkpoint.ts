@@ -400,14 +400,15 @@ export function forgetRuntimeText(runtime: ShellRuntimeState, ledger: RuntimeTex
 
 export class CheckpointStore {
   readonly path: string;
-  /** The previous generation, kept by hard link so publishing still never has a window with no file. */
   readonly previousPath: string;
+  private refused = false;
 
   constructor(readonly dir: string, private readonly ledger?: RuntimeTextLedger) {
     this.path = join(dir, 'checkpoint.json');
     this.previousPath = `${this.path}.prev`;
   }
 
+  refuseWrites(): void { this.refused = true; }
   load(): CheckpointState | undefined {
     if (!existsSync(this.path)) return undefined;
     return this.parse(readFileSync(this.path, 'utf8'));
@@ -416,8 +417,7 @@ export class CheckpointStore {
   /**
    * The recovery load: the live file, or the previous generation when the live one cannot be parsed.
    *
-   * The atomic publish already means a kill can only leave a whole file, so damage here is damage
-   * from outside (bit rot, a hand edit, a truncated copy). One generation of fallback is what keeps
+   * One generation of fallback is what keeps
    * "the checkpoint will not parse" from meaning "the resident never comes up"; if neither file is
    * usable the corruption is loud, and the caller's machine stays in DORMANT with nothing dispatched.
    */
@@ -464,8 +464,8 @@ export class CheckpointStore {
     return state;
   }
 
-  /** Atomic and durable: temp file, fsync, rename, fsync the directory. Throws on any failure. */
   save(state: CheckpointState): void {
+    if (this.refused) throw new CheckpointWriteError(this.path, new Error('checkpoint_store_refused'));
     const temp = `${this.path}.tmp`;
     try {
       mkdirSync(this.dir, { recursive: true });

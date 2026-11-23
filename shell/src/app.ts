@@ -252,6 +252,7 @@ export class CompanionShell implements ShellControl, AttachShell {
    * operator's global config (#277).
    */
   private readonly cliConfigPath: string;
+  private readonly checkpoint: CheckpointStore;
   private tickTimer?: ReturnType<typeof setInterval>;
   private started = false;
   readonly now: () => number;
@@ -321,8 +322,9 @@ export class CompanionShell implements ShellControl, AttachShell {
       agentId: this.config.agentId,
     });
     this.stateLedger = new ShellStateLedger(this.backend, this.config.projectId);
+    this.checkpoint = new CheckpointStore(this.config.dataDir, this.stateLedger);
     this.machine = new StateMachine({
-      checkpoint: new CheckpointStore(this.config.dataDir, this.stateLedger),
+      checkpoint: this.checkpoint,
       trace: this.trace,
       clock: this.now,
       onAlarm: (error) => {
@@ -1384,23 +1386,21 @@ export class CompanionShell implements ShellControl, AttachShell {
     await this.attach?.stop();
     this.attach = undefined;
     this.terminal?.stop();
+    if (this.machine.state === 'RUNNING') this.runtime?.abort('shutdown');
+    const [runSettled, tickSettled] = await Promise.all([
+      this.runLoop.settleInFlight(SHUTDOWN_RUN_TIMEOUT_MS),
+      this.residentTick.settle(SHUTDOWN_RUN_TIMEOUT_MS),
+    ]);
+    const settled = runSettled && tickSettled;
+    if (!settled) this.trace.append('run_settle_timeout', { state: this.machine.state });
     try {
-      if (this.machine.state === 'RUNNING') {
-        this.runtime?.abort('shutdown');
-        const settled = await this.runLoop.settleInFlight(SHUTDOWN_RUN_TIMEOUT_MS);
-        if (!settled) this.trace.append('run_settle_timeout', { state: this.machine.state });
-        if (this.machine.state === 'RUNNING') {
-          await this.machine.dispatch('run_aborted', { reason: 'shutdown' });
-        }
-      }
+      if (this.machine.state === 'RUNNING') await this.machine.dispatch('run_aborted', { reason: 'shutdown' });
       if (this.machine.state === 'DREAMING') await this.machine.dispatch('run_error', { reason: 'shutdown' });
-      // A pause outlives the process (#228): writing DORMANT here would drop a question or budget
-      // request the owner never answered. The next start restores SUSPENDED and re-offers it; only
-      // an explicit decision (approve, refuse, answer) or `/sleep` from IDLE ends a pause.
       if (this.machine.state !== 'DORMANT' && this.machine.state !== 'SUSPENDED') {
         await this.machine.dispatch('shutdown', { reason: 'process_stop' });
       }
     } finally {
+      if (!settled) this.checkpoint.refuseWrites();
       this.http?.stop();
       await this.host.stop();
       this.kernel.close();
