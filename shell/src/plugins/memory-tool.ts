@@ -7,6 +7,7 @@ export interface MemoryToolConfig {
   agentId: string;
   projectId: string;
   sessionId: string;
+  tailTurns: number;
   occasion?: () => Occasion;
   onMemoryRead?: (eventId: string) => void;
 }
@@ -63,6 +64,7 @@ function memoryTool(
           projectId: config.projectId,
           query: requiredText(args, 'query'),
           excludeSessionId: config.sessionId,
+          excludeSessionTailTurns: config.tailTurns,
           limit: SEARCH_LIMIT,
         });
         const lines = entryLines(result.items);

@@ -9,7 +9,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ChannelContract, createMemoryKernel, KernelAgentMemoryBackend, ModelRegistry, type ChannelSession, type EmbeddingProvider, type MemoryKernel, type ModelRoleConfig, type ModelRoleName, type ModelTextUsage, type Occasion, type SessionContextAssembly, type SurfacingSource } from 'cogmem';
-import { defaultShellConfig, type ShellConfig } from './config.ts';
+import { defaultShellConfig, sessionLaneId, type ShellConfig } from './config.ts';
 import { StateMachine } from './state/machine.ts';
 import { CheckpointStore, type InFlightToolCall } from './state/checkpoint.ts';
 import { ShellStateLedger } from './state/state-ledger.ts';
@@ -276,6 +276,12 @@ export class CompanionShell implements ShellControl, AttachShell {
   constructor(readonly options: CompanionShellOptions = {}) {
     this.config = defaultShellConfig(options.config);
     this.now = options.now ?? Date.now;
+    const baseSessionId = this.config.sessionId;
+    Object.defineProperty(this.config, 'sessionId', {
+      enumerable: true,
+      configurable: true,
+      get: () => sessionLaneId(baseSessionId, this.now(), this.config.timeZone),
+    });
     this.trace = new TraceLog(this.config.dataDir);
     this.cliConfigPath = join(this.config.dataDir, 'cogmem-cli.toml');
     this.writeCliConfig();
@@ -742,6 +748,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   }
 
   private async startPlugins(): Promise<void> {
+    const live = this;
     let provider = this.options.modelProvider ? providedModelPlugin(this.options.modelProvider) : undefined;
     if (!provider) {
       this.modelRouter = new ModelRouter({
@@ -780,7 +787,10 @@ export class CompanionShell implements ShellControl, AttachShell {
       memory: {
         agentId: this.config.agentId,
         projectId: this.config.projectId,
-        sessionId: this.config.sessionId,
+        get sessionId() {
+          return live.config.sessionId;
+        },
+        tailTurns: this.config.tailTurns,
         occasion: () => this.currentOccasion(),
         onMemoryRead: () => {
           this.drillsSinceAssembly += 1;
@@ -788,11 +798,21 @@ export class CompanionShell implements ShellControl, AttachShell {
       },
       selfInstall: { proposals: this.pluginProposals, admin: this.pluginsAdmin, trace: this.trace },
     })) this.host.register(plugin, hostConfig);
-    this.host.register(capturePlugin({ agentId: this.config.agentId, projectId: this.config.projectId, sessionId: this.config.sessionId, channel: () => this.currentChannel, paused: () => this.capturePaused }));
+    this.host.register(capturePlugin({
+      agentId: this.config.agentId,
+      projectId: this.config.projectId,
+      get sessionId() {
+        return live.config.sessionId;
+      },
+      channel: () => this.currentChannel,
+      paused: () => this.capturePaused,
+    }));
     this.host.register(sessionContextPlugin({
       agentId: this.config.agentId,
       projectId: this.config.projectId,
-      sessionId: this.config.sessionId,
+      get sessionId() {
+        return live.config.sessionId;
+      },
       targetTokens: () => this.targetTokens(),
       calibrationFactor: (model) => this.runtimeInstance?.contextCalibrationFactor(model) ?? 1,
       clock: () => ({ now: this.now(), timeZone: this.kernel.eventStore.getProjectTimeZone() }),
@@ -826,7 +846,9 @@ export class CompanionShell implements ShellControl, AttachShell {
     this.host.register(dreamPlugin({
       agentId: this.config.agentId,
       projectId: this.config.projectId,
-      sessionId: this.config.sessionId,
+      get sessionId() {
+        return live.config.sessionId;
+      },
       runKernelNight: this.config.dream.runKernelNight,
       maxEpisodes: this.config.dream.maxEpisodes,
       beforeKernelNight: (now) => this.beginDreamModelBudget(now),
@@ -840,7 +862,9 @@ export class CompanionShell implements ShellControl, AttachShell {
           contract: this.channelContract,
           projectId: this.config.projectId,
           agentId: this.config.agentId,
-          sessionId: this.config.sessionId,
+          get sessionId() {
+            return live.config.sessionId;
+          },
           dataDir: this.config.dataDir,
         }));
         this.pluginResults.push({ spec, status: 'loaded', name: 'web-channel', tools: [], commands: [] });

@@ -63,6 +63,7 @@ export interface RecallTraceFacts {
   /** Ids of the items the recall returned. */
   selectedIds: string[];
   suppressed?: RecallTraceSuppression[];
+  rewrite?: { source: string; terms: string[] };
 }
 
 function bounded(ids: readonly string[]): string[] {
@@ -85,6 +86,12 @@ export function recallTracePayload(facts: RecallTraceFacts): Record<string, unkn
       count: entry.count,
       ...(entry.ids?.length ? { ids: bounded(entry.ids) } : {}),
     }));
+  }
+  if (facts.rewrite) {
+    payload.rewrite = {
+      source: facts.rewrite.source,
+      terms: facts.rewrite.terms.slice(0, ID_LIMIT).map((term) => term.slice(0, 80)),
+    };
   }
   return payload;
 }

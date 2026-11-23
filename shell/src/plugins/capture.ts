@@ -457,7 +457,9 @@ export function capturePlugin(config: CapturePluginConfig): NativePlugin {
         kernel,
         agentId: config.agentId,
         projectId: config.projectId,
-        sessionId: config.sessionId,
+        get sessionId() {
+          return config.sessionId;
+        },
         channel: config.channel,
         trace,
         paused: config.paused,

@@ -79,6 +79,13 @@ more billed prompt tokens than the full transcript, which is a warning about
 selectivity, not a long-context cost model. Cache economics and the context
 sweet spot belong to #259 and #258.
 
+## Back-reference family (#472)
+
+`bun eval/fold-drill/backref.ts` runs the deterministic kernel only: four
+next-day follow-ups (昨天/上次/后来/刚才) are asked twice, once against an empty
+project and once against a seeded prior turn. It prints the two counts and fails
+unless every with-context probe hits and every without-context probe misses.
+
 ## #294: real scale and the fold-enable threshold (2026-11-17)
 
 `--corpus real` reruns the three-arm design at the scale #294 names: eight

@@ -198,6 +198,9 @@ export function dreamPlugin(config: DreamPluginConfig): NativePlugin {
     apply(ctx) {
       const service = new DreamService({
         ...config,
+        get sessionId() {
+          return config.sessionId;
+        },
         kernel: ctx.getService<MemoryKernel>('kernel'),
         backend: ctx.getService<KernelAgentMemoryBackend>('memory'),
         trace: ctx.getService<TraceLog>('trace'),

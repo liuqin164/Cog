@@ -19,6 +19,7 @@ import type { ChannelBinding, Occasion, OccasionWithholdReason } from '../occasi
 import { eventsVisibleToAgent, isAgentRawEvent } from './AgentScopeRules.js';
 import {
   compileAgentRecallQuery,
+  extractRecallKeywords,
   type AgentRecallIntent,
   type AgentRecallQueryPlan,
 } from './AgentRecallQueryCompiler.js';
@@ -30,6 +31,8 @@ import { eventHoldsSecretMark } from '../security/SecretMarks.js';
 import { eventHoldsLifeSensitivityMark } from '../security/LifeSensitivity.js';
 import { RecallDecisionTrace, type RecallTraceSuppression } from '../observability/RecallDecisionTrace.js';
 import { TraceStore } from '../observability/TraceStore.js';
+import { digestAnchors } from '../session/SessionDigest.js';
+import { detectBackReference, type BackReferenceRewrite } from './BackReference.js';
 import type {
   AgentRecallDecisionTrace,
   AgentRecallItem,
@@ -100,15 +103,135 @@ export class AgentRecallEngine {
    * lane did not (#115).
    */
   recall(query: AgentRecallQuery): AgentRecallResult {
+    query = this.withRelativeDates(query);
+    const rewrite = this.rewriteBackReference(query);
+    if (rewrite?.anchorText) query = { ...query, anchorText: rewrite.anchorText };
     query = this.scopeExcludedSessionTail(query);
     const { result, suppressedIds } = this.recallPrivate(query);
     const answered = this.withSharedLane(query, result);
     // Occasion scope is the last admission, after the shared lane as well as the local ones: a shared
     // item is still text this connection may not be allowed to speak (#162).
     const gated = this.applyOccasionGate(query, answered, suppressedIds);
-    this.touchAtlasRecallHits(query, gated.result);
-    this.recordRecallTrace(query, gated.result, gated.suppressedIds);
-    return gated.result;
+    const finished = this.finishBackReference(query, rewrite, gated.result);
+    this.touchAtlasRecallHits(query, finished);
+    this.recordRecallTrace(query, finished, gated.suppressedIds, rewrite);
+    this.rememberCanonicalIds(finished);
+    return finished;
+  }
+
+  private lastCanonicalIds: string[] = [];
+
+  private withRelativeDates(query: AgentRecallQuery): AgentRecallQuery {
+    const timeZone = query.timeZone ?? this.kernel.eventStore.getProjectTimeZone();
+    const relative = relativeDateRange(query.query, { now: query.now, localDateNow: query.localDateNow, timeZone });
+    return {
+      ...query,
+      ...(timeZone === undefined ? {} : { timeZone }),
+      ...(relative ? { startTime: query.startTime ?? relative.from, endTime: query.endTime ?? relative.to } : {}),
+    };
+  }
+
+  private rewriteBackReference(query: AgentRecallQuery): BackReferenceRewrite | undefined {
+    if (query.anchorText?.trim()) return undefined;
+    const detection = detectBackReference(query.query);
+    if (!detection) return undefined;
+    try {
+      const anchorText = this.backReferenceAnchor(query, detection.kind);
+      return { ...detection, anchorText, terms: anchorText === '' ? [] : anchorText.split(/\s+/u).filter(Boolean) };
+    } catch {
+      return undefined;
+    }
+  }
+
+  private backReferenceAnchor(query: AgentRecallQuery, kind: BackReferenceRewrite['kind']): string {
+    const terms = new Set<string>();
+    const addText = (text: string | undefined): void => {
+      if (!text) return;
+      for (const term of digestAnchors(text)) if (term.trim() !== '') terms.add(term.trim());
+      for (const term of extractRecallKeywords(text).slice(0, 6)) terms.add(term);
+    };
+    if (kind === 'previous_session') {
+      const previousSessionId = this.findPreviousSessionId(query);
+      const events = previousSessionId ? this.getSessionEvents(previousSessionId, query, 24) : [];
+      for (const event of events.filter((candidate) => candidate.role === 'user' || candidate.role === 'assistant').slice(-4)) {
+        if (this.hasReadableEventText(event)) addText(this.rawEventText(event));
+      }
+    } else {
+      const sessionId = query.excludeSessionId ?? query.sessionId;
+      if (sessionId) {
+        const page = this.kernel.eventStore.queryEvents(1, Math.max((query.excludeSessionTailTurns ?? 0) * 2, 12), {
+          projectId: query.projectId !== undefined ? [query.projectId] : undefined,
+          sessionId: [sessionId],
+          order: 'desc',
+        });
+        let assistant = false;
+        let user = false;
+        for (const event of page.records) {
+          if (event.role === 'tool' || !this.hasReadableEventText(event)) continue;
+          const text = this.rawEventText(event);
+          if (normalizeQueryText(text) === normalizeQueryText(query.query)) continue;
+          if (event.role === 'assistant' && !assistant) {
+            assistant = true;
+            addText(text);
+          } else if (event.role === 'user' && !user) {
+            user = true;
+            addText(text);
+          }
+          if (assistant && user) break;
+        }
+      }
+      for (const id of this.lastCanonicalIds) terms.add(id);
+    }
+    return [...terms].filter((term) => term.length >= 2).slice(0, 12).join(' ');
+  }
+
+  private finishBackReference(
+    query: AgentRecallQuery,
+    rewrite: BackReferenceRewrite | undefined,
+    result: AgentRecallResult,
+  ): AgentRecallResult {
+    if (!rewrite) return result;
+    const ordered = rewrite.kind !== 'state_follow_up' || result.items.length < 2
+      ? result
+      : {
+          ...result,
+          items: [...result.items].sort((left, right) => (
+            (right.sourceAnchor?.occurredAt ?? right.sourceContext?.event?.occurredAt ?? 0)
+            - (left.sourceAnchor?.occurredAt ?? left.sourceContext?.event?.occurredAt ?? 0)
+          )),
+        };
+    if (ordered.items.length > 0 || !query.projectId) return ordered;
+    let episodes: ReturnType<MemoryKernel['listEpisodes']>;
+    try {
+      episodes = this.kernel.listEpisodes({ projectId: query.projectId, limit: 5 });
+    } catch {
+      return ordered;
+    }
+    if (episodes.length === 0) return ordered;
+    const text = [
+      '<recent-items>',
+      '最近事项（可指代其一继续问）：',
+      ...episodes.map((episode) => `- ${(episode.summary ?? episode.topicPath ?? episode.episodeType).slice(0, 80)} · mem:${episode.startEventId}`),
+      '</recent-items>',
+    ].join('\n');
+    return {
+      ...ordered,
+      items: [{ id: 'recent-items-menu', text, tags: ['recall_menu'], source: 'recall_menu' }],
+    };
+  }
+
+  private rememberCanonicalIds(result: AgentRecallResult): void {
+    this.lastCanonicalIds = result.items
+      .map((item) => item.canonicalId)
+      .filter((id): id is string => typeof id === 'string' && id.trim() !== '')
+      .slice(0, 5);
+  }
+
+  private effectiveQueryText(query: AgentRecallQuery): string {
+    return [query.query, query.anchorText]
+      .map((text) => String(text ?? '').trim())
+      .filter(Boolean)
+      .join(' ');
   }
 
   private touchAtlasRecallHits(query: AgentRecallQuery, result: AgentRecallResult): void {
@@ -160,7 +283,7 @@ export class AgentRecallEngine {
     if (intent === 'forensic_quote' || intent === 'previous_session_summary') return result;
     const entries = this.kernel.profile.recall({
       projectId: query.projectId,
-      query: String(query.query ?? query.anchorText ?? ''),
+      query: this.effectiveQueryText(query),
       now: query.now,
     });
     if (entries.length === 0) return result;
@@ -258,6 +381,7 @@ export class AgentRecallEngine {
     query: AgentRecallQuery,
     result: AgentRecallResult,
     suppressedIds: RecallTraceSuppression[],
+    rewrite?: BackReferenceRewrite,
   ): void {
     try {
       const trace = this.recallTrace(query);
@@ -273,6 +397,7 @@ export class AgentRecallEngine {
         reason: decision?.reason ?? 'unknown',
         selectedIds: result.items.map((item) => item.id),
         suppressed: suppressionsForTrace(decision?.suppressed, suppressedIds),
+        ...(rewrite ? { rewrite: { source: rewrite.source, terms: rewrite.terms } } : {}),
       });
     } catch (error) {
       this.recordTraceFailure(query, error);
@@ -430,7 +555,7 @@ export class AgentRecallEngine {
   private projectPhases(items: AgentRecallItem[], query: AgentRecallQuery): { items: AgentRecallItem[]; suppressed: Array<{ reason: RecallSuppressionReason; count: number }> } {
     if (!this.kernel.phaseProjectionEnabled) return { items, suppressed: [] };
     const now = Number(query.now ?? Date.now());
-    const projected = projectPhaseItems(items, String(query.query ?? query.anchorText ?? ''), now);
+    const projected = projectPhaseItems(items, this.effectiveQueryText(query), now);
     const suppressed: Array<{ reason: RecallSuppressionReason; count: number }> = [];
     if (projected.dormant > 0) suppressed.push({ reason: 'phase_dormant', count: projected.dormant });
     if (projected.gist > 0) suppressed.push({ reason: 'phase_gist', count: projected.gist });
@@ -441,7 +566,7 @@ export class AgentRecallEngine {
     SECRET_WITHHELD_EVENT_IDS.set(this, new Set());
     LIFE_SENSITIVITY_WITHHELD_EVENT_IDS.set(this, new Set());
     PRIVATE_CHECKED_ITEMS.set(this, new WeakSet());
-    const queryText = String(query.query ?? '');
+    const queryText = this.effectiveQueryText(query);
     const forensic = FORENSIC_SOCIAL_EXEMPT_INTENTS.has(String(query.intent ?? ''));
     if (!forensic && classifySocialTurn(queryText) === 'social') {
       const empty = this.emptyRecallResult(query, 'social_query_residue_empty');
@@ -580,7 +705,7 @@ export class AgentRecallEngine {
    * turns another identity holds says nothing about what they contain.
    */
   private explainZeroResult(query: AgentRecallQuery): ZeroExplanation {
-    const text = String(query.query ?? query.anchorText ?? '').trim();
+    const text = this.effectiveQueryText(query).trim();
     if (!text) return { kind: 'no_match', thisScope: 0, otherScopes: 0 };
     const queryPlan = compileAgentRecallQuery({ query: query.query, intent: query.intent, anchorText: query.anchorText, taxonomy: this.kernel.taxonomy });
     let events: MemoryEvent[] = [];
@@ -678,7 +803,7 @@ export class AgentRecallEngine {
     if (forensic) return { items, suppressed: [], suppressedIds: [] };
     const { frequent, rare } = this.queryTermFrequencies(query);
     const measurable = frequent.size > 0 && rare.size > 0;
-    const queryText = String(query.query ?? '');
+    const queryText = this.effectiveQueryText(query);
     const grey = classifySocialTurn(queryText) === 'grey';
     const hasContentCue = contentCues(queryText).length > 0;
     const kept: AgentRecallItem[] = [];
@@ -729,7 +854,7 @@ export class AgentRecallEngine {
   }
 
   private queryTermFrequencies(query: AgentRecallQuery): { frequent: Set<string>; rare: Set<string> } {
-    const text = String(query.query ?? '');
+    const text = this.effectiveQueryText(query);
     const frequent = new Set<string>(); const rare = new Set<string>();
     if (!text.trim()) return { frequent, rare };
     const scopeKey = query.projectId ?? '*';
@@ -936,7 +1061,7 @@ export class AgentRecallEngine {
     limit: number,
   ): AgentRecallItem[] {
     try {
-      const atlas = this.kernel.graphExplore(query.query, {
+      const atlas = this.kernel.graphExplore(this.effectiveQueryText(query), {
         projectId: query.projectId,
         limit: Math.max(limit * 2, 6),
         includeEvidence: true,
@@ -975,7 +1100,7 @@ export class AgentRecallEngine {
     relaxationTrace: MemoryAtlasRelaxationStep[];
   } {
     try {
-      const recall = this.kernel.searchAtlas(query.query, {
+      const recall = this.kernel.searchAtlas(this.effectiveQueryText(query), {
         projectId: query.projectId,
         limit,
         now: query.now,
@@ -984,7 +1109,7 @@ export class AgentRecallEngine {
       });
       const atlas = recall.atlas;
       const plannedCards = atlas?.cards ?? [];
-      const legacyAtlas = this.kernel.graphExplore(query.query, {
+      const legacyAtlas = this.kernel.graphExplore(this.effectiveQueryText(query), {
         projectId: query.projectId,
         limit,
         includeEvidence: true,
@@ -1162,7 +1287,7 @@ export class AgentRecallEngine {
     let candidateLimit = Math.min(Math.max(limit * 8, RAW_LANE_CANDIDATE_FLOOR), RAW_LANE_CANDIDATE_CAP);
     for (;;) {
       const semanticIds = this.kernel
-        .nearestRawEventIds(String(query.query ?? queryPlan.primarySearchText), query.projectId, candidateLimit);
+        .nearestRawEventIds(this.effectiveQueryText(query) || queryPlan.primarySearchText, query.projectId, candidateLimit);
       const semanticEvents = semanticIds
         .map((eventId) => this.kernel.eventStore.getEvent(eventId))
         .filter((event): event is MemoryEvent => Boolean(event));
@@ -1242,7 +1367,7 @@ export class AgentRecallEngine {
   }
 
   private graphRecallTextScore(item: AgentRecallItem, query: AgentRecallQuery): number {
-    const queryTerms = discriminativeProbes(query.query)
+    const queryTerms = discriminativeProbes(this.effectiveQueryText(query))
       .filter((term) => !/^(cogmem|memory|project|之前|什么|问题|why|did|say)$/i.test(term));
     const haystack = this.itemSearchableText(item).toLowerCase();
     const overlap = queryTerms.filter((term) => haystack.includes(term)).length;
@@ -1681,4 +1806,8 @@ export class AgentRecallEngine {
     return occasionEventText(event);
   }
 
+}
+
+function normalizeQueryText(text: string): string {
+  return text.normalize('NFKC').toLowerCase().replace(/[\s\u3000]+/gu, '');
 }
