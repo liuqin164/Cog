@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import { ScriptedProvider, makeShell, makeTempDir } from './helpers.ts';
 
+const asText = (messages: Array<{ content: unknown }> | undefined) => (messages ?? []).map((message) => String(message.content)).join('\n');
+
 /**
  * The system prompt is assembled from two sections: a pinned zone (soul, identity, rules) whose bytes
  * must hold still from request to request, and a variable tail that is the only place per-turn
@@ -23,21 +25,25 @@ describe('system prompt sections: a stable pinned zone and a variable tail', () 
       const first = shell.systemPromptSections();
       await shell.submit('第一回合');
       const firstRequest = provider.calls[0].systemPrompt;
+      const firstMessages = asText(provider.calls[0].messages);
 
       clock.at += 3 * 60 * 60 * 1000; // same session, the clock has moved three hours
       const second = shell.systemPromptSections();
       await shell.submit('第二回合');
       const secondRequest = provider.calls[1].systemPrompt;
+      const secondMessages = asText(provider.calls[1].messages);
 
-      // The clock lives in the tail and nowhere else: three hours later the tail differs, the pinned
-      // zone is byte-identical, and both requests carry that same pinned zone as their prefix.
+      // The clock lives in the variable block and nowhere else: three hours later that block differs,
+      // the system prompt is byte-identical, and both requests carry the same pinned prefix.
       expect(first.pinned).not.toContain('<time-context>');
       expect(first.tail).toContain('<time-context>');
       expect(second.tail).not.toBe(first.tail);
       expect(second.pinned).toBe(first.pinned);
-      expect(firstRequest.startsWith(`${first.pinned}\n\n`)).toBe(true);
-      expect(secondRequest.startsWith(`${second.pinned}\n\n`)).toBe(true);
-      expect(secondRequest).not.toBe(firstRequest);
+      expect(firstRequest.startsWith(first.pinned)).toBe(true);
+      expect(secondRequest.startsWith(second.pinned)).toBe(true);
+      expect(secondRequest).toBe(firstRequest);
+      expect(firstMessages).toContain('<time-context>');
+      expect(secondMessages).not.toBe(firstMessages);
     } finally {
       await shell.stop();
     }

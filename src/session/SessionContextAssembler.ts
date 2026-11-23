@@ -17,9 +17,8 @@
  * is a bandwidth goal, not a licence to drop a constraint.
  *
  * The order the lanes are *rendered* in is frozen (`SESSION_CONTEXT_LANES`); the order they are
- * *filled* in is the separate priority table. They are deliberately not the same list: the tail is
- * rendered last because new turns append there, but it outranks the digest and the recall lane when
- * the budget is tight.
+ * *filled* in is the separate priority table. The recall lane renders last because it changes every
+ * turn, but it outranks the tail and the digest when the budget is tight.
  */
 
 import { ImportanceSignalDetector } from '../engine/ImportanceSignalDetector.js';
@@ -29,7 +28,7 @@ import { serializeUntrustedLaneText, serializeUntrustedMemory } from '../agent/U
 import type { ConversationSpeaker } from '../conversation/index.js';
 
 /** The lane order, frozen by `docs/session-context.md`. */
-export const SESSION_CONTEXT_LANES = ['pinned', 'profile', 'digest', 'working_set', 'recall', 'tail'] as const;
+export const SESSION_CONTEXT_LANES = ['pinned', 'profile', 'digest', 'working_set', 'tail', 'recall'] as const;
 export type SessionContextLaneName = (typeof SESSION_CONTEXT_LANES)[number];
 
 /**
@@ -154,7 +153,7 @@ export interface SessionContextAssembly {
   usedTokens: number;
   lanes: SessionContextLane[];
   decisionTrace: SessionContextDecision[];
-  /** The bytes the stable lanes rendered, in order; unchanged across assemblies at the same budget. */
+  /** The bytes the cacheable prefix rendered, in order; unchanged across assemblies at the same budget. */
   stablePrefix: string;
   /** The assembled context: lanes in frozen order. */
   text: string;
@@ -365,7 +364,7 @@ export function assembleSessionContext(input: AssembleSessionContextInput, diges
     lanes: ordered,
     decisionTrace: decisions,
     stablePrefix: ordered
-      .filter((lane) => lane.stable && lane.status === 'included')
+      .filter((lane) => (lane.stable || lane.lane === 'digest') && lane.status === 'included')
       .map((lane) => lane.text)
       .filter(Boolean)
       .join('\n'),

@@ -756,6 +756,8 @@ export class CompanionShell implements ShellControl, AttachShell {
         builtin: { name: 'mg', baseUrl: this.config.model.baseUrl, apiKey: this.config.model.apiKey, model: this.config.model.model, targetTokens: this.config.contextSweetSpot },
         builtinAvailable: process.env.MG_BASE_URL !== undefined,
         timeoutMs: this.config.model.timeoutMs,
+        cacheKey: `${this.config.projectId}-${this.config.agentId}-${this.config.sessionId}`
+          .replace(/[^A-Za-z0-9_.-]/gu, '-'),
         onRetry: ({ attempt, status, delayMs }) => this.trace.append('provider_retry', { attempt, status, delayMs }),
       });
       if (this.modelRouter.storeError) this.trace.append('model_routes_load_failed', { message: this.modelRouter.storeError });

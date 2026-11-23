@@ -16,6 +16,7 @@ export interface MgProviderConfig {
   apiKey: string;
   model: string;
   timeoutMs: number;
+  cacheKey?: string;
   /** Bounded provider-side backoff (#282); tests shrink it, production uses the default. */
   retry?: Partial<ProviderRetryPolicy>;
   /** The account of each retry; the shell writes it to the trace so a recovered 429 is visible. */
@@ -258,6 +259,7 @@ export class MgModelProvider implements ModelProvider {
         body: JSON.stringify({
           model: this.config.model,
           stream: true,
+          ...(this.config.cacheKey === undefined ? {} : { prompt_cache_key: this.config.cacheKey }),
           messages: [{ role: 'system', content: input.systemPrompt }, ...toOpenAiMessages(input.messages)],
           tools: input.tools.length
             ? input.tools.map((tool) => ({

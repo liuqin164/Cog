@@ -2,10 +2,11 @@
  * The six-lane context assembly (#249 A5).
  *
  * Every request is one projection of the kernel's session ledger, fitted to the model route's
- * target bandwidth. `pinned` and `profile` become the stable system prefix; the other lanes become
- * one system block inserted before the newest user line. The kernel owns the lane order, the
- * downgrade rule and the browse-only pointers; this plugin only supplies the shell's material and
- * places the result where the provider reads it.
+ * target bandwidth. `pinned` and `profile` become the fixed system prompt; the digest opens the
+ * system block inserted before the newest user line, so the stable prefix continues across that
+ * boundary. The per-turn time block closes the block. The kernel owns the lane order, the downgrade
+ * rule and the browse-only pointers; this plugin only supplies the shell's material and places the
+ * result where the provider reads it.
  *
  * The split between `prepareRequest` and `transformContext` is deliberate. `prepareRequest` assembles
  * the turn once and reuses it until the ledger's newest sequence advances; it is where the request's
@@ -112,7 +113,7 @@ export function sessionContextPlugin(config: SessionContextPluginConfig): Native
             pendingBlock = turn.pendingBlock;
             return {
               ...request,
-              systemPrompt: [turn.stablePrompt, config.variablePrompt()].filter(Boolean).join('\n\n'),
+              systemPrompt: turn.stablePrompt,
             };
           }
           const recall = query
@@ -133,7 +134,7 @@ export function sessionContextPlugin(config: SessionContextPluginConfig): Native
             : undefined;
           return {
             ...request,
-            systemPrompt: [stablePrompt, config.variablePrompt()].filter(Boolean).join('\n\n'),
+            systemPrompt: stablePrompt,
           };
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -147,7 +148,10 @@ export function sessionContextPlugin(config: SessionContextPluginConfig): Native
         if (!Array.isArray(value) || !pendingBlock) return value;
         const messages = value as AgentMessage[];
         const index = newestUserIndex(messages);
-        const block: AgentMessage = { role: 'system', content: pendingBlock };
+        const block: AgentMessage = {
+          role: 'system',
+          content: [pendingBlock, config.variablePrompt()].filter(Boolean).join('\n'),
+        };
         return index >= 0 ? [...messages.slice(0, index), block, ...messages.slice(index)] : [...messages, block];
       });
     },
@@ -222,12 +226,6 @@ function requestLaneText(lane: SessionContextLane): string {
     : '');
 }
 
-/**
- * The stable prefix in the request's own shape: the pinned paragraphs verbatim (so the old
- * system-prompt contract and a provider cache both still see the same leading bytes), then the
- * kernel's profile lane. Rebuilding it from the assembled items — not from `stablePrefix`'s lane
- * headers — is what lets the kernel's stable trimming actually shorten the prefix under budget.
- */
 function stableSystemPrompt(assembly: SessionContextAssembly): string {
   const pinned = assembly.lanes.find((lane) => lane.lane === 'pinned');
   const profile = assembly.lanes.find((lane) => lane.lane === 'profile');

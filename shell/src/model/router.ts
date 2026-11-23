@@ -17,6 +17,7 @@ export interface ModelRouterOptions {
   builtin: ModelRoute;
   builtinAvailable?: boolean;
   timeoutMs: number;
+  cacheKey?: string;
   /** Each provider retry, so a recovered 429 is in the trace (#282). */
   onRetry?: (event: { attempt: number; status: number; delayMs: number }) => void;
 }
@@ -107,6 +108,7 @@ export class ModelRouter implements ModelProvider {
       apiKey: route.apiKey,
       model: route.model,
       timeoutMs: this.timeoutMs,
+      ...(this.options.cacheKey === undefined ? {} : { cacheKey: this.options.cacheKey }),
       ...(this.options.onRetry ? { onRetry: this.options.onRetry } : {}),
     };
     return new MgModelProvider(config, route.name);

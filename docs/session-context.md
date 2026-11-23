@@ -48,8 +48,8 @@ hot path. It does not decide when the shell should speak; F6 does that.
 ## Lanes (frozen)
 
 Rendered in this order, every turn. The priority column is the fill order: higher wins when the
-budget is tight. A `stable` lane's rendered bytes are the provider's cache prefix and must not change
-between assemblies at the same budget.
+budget is tight. A `stable` lane is never downgraded and must not change between assemblies at the
+same budget; the digest is also prefix-stable while included, but may still be downgraded.
 
 | Lane | Priority | Stable | On budget pressure |
 |---|---|---|---|
@@ -57,14 +57,35 @@ between assemblies at the same budget.
 | `profile` | 50 | yes | trimmed after the other lanes are pointers |
 | `digest` | 10 | no | becomes a browse-only pointer |
 | `working_set` | 20 | no | becomes a browse-only pointer |
-| `recall` | 45 | no | becomes a browse-only pointer last |
 | `tail` | 40 | no | becomes a browse-only pointer |
+| `recall` | 45 | no | becomes a browse-only pointer last |
 
-The render order and the fill order are deliberately different. `tail` renders last because new
-turns append there, but it outranks the digest and the working set: the recent verbatim words are
-the continuity anchor. `recall` is sacrificed last because it is the lane the product exists for;
-the digest is sacrificed first because it only grows. `pinned` and `profile` lead both lists because
-they are the prefix a provider can cache.
+The render order and the fill order are deliberately different. `recall` renders last because it
+changes every turn; it is sacrificed last because it is the lane the product exists for. `tail`
+renders after the working set because the recent verbatim words are the continuity anchor, and it
+outranks the digest and the working set. The digest is sacrificed first because it only grows.
+
+## Cache prefix (#475)
+
+`pinned`, `profile` and the digest lane are the bytes a provider can cache. The shell keeps
+`pinned` and `profile` as the fixed system prompt, then opens the block before the newest user line
+with the digest; the remaining lanes and the per-turn time block follow, with the time block last.
+The stable prefix therefore continues across the message boundary without making the first system
+message grow. The digest renders entries in ascending `occurredAt` with `entryId` as the tie-break,
+so a new mechanical turn, task stub or episode card appends at the end of the lane instead of
+inserting into it. The digest's `stable` flag is `no` only because budget pressure may still
+downgrade it to a pointer; while it is included, its earlier bytes do not change between
+assemblies. The one deliberate exception is the #322 rotation: when the 512-turn window rolls, the
+oldest entries leave the front and the prefix is rebuilt.
+
+`recall` is rendered last because it is the lane that changes on every turn. Moving it behind the
+tail costs no semantics: both lanes are after the digest, and the recall block keeps its own
+envelope and keys.
+
+The shell sends one stable `prompt_cache_key` per project, agent and session. The local mg gateway
+only exposes the provider's prefix cache when that key is present; without it every request is an
+exact-match miss. The key is sanitized to `[A-Za-z0-9_.-]` because the gateway ignores keys with
+other characters.
 
 After the downgrade pass, freed budget is **backfilled** (#316): a lane that became a pointer is
 given back its newest items, highest-priority lane first, until the assembly is within `targetTokens`

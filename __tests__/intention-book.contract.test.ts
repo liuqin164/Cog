@@ -293,7 +293,7 @@ describe('a restart brings active intentions back into the wake assembly', () =>
     const working = assembly.lanes.find((lane) => lane.lane === 'working_set')!;
     expect(working.items.some((item) => item.text.includes('意图：') && item.text.includes('重启后的接口'))).toBe(true);
     expect(working.items.find((item) => item.text.includes('意图：'))?.sourceRefs?.length).toBeGreaterThan(0);
-    expect(assembly.lanes.map((lane) => lane.lane)).toEqual(['pinned', 'profile', 'digest', 'working_set', 'recall', 'tail']);
+    expect(assembly.lanes.map((lane) => lane.lane)).toEqual(['pinned', 'profile', 'digest', 'working_set', 'tail', 'recall']);
   });
 });
 
