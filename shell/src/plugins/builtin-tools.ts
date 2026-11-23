@@ -605,7 +605,7 @@ function definitions(
         const values = credentials.use(ref, 'http_request', { url: target.url.href, toolCallId });
         const masks = credentials.masksFor?.(toolCallId) ?? [];
         const mask = (text: string): string => {
-          const result = maskCredentialValues(text, masks);
+          const result = maskCredentialValues(text, masks, ledger.trace);
           if (result.hits > 0) {
             ledger.trace?.append('credential_value_masked', {
               tool: 'http_request',
@@ -673,7 +673,7 @@ export function builtinToolsPlugin(): NativePlugin {
         const masks = credentials.masksFor(toolCallId);
         if (masks.length === 0) return undefined;
         credentials.forgetMasks?.(toolCallId);
-        const masked = maskCredentialValues(event.result.output, masks);
+        const masked = maskCredentialValues(event.result.output, masks, trace);
         if (masked.hits === 0) return undefined;
         trace?.append('credential_value_masked', {
           tool: event.tool?.toolName,

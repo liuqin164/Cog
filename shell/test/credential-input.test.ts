@@ -234,13 +234,63 @@ describe('the credential input surface', () => {
     expect(JSON.stringify(trace.read())).not.toContain('token-before-revoke');
   });
 
-  test('masking covers base64 and URL encodings and leaves short values alone', () => {
-    const value = 'p@ss word!';
-    const masked = maskCredentialValues(`a=${value} b=${Buffer.from(value).toString('base64')} c=${encodeURIComponent(value)}`, [
-      { ref: 'demo', field: 'password', value },
-    ]);
+  test('masking covers base64, base64url, URL, form, hex and prefixed base64 forms (#523)', () => {
+    const value = 'p ÿÿ¿¿word';
+    const base64 = Buffer.from(value).toString('base64');
+    const encoded = [
+      value,
+      base64,
+      base64.replace(/\+/gu, '-').replace(/\//gu, '_').replace(/=+$/u, ''),
+      encodeURIComponent(value),
+      new URLSearchParams([['v', value]]).toString().slice(2),
+      Buffer.from(value).toString('hex'),
+      Buffer.from(`Bearer ${value}`).toString('base64'),
+      Buffer.from(`owner:${value}`).toString('base64'),
+    ];
+    const masked = maskCredentialValues(encoded.join(' | '), [{ ref: 'demo', field: 'token', value }]);
+    expect(masked.hits).toBe(encoded.length);
+    const parts = masked.text.split(' | ');
+    expect(parts.slice(0, 6)).toEqual(encoded.slice(0, 6).map(() => '«credential:demo.token»'));
+    for (const part of parts.slice(6)) expect(part).toContain('«credential:demo.token»');
+  });
+
+  test('masking covers a JSON-escaped value (#523)', () => {
+    const value = 'line"one\\two\nthree';
+    const escaped = JSON.stringify(value).slice(1, -1);
+    const masked = maskCredentialValues(`{"secret":"${escaped}"}`, [{ ref: 'demo', field: 'secret', value }]);
+    expect(masked.text).toBe('{"secret":"«credential:demo.secret»"}');
+    expect(masked.hits).toBe(1);
+  });
+
+  test('masking covers all three base64 byte alignments (#523)', () => {
+    const token = 'tok+/=en-42';
+    const encoded = ['', 'x', 'xx'].map((pad) => Buffer.from(`${pad}${token}tail`).toString('base64'));
+    const masked = maskCredentialValues(encoded.join(' | '), [{ ref: 'demo', field: 'token', value: token }]);
     expect(masked.hits).toBe(3);
-    expect(masked.text).toBe('a=«credential:demo.password» b=«credential:demo.password» c=«credential:demo.password»');
-    expect(maskCredentialValues('pin 1234', [{ ref: 'demo', field: 'pin', value: '123' }]).text).toBe('pin 1234');
+    for (const part of masked.text.split(' | ')) {
+      expect(part).toContain('«credential:demo.token»');
+    }
+  });
+
+  test('a value shorter than four characters is traced instead of muted silently (#523)', async () => {
+    const records: Array<{ kind: string; record?: Record<string, unknown> }> = [];
+    const quiet = maskCredentialValues('pin 123', [{ ref: 'demo', field: 'pin', value: '123' }], {
+      append: (kind, record) => records.push({ kind, record }),
+    });
+    expect(quiet).toEqual({ text: 'pin 123', hits: 0, fields: [] });
+    expect(records).toEqual([{ kind: 'credential_value_too_short', record: { ref: 'demo', field: 'pin', length: 3 } }]);
+
+    const dir = makeTempDir('credential-short-');
+    const trace = new TraceLog(dir);
+    const service = new CredentialService(dir, trace, () => 1_000, () => true, () => {});
+    const run = service.request({ service: 'short', purpose: 'trace', fields: [{ name: 'pin', secret: true }] });
+    const pending = service.pending()[0]!;
+    expect(service.submit(pending.id, { pin: '123' }, 'terminal', ['https://api.example.com'])).toEqual({ ok: true, ref: 'short' });
+    expect(await run).toEqual({ outcome: 'saved', ref: 'short' });
+    service.use('short', 'http_request', { toolCallId: 'c1' });
+    maskCredentialValues('nothing', service.masksFor('c1'), trace);
+    expect(trace.read()).toContainEqual(
+      expect.objectContaining({ kind: 'credential_value_too_short', ref: 'short', field: 'pin', length: 3 }),
+    );
   });
 });
