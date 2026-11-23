@@ -69,7 +69,6 @@ export interface InstallFlags {
   agent?: string;
   name?: string;
   httpPort?: number;
-  /** `linux` | `darwin` | `win32`; the last is refused with a plain reason. */
   platform?: string;
   serviceName?: string;
   homeDir?: string;
@@ -148,7 +147,6 @@ export interface InstallerOptions {
   shellDir: string;
   bunPath: string;
   cwd: string;
-  /** `process.platform`, unnormalized, so `win32` reaches preflight and is refused there. */
   platform: string;
   homeDir: string;
   now?: () => number;
@@ -323,7 +321,7 @@ export class Installer {
     }
 
     this.io.say('Cogmem 自有智能体安装引导（F21）');
-    this.io.say(`平台：${this.choices.platform}（macOS / Linux；Windows 的服务化不在本轮）`);
+    this.io.say(`平台：${this.choices.platform}（Linux）`);
     this.io.say('安全口径：所有服务面仅回环（127.0.0.1）；快照/数据目录 0700；模型钥匙只经安全输入进 0600 配置文件，不打印、不进日志。');
     this.io.say('全新安装：无旧安装分流、无记忆继承、无迁移分支。');
     mkdirSync(this.choices.dataDir, { recursive: true, mode: 0o700 });
@@ -418,11 +416,12 @@ export class Installer {
   // ── Step 0: 预检 ──────────────────────────────────────────────────────────
 
   private async stepPreflight(): Promise<StepResult> {
-    if (this.choices.platform !== 'linux' && this.choices.platform !== 'darwin') {
+    if (this.choices.platform !== 'linux') {
+      const label = this.choices.platform === 'darwin' ? 'macOS' : this.choices.platform;
       return {
         ok: false,
-        message: `不支持的平台：${this.choices.platform}`,
-        hint: '本安装引导只服务 macOS / Linux；Windows 的服务化不在本轮。',
+        message: `不支持的平台：${label}`,
+        hint: 'Cogmem 5.0 只支持 Linux（systemd 用户服务）；macOS 与 Windows 都不在支持范围，未写入任何服务配置。',
       };
     }
 
@@ -1095,7 +1094,7 @@ export class Installer {
 export const INSTALL_USAGE = [
   'Usage: cogmem install [--data <dir>] [--workspace <dir>] [--project <id>] [--agent <id>]',
   '              [--name <companion name>]',
-  '              [--http-port <n>] [--service-name <name>] [--home <dir>] [--platform linux|darwin]',
+  '              [--http-port <n>] [--service-name <name>] [--home <dir>] [--platform linux]',
   '              [--provider mg|openai_compatible --base-url <url> --model <name>]',
   '              [--embedding-provider local|ollama|openai --embedding-base-url <url> --embedding-model <name>]',
   '              [--yes] [--skip-service] [--uninstall] [--help]',

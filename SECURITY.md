@@ -55,7 +55,7 @@ cannot.
   `--unshare-net` (no network), the workspace writable, the data directory masked read-only (when it
   is not the workspace itself), system directories read-only, `/tmp` and `/var/tmp` as private
   tmpfs, and `HOME=/tmp`. Writes outside the workspace fail as read-only.
-- Sandbox off (macOS, which has no `bwrap`, or Linux when the probe fails): the command runs as the
+- Sandbox off (Linux without `bwrap`, or when the probe fails): the command runs as the
   owner with the owner's full filesystem and network access. Every result is prefixed
   `[sandbox: off]`, and startup records `bash_sandbox_unavailable` in the trace. `doctor` and
   `/status` report the same state.

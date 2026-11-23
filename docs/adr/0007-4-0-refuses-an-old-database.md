@@ -20,6 +20,11 @@ path — `FINAL_TABLES`, `FINAL_AUXILIARY_OBJECTS`, and the runtime guards, then
 `_cogmem_bootstrap_state` — is the part that must keep working, and it is covered
 by `__tests__/fresh-file-database.unit.test.ts`.
 
+**Within 5.x the schema is additive only.** A new column must carry a default;
+removing or changing a column waits for the next major version. Create-or-refuse
+stays exactly as decided above — this fills the policy gap for a database the
+same major version created.
+
 **The refusal is not a new failure mode.** A database that is neither 4.0-shaped
 nor a healthy 3.7.3 release is already rejected today
 (`unsupported_database_identity`, `unsupported_release_schema:<version>`,

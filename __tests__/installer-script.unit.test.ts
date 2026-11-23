@@ -238,4 +238,42 @@ describe('install.sh installs the package it was asked for', () => {
     expect(runInstaller(undefined, { COGMEM_NPM_SPEC: '3.6.5', COGMEM_RELEASE_TARBALL: '5.0.0' }).chunks)
       .toEqual(['add --omit=optional cogmem@3.6.5']);
   });
+
+  test('macOS is refused before bun or the package manager runs', () => {
+    const scratch = makeTempDir('cogmem-installer-darwin-');
+    const stubDir = join(scratch, 'stub');
+    const installHome = join(scratch, 'pkg');
+    const binDir = join(scratch, 'bin');
+    const logPath = join(scratch, 'bun.log');
+    mkdirSync(stubDir, { recursive: true });
+    mkdirSync(installHome, { recursive: true });
+    writeFileSync(join(stubDir, 'uname'), '#!/bin/sh\nprintf "Darwin\\n"\n');
+    chmodSync(join(stubDir, 'uname'), 0o755);
+    writeFileSync(join(stubDir, 'bun'), '#!/bin/sh\nprintf "ran\\n" >> "$STUB_LOG"\n');
+    chmodSync(join(stubDir, 'bun'), 0o755);
+
+    const proc = Bun.spawnSync({
+      cmd: ['bash', installScript],
+      cwd: scratch,
+      env: {
+        ...process.env,
+        PATH: `${stubDir}:${BUN_DIR}:${process.env.PATH ?? ''}`,
+        HOME: scratch,
+        STUB_LOG: logPath,
+        COGMEM_INSTALL_HOME: installHome,
+        COGMEM_BIN_DIR: binDir,
+        COGMEM_PACKAGE_SPEC: 'latest',
+        NO_COLOR: '1',
+      },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+
+    expect(proc.exitCode).toBe(1);
+    const output = proc.stdout.toString() + proc.stderr.toString();
+    expect(output).toContain('macOS is not supported');
+    expect(output).toContain('Linux');
+    expect(existsSync(logPath)).toBe(false);
+    expect(existsSync(join(installHome, 'node_modules'))).toBe(false);
+  });
 });

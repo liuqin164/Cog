@@ -17,7 +17,7 @@ import {
   resolveCogmemInvocation,
   type InstallGateDiagnostic,
   type InstallStep,
-} from 'cogmem/internal';
+} from 'cogmem';
 import { defaultFetchHealth, runDoctor, type DoctorCheck } from './doctor.ts';
 import { defaultShellHome } from './layout.ts';
 import { defaultRunner, type Platform, type ServiceSpec } from './service.ts';

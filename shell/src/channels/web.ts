@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ChannelContract, ChannelSession, SessionTurnRead, SessionTurnReadInput } from 'cogmem';
-import { isLocalAuthority, isLoopbackAddress, jsonResponse, readJsonBody, readObservatoryToken, refuseWrite } from 'cogmem/internal';
+import { isLocalAuthority, isLoopbackAddress, jsonResponse, readJsonBody, readObservatoryToken, refuseWrite } from 'cogmem';
 import type { NativePlugin } from '../plugins/host.ts';
 import type { ChannelRegistry } from './registry.ts';
 

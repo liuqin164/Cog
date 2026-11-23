@@ -176,14 +176,10 @@ describe('core release metadata', () => {
 
     expect(manifest.main).toBe('./dist/public.js');
     expect(manifest.types).toBe('./dist/public.d.ts');
-    expect(Object.keys(manifest.exports).sort()).toEqual(['.', './internal', './web']);
+    expect(Object.keys(manifest.exports).sort()).toEqual(['.', './web']);
     expect(manifest.exports['.']).toEqual({
       import: './dist/public.js',
       types: './dist/public.d.ts',
-    });
-    expect(manifest.exports['./internal']).toEqual({
-      import: './dist/internal.js',
-      types: './dist/internal.d.ts',
     });
     expect(manifest.exports['./web']).toEqual({ import: './dist/shell/plugins/web.js' });
   });

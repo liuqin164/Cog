@@ -34,9 +34,9 @@ CLI is right — stop and report the disagreement instead of improvising.
 - The installer needs Bun; if Bun is missing it installs Bun for the current
   user (`install.sh`, the `bun.sh/install` step). Check `command -v bun` first
   and say which case applied.
-- Supported machines are Linux (systemd user service) and macOS (launchd
-  agent). Windows is not supported: stop and report it rather than trying to
-  work around the refusal. The resident runtime is Bun, not Node.
+- Supported machines are Linux (systemd user service) only. macOS and Windows
+  are not supported: stop and report it rather than trying to work around the
+  refusal. The resident runtime is Bun, not Node.
 - The Quick Start install path below resolves `cogmem@latest` from npm.
   That means it installs the latest *released* version. If the user asked for
   a build from a source checkout, do not use the installer — work from the
@@ -88,7 +88,7 @@ cogmem install \
   argument. `openai_compatible` requires one.
 - The other flags are `--data <dir>`, `--workspace <dir>`, `--project <id>`,
   `--agent <id>`, `--http-port <n>`, `--service-name <name>`,
-  `--home <dir>`, `--platform linux|darwin`, `--skip-service`,
+  `--home <dir>`, `--platform linux`, `--skip-service`,
   `--uninstall`, and `--help`. Use `--help` to show the installer's own
   wording.
 

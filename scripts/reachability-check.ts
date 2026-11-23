@@ -29,7 +29,6 @@ const binEntries = readdirSync(join(ROOT, 'src/bin'))
   .map((file) => join(ROOT, 'src/bin', file));
 const entries = [
   join(ROOT, 'src/public.ts'),
-  join(ROOT, 'src/internal.ts'),
   ...binEntries,
   join(ROOT, 'shell/src/cog.ts'),
   join(ROOT, 'shell/src/cli.ts'),

@@ -86,7 +86,7 @@ state; the helpers reset `lastIndex` themselves, and a caller that reuses a patt
 that reset.
 
 The shell's capture path calls these through `SecretRedactor` (`shell/src/kernel-host.ts`) instead
-of borrowing `DeepWriteRedactor` from `cogmem/internal`; `__tests__/secret-public-surface.contract.test.ts`
+of borrowing the kernel-private `DeepWriteRedactor`; `__tests__/secret-public-surface.contract.test.ts`
 reads this table back and compares it with the actual exports.
 
 ## Recall policy (frozen)

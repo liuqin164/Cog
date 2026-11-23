@@ -11,8 +11,7 @@
     "allowImportingTsExtensions": true,
     "baseUrl": ".",
     "paths": {
-      "cogmem": ["../src/public.ts"],
-      "cogmem/internal": ["../src/internal.ts"]
+      "cogmem": ["../src/public.ts"]
     }
   },
   "include": ["src/**/*.ts", "test/**/*.ts"]

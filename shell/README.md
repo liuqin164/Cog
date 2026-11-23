@@ -5,7 +5,7 @@ basic tools. It is built into the `cogmem` package as `dist/shell`, and `cog` op
 directory is the source layout for development, not a package a user installs first. Every gap it hit
 is a ticket proposal in `src/probes/gaps.ts` and on #165. The kernel takes zero diff from it: in the
 source tree the shell reaches the kernel through this directory's own `tsconfig.json` paths
-(`cogmem` → `../src/public.ts`, `cogmem/internal` → `../src/internal.ts`), and the published build
+(`cogmem` → `../src/public.ts`), and the published build
 imports the package itself.
 
 ## Run
@@ -185,7 +185,7 @@ stops the install before the probe, naming it. The key for `openai_compatible` c
 `MG_API_KEY` or `COGMEM_MODEL_KEY`, never from an argv flag. mg stays available as an explicit
 choice for a machine that runs that local gateway; it is not the fallback.
 
-0. **预检** — OS (macOS/Linux only; Windows is refused, its service story is not this round), bun,
+0. **预检** — OS (Linux only; macOS and Windows are refused, their service story is not this round), bun,
    free disk, and whether the loopback HTTP port is free. No old-install branch: every version so far
    has no users, so there is one path and no migration.
 1. **落位** — install the package deps, create the data directory (`0700`) and `snapshots/` (`0700`),
@@ -198,8 +198,8 @@ choice for a machine that runs that local gateway; it is not the fallback.
    one explicit choice and is not rewritten.
 3. **节律** — time zone, dream window, do-not-disturb window. TZ and the dream window go to the
    resident's env file; the quiet window is recorded and gates proactive speech (#328).
-4. **常驻** — register a **user-level** service (`systemd --user` on Linux, launchd agent on macOS; no
-   sudo), start it, run the shell-side doctor, and print the star-sea and health addresses.
+4. **常驻** — register a **user-level** `systemd --user` service (no sudo), start it, run the
+   shell-side doctor, and print the star-sea and health addresses.
 5. **自检式首醒** — write a probe memory through the resident's own control socket (its in-process
    kernel keeps the single writer), restart the process, and recall it. Then run one **real
    embedding** through the resident's embedder and check its 768 dimensions (#280): lexical recall
