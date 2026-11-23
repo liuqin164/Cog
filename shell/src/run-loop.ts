@@ -25,13 +25,14 @@ function truncate(text: string, limit: number): string {
 export class RunLoop {
   private readonly inboundResults = new Map<string, RunSummary | Error>();
   private readonly inboundWaiters = new Set<string>();
+  private readonly inboundRunStart = new Map<string, (runId: string) => void>();
   private drainPromise?: Promise<void>;
   private activeRun?: Promise<RunSummary>;
   private stopping = false;
 
   constructor(private readonly shell: CompanionShell) {}
 
-  async submit(text: string, channel = 'terminal'): Promise<RunSummary | undefined> {
+  async submit(text: string, channel = 'terminal', onRunStart?: (runId: string) => void): Promise<RunSummary | undefined> {
     if (!text.trim()) throw new Error('submit_empty_text');
     if (this.shell.machine.state === 'RUNNING') {
       if (this.shell.runtime?.isRunning && channel === this.shell.currentChannel) {
@@ -41,14 +42,14 @@ export class RunLoop {
       }
       this.shell.clock!.markInteraction(this.shell.now());
       this.shell.residentTick.observeSurfacingReply(text);
-      this.enqueueInbound(text, channel, 'queued');
+      this.enqueueInbound(text, channel, 'queued', undefined, onRunStart);
       return undefined;
     }
     if (this.shell.statusFace.dailyBudgetExceeded()) this.shell.statusFace.announceDailyBudget('user_message');
-    if (this.shell.machine.state === 'SUSPENDED') return this.submitWhileSuspended(text, channel);
+    if (this.shell.machine.state === 'SUSPENDED') return this.submitWhileSuspended(text, channel, onRunStart);
     this.shell.clock!.markInteraction(this.shell.now());
     this.shell.residentTick.observeSurfacingReply(text);
-    const id = this.enqueueInbound(text, channel, 'queued');
+    const id = this.enqueueInbound(text, channel, 'queued', undefined, onRunStart);
     this.inboundWaiters.add(id);
     let result: RunSummary | Error | undefined;
     try {
@@ -59,19 +60,13 @@ export class RunLoop {
       result = this.inboundResults.get(id);
       this.inboundResults.delete(id);
       this.inboundWaiters.delete(id);
+      this.inboundRunStart.delete(id);
     }
     if (result instanceof Error) throw result;
     return result;
   }
 
-  /**
-   * A line typed while paused (#228). For a question the line is the answer: the same assignment
-   * continues, no new assignment record is written, and the object is marked answered so the
-   * resumed prompt can still name the question. For a budget request a typed line is a new
-   * instruction: the paused task closes as budget_exceeded (traced) and the line starts fresh work.
-   * There is no timeout for either kind — see `Suspension`'s comment.
-   */
-  private async submitWhileSuspended(text: string, channel: string): Promise<RunSummary | undefined> {
+  private async submitWhileSuspended(text: string, channel: string, onRunStart?: (runId: string) => void): Promise<RunSummary | undefined> {
     const suspension = this.shell.machine.runtime.suspension;
     this.shell.clock!.markInteraction(this.shell.now());
     this.shell.residentTick.observeSurfacingReply(text);
@@ -79,7 +74,7 @@ export class RunLoop {
       this.shell.machine.updateRuntime({ suspension: { ...suspension, answeredAt: this.shell.now() } });
       this.shell.trace.append('suspension_answered', { id: suspension.id, assignmentId: suspension.assignmentId, chars: text.trim().length });
       try {
-        return await this.executeRun(text, 'message_received', 'question_answered', 'answer_received', undefined, channel);
+        return await this.executeRun(text, 'message_received', 'question_answered', 'answer_received', undefined, channel, undefined, onRunStart);
       } catch (error) {
         this.retainFailed(text, channel, error);
         throw error;
@@ -88,7 +83,7 @@ export class RunLoop {
     if (suspension) this.shell.proposalsHandlers.supersedeSuspension('new_input');
     this.beginUserAssignment(text);
     try {
-      return await this.executeRun(text, 'message_received', 'user_message', 'message_received', undefined, channel);
+      return await this.executeRun(text, 'message_received', 'user_message', 'message_received', undefined, channel, undefined, onRunStart);
     } catch (error) {
       this.retainFailed(text, channel, error);
       throw error;
@@ -122,9 +117,10 @@ export class RunLoop {
     grant?: { tokens: number; turns: number },
     channel?: string,
     sourceRefs?: Array<{ eventId?: string; sourceId?: string; contentHash?: string }>,
+    onRunStart?: (runId: string) => void,
   ): Promise<RunSummary> {
     if (this.stopping) return Promise.reject(new Error('run_loop_stopping'));
-    const run = this.runOnce(text, trigger, reason, dispatchTrigger, grant, channel, sourceRefs);
+    const run = this.runOnce(text, trigger, reason, dispatchTrigger, grant, channel, sourceRefs, onRunStart);
     if (!this.activeRun) {
       this.activeRun = run;
       const clear = () => {
@@ -143,8 +139,10 @@ export class RunLoop {
     grant?: { tokens: number; turns: number },
     channel?: string,
     sourceRefs?: Array<{ eventId?: string; sourceId?: string; contentHash?: string }>,
+    onRunStart?: (runId: string) => void,
   ): Promise<RunSummary> {
     const runId = `run-${this.shell.now().toString(36)}-${randomUUID().slice(0, 8)}`;
+    onRunStart?.(runId);
     const origin = trigger === 'emergence_due' ? 'emergence' : 'user';
     this.shell.currentChannel = trigger === 'emergence_due' ? '' : channel ?? this.shell.currentChannel;
     const tier = this.budgetTier(trigger);
@@ -220,7 +218,7 @@ export class RunLoop {
     }
   }
 
-  private enqueueInbound(text: string, channel: string, status: 'queued' | 'failed', error?: string): string {
+  private enqueueInbound(text: string, channel: string, status: 'queued' | 'failed', error?: string, onRunStart?: (runId: string) => void): string {
     const entry = {
       id: `inbound-${this.shell.now().toString(36)}-${randomUUID().slice(0, 8)}`,
       text,
@@ -229,6 +227,7 @@ export class RunLoop {
       status,
       ...(error ? { error } : {}),
     };
+    if (onRunStart) this.inboundRunStart.set(entry.id, onRunStart);
     this.shell.machine.updateRuntime({ inboundQueue: [...(this.shell.machine.runtime.inboundQueue ?? []), entry] });
     this.shell.trace.append(status === 'failed' ? 'inbound_failed_retained' : 'inbound_queued', {
       id: entry.id,
@@ -294,10 +293,12 @@ export class RunLoop {
       }
       if (this.shell.machine.state === 'SUSPENDED') this.shell.proposalsHandlers.supersedeSuspension('new_input');
       if (this.stopping) return;
+      const onRunStart = this.inboundRunStart.get(entry.id);
+      this.inboundRunStart.delete(entry.id);
       this.dropInbound(entry.id);
       this.beginUserAssignment(entry.text);
       try {
-        const summary = await this.executeRun(entry.text, 'message_received', 'inbound_queue', 'message_received', undefined, entry.channel);
+        const summary = await this.executeRun(entry.text, 'message_received', 'inbound_queue', 'message_received', undefined, entry.channel, undefined, onRunStart);
         if (this.inboundWaiters.has(entry.id)) this.inboundResults.set(entry.id, summary);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

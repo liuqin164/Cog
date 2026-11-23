@@ -8,8 +8,7 @@ import type { TraceLog } from '../trace.ts';
 import type { ChannelRegistry } from './registry.ts';
 
 export interface TelegramShell {
-  submit(text: string, channel?: string): Promise<unknown>;
-  currentChannel: string;
+  submit(text: string, channel?: string, onRunStart?: (runId: string) => void): Promise<unknown>;
   confirmProposal(id: string): Promise<{ ok: boolean; reason?: string; proposal?: { resultText?: string } }>;
   discardProposal(id: string): unknown;
   reviewCommitmentReceipt(input: {
@@ -225,14 +224,7 @@ export class TelegramChannel {
     this.options.trace.append('telegram_disconnected', {});
     return this.card();
   }
-
   onBusEvent(name: string, payload: any, ctx?: { runId?: string }): void {
-    if (name === 'agent_start') {
-      if (this.state === 'connected' && this.session && this.options.shell.currentChannel === this.session.channelId && typeof ctx?.runId === 'string') {
-        this.replyRuns.add(ctx.runId);
-      }
-      return;
-    }
     if (name === 'agent_end') {
       const runId = ctx?.runId;
       if (typeof runId !== 'string' || !this.replyRuns.delete(runId)) return;
@@ -373,7 +365,15 @@ export class TelegramChannel {
       return;
     }
     this.options.contract.presence(this.session, { reachability: 'online', ownerActivity: 'active' });
-    void this.options.shell.submit(ingress.text, this.session.channelId).catch((error) => {
+    this.submitText(ingress.text, this.session.channelId);
+  }
+  private submitText(text: string, channelId: string): void {
+    let runId: string | undefined;
+    void this.options.shell.submit(text, channelId, (started) => {
+      runId = started;
+      this.replyRuns.add(started);
+    }).catch((error) => {
+      if (runId) this.replyRuns.delete(runId);
       this.options.trace.append('telegram_submit_failed', { message: error instanceof Error ? error.message : String(error) });
     });
   }
@@ -568,7 +568,7 @@ export function telegramChannelPlugin(options: TelegramChannelPluginOptions): Na
           return { ok: true };
         },
       });
-      for (const name of ['agent_start', 'agent_end', 'companion_command_proposal', 'companion_emergence']) {
+      for (const name of ['agent_end', 'companion_command_proposal', 'companion_emergence']) {
         ctx.on(name, (payload: any, busCtx?: { runId?: string }) => channel.onBusEvent(name, payload, busCtx));
       }
       channel.start();

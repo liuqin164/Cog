@@ -1025,8 +1025,8 @@ export class CompanionShell implements ShellControl, AttachShell {
     return this.contextLanes.targetTokens();
   }
 
-  async submit(text: string, channel = 'terminal'): Promise<RunSummary | undefined> {
-    return this.runLoop.submit(text, channel);
+  async submit(text: string, channel = 'terminal', onRunStart?: (runId: string) => void): Promise<RunSummary | undefined> {
+    return this.runLoop.submit(text, channel, onRunStart);
   }
 
   async wakeFromSleep(): Promise<void> {

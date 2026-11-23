@@ -344,6 +344,34 @@ describe('telegram channel plugin (F12)', () => {
     }
   }, 60_000);
 
+  test('an autonomous run after a Telegram turn is not answered to Telegram', async () => {
+    const fake = startFakeTelegram();
+    const dir = makeTempDir('telegram-autonomous-');
+    const dataDir = join(dir, 'data');
+    writeConfig(dataDir, fake.base);
+    writePluginRegistry(dataDir, ['builtin:telegram-channel']);
+    const provider = new ScriptedProvider([
+      { text: '来自 Telegram 的答复。', toolCalls: [] },
+      { text: '自主回答。', toolCalls: [] },
+    ]);
+    const shell = makeTelegramShell(dir, provider, dataDir);
+    await shell.start();
+    const base = shell.httpUrl!;
+    try {
+      await connectTelegram(base, fake);
+      fake.push({ update_id: 2, message: { text: '帮我看看。', chat: { id: OWNER, type: 'private' }, from: { id: OWNER } } });
+      await waitUntil(() => fake.sent.some((entry) => entry.method === 'sendMessage' && entry.body.text === '来自 Telegram 的答复。'));
+
+      const summary = await shell.runLoop.executeRun('自主检查。', 'message_received', 'assignment_resume');
+      expect(summary.lastAssistantText).toBe('自主回答。');
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(fake.sent.some((entry) => entry.method === 'sendMessage' && entry.body.text === '自主回答。')).toBe(false);
+    } finally {
+      await shell.stop();
+      fake.stop();
+    }
+  }, 60_000);
+
   test('surfacing is delivered through the channel and stays silent inside the quiet window', async () => {
     const fake = startFakeTelegram();
     const dir = makeTempDir('telegram-surfacing-');
