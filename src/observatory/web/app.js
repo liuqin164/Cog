@@ -1288,8 +1288,16 @@ async function loadCandidates() {
 }
 
 function candidateContent(candidate) {
-  const text = typeof candidate.content === 'string' ? candidate.content : JSON.stringify(candidate.content ?? {}, null, 2);
-  return text.length > 260 ? `${text.slice(0, 260)}…` : text;
+  return typeof candidate.content === 'string' ? candidate.content : JSON.stringify(candidate.content ?? {}, null, 2);
+}
+
+function candidatePreview(candidate) {
+  const lines = candidateContent(candidate).split('\n');
+  return lines.length > 3 ? `${lines.slice(0, 3).join('\n')}\n…` : lines.join('\n');
+}
+
+function candidateBatchConfirm(label, selected) {
+  return `对 ${selected.length} 条候选执行「${label}」？\n\n${selected.map((candidate) => `${candidate.candidateId}\n${candidatePreview(candidate)}`).join('\n\n')}`;
 }
 
 function candidateExpiry(candidate) {
@@ -1339,7 +1347,7 @@ async function reviewCandidateBatch(action) {
     reviewAfter = Date.now() + Math.round(days * 86_400_000);
   }
   const label = CANDIDATE_ACTION_LABEL[action];
-  if (!confirm(`对 ${selected.length} 条候选执行「${label}」？`)) return;
+  if (!confirm(candidateBatchConfirm(label, selected))) return;
   state.candidateNotice = null;
   try {
     await postJson('candidates/batch', {
@@ -1409,21 +1417,26 @@ function candidateReviewSection() {
       else state.selectedCandidates.delete(candidate.candidateId);
       selected.textContent = `已选 ${state.selectedCandidates.size} 条`;
     });
+    const text = candidateContent(candidate);
+    const details = text.length > 260 ? el('details', { class: 'candidate-content', open: true }, [
+      el('summary', { text: '完整内容' }),
+      el('pre', { class: 'json', text }),
+    ]) : null;
+    const promote = el('button', { class: 'primary', type: 'button', text: CANDIDATE_ACTION_LABEL.promote, onclick: () => void reviewCandidate(candidate, 'promote') });
+    if (details) details.addEventListener('toggle', () => { promote.disabled = !details.open; });
+    const actions = [promote, ...['reject', 'defer'].map((action) => el('button', {
+      class: 'chip', type: 'button', text: CANDIDATE_ACTION_LABEL[action], onclick: () => void reviewCandidate(candidate, action),
+    }))];
     body.append(el('tr', {}, [
       el('td', {}, [checkbox]),
       el('td', {}, [
         el('div', { class: 'hint', text: `${candidate.candidateType} · ${candidate.candidateId}` }),
-        el('pre', { class: 'json', text: candidateContent(candidate) }),
+        details ?? el('pre', { class: 'json', text }),
         candidate.statusReason ? el('div', { class: 'hint', text: candidate.statusReason }) : null,
       ]),
       el('td', { class: 'num', text: Number(candidate.confidence ?? 0).toFixed(2) }),
       el('td', { text: candidateExpiry(candidate) }),
-      el('td', {}, ['promote', 'reject', 'defer'].map((action) => el('button', {
-        class: action === 'promote' ? 'primary' : 'chip',
-        type: 'button',
-        text: CANDIDATE_ACTION_LABEL[action],
-        onclick: () => void reviewCandidate(candidate, action),
-      }))),
+      el('td', {}, actions),
     ]));
   }
   table.append(body);
