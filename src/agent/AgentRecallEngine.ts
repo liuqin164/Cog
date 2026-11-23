@@ -78,6 +78,8 @@ import {
 } from './AgentRecallText.js';
 
 const RRF_K = 60;
+const RELATIVE_WINDOW_BOOST = 0.004;
+const RELATIVE_QUERY_FILLERS = new Set([...'发生做聊说讨论问提干记告诉事情要跟去来刚才方', 'just', 'now', 'moments', 'ago']);
 
 /**
  * Per backend instance, never global: document frequency describes one database, and a daemon serving
@@ -124,10 +126,12 @@ export class AgentRecallEngine {
   private withRelativeDates(query: AgentRecallQuery): AgentRecallQuery {
     const timeZone = query.timeZone ?? this.kernel.eventStore.getProjectTimeZone();
     const relative = relativeDateRange(query.query, { now: query.now, localDateNow: query.localDateNow, timeZone });
+    const hasContent = relative ? contentCues(relative.rest ?? query.query).some((cue) => !RELATIVE_QUERY_FILLERS.has(cue)) : false;
     return {
       ...query,
       ...(timeZone === undefined ? {} : { timeZone }),
-      ...(relative ? { startTime: query.startTime ?? relative.from, endTime: query.endTime ?? relative.to } : {}),
+      ...(relative && !hasContent ? { startTime: query.startTime ?? relative.from, endTime: query.endTime ?? relative.to } : {}),
+      ...(relative && hasContent ? { relativeWindow: { from: relative.from, to: relative.to } } : {}),
     };
   }
 
@@ -877,13 +881,6 @@ export class AgentRecallEngine {
   }
 
   private recallCore(query: AgentRecallQuery, laneLimit?: number): RecallCoreResult {
-    const timeZone = query.timeZone ?? this.kernel.eventStore.getProjectTimeZone();
-    const relative = relativeDateRange(query.query, { now: query.now, localDateNow: query.localDateNow, timeZone });
-    query = {
-      ...query,
-      ...(timeZone === undefined ? {} : { timeZone }),
-      ...(relative ? { startTime: query.startTime ?? relative.from, endTime: query.endTime ?? relative.to } : {}),
-    };
     const queryPlan = compileAgentRecallQuery({
       query: query.query,
       intent: query.intent,
@@ -1304,6 +1301,7 @@ export class AgentRecallEngine {
       const fusedScore = (event: MemoryEvent): number => (
         (semanticRank.has(event.eventId) ? 1 / (RRF_K + semanticRank.get(event.eventId)!) : 0)
         + (lexicalRank.has(event.eventId) ? 1 / (RRF_K + lexicalRank.get(event.eventId)!) : 0)
+        + this.relativeWindowBoost(event, query)
       );
       rawEvents.sort((left, right) => fusedScore(right) - fusedScore(left));
       const items = rawEvents
@@ -1568,6 +1566,11 @@ export class AgentRecallEngine {
     const haystack = this.rawEventText(event).toLowerCase();
     return this.recallCueTerms(queryPlan)
       .reduce((score, cue) => score + (haystack.includes(cue.toLowerCase()) ? 1 : 0), 0);
+  }
+
+  private relativeWindowBoost(event: MemoryEvent, query: AgentRecallQuery): number {
+    const window = query.relativeWindow;
+    return window && event.occurredAt >= window.from && event.occurredAt < window.to ? RELATIVE_WINDOW_BOOST : 0;
   }
 
   private rawEventTextLength(event: MemoryEvent): number {

@@ -89,6 +89,7 @@ export interface AgentRecallQuery {
   limit?: number;
   startTime?: number;
   endTime?: number;
+  relativeWindow?: { from: number; to: number };
   retrievalPolicy?: StrategyRetrievalPolicy;
   includeProfileLane?: boolean;
 }
