@@ -242,4 +242,77 @@ describe('the observatory candidate review face (#473)', () => {
       expect(reviews.some((review) => review.candidateId === item.candidateId && review.surface === 'observatory')).toBe(true);
     }
   });
+
+  test('a batch with a repeated candidate id is refused before any review runs', async () => {
+    const listed = await (await fetch(`${base()}/candidates?project=${PROJECT}&limit=200`)).json() as {
+      candidates: Array<{ candidateId: string; contentHash: string }>;
+    };
+    const item = listed.candidates.find((candidate) => candidate.candidateId.startsWith('cand-batch-'))!;
+    const response = await post('/candidates/batch', {
+      projectId: PROJECT,
+      action: 'reject',
+      confirm: true,
+      items: [item, item],
+    });
+    expect(response.status).toBe(400);
+    expect((await response.json() as { error: string }).error).toBe('duplicate_candidate_id');
+    const store = new DeepWriteCandidateStore(kernel.factStore.getDatabase());
+    expect(store.getCandidate(item.candidateId)?.status).toBe('needs_confirmation');
+    expect(kernel.listDreamCandidateReviews({ projectId: PROJECT, candidateId: item.candidateId })).toHaveLength(0);
+  });
+
+  test('a batch that fails midway rolls back every candidate and audit row', async () => {
+    const listed = await (await fetch(`${base()}/candidates?project=${PROJECT}&limit=200`)).json() as {
+      candidates: Array<{ candidateId: string; contentHash: string }>;
+    };
+    const batch = listed.candidates.filter((item) => item.candidateId.startsWith('cand-batch-')).slice(0, 2);
+    expect(batch).toHaveLength(2);
+    const original = kernel.reviewDreamCandidate.bind(kernel);
+    kernel.reviewDreamCandidate = ((input) => {
+      if (input.candidateId === batch[1]!.candidateId) throw new Error('review_failed');
+      return original(input);
+    }) as typeof kernel.reviewDreamCandidate;
+    try {
+      const response = await post('/candidates/batch', {
+        projectId: PROJECT,
+        action: 'reject',
+        confirm: true,
+        items: batch.map((item) => ({ candidateId: item.candidateId, contentHash: item.contentHash })),
+      });
+      expect(response.status).toBe(400);
+      expect((await response.json() as { error: string }).error).toBe('review_failed');
+    } finally {
+      kernel.reviewDreamCandidate = original;
+    }
+    const store = new DeepWriteCandidateStore(kernel.factStore.getDatabase());
+    for (const item of batch) {
+      expect(store.getCandidate(item.candidateId)?.status).toBe('needs_confirmation');
+      expect(kernel.listDreamCandidateReviews({ projectId: PROJECT, candidateId: item.candidateId })).toHaveLength(0);
+    }
+  });
+
+  test('a failed promote leaves no orphan user confirmation event', async () => {
+    const target = await candidate('cand-batch-4');
+    const count = () => (kernel.factStore.getDatabase().prepare(
+      `SELECT COUNT(*) AS n FROM memory_events WHERE payload_json LIKE '%candidate_promote%'`,
+    ).get() as { n: number }).n;
+    const before = count();
+    const original = kernel.reviewDreamCandidate.bind(kernel);
+    kernel.reviewDreamCandidate = ((input) => {
+      if (input.candidateId === target.candidateId) throw new Error('promotion_failed');
+      return original(input);
+    }) as typeof kernel.reviewDreamCandidate;
+    try {
+      const response = await post(`/candidates/${target.candidateId}/promote`, {
+        projectId: PROJECT,
+        contentHash: target.contentHash,
+      });
+      expect(response.status).toBe(400);
+      expect((await response.json() as { error: string }).error).toBe('promotion_failed');
+    } finally {
+      kernel.reviewDreamCandidate = original;
+    }
+    expect(count()).toBe(before);
+    expect((await candidate(target.candidateId)).status).toBe('needs_confirmation');
+  });
 });

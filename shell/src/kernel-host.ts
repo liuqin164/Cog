@@ -1,26 +1,17 @@
-/**
- * The shell *is* the kernel host process (guidance topology): one kernel per database, opened here.
- *
- * It used to serve that kernel over MCP to other hosts. That face is gone (#200 R2): the shell and
- * the kernel are one process, so an outward MCP endpoint was a second way in with no second reader,
- * and this shell's only other caller — the installer — speaks the control socket instead. What is
- * left on the loopback HTTP port is status and the star map, and nothing that runs a tool: `GET
- * /health` (the doctor's window into a *running* resident, so it never opens a second kernel) and
- * the read-only observatory.
- */
 import { Database } from 'bun:sqlite';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { redactSecretText } from 'cogmem';
 import {
+  createObservatoryCandidateFace,
   createObservatoryRoutes,
   MemoryObservatory,
   readObservatoryToken,
+  type MemoryKernel,
 } from 'cogmem';
 import { readMemoryUsage } from './memory.ts';
 
-/** The product manifest beside this module (`dist/shell` → package root). */
 function productVersion(): string {
   let dir = dirname(fileURLToPath(import.meta.url));
   for (let depth = 0; depth < 4; depth += 1) {
@@ -38,12 +29,9 @@ function productVersion(): string {
 export interface HttpFaceOptions {
   port: number;
   hostname: string;
-  /** Extra health fields the host wants reported (lifecycle state, version, ...). */
   health?: () => Record<string, unknown>;
   healthStatus?: () => string;
-  /** The companion's own identity, listed in the roster before it has written a ledger row. */
   connectedAgents?: () => string[];
-  /** The shell's trace file; the observatory reads its surfacing counts from it. */
   tracePath?: string;
   credentials?: HttpCredentialFace;
   channels?: HttpChannelFace;
@@ -81,7 +69,6 @@ export interface HttpChannelFace {
 }
 
 export interface HttpFaceHandle {
-  /** `http://host:port`; the resident's address, used in what the installer prints. */
   baseUrl: string;
   healthUrl: string;
   port: number;
@@ -114,6 +101,7 @@ async function openObservatory(
       token: readObservatoryToken(dirname(dbPath)),
       credentials,
       channels,
+      candidates: createObservatoryCandidateFace(kernel as MemoryKernel),
       uiSlots: ui?.slots,
       companionName: ui?.name,
       companionAvatar: ui?.avatar,
@@ -121,7 +109,6 @@ async function openObservatory(
   };
 }
 
-/** A loopback-only HTTP face over the in-process kernel: status and the read-only star map. */
 export async function startKernelHttpFace(kernel: unknown, options: HttpFaceOptions): Promise<HttpFaceHandle> {
   const kernelHealth = (): Record<string, unknown> => {
     try {

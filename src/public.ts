@@ -1020,6 +1020,8 @@ export type { SharedCollection, SharedItem, SharedMemoryPort, SharedRetraction }
 
 export { MemoryObservatory } from './observatory/MemoryObservatory.js';
 export type { MemoryObservatoryOptions } from './observatory/MemoryObservatory.js';
+export { createObservatoryCandidateFace } from './observatory/candidates.js';
+export type { ObservatoryCandidateFaceOptions } from './observatory/candidates.js';
 export {
   createObservatoryRoutes,
   isLocalAuthority,
