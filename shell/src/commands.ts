@@ -221,7 +221,7 @@ export const CORE_COMMANDS: readonly CoreCommand[] = [
   },
   {
     name: 'candidates',
-    description: '内核候选队列：数量、来源与待审状态',
+    description: '内核候选队列：数量、来源与待审状态；可在星海审核',
     surfaces: ['palette', 'resident', 'tui'],
     run(host) {
       const { counts, items } = host.candidateQueue();

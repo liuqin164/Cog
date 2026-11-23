@@ -18,12 +18,15 @@ export interface CandidateReviewRecord {
   targetBeliefId?: string;
   replacementCandidateId?: string;
   reviewAfter?: number;
+  surface?: string;
   decision: Record<string, unknown>;
   createdAt: number;
 }
 
 export class CandidateReviewStore {
-  constructor(private readonly db: Database) {}
+  constructor(private readonly db: Database) {
+    this.ensureColumn('surface', 'TEXT');
+  }
 
   insert(input: Omit<CandidateReviewRecord, 'reviewId' | 'createdAt'> & { reviewId?: string; createdAt?: number }): CandidateReviewRecord {
     const record: CandidateReviewRecord = {
@@ -35,13 +38,14 @@ export class CandidateReviewStore {
       INSERT INTO deep_write_candidate_reviews(
         review_id, candidate_id, project_id, action, actor, reason, from_status, to_status,
         confirmation_event_id, target_belief_id, replacement_candidate_id, review_after,
-        decision_json, created_at
-      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        surface, decision_json, created_at
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       record.reviewId, record.candidateId, record.projectId === undefined ? null : projectScope(record.projectId), record.action,
       record.actor, record.reason, record.fromStatus, record.toStatus,
       record.confirmationEventId || null, record.targetBeliefId || null,
       record.replacementCandidateId || null, record.reviewAfter ?? null,
+      record.surface || null,
       JSON.stringify(record.decision), record.createdAt,
     );
     return record;
@@ -59,6 +63,12 @@ export class CandidateReviewStore {
     `).all(...params, Math.max(1, Math.min(options.limit ?? 100, 500))) as Array<Record<string, unknown>>;
     return rows.map(mapReview);
   }
+
+  private ensureColumn(column: string, definition: string): void {
+    const columns = this.db.prepare(`PRAGMA table_info(deep_write_candidate_reviews)`).all() as Array<{ name: string }>;
+    if (columns.some((item) => item.name === column)) return;
+    this.db.exec(`ALTER TABLE deep_write_candidate_reviews ADD COLUMN ${column} ${definition}`);
+  }
 }
 
 function mapReview(row: Record<string, unknown>): CandidateReviewRecord {
@@ -75,6 +85,7 @@ function mapReview(row: Record<string, unknown>): CandidateReviewRecord {
     targetBeliefId: row.target_belief_id ? String(row.target_belief_id) : undefined,
     replacementCandidateId: row.replacement_candidate_id ? String(row.replacement_candidate_id) : undefined,
     reviewAfter: row.review_after == null ? undefined : Number(row.review_after),
+    surface: row.surface ? String(row.surface) : undefined,
     decision: parseObject(row.decision_json),
     createdAt: Number(row.created_at),
   };

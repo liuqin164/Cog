@@ -20,8 +20,8 @@ nightly snapshot, its manifest, the bundle and the recovery drill are otherwise 
 - **No new table.** Health state lives in the existing `_meta` key/value table, transitions are rows
   in the existing `governance_audit_log`, and a snapshot's manifest is a JSON file beside it. No
   column, no migration.
-- **No new observatory write.** The health page is a read of persisted state. The soul editor remains
-  the observatory's only write exception.
+- **No new observatory write.** The health page is a read of persisted state. The soul editor and
+  candidate review remain the observatory's named write exceptions.
 - **No second snapshot format.** The nightly snapshot is the existing `cogmem snapshot` DB copy
   (`.snap`) plus a manifest; the bundle shares that copy, checksum and count verification. The
   `cogmem snapshot export|import` face is unchanged.
@@ -293,7 +293,8 @@ remain readable from the database.
 - `MemoryKernel.backup.snapshot` runs at the end of `runNight` when a snapshots directory is
   configured; the week's first verified copy is kept as a weekly archive beside the nightly window.
   `cogmem backup snapshot|list|bundle|restore` is the operator face.
-- The observatory gains a read-only health tab. Its only write remains the soul editor.
+- The observatory gains a read-only health tab. Its named writes remain the soul editor and candidate
+  review.
 - The update boundary is stated rather than invented: 5.0 has **no pre-migration snapshot** — 4.0
   refuses an old database and writes no backup (ADR-0007), and `cogmem snapshot export|import` is
   the one DB snapshot format. The nightly snapshot reuses it, so there is no second format to

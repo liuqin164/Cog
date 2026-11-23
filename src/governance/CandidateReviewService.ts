@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type Database from 'bun:sqlite';
 import type { DeepWritePromotionDecision, DeepWritePromotionPolicy } from '../engine/DeepWritePromotionPolicy.js';
 import type { MemoryEvent } from '../types/index.js';
@@ -14,6 +15,8 @@ export interface CandidateReviewInput {
   targetBeliefId?: string;
   replacementCandidateId?: string;
   reviewAfter?: number;
+  surface?: string;
+  expectedContentHash?: string;
 }
 
 export interface CandidateReviewResult {
@@ -22,16 +25,6 @@ export interface CandidateReviewResult {
   decision?: DeepWritePromotionDecision;
 }
 
-/**
- * The inputs each action actually consumes. The audit row is append-only evidence, so writing a
- * field the action never read turns the row into a claim that never happened: `approve` would
- * record a bound belief, `reject` a deferral date, `supersede` a user confirmation. Anything
- * outside this table is rejected instead of recorded.
- *
- * Consumed and required are the same thing here: an action that consumes `replacementCandidateId`
- * has no meaning without one, and an optional consumed input would only reintroduce a shape the
- * action cannot express.
- */
 const CONSUMED_INPUTS: Record<CandidateReviewAction, readonly OptionalInputField[]> = {
   approve: ['confirmationEventId'],
   reject: [],
@@ -60,6 +53,9 @@ export class CandidateReviewService {
       assertConsumedInputs(input);
       const candidate = this.candidates.getCandidate(required(input.candidateId, 'candidateId'));
       if (!candidate) throw new Error('candidate_not_found');
+      if (input.expectedContentHash !== undefined && candidateContentHash(candidate.content) !== input.expectedContentHash) {
+        throw new Error('candidate_content_changed');
+      }
       const run = this.candidates.getRun(candidate.runId);
       if (!run || run.projectId !== input.projectId) throw new Error('candidate_project_mismatch');
       if (candidate.status !== 'needs_confirmation') throw new Error('candidate_not_awaiting_confirmation');
@@ -77,10 +73,6 @@ export class CandidateReviewService {
           reviewAfter: input.reviewAfter,
         });
       } else if (input.action === 'supersede') {
-        // Supersede means "another candidate replaced this one", so the replacement is the whole
-        // content of the action. Without it the row used to fall back to type `manual_review` with
-        // its own id as the target, which answers "what replaced this?" with the row it just closed.
-        // Retiring a candidate without a successor is what `reject` is for.
         const replacementCandidateId = input.replacementCandidateId?.trim();
         if (!replacementCandidateId) throw new Error('replacement_candidate_required');
         this.requireReplacement(replacementCandidateId, input.projectId, candidate.candidateId);
@@ -102,10 +94,6 @@ export class CandidateReviewService {
           if (!belief || belief.project_id !== input.projectId || belief.status !== 'active') {
             throw new Error('target_belief_not_active_in_project');
           }
-          // Relink is an operator assertion about which belief this correction corrects, so every
-          // target-bearing field has to move together. The curator writes correctedClaimKey and
-          // correctedBeliefCandidateIds as a pair; rewriting one of them leaves the record naming two
-          // different beliefs, and the resolver verdict would then describe a match that never happened.
           const previousTargets = [
             typeof content.targetBeliefId === 'string' ? content.targetBeliefId : null,
             ...(Array.isArray(content.correctedBeliefCandidateIds)
@@ -150,6 +138,7 @@ export class CandidateReviewService {
         targetBeliefId: input.targetBeliefId,
         replacementCandidateId: input.replacementCandidateId,
         reviewAfter: input.reviewAfter,
+        surface: input.surface,
         decision: decision ? { ...decision } : {},
       });
       return { review, candidate: reviewed, decision };
@@ -182,8 +171,6 @@ export class CandidateReviewService {
   }
 
   private requireReplacement(candidateId: string, projectId: string, reviewedCandidateId: string): void {
-    // A candidate cannot replace itself: the record would point back at the row it just closed,
-    // so anything following "what replaced this?" would land on a superseded candidate.
     if (candidateId === reviewedCandidateId) throw new Error('replacement_candidate_must_differ');
     const replacement = this.candidates.getCandidate(candidateId);
     const run = replacement ? this.candidates.getRun(replacement.runId) : null;
@@ -213,4 +200,8 @@ function asObject(value: unknown): Record<string, unknown> {
 function required(value: string | undefined, field: string): string {
   if (!value?.trim()) throw new Error(`${field}_required`);
   return value.trim();
+}
+
+export function candidateContentHash(content: unknown): string {
+  return createHash('sha256').update(JSON.stringify(content ?? null)).digest('hex');
 }

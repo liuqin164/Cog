@@ -18,7 +18,7 @@ The kernel is host-agnostic and Cog is its resident: the memory belongs to the c
 - **A night shift.** Dream runs inside the hours you set — 02:00–05:00 by default — and only over sealed episodes. It drafts durable-memory candidates with exact source event ids, writes the night's summary, and records a run receipt. Candidates are not facts: they carry their evidence and status, and only a governed promotion step makes them current.
 - **Emergence, not notification spam.** When something is due, relevant or unfinished — a promise, an open loop, a practice that matches the task — the kernel offers a candidate with its reason, freshness and sensitivity. The shell decides whether to speak. Commitments are announced once and asked about once; asking again for the same occurrence returns nothing.
 - **Promises and plans, kept apart.** The commitment book records who promised what and when it comes due, in both directions; a third party's reported promise is marked tentative. The intention book records the agent's own plans. Prospective memory is confirmed-only and executes nothing — there is no hidden task runner.
-- **Native plugins, and a window into it.** `/plugins add <package-or-path>` registers a native plugin written against the host API, and `/plugins` reports what the process actually loaded. `cogmem observatory` serves a loopback-only page with the Atlas star map, the ledger timeline, stored recall decisions, health, and the soul editor — the one write route on an otherwise read-only page.
+- **Native plugins, and a window into it.** `/plugins add <package-or-path>` registers a native plugin written against the host API, and `/plugins` reports what the process actually loaded. `cogmem observatory` serves a loopback-only page with the Atlas star map, the ledger timeline, stored recall decisions, health, the soul editor, and the candidate review queue — the soul and candidate-review writes are the named exceptions on an otherwise read-only page.
 
 ## Quick Start
 
@@ -164,7 +164,7 @@ Budgets live in `<dataDir>/budgets.json`: the default daily ceiling is 2,000,000
 
 At most once every 24 hours, independently of whether Dream ran, the resident writes a verified snapshot of the whole database; checksum, open and row counts are checked before it is reported. Seven daily snapshots and four weekly archives are kept. `cogmem backup list` shows them, and `cogmem snapshot import --snap <file>` restores one. A snapshot contains the whole brain — treat it like the database.
 
-`cogmem observatory` serves the star map on loopback. Reads write nothing; the soul editor's save and rollback routes are the only writes, and they require a token minted by the installer.
+`cogmem observatory` serves the star map on loopback. Reads write nothing; the soul editor's save and rollback routes and the candidate-review routes are the only writes, and they require a token minted by the installer.
 
 ## Bring your history
 
