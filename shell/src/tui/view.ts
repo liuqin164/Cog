@@ -34,6 +34,7 @@ export interface StatusState {
   quietWindow?: { startHour: number; endHour: number; active: boolean };
   sandbox?: 'on' | 'off';
   capturePaused?: boolean;
+  failedInbound?: number;
   suspended?: { kind: 'budget' | 'question'; text: string };
 }
 

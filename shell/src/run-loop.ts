@@ -17,6 +17,7 @@ const MAX_ASSIGNMENT_FINDINGS = 600;
  */
 const RESUME_BACKOFF_BASE_MS = 5 * 60_000;
 const RESUME_BACKOFF_CAP_MS = 6 * 60 * 60_000;
+const MAX_FAILED_INBOUND = 20;
 
 function truncate(text: string, limit: number): string {
   return text.length <= limit ? text : `${text.slice(0, limit)}…`;
@@ -228,7 +229,12 @@ export class RunLoop {
       ...(error ? { error } : {}),
     };
     if (onRunStart) this.inboundRunStart.set(entry.id, onRunStart);
-    this.shell.machine.updateRuntime({ inboundQueue: [...(this.shell.machine.runtime.inboundQueue ?? []), entry] });
+    let queue = [...(this.shell.machine.runtime.inboundQueue ?? []), entry];
+    if (status === 'failed') {
+      const failed = queue.filter((item) => item.status === 'failed');
+      if (failed.length > MAX_FAILED_INBOUND) queue = queue.filter((item) => item !== failed[0]);
+    }
+    this.shell.machine.updateRuntime({ inboundQueue: queue });
     this.shell.trace.append(status === 'failed' ? 'inbound_failed_retained' : 'inbound_queued', {
       id: entry.id,
       channel,
@@ -247,6 +253,7 @@ export class RunLoop {
     const message = error instanceof Error ? error.message : String(error);
     try {
       this.enqueueInbound(text, channel, 'failed', message);
+      this.shell.statusFace.emitStatus();
     } catch (nested) {
       this.shell.trace.append('inbound_retention_failed', {
         channel,

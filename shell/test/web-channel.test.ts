@@ -305,4 +305,33 @@ describe('web channel plugin (F12)', () => {
       await shell.stop();
     }
   }, 60_000);
+
+  test('the web state carries the failed inbound count', async () => {
+    const dir = makeTempDir('web-channel-failed-');
+    const dataDir = join(dir, 'data');
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(join(dataDir, 'observatory-token'), `${TOKEN}\n`, { mode: 0o600 });
+    writePluginRegistry(dataDir, ['builtin:web-channel']);
+    const shell = makeShell(dir, new ScriptedProvider([{ text: 'unused', toolCalls: [] }]), {
+      dataDir,
+      dbPath: join(dataDir, 'memory.sqlite'),
+      plugins: ['builtin:web-channel'],
+      dream: NO_DREAM,
+      http: { enabled: true, port: 0, hostname: '127.0.0.1' },
+    });
+    await shell.start();
+    const base = shell.httpUrl!;
+    const reader = (await fetch(`${base}/channel/web/events`)).body!.getReader();
+    const sse = new Sse(reader);
+    try {
+      shell.machine.updateRuntime({
+        inboundQueue: [{ id: 'inbound-failed', text: '没送到', channel: 'web', at: Date.now(), status: 'failed', error: 'down' }],
+      });
+      shell.statusFace.emitStatus();
+      expect(await sse.wait('state')).toEqual({ state: 'IDLE', failed: 1 });
+    } finally {
+      await reader.cancel().catch(() => {});
+      await shell.stop();
+    }
+  }, 60_000);
 });

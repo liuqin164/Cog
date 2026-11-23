@@ -33,6 +33,7 @@ let active = null;
 let oldestCursor = 0;
 let hasMore = false;
 let loadingOlder = false;
+let failedInbound = 0;
 
 const messages = document.getElementById('messages');
 const state = document.getElementById('state');
@@ -60,6 +61,10 @@ function syncTokenBar() {
 
 function scroll() {
   messages.scrollTop = messages.scrollHeight;
+}
+
+function showState(label) {
+  state.textContent = failedInbound > 0 ? `${label} · 未送达 ${failedInbound}` : label;
 }
 
 function clock(at) {
@@ -278,7 +283,7 @@ function closeModal() {
 function connect() {
   const stream = new EventSource('/channel/web/events');
   stream.addEventListener('open', () => {
-    state.textContent = '在线';
+    showState('在线');
   });
   stream.addEventListener('error', () => {
     state.textContent = '重连中';
@@ -315,7 +320,8 @@ function connect() {
   });
   stream.addEventListener('state', (event) => {
     const payload = JSON.parse(event.data);
-    state.textContent = payload.state === 'RUNNING' ? '思考中' : '在线';
+    if (typeof payload.failed === 'number') failedInbound = payload.failed;
+    showState(payload.state === 'RUNNING' ? '思考中' : '在线');
   });
   stream.addEventListener('bye', () => {
     state.textContent = '渠道已停止';

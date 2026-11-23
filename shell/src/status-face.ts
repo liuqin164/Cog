@@ -144,6 +144,7 @@ export class StatusFace {
       quietWindow: this.shell.config.quiet ? { ...this.shell.config.quiet, active: this.shell.clock?.quietWindowOpen() ?? false } : undefined,
       sandbox: this.sandboxState(),
       capturePaused: this.shell.capturePaused,
+      failedInbound: this.failedInbound(),
       ...(this.shell.machine.state === 'SUSPENDED' && this.shell.machine.runtime.suspension ? { suspended: this.suspendedLine(this.shell.machine.runtime.suspension) } : {}),
     };
   }
@@ -170,6 +171,10 @@ export class StatusFace {
   /** `/status` and the status bar say whether bash is isolated; a silent degradation is the bug (#284). */
   sandboxState(): 'on' | 'off' {
     return bwrapUsable() ? 'on' : 'off';
+  }
+
+  failedInbound(): number {
+    return this.shell.machine.runtime.inboundQueue?.filter((entry) => entry.status === 'failed').length ?? 0;
   }
 
   /**

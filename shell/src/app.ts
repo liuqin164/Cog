@@ -1328,7 +1328,7 @@ export class CompanionShell implements ShellControl, AttachShell {
    */
   private readonly commandHost: CommandHost = {
     config: () => this.config,
-    lifecycle: () => ({ state: this.machine.state, seq: this.machine.seq, costDayTokens: this.machine.runtime.costDayTokens ?? 0, sandbox: this.statusFace.sandboxState() }),
+    lifecycle: () => ({ state: this.machine.state, seq: this.machine.seq, costDayTokens: this.machine.runtime.costDayTokens ?? 0, sandbox: this.statusFace.sandboxState(), failedInbound: this.statusFace.failedInbound() }),
     contextTokens: () => this.contextTokenEstimate,
     contextToolOutput: () => this.lastToolOutput,
     contextLanes: () => (this.lastLaneAssembly ? laneAssemblyView(this.lastLaneAssembly) : undefined),

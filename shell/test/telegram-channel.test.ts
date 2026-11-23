@@ -372,6 +372,47 @@ describe('telegram channel plugin (F12)', () => {
     }
   }, 60_000);
 
+  test('a run_error sends a failure notice and only the owner can resend', async () => {
+    const fake = startFakeTelegram();
+    const dir = makeTempDir('telegram-run-error-');
+    const dataDir = join(dir, 'data');
+    writeConfig(dataDir, fake.base);
+    writePluginRegistry(dataDir, ['builtin:telegram-channel']);
+    const provider = new ScriptedProvider([
+      () => {
+        throw new Error('mg_gateway_error: 503 provider down');
+      },
+      { text: '重发成功。', toolCalls: [] },
+    ]);
+    const shell = makeTelegramShell(dir, provider, dataDir);
+    await shell.start();
+    const base = shell.httpUrl!;
+    try {
+      await connectTelegram(base, fake);
+      fake.push({ update_id: 2, message: { text: '这句要重发。', chat: { id: OWNER, type: 'private' }, from: { id: OWNER } } });
+      await waitUntil(() => fake.sent.some((entry) => entry.method === 'sendMessage' && String(entry.body.text).includes('模型线路故障')));
+      const failure = fake.sent.find((entry) => entry.method === 'sendMessage' && String(entry.body.text).includes('模型线路故障'))!;
+      expect(failure.body.text).toContain('这句我没回答');
+      const resend = failure.body.reply_markup.inline_keyboard[0][0];
+      expect(resend.text).toBe('重发');
+      expect(resend.callback_data).toMatch(/^resend:run-/);
+
+      const callsBeforeStranger = provider.calls.length;
+      fake.push({ update_id: 3, callback_query: { id: 'cb-stranger-resend', data: resend.callback_data, from: { id: STRANGER } } });
+      await waitUntil(() => fake.sent.some((entry) => entry.method === 'answerCallbackQuery' && entry.body.callback_query_id === 'cb-stranger-resend'));
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(provider.calls.length).toBe(callsBeforeStranger);
+      expect(fake.sent.some((entry) => entry.method === 'sendMessage' && entry.body.text === '重发成功。')).toBe(false);
+
+      fake.push({ update_id: 4, callback_query: { id: 'cb-owner-resend', data: resend.callback_data, from: { id: OWNER } } });
+      await waitUntil(() => fake.sent.some((entry) => entry.method === 'sendMessage' && entry.body.text === '重发成功。'));
+      expect(provider.calls).toHaveLength(2);
+    } finally {
+      await shell.stop();
+      fake.stop();
+    }
+  }, 60_000);
+
   test('surfacing is delivered through the channel and stays silent inside the quiet window', async () => {
     const fake = startFakeTelegram();
     const dir = makeTempDir('telegram-surfacing-');

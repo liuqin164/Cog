@@ -72,6 +72,7 @@ export class WebChannel {
   private readonly streams = new Set<Stream>();
   private stopped = false;
   private runStartedAt = 0;
+  private failedInbound = 0;
 
   constructor(private readonly options: WebChannelOptions) {
     this.session = options.contract.register({
@@ -169,7 +170,12 @@ export class WebChannel {
     }
     if (name === 'companion_transition') {
       if (payload?.state === 'RUNNING') this.runStartedAt = this.options.clock.now();
-      this.broadcast('state', { state: payload?.state });
+      this.broadcast('state', { state: payload?.state, failed: this.failedInbound });
+      return;
+    }
+    if (name === 'companion_status') {
+      this.failedInbound = typeof payload?.status?.failedInbound === 'number' ? payload.status.failedInbound : 0;
+      this.broadcast('state', { state: payload?.status?.lifecycle, failed: this.failedInbound });
     }
   }
 
@@ -429,7 +435,7 @@ export function webChannelPlugin(options: WebChannelPluginOptions): NativePlugin
         config: [],
         status: () => ({ state: 'connected', detail: '本页由 Web 渠道提供' }),
       });
-      for (const name of ['message_update', 'message_end', 'companion_command_proposal', 'companion_emergence', 'companion_transition', 'commitment_receipt']) {
+      for (const name of ['message_update', 'message_end', 'companion_command_proposal', 'companion_emergence', 'companion_transition', 'commitment_receipt', 'companion_status']) {
         ctx.on(name, (payload: any) => channel.onBusEvent(name, payload));
       }
       ctx.dispose(() => {

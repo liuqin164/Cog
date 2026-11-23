@@ -131,6 +131,31 @@ describe('messages that arrive while a run cannot take them', () => {
       await again.stop();
     }
   });
+
+  test('failed lines are counted by /status and capped at 20', async () => {
+    const dir = makeTempDir();
+    const provider = new ScriptedProvider([{ text: 'unused', toolCalls: [] }]);
+    const shell = makeShell(dir, provider);
+    await shell.start();
+    try {
+      const runtime = (shell as unknown as { runtime: { run: (...args: unknown[]) => Promise<unknown> } }).runtime;
+      runtime.run = async () => {
+        throw new Error('provider unreachable');
+      };
+      for (let index = 1; index <= 21; index += 1) {
+        await expect(shell.submit(`fail-${index}`)).rejects.toThrow('provider unreachable');
+      }
+      const failed = shell.machine.runtime.inboundQueue?.filter((entry) => entry.status === 'failed') ?? [];
+      expect(failed).toHaveLength(20);
+      expect(failed[0]!.text).toBe('fail-2');
+      expect(failed.at(-1)!.text).toBe('fail-21');
+      expect(shell.currentStatus().failedInbound).toBe(20);
+      const status = await shell.runCommand('status', '');
+      expect(status.text).toContain('未送达 20 条');
+    } finally {
+      await shell.stop();
+    }
+  }, 60_000);
 });
 
 describe('waking and blank input', () => {

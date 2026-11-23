@@ -139,6 +139,7 @@ export class TelegramChannel {
   private disposed = false;
   private offset = 0;
   private replyRuns = new Set<string>();
+  private resendTexts = new Map<string, string>();
   private failures = 0;
   private lastError?: string;
 
@@ -197,6 +198,7 @@ export class TelegramChannel {
     if (previous && previous !== credential) this.options.credentials.revoke(previous);
     this.session = undefined;
     this.replyRuns.clear();
+    this.resendTexts.clear();
     this.config = { apiBase: this.config.apiBase, credential };
     this.persist();
     this.state = 'pairing';
@@ -214,6 +216,7 @@ export class TelegramChannel {
     if (this.config.credential) this.options.credentials.revoke(this.config.credential);
     this.session = undefined;
     this.replyRuns.clear();
+    this.resendTexts.clear();
     this.pairingCode = undefined;
     this.pairingExpiresAt = 0;
     this.state = 'disconnected';
@@ -228,7 +231,18 @@ export class TelegramChannel {
     if (name === 'agent_end') {
       const runId = ctx?.runId;
       if (typeof runId !== 'string' || !this.replyRuns.delete(runId)) return;
-      const text = payload?.summary?.lastAssistantText;
+      const summary = payload?.summary;
+      if (summary?.stopReason === 'run_error') {
+        const userText = summary.userText;
+        if (typeof userText === 'string' && userText !== '') {
+          this.resendTexts.set(runId, userText);
+          if (this.resendTexts.size > 20) this.resendTexts.delete(this.resendTexts.keys().next().value!);
+        }
+        const reason = typeof summary.error === 'string' && summary.error !== '' ? `原因：${summary.error.slice(0, 200)}` : '';
+        void this.send(`模型线路故障，这句我没回答。${reason}`, { inline_keyboard: [[{ text: '重发', callback_data: `resend:${runId}` }]] });
+        return;
+      }
+      const text = summary?.lastAssistantText;
       if (typeof text === 'string' && text !== '') void this.send(text);
       return;
     }
@@ -442,9 +456,22 @@ export class TelegramChannel {
       return;
     }
     const [action, id] = (query.data ?? '').split(':');
-    if (accountId !== this.config.ownerId || !id || (action !== 'confirm' && action !== 'discard')) {
+    if (accountId !== this.config.ownerId || !id || (action !== 'confirm' && action !== 'discard' && action !== 'resend')) {
       this.options.trace.append('telegram_approval_refused', { accountId, data: query.data ?? '' });
       await this.answer(query.id, '拒绝：仅登记的 owner 可批准。');
+      return;
+    }
+    if (action === 'resend') {
+      const resend = this.resendTexts.get(id);
+      if (resend === undefined) {
+        this.options.trace.append('telegram_resend_refused', { accountId, id });
+        await this.answer(query.id, '没有可重发的原文。');
+        return;
+      }
+      this.resendTexts.delete(id);
+      this.options.trace.append('telegram_resend', { accountId, id });
+      await this.answer(query.id, '重发中。');
+      this.submitText(resend, this.session?.channelId ?? `telegram:${this.config.ownerId}`);
       return;
     }
     let text: string;
