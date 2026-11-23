@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import type { ChannelContract, ChannelSession } from 'cogmem';
+import type { AgentTurnReceipt, ChannelContract, ChannelSession } from 'cogmem';
 import type { CredentialService } from '../credentials.ts';
 import type { NativePlugin } from '../plugins/host.ts';
 import type { TraceLog } from '../trace.ts';
@@ -12,6 +12,10 @@ export interface TelegramShell {
   currentChannel: string;
   confirmProposal(id: string): Promise<{ ok: boolean; reason?: string; proposal?: { resultText?: string } }>;
   discardProposal(id: string): unknown;
+  reviewCommitmentReceipt(input: {
+    sourceEventId: string;
+    action: 'confirm' | 'intention' | 'forget';
+  }): { text: string };
 }
 
 interface TelegramClock {
@@ -424,6 +428,19 @@ export class TelegramChannel {
 
   private async onCallback(query: TelegramCallbackQuery): Promise<void> {
     const accountId = String(query.from?.id ?? '');
+    const receipt = (query.data ?? '').split('|');
+    if (receipt[0] === 'receipt' && receipt.length === 3) {
+      const action = receipt[2];
+      if (accountId !== this.config.ownerId || (action !== 'confirm' && action !== 'intention' && action !== 'forget')) {
+        await this.answer(query.id, '拒绝：仅登记的 owner 可确认回执。');
+        return;
+      }
+      const result = this.options.shell.reviewCommitmentReceipt({ sourceEventId: receipt[1]!, action });
+      this.options.trace.append('telegram_receipt', { accountId, action, ok: true });
+      await this.answer(query.id, result.text);
+      await this.send(result.text);
+      return;
+    }
     const [action, id] = (query.data ?? '').split(':');
     if (accountId !== this.config.ownerId || !id || (action !== 'confirm' && action !== 'discard')) {
       this.options.trace.append('telegram_approval_refused', { accountId, data: query.data ?? '' });
@@ -467,6 +484,17 @@ export class TelegramChannel {
     if (delivery.outcome === 'delivered') await this.send(payload.text);
   }
 
+  onReceipt(receipt: AgentTurnReceipt): void {
+    if (this.state !== 'connected' || !receipt?.sourceEventId) return;
+    void this.send(receipt.text, {
+      inline_keyboard: [[
+        { text: '对', callback_data: `receipt|${receipt.sourceEventId}|confirm` },
+        { text: '只是打算，不用提醒', callback_data: `receipt|${receipt.sourceEventId}|intention` },
+        { text: '别记', callback_data: `receipt|${receipt.sourceEventId}|forget` },
+      ]],
+    });
+  }
+
   private async answer(callbackId: string, text: string): Promise<void> {
     try {
       await this.api.answerCallbackQuery(callbackId, text);
@@ -488,7 +516,7 @@ export class TelegramChannel {
 export function telegramChannelPlugin(options: TelegramChannelPluginOptions): NativePlugin {
   return {
     name: 'telegram-channel',
-    inject: ['shell', 'credentials', 'clock', 'trace', 'channelRegistry'],
+    inject: ['shell', 'credentials', 'clock', 'trace', 'channelRegistry', 'eventBus'],
     apply(ctx) {
       let config: TelegramConfig | undefined;
       let error: string | undefined;
@@ -508,6 +536,7 @@ export function telegramChannelPlugin(options: TelegramChannelPluginOptions): Na
         dataDir: options.dataDir,
       }, config, error);
       ctx.provide('telegramChannel', channel);
+      ctx.on('commitment_receipt', (receipt: AgentTurnReceipt) => channel.onReceipt(receipt));
       const configFields = [{ name: 'token', label: 'Bot Token', secret: true }];
       const unregister = ctx.getService<ChannelRegistry>('channelRegistry').register({
         id: 'telegram',

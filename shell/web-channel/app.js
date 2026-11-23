@@ -307,6 +307,9 @@ function connect() {
   stream.addEventListener('proposal', (event) => {
     proposalCard(JSON.parse(event.data).proposal || {});
   });
+  stream.addEventListener('receipt', (event) => {
+    receiptCard(JSON.parse(event.data));
+  });
   stream.addEventListener('emergence', (event) => {
     emergenceCard(JSON.parse(event.data));
   });
@@ -318,6 +321,36 @@ function connect() {
     state.textContent = '渠道已停止';
     stream.close();
   });
+}
+
+function receiptCard(receipt) {
+  if (!receipt || typeof receipt.text !== 'string') return;
+  const card = el('div', 'notice');
+  const line = el('div', '', receipt.text);
+  const actions = el('div', '');
+  const labels = { confirm: '对', intention: '只是打算，不用提醒', forget: '别记' };
+  for (const action of receipt.actions || []) {
+    const button = el('button', '', labels[action] || action);
+    button.type = 'button';
+    button.addEventListener('click', async () => {
+      try {
+        const result = await post('/channel/web/receipt', {
+          sourceEventId: receipt.sourceEventId,
+          action,
+          content: receipt.content,
+          dueAt: receipt.dueAt,
+        });
+        card.replaceChildren(el('div', '', result.text));
+        scroll();
+      } catch (error) {
+        addNotice(`回执处理失败：${error instanceof Error ? error.message : String(error)}`);
+      }
+    });
+    actions.append(button);
+  }
+  card.append(line, actions);
+  messages.append(card);
+  scroll();
 }
 
 async function loadHistory(before) {

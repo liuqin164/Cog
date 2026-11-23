@@ -66,11 +66,12 @@ import { SurfacingCandidates, SurfacingFeedback } from '../surfacing/index.js';
 import { OccasionScope } from '../occasion/index.js';
 import { DeliveryRouter } from '../delivery/index.js';
 import { ProcedureCompiler } from '../procedure/index.js';
-import { CommitmentBook } from '../commitment/index.js';
+import { CommitmentBook, type CommitmentEntry } from '../commitment/index.js';
 import { IntentionBook } from '../intention/index.js';
 import { SoulService } from '../soul/index.js';
 import { ContextCortex } from '../context/index.js';
-import { ProspectiveMemoryService } from '../prospective/index.js';
+import { ProspectiveMemoryService, type ProspectiveMemoryRecord } from '../prospective/index.js';
+import type { AgentTurnReceiptAction } from '../agent/AgentMemoryTypes.js';
 import { KernelEventStream, ledgerAppendEvent } from '../events/index.js';
 import { ContextOutcomeStore, MemoryUseJudge, StrategyCortex } from '../strategy/index.js';
 import { EpisodeAssembler, EpisodeStore, type EpisodeBoundaryDecisionRecord, type EpisodeClosureMode, type EpisodeClosureReceipt, type EpisodeDreamStatus, type EpisodeListOptions, type MemoryEpisode, type TurnRelationAdvisoryReviewer } from '../episode/index.js';
@@ -89,6 +90,7 @@ import {
 import { ModelRegistry } from '../models/ModelRegistry.js';
 import { DeepWriteCandidateStore, type DeepWriteCandidateStatus } from '../store/DeepWriteCandidateStore.js';
 import { CandidateReviewStore, type CandidateReviewRecord } from '../store/CandidateReviewStore.js';
+import { reviewKernelCommitmentReceipt } from '../store/CommitmentReceiptReview.js';
 import { CompilerConfidenceStore } from '../store/CompilerConfidenceStore.js';
 import { DreamLedgerStore, type DreamBacklogStatus } from '../store/DreamLedgerStore.js';
 import { EntityStore } from '../store/EntityStore.js';
@@ -165,7 +167,6 @@ export abstract class KernelServices {
   ): unknown;
 
   readonly eventStore: EventStore;
-  /** The in-process event stream the resident shell subscribes to. Contract: `docs/events.md`. */
   readonly events: KernelEventStream;
   readonly factStore: FactStore;
   readonly entityStore: EntityStore;
@@ -178,46 +179,17 @@ export abstract class KernelServices {
   readonly memoryUseJudge: MemoryUseJudge;
   readonly contextOutcomeStore: ContextOutcomeStore;
   readonly prospectiveMemoryService: ProspectiveMemoryService;
-  /** Self-set wake intentions, ledger-backed. Contract: `docs/time-awareness.md`. */
+  readonly receiptsEnabled: boolean;
   readonly wakeIntentions: WakeIntentionService;
-  /** The due-scan that fires intentions and announces due prospective memories on `events`. */
   readonly wakeScheduler: WakeScheduler;
-  /** The conversation-native capture face: speaker, channel, thread and occasion first class (#157). */
   readonly conversationCapture: ConversationCaptureService;
-  /**
-   * The session-context face (#191): mechanical digest, verbatim session recall, and the per-turn
-   * budgeted assembly. Contract: `docs/session-context.md`.
-   */
   readonly sessionContext: SessionContextService;
-  /** The person entity layer: stable ids, aliases, relations, versioned attributes, attachment (#158). */
   readonly persons: PersonDirectory;
-  /**
-   * The profile compiler: the owner's four ledgers, compiled from governed evidence into ledger
-   * rows, correctable and ranked by their own priority and decay (#159). Contract:
-   * `docs/profile-compilation.md`.
-   */
   readonly profile: ProfileCompiler;
-  /**
-   * The procedure book: how the work got done in this project, compiled from its own attempts and
-   * from imported guides, recalled by task description. Contract: `docs/procedure-compilation.md`.
-   */
   readonly procedures: ProcedureCompiler;
-  /**
-   * The commitment book: promises said out loud, their due instants, their completion evidence and
-   * the announce-once / ask-once marks. Contract: `docs/commitments.md`.
-   */
   readonly commitments: CommitmentBook;
-  /**
-   * The intention ledger: the agent's own plans, separate from the promises it owes the owner
-   * (F22 of #216). Contract: `docs/intentions.md`.
-   */
   readonly intentions: IntentionBook;
-  /** Pause, time-range deletion, human-readable export and their audit (#163, F9). */
   readonly sovereignty: MemorySovereigntyService;
-  /**
-   * The versioned, per-agent soul table (#194, F17). Reads are per agent; saves and rollbacks are
-   * owner-only, and the agent-facing backend has no save method. Contract: `docs/soul-storage.md`.
-   */
   readonly soul: SoulService;
   /**
    * The surfacing candidate query: the kernel's half of emergence, with deterministic sensitivity
@@ -319,6 +291,7 @@ export abstract class KernelServices {
     this.configDiagnostics.push(...normalizedBoundary.diagnostics);
     if (options.projectTimeZone && normalizedBoundary.config.timezone && options.projectTimeZone !== normalizedBoundary.config.timezone) throw new Error('project_timezone_conflict');
     this.projectClock = resolveProjectClockContext({ projectTimeZone: options.projectTimeZone ?? normalizedBoundary.config.timezone });
+    this.receiptsEnabled = options.receiptsEnabled !== false;
     this.taxonomyResolution = options.taxonomy ?? { taxonomy: DEFAULT_TAXONOMY, source: 'default', reasons: [] };
     this.language = options.language;
     this.phaseProjection = options.phaseProjectionEnabled === true;
@@ -781,6 +754,26 @@ export abstract class KernelServices {
       undefined
     );
     this.ensureMetaTable(db);
+  }
+
+  reviewCommitmentReceipt(input: {
+    projectId: string;
+    sourceEventId: string;
+    action: AgentTurnReceiptAction;
+    actor?: string;
+    content?: string;
+    dueAt?: number;
+    now?: number;
+    surface?: string;
+  }): { review: CandidateReviewRecord; commitment?: CommitmentEntry; intention?: ProspectiveMemoryRecord } {
+    const projectId = input.projectId.trim();
+    if (!projectId) throw new Error('project_id_required');
+    return reviewKernelCommitmentReceipt({
+      events: this.eventStore,
+      commitments: this.commitments,
+      prospective: this.prospectiveMemoryService,
+      review: this.candidateReviewService,
+    }, { ...input, projectId, actor: input.actor ?? 'owner' });
   }
 
   protected ensureMetaTable(db: ReturnType<FactStore['getDatabase']>): void {

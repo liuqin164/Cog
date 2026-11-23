@@ -4,6 +4,7 @@ import type { DeepWritePromotionDecision, DeepWritePromotionPolicy } from '../en
 import type { MemoryEvent } from '../types/index.js';
 import type { CandidateReviewAction, CandidateReviewRecord, CandidateReviewStore } from '../store/CandidateReviewStore.js';
 import type { DeepWriteCandidateRecord, DeepWriteCandidateStore } from '../store/DeepWriteCandidateStore.js';
+import { recordCommitmentReceiptReview, type CommitmentReceiptReviewInput } from '../store/CommitmentReceiptReview.js';
 
 export interface CandidateReviewInput {
   candidateId: string;
@@ -45,6 +46,11 @@ export class CandidateReviewService {
     private readonly promotion: DeepWritePromotionPolicy,
     private readonly eventLookup: (eventId: string) => MemoryEvent | null,
   ) {}
+
+  reviewCommitmentReceipt(input: CommitmentReceiptReviewInput): CandidateReviewRecord {
+    required(input.actor, 'actor');
+    return recordCommitmentReceiptReview(this.candidates, this.reviews, input);
+  }
 
   review(input: CandidateReviewInput): CandidateReviewResult {
     return this.db.transaction((): CandidateReviewResult => {

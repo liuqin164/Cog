@@ -122,6 +122,7 @@ export interface ShellConfig {
   /** Native plugin specs read from `<dataDir>/plugins.json` at startup. */
   plugins: string[];
   terminalEnabled: boolean;
+  receipts: boolean;
   /**
    * The vector provider (#313). The default is the local bge model and its bge-zh query prefix;
    * remote providers default to an empty prefix because that instruction is model-specific.
@@ -356,6 +357,7 @@ export function defaultShellConfig(overrides: Partial<ShellConfig> = {}): ShellC
     },
     plugins: overrides.plugins ?? registryPlugins,
     terminalEnabled: overrides.terminalEnabled ?? env('COG_TERMINAL') !== 'off',
+    receipts: overrides.receipts ?? env('COG_RECEIPTS') !== 'off',
     embedding: overrides.embedding ?? embeddingFromEnv(),
     attach: overrides.attach ?? {
       enabled: env('COG_ATTACH') === 'on',

@@ -194,6 +194,15 @@ export class TuiApp {
       this.scheduleRender();
       return;
     }
+    if (this.editor.isEmpty() && key.name === 'char' && key.text && '123'.includes(key.text)) {
+      const receipt = this.view.pendingReceipt();
+      const action = receipt?.actions?.[Number(key.text) - 1];
+      if (receipt?.sourceEventId && action) {
+        this.client.send({ t: 'commitment-receipt', sourceEventId: receipt.sourceEventId, action: action.action });
+        this.scheduleRender();
+        return;
+      }
+    }
     if ((key.name === 'up' || key.name === 'down') && this.editor.isEmpty() && !this.view.overlay) {
       this.view.moveSelection(key.name === 'up' ? -1 : 1);
       this.followIfAtBottom();

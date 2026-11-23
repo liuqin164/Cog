@@ -5,6 +5,7 @@ import { secretFindingsMetadata } from '../security/SecretPatterns.js';
 import type { MemoryEvent } from '../types/index.js';
 import { collectionTags, metadataWithCollection } from './AgentMemoryScope.js';
 import { omitSecretFindings } from './AgentRecallText.js';
+import { buildAgentTurnReceipt, withAgentTurnReceipt } from '../store/CommitmentReceipt.js';
 import type {
   AgentTaskEventMemory,
   AgentToolCallMemory,
@@ -126,7 +127,7 @@ export class AgentTurnMemoryWriter {
     if (assistantEvent) {
       this.kernel.eventStore.updateNextEventId(userEvent.eventId, assistantEvent.eventId);
     }
-    return this.finalizeTurn({
+    const result = this.finalizeTurn({
       turn,
       userEvent,
       assistantEvents: assistantEvent ? [assistantEvent] : [],
@@ -138,6 +139,13 @@ export class AgentTurnMemoryWriter {
       occurredAt,
       turnId,
     });
+    return withAgentTurnReceipt(result, this.receiptFor({
+      userEvent,
+      assistantEvent,
+      userText: excludedUser.text,
+      assistantText: turn.assistantText ?? '',
+      occurredAt,
+    }));
   }
 
   private finalizePrewrittenTurn(turn: AgentTurnMemory): AgentTurnMemoryResult {
@@ -155,7 +163,7 @@ export class AgentTurnMemoryWriter {
     const threadId = turn.threadId || userEvent.threadId || turn.sessionId;
     const occurredAt = turn.timestamp ?? userEvent.occurredAt;
     const turnId = turn.turnId ?? userEvent.turnId ?? `${turn.agentId}:${turn.sessionId}:${turn.turnSeq ?? 0}:${occurredAt}`;
-    return this.finalizeTurn({
+    const result = this.finalizeTurn({
       turn,
       userEvent,
       assistantEvents,
@@ -166,6 +174,40 @@ export class AgentTurnMemoryWriter {
       assistantText,
       occurredAt,
       turnId,
+    });
+    return withAgentTurnReceipt(result, this.receiptFor({
+      userEvent,
+      assistantEvent: assistantEvents.at(-1),
+      userText,
+      assistantText,
+      occurredAt,
+    }));
+  }
+
+  private receiptFor(input: {
+    userEvent: MemoryEvent;
+    assistantEvent?: MemoryEvent;
+    userText: string;
+    assistantText: string;
+    occurredAt: number;
+  }) {
+    if (!this.kernel.receiptsEnabled) return undefined;
+    const timeZone = this.kernel.eventStore.getProjectTimeZone();
+    const user = buildAgentTurnReceipt({
+      text: input.userText,
+      role: 'user',
+      occurredAt: input.occurredAt,
+      timeZone,
+      sourceEventId: input.userEvent.eventId,
+    });
+    if (user) return user;
+    if (!input.assistantText) return undefined;
+    return buildAgentTurnReceipt({
+      text: input.assistantText,
+      role: 'assistant',
+      occurredAt: input.occurredAt,
+      timeZone,
+      sourceEventId: input.assistantEvent?.eventId ?? input.userEvent.eventId,
     });
   }
 

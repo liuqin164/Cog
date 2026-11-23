@@ -11,6 +11,18 @@ const PROMOTION_PRIORITY = `
   END
 `;
 
+const CLASSIFICATION_CANDIDATE_TYPES = new Set([
+  'long_term_goal',
+  'temporal_fact_update',
+  'project_memory',
+  'user_preference',
+  'preferences',
+  'boundary',
+  'failure_lesson',
+  'diagnostic_conclusion',
+  'conflict_candidate',
+]);
+
 export type DeepWriteRunStatus = 'running' | 'staged' | 'succeeded' | 'failed' | 'skipped' | 'abandoned';
 export type DeepWriteCandidateStatus = 'staged' | 'shadow' | 'candidate' | 'promoting' | 'promoted' | 'rejected' | 'needs_confirmation' | 'superseded';
 
@@ -239,12 +251,24 @@ export class DeepWriteCandidateStore {
   }
 
   insertCandidates(inputs: DeepWriteCandidateInput[]): DeepWriteCandidateRecord[] {
-    const records = inputs.map((input) => ({
-      ...input,
-      candidateId: input.candidateId || randomUUID(),
-      createdAt: input.createdAt ?? Date.now(),
-      updatedAt: input.createdAt ?? Date.now()
-    }));
+    const confirmed = this.confirmedReceiptEvents();
+    const records = inputs.map((input) => {
+      const receiptConfirmed = confirmed.size > 0
+        && CLASSIFICATION_CANDIDATE_TYPES.has(input.candidateType)
+        && input.candidateType !== 'long_term_goal'
+        && evidenceEventIds(input.evidence).some((eventId) => confirmed.has(eventId));
+      return {
+        ...input,
+        ...(receiptConfirmed ? {
+          status: 'needs_confirmation' as const,
+          publishStatus: 'needs_confirmation' as const,
+          statusReason: 'commitment_receipt_confirmed_requires_confirmation',
+        } : {}),
+        candidateId: input.candidateId || randomUUID(),
+        createdAt: input.createdAt ?? Date.now(),
+        updatedAt: input.createdAt ?? Date.now()
+      };
+    });
 
     const stmt = this.db.prepare(`
       INSERT INTO deep_write_candidates (
@@ -276,6 +300,14 @@ export class DeepWriteCandidateStore {
     })();
 
     return records;
+  }
+
+  private confirmedReceiptEvents(): Set<string> {
+    const rows = this.db.prepare(`
+      SELECT candidate_id FROM deep_write_candidate_reviews
+      WHERE action = 'approve' AND candidate_id LIKE 'commitment-receipt:%'
+    `).all() as Array<{ candidate_id: string }>;
+    return new Set(rows.map((row) => row.candidate_id.slice('commitment-receipt:'.length)));
   }
 
   getRun(runId: string): DeepWriteRunRecord | null {
@@ -674,4 +706,13 @@ export class DeepWriteCandidateStore {
     if (columns.some((item) => item.name === column)) return;
     this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
+}
+
+function evidenceEventIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== 'object') return [];
+    const eventId = (item as { eventId?: unknown }).eventId;
+    return typeof eventId === 'string' ? [eventId] : [];
+  });
 }
