@@ -35,6 +35,47 @@ describe('the memory tool (#323)', () => {
     }
   });
 
+  test('search reaches this session outside the tail and still skips the tail', async () => {
+    const shell = makeShell(makeTempDir('memory-tool-session-tail-'), new ScriptedProvider([{ text: '好。', toolCalls: [] }]), { dream: NO_DREAM });
+    await shell.start();
+    try {
+      const sessionId = shell.config.sessionId;
+      for (let turnSeq = 1; turnSeq <= 10; turnSeq += 1) {
+        const content = turnSeq === 1
+          ? 'ORION-EARLY 部署窗口是周二凌晨两点。'
+          : turnSeq === 10
+            ? 'ORION-TAIL 最近这一轮的内容。'
+            : `普通对话第 ${turnSeq} 轮。`;
+        shell.kernel.recordRawEvent({
+          projectId: shell.config.projectId,
+          threadId: sessionId,
+          sessionId,
+          turnSeq,
+          role: 'user',
+          content,
+          sourceId: `${shell.config.agentId}:${sessionId}`,
+          metadata: { sourceAgent: shell.config.agentId },
+        });
+      }
+      const earlier = await shell.host.tools.invoke(
+        'memory',
+        { toolCallId: 'm1', input: { action: 'search', query: 'ORION-EARLY' } },
+        { runId: 'r' },
+      );
+      expect(earlier.isError).toBe(false);
+      expect(earlier.output).toContain('ORION-EARLY');
+      const tail = await shell.host.tools.invoke(
+        'memory',
+        { toolCallId: 'm2', input: { action: 'search', query: 'ORION-TAIL' } },
+        { runId: 'r' },
+      );
+      expect(tail.isError).toBe(false);
+      expect(tail.output).not.toContain('ORION-TAIL');
+    } finally {
+      await shell.stop();
+    }
+  });
+
   test('read opens the ledger row behind a mem: key', async () => {
     const shell = makeShell(makeTempDir('memory-tool-read-'), new ScriptedProvider([{ text: '好。', toolCalls: [] }]), { dream: NO_DREAM });
     await shell.start();

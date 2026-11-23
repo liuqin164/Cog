@@ -7,6 +7,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { localDateFor } from 'cogmem';
 import { readPluginRegistry } from './plugins/registry.ts';
 import { DEFAULT_MAX_IDLE_TURNS } from './state/agent-loop.ts';
 import { normalizeCompanionName } from './companion-name.ts';
@@ -19,6 +20,10 @@ import {
 } from './embedding/model.ts';
 
 export { DEFAULT_MAX_IDLE_TURNS };
+
+export function sessionLaneId(baseSessionId: string, now: number, timeZone: string): string {
+  return `${baseSessionId}:${localDateFor(now, timeZone)}`;
+}
 
 export interface RunBudget {
   maxTurnsPerRun: number;

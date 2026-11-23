@@ -3,6 +3,7 @@
  * carry the conversation lane marker the kernel's session context reads.
  */
 import { describe, expect, test } from 'bun:test';
+import { localDateFor, localDateRange } from 'cogmem';
 
 import { defaultShellConfig } from '../src/config.ts';
 import { makeShell, makeTempDir, ScriptedProvider } from './helpers.ts';
@@ -59,6 +60,44 @@ describe('session identity', () => {
       expect(afterRows.at(-1)).toBe('ack 9');
     } finally {
       await second.stop();
+    }
+  }, 30_000);
+
+  test('the resident lane splits on the project local day, not the host day', async () => {
+    const host = Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC';
+    const zones = ['America/New_York', 'Asia/Tokyo', 'Europe/Berlin', 'Pacific/Auckland', 'Asia/Kolkata', 'UTC'];
+    const project = zones.find((zone) => {
+      if (zone === host) return false;
+      const first = localDateRange(2026, 6, 1, 2026, 6, 2, zone);
+      const second = localDateRange(2026, 6, 2, 2026, 6, 3, zone);
+      return localDateFor(first.to - 60_000, host) === localDateFor(second.from + 60_000, host);
+    });
+    expect(project).toBeDefined();
+    const firstDay = localDateRange(2026, 6, 1, 2026, 6, 2, project);
+    const secondDay = localDateRange(2026, 6, 2, 2026, 6, 3, project);
+    const clock = { now: firstDay.to - 60_000 };
+    const shell = makeShell(
+      makeTempDir('session-day-split-'),
+      new ScriptedProvider([
+        { text: 'before.', toolCalls: [] },
+        { text: 'after.', toolCalls: [] },
+      ]),
+      { timeZone: project },
+      { now: () => clock.now },
+    );
+    await shell.start();
+    try {
+      await shell.submit('before midnight');
+      clock.now = secondDay.from + 60_000;
+      await shell.submit('after midnight');
+      const userRows = shell.kernel.eventStore.queryEvents(1, 100, { projectId: [shell.config.projectId] }).records
+        .filter((event) => event.role === 'user');
+      const sessions = userRows.map((event) => event.sessionId);
+      expect(new Set(sessions).size).toBe(2);
+      expect(sessions.some((sessionId) => sessionId?.endsWith(`:${localDateFor(firstDay.to - 60_000, project)}`))).toBe(true);
+      expect(sessions.some((sessionId) => sessionId?.endsWith(`:${localDateFor(secondDay.from + 60_000, project)}`))).toBe(true);
+    } finally {
+      await shell.stop();
     }
   }, 30_000);
 });

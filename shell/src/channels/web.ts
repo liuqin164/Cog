@@ -377,7 +377,9 @@ export function webChannelPlugin(options: WebChannelPluginOptions): NativePlugin
         contract: options.contract,
         projectId: options.projectId,
         agentId: options.agentId,
-        sessionId: options.sessionId,
+        get sessionId() {
+          return options.sessionId;
+        },
         webRoot: defaultWebRoot(),
         routes: { isLoopbackAddress, isLocalAuthority, jsonResponse, readJsonBody, refuseWrite },
         token: readObservatoryToken(options.dataDir),
