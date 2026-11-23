@@ -301,3 +301,39 @@ describe('back-reference anchor state (#490)', () => {
     }
   });
 });
+
+describe('approval short replies are not back-references (#516)', () => {
+  test('approval phrases do not rewrite, while question and state phrases still do', () => {
+    for (const query of ['就这个', '这个吧', '它挺好']) {
+      expect(detectBackReference(query), query).toBeUndefined();
+    }
+    for (const query of ['它怎么样了', '这个呢', '那个怎么样了']) {
+      expect(detectBackReference(query), query).toMatchObject({ source: 'deterministic_backref' });
+    }
+  });
+
+  test('approval phrases neither rewrite nor open the fallback menu', async () => {
+    const { kernel, backend } = setup();
+    try {
+      await seedYesterday(backend);
+      for (const query of ['就这个', '这个吧', '它挺好']) {
+        const result = backend.recall({
+          agentId: AGENT,
+          projectId: PROJECT,
+          query,
+          excludeSessionId: 'session-today',
+          excludeSessionTailTurns: 1,
+          limit: 3,
+          now: NOW,
+        });
+        expect(result.items.some((item) => item.source === 'recall_menu'), query).toBe(false);
+        const row = kernel.factStore.getDatabase()
+          .query('SELECT payload FROM trace_events WHERE event_type = ? ORDER BY rowid DESC LIMIT 1')
+          .get('recall.result') as { payload: string } | null;
+        expect(JSON.parse(row!.payload), query).not.toHaveProperty('rewrite');
+      }
+    } finally {
+      kernel.close();
+    }
+  });
+});
