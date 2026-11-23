@@ -38,8 +38,8 @@ jobs:
         run: bun run lint:test-timing
       - run: bun run prepublishOnly
       # `shell/` is a private package that lives inside this repo and is deliberately outside the
-      # npm tarball (`files` in package.json), so `prepublishOnly` — typecheck, build, test, pack —
-      # never sees it. Its suite is a second gate with its own lockfile and its own preload.
+      # npm tarball (`files` in package.json). `prepublishOnly` runs its typecheck and suite too, but
+      # CI installs the shell's own lockfile first so the two gates do not share a dependency tree.
       - run: cd shell && bun install --frozen-lockfile
       # The root typecheck covers the root tsconfig, not the shell's own source and tests.
       - run: cd shell && bun run typecheck

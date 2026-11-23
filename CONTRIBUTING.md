@@ -36,7 +36,7 @@ fallback.
 
 ## API Discipline
 
-Only explicitly exported symbols in `src/public.ts` are public. Do not re-export `src/internal.ts` from the package entrypoint.
+Only explicitly exported symbols in `src/public.ts` are public. Everything else under `src/` is internal, even when it is reachable from the package.
 
 ## Adapter Changes
 

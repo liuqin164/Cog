@@ -28,7 +28,7 @@
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "node scripts/build.mjs",
     "prepare": "node -e \"const fs=require('node:fs');if(fs.existsSync('scripts/build.mjs'))require('node:child_process').execFileSync(process.execPath,['scripts/build.mjs'],{stdio:'inherit'})\"",
-    "prepublishOnly": "bun run typecheck && bun run build && bun test __tests__ && bun run leak:check && npm pack --dry-run --json",
+    "prepublishOnly": "bun run typecheck && bun run build && bun test __tests__ && bun run leak:check && cd shell && bun run typecheck && bun test test && cd .. && bun run reachability && bun scripts/budget-check.ts && npm pack --dry-run --json",
     "type": "tsc -p tsconfig.json --noEmit",
     "test": "bun test __tests__",
     "lint:test-timing": "bun scripts/test-timing-lint.ts",

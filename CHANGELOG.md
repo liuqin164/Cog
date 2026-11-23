@@ -32,8 +32,9 @@
   schema entries. Also removed unreachable `AlgorithmReviewBackend`, `Embedder*`, `LongMemEvalCli`,
   board files, topology identity helpers, eval datasets, `SynapseUtils`, the public `agent-loop`
   follow-up setter, and nine uncalled `AgentRecallEngine` methods; `src/eval/strategy` moved to
-  `src/strategy` because it is runtime code. `freeze-budget.json` drops to 86 tables and CI gains a
-  reachability check. User-visible effect, in one line: the shipped package and its schema no longer
+  `src/strategy` because it is runtime code. `freeze-budget.json` drops to 86 tables at this commit
+  and counts 88 at 5.0.0, after #470 and #474 each add one; CI gains a reachability check.
+  User-visible effect, in one line: the shipped package and its schema no longer
   carry a plan runtime no product path ever instantiated, and a new unreferenced source file fails CI.
 
 - **The first batch of unreachable files is gone (#337).** 23 files nothing could reach from
@@ -275,6 +276,65 @@
   `ProposalLedgerLike` extension type. No table, column, migration, dependency, bin or CLI command
   changes. User-visible effect, in one line: `cogmem/internal` no longer exports the unused
   proposal-ledger and benchmark/eval runners; nothing else behaves differently.
+
+- **Derived rows now have a lineage ledger (#470).** `memory_derivations(derived_kind, derived_id,
+  source_event_id, project_id, created_at)` is written by the nine existing derivation paths through
+  one `registerDerivation` helper, and a contract test walks `FINAL_TABLES` so every table with text
+  is classified as registered, rebuildable or audit-only; an unclassified new table fails the test.
+  Existing forget and correction results are unchanged, and `memory_derivations` itself is erased
+  with the source event. User-visible effect, in one line: nothing visible changes yet; this is the
+  skeleton that lets 5.1 delete every derived row by its source instead of maintaining parallel
+  lists.
+
+- **A measured 90-day degradation gate runs on every push (#471).** `__tests__/fixtures/degradation-corpus.ts`
+  builds a seeded 10,000-event, 90-day, Chinese/Japanese/English corpus in `Asia/Tokyo`, and
+  `__tests__/degradation.unit.test.ts` asserts the shape the small-data suite missed: a late promise
+  still surfaces once, a correction suppresses only what it corrects, day-zero stable facts survive
+  90 days and 600 later updates, recall p95 stays under 2 s and the checkpoint under 64 MiB, and a
+  real `/forget` leaves every table including CJK n-grams empty. One assertion is measured red
+  against the pre-fix guard. No product code changed. User-visible effect, in one line: regressions
+  that only appear after weeks of use now fail CI in about ten seconds.
+
+- **A back-reference question now reaches the thing it refers to (#472).** A deterministic detector
+  fires only when the turn has a back-reference marker and no content words of its own, then rewrites
+  the query through the existing `anchorText` channel with anchors from this session's tail, the
+  previous session or the last recall hit; no model rewrites the question. Everything downstream
+  reads the effective query, and a miss falls back to a recent-items menu so the companion asks
+  rather than claiming it does not remember. Ordinary non-back-reference queries are untouched.
+  User-visible effect, in one line: "what about the thing from yesterday" now surfaces that thing
+  instead of returning nothing.
+
+- **The star sea can now promote, reject and defer classification candidates (#473).**
+  `POST /observatory/candidates/:id/{promote|reject|defer}` and
+  `POST /observatory/candidates/batch` land on `CandidateReviewService`, carry the `contentHash` the
+  page displayed so a changed candidate is refused with `candidate_content_changed`, record the
+  review surface as `observatory`, and cap batch writes at 20 with an explicit second confirmation.
+  The existing local-Origin, JSON and 0600-token locks are unchanged, and the `/candidates` help now
+  points at the star sea. User-visible effect, in one line: the owner can act on a candidate where
+  it is shown instead of reading an expiring queue and typing a separate command.
+
+- **Closed undeclared work now becomes an episode card at the DREAMING boundary (#474).**
+  `SessionDeepCards` splits conversation turns deterministically — a declared task end, or two turns
+  more than 30 minutes apart — and compiles each closed segment of at least 8 turns into one
+  `kind: 'deep'` digest entry holding what was done, open items and pointers to every covered turn;
+  declared task ends keep their stub and are not carded. A model may write the card through the
+  existing memory role, but a card that paraphrases a number, name or decision is rejected for the
+  deterministic builder, which keeps the ledger text as the only source. Cards auto-expand into
+  `working_set` through the existing #253 path and drill down to `mem:`; a range forget deletes the
+  card with its source events and its lineage row. User-visible effect, in one line: an afternoon of
+  undeclared work comes back next day as one card with its open items instead of a pile of per-turn
+  fragments.
+
+- **The context prefix is now the bytes a provider can cache (#475).** `pinned` and `profile` stay in
+  the fixed system prompt, the digest lane opens the injected block with its entries in ascending
+  `occurredAt` (entry id tie-break) so a new turn, task stub or episode card appends at the lane's
+  tail instead of inserting, and `recall` moves behind `tail` because it is the lane that changes
+  every turn. The shell also sends one `prompt_cache_key` per project, agent and session, sanitized
+  to the characters the gateway accepts, because the local mg gateway exposes the provider's prefix
+  cache only when the key is present. No turn budget, lane content or semantic ordering changes; the
+  deliberate exception is the existing 512-turn rotation, which rebuilds the prefix when the window
+  rolls. User-visible effect, in one line: consecutive turns keep the same cacheable prefix, so the
+  provider stops re-reading the conversation from the digest onward.
 
 ## 4.1.0
 
