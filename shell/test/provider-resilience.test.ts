@@ -5,7 +5,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { makeShell, makeTempDir } from './helpers.ts';
-import { MgModelProvider, type ProviderRetryPolicy } from '../src/plugins/mg-provider.ts';
+import { MgModelProvider, type MgProviderConfig, type ProviderRetryPolicy } from '../src/plugins/mg-provider.ts';
 
 interface FakeEndpoint {
   baseUrl: string;
@@ -62,13 +62,19 @@ interface RetryEvent {
   delayMs: number;
 }
 
-function providerFor(endpoint: FakeEndpoint, retry: Partial<ProviderRetryPolicy>, retries: RetryEvent[]): MgModelProvider {
+function providerFor(
+  endpoint: FakeEndpoint,
+  retry: Partial<ProviderRetryPolicy>,
+  retries: RetryEvent[],
+  clock?: MgProviderConfig['clock'],
+): MgModelProvider {
   return new MgModelProvider({
     baseUrl: endpoint.baseUrl,
     apiKey: 'sk-test',
     model: 'test-model',
     timeoutMs: 10_000,
     retry,
+    ...(clock ? { clock } : {}),
     onRetry: (event) => retries.push(event),
   }, 'test');
 }
@@ -211,17 +217,20 @@ describe('Retry-After is honoured inside the retry budget', () => {
       { status: 429, body: LIMITED },
     ]);
     const retries: RetryEvent[] = [];
+    const time = { value: 0 };
+    const clock: MgProviderConfig['clock'] = {
+      now: () => time.value,
+      sleep: async (ms: number) => { time.value += ms; },
+    };
     try {
-      const startedAt = Date.now();
-      const message = await complete(providerFor(endpoint, { ...headerWins, maxTotalMs: 400 }, retries))
+      const wallStartedAt = performance.now();
+      const message = await complete(providerFor(endpoint, { ...headerWins, maxTotalMs: 400 }, retries, clock))
         .then(() => 'unexpected success', (error: unknown) => String(error instanceof Error ? error.message : error));
-      const elapsed = Date.now() - startedAt;
-      // The 5 s header is cut to what is left of the 400 ms budget, so only one retry fits.
+      const wallElapsed = performance.now() - wallStartedAt;
       expect(endpoint.requests).toHaveLength(2);
-      expect(retries).toHaveLength(1);
-      expect(retries[0]!.delayMs).toBeGreaterThan(0);
-      expect(retries[0]!.delayMs).toBeLessThanOrEqual(400);
-      expect(elapsed).toBeLessThan(2_000);
+      expect(retries).toEqual([{ attempt: 1, status: 429, delayMs: 400 }]);
+      expect(time.value).toBe(400);
+      expect(wallElapsed).toBeLessThan(2_000);
       expect(message).toContain('429');
       expect(message).toContain('provider_retry: attempts=2');
     } finally {
