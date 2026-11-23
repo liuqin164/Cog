@@ -661,7 +661,10 @@ export class ResidentTick {
         || result.kernelNightSkippedReason === 'no_sealed_episode_backlog'
         || processed < this.shell.config.dream.maxEpisodes
         || this.dreamBacklog(at).episodes === 0;
-      if (drained) this.shell.clock!.markDreamed(at);
+      if (drained) {
+        this.shell.clock!.markDreamed(at);
+        this.shell.clearBackfilledMemoryModel(at);
+      }
       else this.shell.trace.append('dream_backlog_remaining', {
         localDate,
         processedEpisodeCount: result.processedEpisodeCount,

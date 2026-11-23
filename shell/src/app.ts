@@ -254,10 +254,24 @@ export class CompanionShell implements ShellControl, AttachShell {
   noteMemoryModel(state: 'reachable' | 'unreachable' | 'degraded', reason?: string, at = this.now()): void {
     const previous = this.machine.runtime.memoryModel;
     this.memoryModelFailed = state !== 'reachable';
-    if (previous?.state === state && previous.reason === reason) return;
+    const pendingBackfill = state !== 'reachable' || (previous?.pendingBackfill === true && this.dreamBacklogEpisodes() > 0);
+    if (previous?.state === state && previous.reason === reason && previous.pendingBackfill === pendingBackfill) return;
     if (!previous && state === 'reachable') return;
-    this.machine.updateRuntime({ memoryModel: { state, ...(reason ? { reason } : {}), since: at, pendingBackfill: state !== 'reachable' } });
-    this.trace.append('memory_model_state', { state, reason, previous: previous?.state });
+    const since = state === 'reachable' && pendingBackfill ? previous?.since ?? at : at;
+    this.machine.updateRuntime({ memoryModel: { state, ...(reason ? { reason } : {}), since, pendingBackfill } });
+    this.trace.append('memory_model_state', { state, reason, previous: previous?.state, pendingBackfill });
+  }
+
+  private dreamBacklogEpisodes(): number {
+    const status = this.kernel.getEpisodeDreamStatus(this.config.projectId);
+    return status.pending + status.retryScheduled + status.failedRetryable;
+  }
+
+  clearBackfilledMemoryModel(at = this.now()): void {
+    const previous = this.machine.runtime.memoryModel;
+    if (previous?.pendingBackfill !== true || this.dreamBacklogEpisodes() > 0) return;
+    this.machine.updateRuntime({ memoryModel: { ...previous, pendingBackfill: false } });
+    this.trace.append('memory_model_state', { state: previous.state, reason: previous.reason, previous: previous.state, pendingBackfill: false });
   }
   private embeddingReadyAllowed = false;
 

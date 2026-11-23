@@ -149,12 +149,16 @@ export class StatusFace {
     };
   }
 
-  memoryModelHealth(): { route: string; model: string; baseUrl: string; state: 'reachable' | 'unreachable' | 'degraded' | 'rule_only'; line: string } {
+  memoryModelHealth(): { route: string; model: string; baseUrl: string; state: 'reachable' | 'unreachable' | 'degraded' | 'rule_only'; line: string; pendingBackfill: boolean; since: number | null; backlogEpisodes: number } {
     const role = this.shell.modelRegistry.getRoleConfig('memory');
     const route = this.shell.modelRouter?.active ?? 'default';
     const ruleOnly = role.provider !== 'openai_compatible';
-    const degraded = this.shell.machine.runtime.memoryModel?.state === 'degraded';
+    const memoryModel = this.shell.machine.runtime.memoryModel;
+    const degraded = memoryModel?.state === 'degraded';
     const state = ruleOnly ? 'rule_only' : this.shell.memoryModelFailed ? (degraded ? 'degraded' : 'unreachable') : 'reachable';
+    const dream = this.shell.kernel.getEpisodeDreamStatus(this.shell.config.projectId);
+    const backlogEpisodes = dream.pending + dream.retryScheduled + dream.failedRetryable;
+    const pendingBackfill = memoryModel?.pendingBackfill === true && (state !== 'reachable' || backlogEpisodes > 0);
     const stateText = state === 'rule_only'
       ? '降级为规则；夜间整合不会用模型'
       : state === 'degraded' ? '今夜模型预算用尽，降级为规则；缺帧记忆已排期回填'
@@ -164,6 +168,9 @@ export class StatusFace {
       model: role.modelName,
       baseUrl: redactUrl(role.baseUrl, [role.apiKey]),
       state,
+      pendingBackfill,
+      since: memoryModel?.since ?? null,
+      backlogEpisodes,
       line: `记忆模型：${route}/${role.modelName}（${stateText}）`,
     };
   }

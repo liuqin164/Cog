@@ -231,4 +231,68 @@ describe('Dream route A in the shell', () => {
       await restarted.stop();
     }
   });
+
+  test('pending backfill survives model recovery until the dream backlog drains, and both faces report it', async () => {
+    const dir = makeTempDir();
+    const shell = makeShell(dir, new ScriptedProvider([{ text: 'unused', toolCalls: [] }]), {
+      http: { enabled: true, port: 0, hostname: '127.0.0.1' },
+    });
+    await shell.start();
+    try {
+      for (let index = 0; index < 2; index += 1) {
+        const eventId = `evt-backfill-${index}`;
+        const sessionId = `backfill-${index}`;
+        const event = shell.kernel.eventStore.append({
+          eventId,
+          streamId: sessionId,
+          streamType: 'thread',
+          eventType: 'RAW_EVENT_RECORDED',
+          rawEventType: 'message',
+          projectId: shell.config.projectId,
+          sessionId,
+          threadId: `companion-day:${index}`,
+          role: 'user',
+          occurredAt: BASE,
+          localDate: '2026-01-01',
+          payload: { text: `第 ${index} 条：部署负责人是青栎组。` },
+        });
+        shell.kernel.appendRawEventToEpisode(event, {
+          projectId: shell.config.projectId, sessionId, sourceAgent: shell.config.agentId, now: BASE,
+        });
+        const episode = shell.kernel.listEpisodes({ projectId: shell.config.projectId, sessionId, statuses: ['open'] })[0]!;
+        shell.kernel.episodeStore.sealEpisode(episode.episodeId, { mode: 'hard', reason: 'test', now: BASE + 1 });
+      }
+
+      expect(shell.currentStatus().memoryModel).toMatchObject({
+        pendingBackfill: false, since: null, backlogEpisodes: 2,
+      });
+
+      const degradedAt = BASE + 1000;
+      shell.noteMemoryModel('unreachable', 'semantic_processor_failed', degradedAt);
+      expect(shell.currentStatus().memoryModel).toMatchObject({
+        state: 'unreachable', pendingBackfill: true, since: degradedAt, backlogEpisodes: 2,
+      });
+      const health = await (await fetch(`${shell.httpUrl}/health`)).json() as {
+        memoryModel: { pendingBackfill: boolean; since: number; backlogEpisodes: number };
+      };
+      expect(health.memoryModel).toMatchObject({ pendingBackfill: true, since: degradedAt, backlogEpisodes: 2 });
+
+      shell.noteMemoryModel('reachable', undefined, degradedAt + 1000);
+      expect(shell.currentStatus().memoryModel).toMatchObject({
+        state: 'reachable', pendingBackfill: true, since: degradedAt, backlogEpisodes: 2,
+      });
+
+      shell.kernel.factStore.getDatabase().prepare(`DELETE FROM episode_dream_jobs`).run();
+      shell.noteMemoryModel('reachable', undefined, degradedAt + 2000);
+      expect(shell.currentStatus().memoryModel).toMatchObject({
+        state: 'reachable', pendingBackfill: false, since: degradedAt + 2000, backlogEpisodes: 0,
+      });
+      const drained = await (await fetch(`${shell.httpUrl}/health`)).json() as {
+        memoryModel: { pendingBackfill: boolean; since: number; backlogEpisodes: number };
+      };
+      expect(drained.memoryModel).toMatchObject({ pendingBackfill: false, since: degradedAt + 2000, backlogEpisodes: 0 });
+    } finally {
+      await shell.stop();
+    }
+  });
 });
