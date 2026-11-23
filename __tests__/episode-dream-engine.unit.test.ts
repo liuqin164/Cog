@@ -487,9 +487,6 @@ test('episode append names a message, so the same one twice is a replay (#113)',
 });
 
 test('a tick reports why the semantic processor gave up, not only that it did', async () => {
-  // Measured on the box: a model call that timed out produced `semanticProcessorFailedCount: 1`,
-  // no frame and no reason anywhere in the result, because the counter was all the scheduler
-  // carried. The reason and the error text now travel with it.
   const db = new Database(':memory:');
   const store = testEpisodeStore(db);
   const curator = {
@@ -518,7 +515,7 @@ test('a tick reports why the semantic processor gave up, not only that it did', 
     expect(store.getDreamJobState(episode.episodeId)).toBe('failed_retryable');
     const job = db.prepare(`SELECT failure_category, retry_after, attempts FROM episode_dream_jobs WHERE episode_id=?`)
       .get(episode.episodeId) as { failure_category: string; retry_after: number; attempts: number };
-    expect(job).toMatchObject({ failure_category: 'semantic_processor_failed', attempts: 0 });
+    expect(job).toMatchObject({ failure_category: 'semantic_processor_failed', attempts: 1 });
     expect(job.retry_after).toBeGreaterThan(200);
   } finally {
     db.close();
@@ -552,8 +549,122 @@ test('a spent model budget is its own degraded reason and is retried instead of 
     expect(store.getDreamJobState(episode.episodeId)).toBe('failed_retryable');
     const job = db.prepare(`SELECT failure_category, retry_after, attempts FROM episode_dream_jobs WHERE episode_id=?`)
       .get(episode.episodeId) as { failure_category: string; retry_after: number; attempts: number };
-    expect(job).toMatchObject({ failure_category: 'semantic_processor_budget', attempts: 0 });
+    expect(job).toMatchObject({ failure_category: 'semantic_processor_budget', attempts: 1 });
     expect(job.retry_after).toBeGreaterThan(200);
+  } finally {
+    db.close();
+  }
+});
+
+test('semantic processor failures back off with attempts and stop at the attempt ceiling', async () => {
+  const db = new Database(':memory:');
+  const store = testEpisodeStore(db);
+  let calls = 0;
+  const curator = {
+    run: async () => {
+      calls += 1;
+      throw new Error('semantic_processor_failed: provider timeout');
+    },
+  };
+  const scheduler = new DreamScheduler(store, curator as never);
+  try {
+    const episode = store.createEpisode({
+      projectId: 'brain', sessionId: 'backoff', episodeType: 'decision', importance: 0.9,
+      eventId: 'evt-backoff', occurredAt: 100,
+    });
+    store.appendEvent({ episodeId: episode.episodeId, eventId: 'evt-backoff', relation: 'continues_previous', confidence: 1, occurredAt: 100 });
+    store.sealEpisode(episode.episodeId, { mode: 'hard', reason: 'test', now: 101 });
+
+    const delays: number[] = [];
+    let at = 200;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      expect((await scheduler.tick({ projectId: 'brain', now: at, maxAttempts: 3 })).failedEpisodeCount).toBe(1);
+      const job = db.prepare(`SELECT retry_after FROM episode_dream_jobs WHERE episode_id=?`)
+        .get(episode.episodeId) as { retry_after: number };
+      delays.push(job.retry_after - at);
+      at = job.retry_after;
+    }
+    expect(delays.map((delay) => Math.round(delay / 60_000))).toEqual([5, 10, 20]);
+
+    expect(await scheduler.tick({ projectId: 'brain', now: at, maxAttempts: 3 })).toEqual(expect.objectContaining({ skipped: true }));
+    expect(calls).toBe(3);
+    const job = db.prepare(`SELECT failure_category, attempts FROM episode_dream_jobs WHERE episode_id=?`)
+      .get(episode.episodeId) as { failure_category: string; attempts: number };
+    expect(job).toEqual({ failure_category: 'semantic_processor_failed', attempts: 3 });
+    expect(store.getDreamJobState(episode.episodeId)).toBe('failed_retryable');
+  } finally {
+    db.close();
+  }
+});
+
+test('a spent semantic budget retries at the next local midnight', async () => {
+  const db = new Database(':memory:');
+  const store = testEpisodeStore(db);
+  const curator = {
+    run: async () => {
+      throw new Error('semantic_processor_budget: dream_model_budget_exceeded: 120 >= 100');
+    },
+  };
+  const scheduler = new DreamScheduler(store, curator as never);
+  try {
+    const episode = store.createEpisode({
+      projectId: 'brain', sessionId: 'budget-night', episodeType: 'decision', importance: 0.9,
+      eventId: 'evt-budget-night', occurredAt: 100,
+    });
+    store.appendEvent({ episodeId: episode.episodeId, eventId: 'evt-budget-night', relation: 'continues_previous', confidence: 1, occurredAt: 100 });
+    store.sealEpisode(episode.episodeId, { mode: 'hard', reason: 'test', now: 101 });
+
+    const at = new Date(2026, 0, 5, 13, 45).getTime();
+    expect((await scheduler.tick({ projectId: 'brain', now: at })).failedEpisodeCount).toBe(1);
+    const job = db.prepare(`SELECT failure_category, retry_after FROM episode_dream_jobs WHERE episode_id=?`)
+      .get(episode.episodeId) as { failure_category: string; retry_after: number };
+    expect(job).toEqual({ failure_category: 'semantic_processor_budget', retry_after: new Date(2026, 0, 6).getTime() });
+  } finally {
+    db.close();
+  }
+});
+
+test('other failure categories keep their classification and terminal outcome', async () => {
+  const db = new Database(':memory:');
+  const store = testEpisodeStore(db);
+  const messages = new Map<string, string>([
+    ['provider', 'provider timeout'],
+    ['rate', '429 rate limited'],
+    ['unknown', 'mystery'],
+    ['validation', 'candidate_evidence missing'],
+  ]);
+  const messageByEpisode = new Map<string, string>();
+  const curator = {
+    run: async (input: { sourceEpisodeId: string }) => {
+      throw new Error(messageByEpisode.get(input.sourceEpisodeId)!);
+    },
+  };
+  const scheduler = new DreamScheduler(store, curator as never);
+  try {
+    const episodeIds = new Map<string, string>();
+    for (const key of messages.keys()) {
+      const episode = store.createEpisode({
+        projectId: 'brain', sessionId: key, episodeType: 'decision', importance: 0.9,
+        eventId: `evt-${key}`, occurredAt: 100,
+      });
+      store.appendEvent({ episodeId: episode.episodeId, eventId: `evt-${key}`, relation: 'continues_previous', confidence: 1, occurredAt: 100 });
+      store.sealEpisode(episode.episodeId, { mode: 'hard', reason: 'test', now: 101 });
+      episodeIds.set(key, episode.episodeId);
+      messageByEpisode.set(episode.episodeId, messages.get(key)!);
+    }
+
+    const at = 200;
+    expect((await scheduler.tick({ projectId: 'brain', now: at })).failedEpisodeCount).toBe(4);
+    const jobs = new Map((db.prepare(`SELECT episode_id, failure_category, retry_after, state FROM episode_dream_jobs`)
+      .all() as Array<{ episode_id: string; failure_category: string; retry_after: number | null; state: string }>)
+      .map((job) => [job.episode_id, job]));
+    for (const [key, category] of [['provider', 'transient_provider'], ['rate', 'rate_limit'], ['unknown', 'unknown_retryable']] as const) {
+      const job = jobs.get(episodeIds.get(key)!)!;
+      expect(job).toMatchObject({ failure_category: category, state: 'failed_retryable' });
+      expect(job.retry_after!).toBeGreaterThanOrEqual(at + 30_000);
+      expect(job.retry_after!).toBeLessThan(at + 31_000);
+    }
+    expect(jobs.get(episodeIds.get('validation')!)).toMatchObject({ failure_category: 'validation', retry_after: null, state: 'failed_terminal' });
   } finally {
     db.close();
   }

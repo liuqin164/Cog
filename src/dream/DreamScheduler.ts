@@ -219,7 +219,8 @@ function curatorLimits(mode: Exclude<SelectedDreamMode, 'none'>): { eventLimit: 
 function classifyFailure(message: string, attempts: number, now: number): {
   now: number; failureCategory: string; terminal: boolean; retryAfter?: number;
 } {
-  if (/semantic_processor_(failed|budget)/iu.test(message)) return { now, failureCategory: message.split(':')[0]!, terminal: false, retryAfter: now + 5 * 60_000 };
+  if (/semantic_processor_budget/iu.test(message)) return { now, failureCategory: 'semantic_processor_budget', terminal: false, retryAfter: nextLocalMidnight(now) };
+  if (/semantic_processor_failed/iu.test(message)) return { now, failureCategory: 'semantic_processor_failed', terminal: false, retryAfter: now + Math.min(60 * 60_000, 5 * 60_000 * 2 ** Math.max(0, attempts - 1)) };
   if (/(candidate_evidence|project_mismatch|validation|schema|episode_has_no_raw_events)/iu.test(message)) {
     return { now, failureCategory: 'validation', terminal: true };
   }
@@ -231,6 +232,8 @@ function classifyFailure(message: string, attempts: number, now: number): {
   const delay = Math.min(60 * 60_000, 30_000 * 2 ** Math.max(0, attempts - 1));
   return { now, failureCategory: category, terminal: false, retryAfter: now + delay };
 }
+
+const nextLocalMidnight = (now: number): number => { const midnight = new Date(now); midnight.setHours(24, 0, 0, 0); return midnight.getTime(); };
 
 function modeLimit(mode: DreamTickMode): number {
   if (mode === 'micro') return 1;
