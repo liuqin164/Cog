@@ -324,7 +324,7 @@ function deepCardUserPrompt(entries: readonly SessionDigestEntry[]): string {
   const lines: string[] = ['Turns:'];
   let used = 0;
   for (const entry of entries) {
-    const text = entry.text.replace(/\s+/gu, ' ').trim().slice(0, 300);
+    const text = clipCardText(entry.text.replace(/\s+/gu, ' ').trim(), 300);
     const line = `[${entry.sourceRefs[0] ?? entry.entryId}] ${entry.speaker}: ${text}`;
     if (used + line.length > 8_000) break;
     used += line.length;
@@ -348,7 +348,8 @@ function parseCompiledCard(raw: string): { did: string; open: string } | undefin
 }
 
 function anchorsVerbatim(card: string, source: string): boolean {
-  return digestAnchors(card).every((anchor) => source.includes(anchor));
+  const present = new Set(digestAnchors(source));
+  return digestAnchors(card).every((anchor) => present.has(anchor));
 }
 
 function deterministicDid(entries: readonly SessionDigestEntry[]): string {
@@ -364,7 +365,7 @@ function deterministicDid(entries: readonly SessionDigestEntry[]): string {
     const line = entry.text.split('\n').map((part) => part.trim()).find(Boolean);
     if (!line || seen.has(line)) continue;
     seen.add(line);
-    lines.push(line.slice(0, 180));
+    lines.push(clipCardText(line, 180));
   }
   return lines.join('；') || '无';
 }
@@ -379,11 +380,19 @@ function deterministicOpen(entries: readonly SessionDigestEntry[]): string {
       const line = rawLine.trim();
       if (!line || !OPEN_MARKERS.test(line) || seen.has(line)) continue;
       seen.add(line);
-      lines.push(line.slice(0, 160));
+      lines.push(clipCardText(line, 160));
       if (lines.length >= 3) return lines.join('；');
     }
   }
   return lines.join('；') || '无';
+}
+
+function clipCardText(text: string, limit: number): string {
+  const points = Array.from(text);
+  if (points.length <= limit) return text;
+  const clipped = points.slice(0, limit).join('');
+  const trailing = clipped.match(/[0-9][0-9.,:%+\-/]*$/u);
+  return (trailing && /[0-9.,:%+\-/]/u.test(points[limit] ?? '') ? clipped.slice(0, clipped.length - trailing[0].length) : clipped).trimEnd();
 }
 
 function renderCardText(entries: readonly SessionDigestEntry[], did: string, open: string, origin: 'rule' | 'model'): string {
