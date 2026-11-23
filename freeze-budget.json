@@ -85,5 +85,23 @@
   "commands": 23,
   "states": 6,
   "tables": 88,
-  "exportSymbols": 810
+  "exportSymbols": 810,
+  "apiOnly": [
+    "src/agent/MemoryUsageReceipt.ts",
+    "src/agent/SessionWorkingState.ts",
+    "src/benchmark/BrainEval.ts",
+    "src/embedding/EmbeddingProvider.ts",
+    "src/embedding/OllamaEmbeddingProvider.ts",
+    "src/embedding/QwenAPIEmbeddingProvider.ts",
+    "src/lexicon/zh/entities.ts",
+    "src/lexicon/zh/index.ts",
+    "src/lexicon/zh/stopwords.ts",
+    "src/lexicon/zh/topics.ts",
+    "src/semantic/index.ts",
+    "src/strategy/ContextPolicyScorer.ts",
+    "src/strategy/StrategyConditionedCandidateBuilder.ts",
+    "src/strategy/StrategyContextFormatter.ts",
+    "src/strategy/StrategyDiversitySelector.ts",
+    "src/strategy/StrategyRolloutEvaluator.ts"
+  ]
 }
