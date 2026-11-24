@@ -69,9 +69,9 @@ export const ERASURE_RULES: ReadonlyArray<readonly [string, string]> = [
   ['topic_operations', `DELETE FROM topic_operations WHERE ${jsonHit('evidence_event_ids_json')}`],
   ['topic_nodes', `DELETE FROM topic_nodes WHERE ${jsonHit('evidence_event_ids_json')}`],
   ['memory_entities', `DELETE FROM memory_entities WHERE entity_id IN (SELECT id FROM ${ENTITY})`],
-  ['entities', `DELETE FROM entities WHERE entity_id IN (SELECT id FROM ${ENTITY}) OR created_from IN (SELECT id FROM ${EVENT})`],
+  ['entities', `DELETE FROM entities WHERE entity_id IN (SELECT id FROM ${ENTITY})`],
   ['entity_instances', `DELETE FROM entity_instances
-    WHERE instance_id IN (SELECT id FROM ${ENTITY}) OR canonical_entity_id IN (SELECT id FROM ${ENTITY}) OR created_from IN (SELECT id FROM ${EVENT})`],
+    WHERE instance_id IN (SELECT id FROM ${ENTITY}) OR canonical_entity_id IN (SELECT id FROM ${ENTITY})`],
   ['memory_entity_scope_identity', `DELETE FROM memory_entity_scope_identity
     WHERE root_entity_id IN (SELECT id FROM ${ENTITY}) OR scoped_entity_id IN (SELECT id FROM ${ENTITY})`],
   ['entity_alias_conflicts', `DELETE FROM entity_alias_conflicts
@@ -83,7 +83,8 @@ export const ERASURE_RULES: ReadonlyArray<readonly [string, string]> = [
     WHERE source_neuron_id IN (SELECT id FROM ${EVENT})
        OR source_entity_id IN (SELECT id FROM ${ENTITY})
        OR target_entity_id IN (SELECT id FROM ${ENTITY})`],
-  ['entity_mentions', `DELETE FROM entity_mentions WHERE neuron_id IN (SELECT id FROM ${EVENT})`],
+  ['entity_mentions', `DELETE FROM entity_mentions
+    WHERE neuron_id IN (SELECT id FROM ${EVENT}) OR entity_id IN (SELECT id FROM ${ENTITY})`],
   ['pending_entity_resolution', `DELETE FROM pending_entity_resolution
     WHERE context_neuron_id IN (SELECT id FROM ${EVENT}) OR resolved_entity_id IN (SELECT id FROM ${ENTITY})`],
   ['compiled_events', `DELETE FROM compiled_events WHERE neuron_id IN (SELECT id FROM ${EVENT})`],
@@ -270,13 +271,22 @@ export function eraseDerivedOf(context: DerivedEraseContext): Record<string, num
   }
   if (hasTable('entity_instances')) {
     db.prepare(`INSERT OR IGNORE INTO ${ENTITY} (id)
-      SELECT instance_id FROM entity_instances WHERE created_from IN (SELECT id FROM ${EVENT})
-      UNION SELECT canonical_entity_id FROM entity_instances WHERE created_from IN (SELECT id FROM ${EVENT})`).run();
+      SELECT instance_id FROM entity_instances WHERE created_from IN (SELECT id FROM ${EVENT})`).run();
   }
   if (hasTable('entity_mentions') && hasTable('memory_bindings')) {
     db.prepare(`DELETE FROM ${ENTITY}
       WHERE EXISTS (SELECT 1 FROM entity_mentions m WHERE m.entity_id=${ENTITY}.id AND (m.neuron_id IS NULL OR m.neuron_id NOT IN (SELECT id FROM ${EVENT})))
          OR EXISTS (SELECT 1 FROM memory_bindings b WHERE b.entity_id=${ENTITY}.id AND b.event_id NOT IN (SELECT id FROM ${EVENT}))`).run();
+  }
+  if (hasTable('entity_instances')) {
+    db.prepare(`INSERT OR IGNORE INTO ${ENTITY} (id)
+      SELECT DISTINCT e.canonical_entity_id FROM entity_instances e
+      WHERE e.instance_id IN (SELECT id FROM ${ENTITY})
+        AND NOT EXISTS (
+          SELECT 1 FROM entity_instances other
+          WHERE other.canonical_entity_id=e.canonical_entity_id
+            AND other.instance_id NOT IN (SELECT id FROM ${ENTITY})
+        )`).run();
   }
   if (hasTable('belief_graph_evidence')) {
     db.prepare(`INSERT OR IGNORE INTO ${BELIEF} (id)

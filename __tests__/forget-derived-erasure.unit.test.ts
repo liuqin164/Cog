@@ -320,6 +320,87 @@ test('#500 a row referenced only through relatedEventIds is erased by the ledger
   }
 });
 
+test('#505 a partial window keeps an entity a surviving mention still names', () => {
+  const kernel = createMemoryKernel({ dbPath: join(makeTempDir('forget-entity-partial-'), 'memory.sqlite'), projectTimeZone: 'UTC' });
+  const projectId = 'entity-window';
+  const base = Date.UTC(2026, 2, 6, 9);
+  try {
+    const db = kernel.factStore.getDatabase();
+    const inside = kernel.recordRawEvent({
+      projectId,
+      threadId: 'entity-session',
+      sessionId: 'entity-session',
+      role: 'user',
+      content: 'entity inside evidence',
+      occurredAt: base,
+    });
+    const outside = kernel.recordRawEvent({
+      projectId,
+      threadId: 'entity-session',
+      sessionId: 'entity-session',
+      role: 'assistant',
+      content: 'entity outside evidence',
+      occurredAt: base + DAY,
+    });
+    const kept = kernel.entityStore.upsertEntity({
+      canonicalName: `王芳-${SECRET}`,
+      type: 'person',
+      aliases: [`阿芳-${SECRET}`],
+      createdFrom: inside.eventId,
+      metadata: { projectId },
+      createdAt: base,
+    });
+    const dropped = kernel.entityStore.upsertEntity({
+      canonicalName: `幽灵-${SECRET}`,
+      type: 'person',
+      aliases: [`幽别名-${SECRET}`],
+      createdFrom: inside.eventId,
+      metadata: { projectId },
+      createdAt: base,
+    });
+    kernel.entityStore.recordMention({ entityId: kept.entityId, neuronId: inside.eventId, projectId, createdAt: base });
+    kernel.entityStore.recordMention({ entityId: kept.entityId, neuronId: outside.eventId, projectId, createdAt: base + DAY });
+    kernel.entityStore.recordMention({ entityId: dropped.entityId, neuronId: inside.eventId, projectId, createdAt: base });
+    kernel.memoryBindingStore.upsertEntity({
+      projectId,
+      entityId: kept.entityId,
+      entityType: 'person',
+      canonicalName: kept.canonicalName,
+      aliases: kept.aliases,
+      now: base,
+    });
+    kernel.memoryBindingStore.upsertEntity({
+      projectId,
+      entityId: dropped.entityId,
+      entityType: 'person',
+      canonicalName: dropped.canonicalName,
+      aliases: dropped.aliases,
+      now: base,
+    });
+
+    kernel.sovereignty.deleteRange({ projectId, start: base - 1, end: base + 1 });
+
+    const count = (sql: string, params: Array<string | number> = []): number =>
+      Number((db.prepare(sql).get(...params) as { c?: number } | null)?.c ?? 0);
+    expect(kernel.eventStore.getEvent(inside.eventId)).toBeFalsy();
+    expect(kernel.eventStore.getEvent(outside.eventId)).toBeTruthy();
+    expect(count(`SELECT COUNT(*) AS c FROM entity_instances WHERE instance_id=?`, [kept.entityId])).toBe(1);
+    expect(count(`SELECT COUNT(*) AS c FROM entities WHERE entity_id=?`, [kept.canonicalEntityId])).toBe(1);
+    expect(count(`SELECT COUNT(*) AS c FROM entity_aliases WHERE entity_id=?`, [kept.entityId])).toBeGreaterThan(0);
+    expect(count(`SELECT COUNT(*) AS c FROM entity_mentions WHERE entity_id=? AND neuron_id=?`, [kept.entityId, outside.eventId])).toBe(1);
+    expect(count(`SELECT COUNT(*) AS c FROM memory_entities WHERE entity_id=?`, [kept.entityId])).toBe(1);
+    for (const table of ['entity_instances', 'entities', 'entity_aliases', 'entity_mentions', 'memory_entities']) {
+      const column = table === 'entities' ? 'entity_id' : table === 'entity_instances' ? 'instance_id' : 'entity_id';
+      expect(count(`SELECT COUNT(*) AS c FROM ${table} WHERE ${column} IN (?, ?)`, [dropped.entityId, dropped.canonicalEntityId]), table).toBe(0);
+    }
+    expect(count(`SELECT COUNT(*) AS c FROM entity_aliases a LEFT JOIN entity_instances e ON e.instance_id=a.entity_id WHERE e.instance_id IS NULL`)).toBe(0);
+    expect(count(`SELECT COUNT(*) AS c FROM entity_mentions m LEFT JOIN entity_instances e ON e.instance_id=m.entity_id WHERE e.instance_id IS NULL`)).toBe(0);
+    expect(count(`SELECT COUNT(*) AS c FROM memory_entities m LEFT JOIN entity_instances e ON e.instance_id=m.entity_id WHERE e.instance_id IS NULL`)).toBe(0);
+  } finally {
+    kernel.close();
+  }
+});
+
 function rowsHolding(db: Database, needle: string): string[] {
   const hits: string[] = [];
   const tables = db.prepare(`SELECT name,sql FROM sqlite_master WHERE type='table'`).all() as Array<{ name: string; sql: string | null }>;
