@@ -110,6 +110,15 @@ export const PRIVACY_SCHEMA_CLASSIFICATION: Readonly<Record<string, PrivacyTable
   ...MIGRATION_CLASSIFICATION,
 } as Record<string, PrivacyTableClassification>);
 
+const LEGACY_IGNORED_TABLES = new Set([
+  '_episode_integrity_markers','entity_scope_migration_quarantine','memory_activation',
+  'pending_entity_resolution_quarantine','pipeline_checkpoints','policy_execution_audit_outbox',
+  'policy_execution_legacy_tombstones','policy_execution_quarantine','policy_execution_read_model',
+  'policy_executions','policy_projection_state','projection_event_discard_receipts',
+  'runtime_event_outbox','runtime_projection_state','runtime_projection_states',
+  'runtime_projection_transitions','runtime_scope_discard_receipts','runtime_states','runtime_transitions',
+]);
+
 export interface PrivacyDeletionContext {
   scope: string;
   listPersistentTables(): string[];
@@ -259,6 +268,7 @@ export function deleteResidualProjectOwnedContent(context: PrivacyDeletionContex
 export function assertPrivacySchemaClassified(tables: string[]): void {
   const unknown = tables.filter((table) => {
     if (PRIVACY_SCHEMA_CLASSIFICATION[table]) return false;
+    if (LEGACY_IGNORED_TABLES.has(table)) return false;
     return !/^(?:memory_events|memory_atlas|deep_write_summaries)_fts(?:_|$)/.test(table);
   });
   if (unknown.length > 0) throw new Error(`privacy_schema_unclassified:${unknown.sort().join(',')}`);

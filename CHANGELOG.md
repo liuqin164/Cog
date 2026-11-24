@@ -336,6 +336,8 @@
   rolls. User-visible effect, in one line: consecutive turns keep the same cacheable prefix, so the
   provider stops re-reading the conversation from the digest onward.
 
+- **5.0 开发库中残留的空表无害 (#521)**：#450 已从 schema 与删除分类中移除这些表，`forgetUser` 把它们登记为忽略且不 DROP，主权删除不再整体失败。
+
 ## 4.1.0
 
 Scope for this line, in the order it is worked: the shared-memory design comparison (#134, whose
