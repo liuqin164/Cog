@@ -61,7 +61,7 @@ export class SovereigntyCommands {
     const traceRecordsRemoved = this.shell.trace.forgetWindow(pending.start, pending.end, [...deletedTexts]);
     this.shell.machine.updateRuntime({ pendingForget: undefined });
     const deleted = Object.entries(result.deleted)
-      .filter(([, value]) => value > 0)
+      .filter(([, value]) => typeof value === 'number' && value > 0)
       .map(([field, value]) => `${field} ${value}`)
       .join(' · ');
     const copies = [

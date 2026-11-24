@@ -189,6 +189,11 @@ test('#422 a range deletion erases every derived row the real pipelines wrote', 
 
     const result = kernel.sovereignty.deleteRange({ projectId, start: base - 60_000, end: Date.now() + 60_000 });
     expect(result.deleted.events).toBeGreaterThanOrEqual(events.length);
+    expect(result.deleted.derivedTables).toBeDefined();
+    expect(Object.values(result.deleted.derivedTables!).some((count) => count > 0)).toBe(true);
+    const audit = kernel.getGovernanceAudit(projectId).find((entry) => entry.auditId === result.auditId)!;
+    expect((audit.details as { counts: { derivedTables: Record<string, number> } }).counts.derivedTables)
+      .toEqual(result.deleted.derivedTables);
     for (const event of events) {
       expect(present('memory_event_cjk_terms', 'event_id=?', [event.eventId])).toBe(0);
     }
@@ -258,8 +263,9 @@ test('#422 an episode that crosses the window is erased whole', () => {
       return event;
     });
 
-    kernel.sovereignty.deleteRange({ projectId, start: events[1]!.occurredAt - 1, end: events[1]!.occurredAt + 1 });
+    const result = kernel.sovereignty.deleteRange({ projectId, start: events[1]!.occurredAt - 1, end: events[1]!.occurredAt + 1 });
 
+    expect(result.deleted.events).toBeGreaterThanOrEqual(2);
     expect(kernel.eventStore.getEvent(events[0]!.eventId)).toBeFalsy();
     expect(kernel.eventStore.getEvent(events[1]!.eventId)).toBeFalsy();
     expect(kernel.eventStore.getEvent(events[2]!.eventId)).toBeTruthy();

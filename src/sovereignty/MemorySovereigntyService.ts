@@ -128,10 +128,19 @@ export interface SovereigntyDeleteInput {
   collectText?: (text: string) => void;
 }
 
-export interface SovereigntyDeleteResult extends SovereigntyDeleteInput {
+export type SovereigntyDeleteCounts = Record<string, number> & { derivedTables?: Record<string, number> };
+
+export interface SovereigntyRecoveredErase {
   auditId: string;
   deleted: Record<string, number>;
   artifacts: SovereigntyArtifactCoverage;
+}
+
+export interface SovereigntyDeleteResult extends SovereigntyDeleteInput {
+  auditId: string;
+  deleted: SovereigntyDeleteCounts;
+  artifacts: SovereigntyArtifactCoverage;
+  recovered?: SovereigntyRecoveredErase;
 }
 
 /**
@@ -346,12 +355,6 @@ export class MemorySovereigntyService {
     return { projectId: scope, paused: false };
   }
 
-  /**
-   * Delete one half-open window. The ledger rows in `[start, end)` go first; every compiled-book
-   * row whose `sourceRefs` names one of those events goes with the whole entry stream; facts,
-   * beliefs, neurons, episodes and graph documents derived from the window are removed; then the
-   * books recompile and the Atlas rebuilds from what remains.
-   */
   deleteRange(input: SovereigntyDeleteInput): SovereigntyDeleteResult {
     const scope = requiredProject(input.projectId);
     if (!Number.isFinite(input.start) || !Number.isFinite(input.end) || input.start >= input.end) {
@@ -359,8 +362,6 @@ export class MemorySovereigntyService {
     }
     assertDerivedErasureCovered((this.ports.db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`).all() as Array<{ name: string }>).map((row) => row.name));
     const recovered = this.runPendingErase(scope);
-    // Range ids, not range events: a decade-size window is 200k rows, and holding every parsed
-    // payload to delete them is what took the resident toward MemoryMax. The scan stays paged.
     const rangeIds = new Set<string>();
     let earliestRecordedAt = input.start;
     this.eachEvent(scope, (event) => {
@@ -386,26 +387,18 @@ export class MemorySovereigntyService {
       });
     }
     const deleteIds = new Set([...rangeIds, ...derived.map((event) => event.eventId), ...streamRows.map((event) => event.eventId)]);
-    const deleted = Object.fromEntries(SOVEREIGNTY_DELETE_COUNT_FIELDS.map((field) => [field, 0])) as Record<string, number>;
-    deleted.events = rangeIds.size;
+    const deleted = Object.fromEntries(SOVEREIGNTY_DELETE_COUNT_FIELDS.map((field) => [field, 0])) as SovereigntyDeleteCounts;
     deleted.derivedEntries = derived.length;
     deleted.entryVersions = streamRows.length;
     const artifacts = emptyCoverage();
     if (deleteIds.size === 0) {
-      if (recovered) return { ...input, projectId: scope, ...recovered };
       const scanned = this.removeAffectedArtifacts(Number.POSITIVE_INFINITY, false);
       const auditId = this.writeAudit('delete_range', scope, { start: input.start, end: input.end, counts: deleted, artifacts: scanned }, input.reason);
-      return { ...input, projectId: scope, auditId, deleted, artifacts: scanned };
+      return { ...input, projectId: scope, auditId, deleted, artifacts: scanned, ...(recovered ? { recovered } : {}) };
     }
     const auditId = `audit-${randomUUID()}`;
 
-    // The live database is rewritten, not only logically emptied: without secure_delete the
-    // deleted text stays in freelist pages, and without VACUUM it stays in pages that the table
-    // b-trees no longer reference. This is the same filesystem contract as `forgetUser`.
     this.ports.db.exec(`PRAGMA secure_delete = ON`);
-    // Temporary id sets keep every statement in this deletion below SQLite's variable limit. A
-    // 200k-row window would otherwise need a 200k-parameter `IN (...)`, which is both slow and
-    // above the limit on some builds.
     this.ports.db.exec(`
       CREATE TEMP TABLE IF NOT EXISTS _sovereignty_event_ids (id TEXT PRIMARY KEY);
       CREATE TEMP TABLE IF NOT EXISTS _sovereignty_episode_ids (id TEXT PRIMARY KEY);
@@ -440,6 +433,7 @@ export class MemorySovereigntyService {
         for (const id of added) deleteIds.add(id);
         for (const id of added) insertEventId.run(id);
       }
+      deleted.events = deleteIds.size;
 
       this.eachEvent(scope, (event) => {
         if (!deleteIds.has(event.eventId)) return;
@@ -490,7 +484,7 @@ export class MemorySovereigntyService {
       deleted.traceEvents = this.deleteIfTable('trace_events',
         `DELETE FROM trace_events WHERE COALESCE(project_id,'')=? AND timestamp>=? AND timestamp<?`,
         [scope, input.start, input.end]);
-      eraseDerivedOf({
+      deleted.derivedTables = eraseDerivedOf({
         db: this.ports.db,
         eventIdsSource: '_sovereignty_event_ids',
         episodeIdsSource: '_sovereignty_episode_ids',
@@ -521,6 +515,7 @@ export class MemorySovereigntyService {
       auditId: completed?.auditId ?? auditId,
       deleted: completed?.deleted ?? deleted,
       artifacts: completed?.artifacts ?? artifacts,
+      ...(recovered ? { recovered } : {}),
     };
   }
 

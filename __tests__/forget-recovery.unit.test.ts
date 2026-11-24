@@ -90,10 +90,19 @@ test('#423 a failure after the main commit leaves a marker, and the next call fi
     utimesSync(late, (base + 2) / 1000, (base + 2) / 1000);
 
     const recovered = kernel.sovereignty.deleteRange({ projectId, start: base + DAY, end: base + DAY + 1 });
-    expect(recovered.artifacts.upgradesRemoved).toBe(1);
+    expect(recovered.recovered?.artifacts.upgradesRemoved).toBe(1);
+    expect(recovered.artifacts.upgradesRemoved).toBe(0);
+    expect(recovered.deleted.events).toBe(0);
+    expect(recovered.recovered?.auditId).not.toBe(recovered.auditId);
     expect(existsSync(late)).toBe(false);
     expect(db.prepare(`SELECT value FROM _meta WHERE key=?`).get(`sovereignty.pending_erase:${projectId}`)).toBeNull();
-    expect(db.prepare(`SELECT COUNT(*) AS c FROM governance_audit_log WHERE action='delete_range' AND project_id=?`).get(`sha256:${createHash('sha256').update(projectId).digest('hex')}`)).toEqual({ c: 1 });
+    const auditIds = (db.prepare(`SELECT audit_id FROM governance_audit_log WHERE action='delete_range' AND project_id=?`)
+      .all(`sha256:${createHash('sha256').update(projectId).digest('hex')}`) as Array<{ audit_id: string }>)
+      .map((row) => row.audit_id);
+    expect(auditIds).toContain(recovered.auditId);
+    expect(auditIds).toContain(recovered.recovered!.auditId);
+    const noop = db.prepare(`SELECT details_json FROM governance_audit_log WHERE audit_id=?`).get(recovered.auditId) as { details_json: string };
+    expect((JSON.parse(noop.details_json) as { counts: { events: number } }).counts.events).toBe(0);
   } finally {
     kernel.close();
   }
