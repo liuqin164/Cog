@@ -194,6 +194,16 @@ export interface ProfileAuditEntry {
   occurredAt: number;
 }
 
+export interface ProfileCorrectionCounts {
+  profile: number;
+  beliefs: number;
+  facts: number;
+  frames: number;
+  cards: number;
+}
+
+export type ProfileCorrectionResult = ProfileEntry & { replaced: ProfileCorrectionCounts };
+
 export interface ProfileCompilerPorts {
   events: EventStore;
   facts: FactStore;
@@ -204,6 +214,7 @@ export interface ProfileCompilerPorts {
   /** Every prospective memory in the project; this face applies the status rule itself. */
   listOngoing: (projectId: string) => ProspectiveMemoryRecord[];
   supersedeFrames?: (projectId: string, eventIds: string[], now: number) => number;
+  countCorrectedCards?: (projectId: string, eventIds: readonly string[]) => number;
 }
 
 interface Candidate {
@@ -265,6 +276,7 @@ export class ProfileCompiler {
   private readonly sourceEventOfNeuron: ProfileCompilerPorts['sourceEventOfNeuron'];
   private readonly listOngoing: ProfileCompilerPorts['listOngoing'];
   private readonly supersedeFrames?: ProfileCompilerPorts['supersedeFrames'];
+  private readonly countCorrectedCards?: ProfileCompilerPorts['countCorrectedCards'];
 
   constructor(ports: ProfileCompilerPorts) {
     this.events = ports.events;
@@ -274,6 +286,7 @@ export class ProfileCompiler {
     this.sourceEventOfNeuron = ports.sourceEventOfNeuron;
     this.listOngoing = ports.listOngoing;
     this.supersedeFrames = ports.supersedeFrames;
+    this.countCorrectedCards = ports.countCorrectedCards;
   }
 
   compile(input: ProfileCompileInput): ProfileCompileResult {
@@ -346,13 +359,7 @@ export class ProfileCompiler {
       .slice(0, limit);
   }
 
-  /**
-   * The owner corrects one entry. The correction is a row on the entry's own stream whose
-   * `sourceRefs` name **both** the correction turn and the entry's original sources, so the chain
-   * still reaches what the entry was compiled from. The ledger is then recompiled — the receipt is
-   * the `PROFILE_LEDGER_RECOMPILED` row.
-   */
-  correct(input: ProfileCorrectInput): ProfileEntry {
+  correct(input: ProfileCorrectInput): ProfileCorrectionResult {
     const projectId = requiredText(input.projectId, 'project_id_required');
     const ledger = this.requireLedger(input.ledger);
     const key = requiredText(input.key, 'profile_key_required');
@@ -381,9 +388,6 @@ export class ProfileCompiler {
     };
     this.appendVersion(projectId, {
       entryId, ledger, key, value,
-      // The correction is appended **after** the entry's existing sources, so `sourceRefs[0]` — the
-      // event a recall item anchors and therefore the one the identity rule reads — stays the event
-      // the entry was compiled from. A correction cannot hand an owned entry to another identity.
       sourceRefs: uniqRefs([...current.sourceRefs, correctionRef]),
       recordedAt: event.occurredAt,
       compiledAt: now,
@@ -393,14 +397,11 @@ export class ProfileCompiler {
       previousSourceRefs: current.sourceRefs,
       correctionEventId: event.eventId,
     });
-    // The correction is not local to this book (#242): the source belief or fact is superseded, so
-    // the Atlas and the default recall lanes stop presenting the replaced value as current.
-    this.propagateCorrection(projectId, current, value, event, now);
-    // The whole ledger is recompiled, not only the corrected key: the ticket's "该册重编译".
+    const replaced = this.propagateCorrection(projectId, current, value, event, now);
     const result = this.compileLedgers(projectId, [ledger], now);
     const entries = this.entries({ projectId, ledger });
     this.appendReceipt(projectId, ledger, now, entries.length, result.written);
-    return entries.find((entry) => entry.entryId === entryId)!;
+    return { ...entries.find((entry) => entry.entryId === entryId)!, replaced: { profile: 1, ...replaced } };
   }
 
   /** Every profile row for the project, oldest first. The audit is the ledger itself. */
@@ -737,9 +738,12 @@ export class ProfileCompiler {
     value: string,
     correction: MemoryEvent,
     now: number,
-  ): void {
-    if (current.ledger !== 'facts' && current.ledger !== 'preferences') return;
+  ): Omit<ProfileCorrectionCounts, 'profile'> {
     const sourceIds = new Set(current.sourceRefs.map((ref) => ref.eventId).filter((id): id is string => Boolean(id)));
+    const cards = this.countCorrectedCards?.(projectId, [...sourceIds]) ?? 0;
+    if (current.ledger !== 'facts' && current.ledger !== 'preferences') {
+      return { beliefs: 0, facts: 0, frames: 0, cards };
+    }
     const beliefs = new Map<string, ReturnType<BeliefStore['findByCanonicalKey']>[number]>();
     for (const belief of this.beliefs.findByCanonicalKey(current.key, projectId)) beliefs.set(belief.id, belief);
     for (const belief of this.beliefs.listByTimeRange(0, MAX_TIME, {
@@ -750,6 +754,7 @@ export class ProfileCompiler {
       if (belief.sourceEventId && sourceIds.has(belief.sourceEventId)) beliefs.set(belief.id, belief);
     }
     const correctedKeys = new Set<string>();
+    let beliefsReplaced = 0;
     for (const belief of beliefs.values()) {
       if (belief.status !== 'active' || correctedKeys.has(belief.canonicalKey)) continue;
       correctedKeys.add(belief.canonicalKey);
@@ -777,9 +782,11 @@ export class ProfileCompiler {
       }, now);
       if (corrected.belief) {
         this.beliefs.supersedeActiveForCorrection(corrected.belief.canonicalKey, projectId, corrected.belief.id, now);
+        beliefsReplaced += 1;
       }
     }
 
+    let factsReplaced = 0;
     for (const fact of this.facts.listFactsByTimeRange(0, MAX_TIME, {
       projectId,
       limit: PROFILE_EVIDENCE_LIMIT,
@@ -796,9 +803,11 @@ export class ProfileCompiler {
           previousValue: current.value,
         },
       });
+      factsReplaced += 1;
     }
 
-    if (sourceIds.size > 0) this.supersedeFrames?.(projectId, [...sourceIds], now);
+    const frames = sourceIds.size > 0 ? this.supersedeFrames?.(projectId, [...sourceIds], now) ?? 0 : 0;
+    return { beliefs: beliefsReplaced, facts: factsReplaced, frames, cards };
   }
 
   /** entryId → its versions oldest first, plus how the newest row left it. */

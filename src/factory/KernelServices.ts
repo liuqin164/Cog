@@ -60,6 +60,7 @@ import { EntityGovernanceService } from '../entity/index.js';
 import { DEFAULT_RHYTHM_SAMPLE_DAYS, TemporalMemoryService, WakeIntentionService, WakeScheduler, computeTemporalContext, evaluateDreamWindow as evaluateDreamWindowAt, type DreamWindow, type DreamWindowEvaluation, type TemporalAnchor, type TemporalContext, type WakeTickInput, type WakeTickResult } from '../temporal/index.js';
 import { ConversationCaptureService, type ConversationTurnInput, type ConversationTurnQuery, type ConversationTurnRecord } from '../conversation/index.js';
 import { SessionContextService, type SessionContextItem } from '../session/index.js';
+import { countCorrectedDeepCards } from '../session/SessionDeepCards.js';
 import { PersonDirectory } from '../person/index.js';
 import { ProfileCompiler } from '../profile/index.js';
 import { SurfacingCandidates, SurfacingFeedback } from '../surfacing/index.js';
@@ -519,6 +520,7 @@ export abstract class KernelServices {
         limit: 200,
       }),
       supersedeFrames: (projectId, eventIds, now) => this.memoryFrameStore.supersedeReferencingEvents(projectId, eventIds, now),
+      countCorrectedCards: (projectId, eventIds) => countCorrectedDeepCards(db, projectId, eventIds),
     });
     this.surfacingFeedback = new SurfacingFeedback({ events: this.eventStore });
     this.occasionScope = new OccasionScope();

@@ -107,8 +107,6 @@ export class SovereigntyCommands {
     const outputPath = arg !== ''
       ? arg
       : join(this.shell.config.dataDir, 'exports', `memory-${new Date(this.shell.now()).toISOString().replace(/[:.]/gu, '-')}.md`);
-    // Any new export invalidates an older unconfirmed request: a confirmation must belong to the
-    // path the owner just saw, not one two commands ago.
     this.pendingExport = undefined;
     if (!isWithin(this.shell.config.dataDir, outputPath)) {
       this.pendingExport = { path: outputPath };
@@ -148,8 +146,6 @@ export class SovereigntyCommands {
       };
     }
     const entry = matches[0]!;
-    // The correction names the owner's turn. The command line is that turn, recorded through the
-    // same backend every typed message uses, so pause/exclusion rules apply unchanged.
     const turn = await this.shell.backend.rememberTurnWithResult({
       agentId: this.shell.config.agentId,
       projectId,
@@ -165,33 +161,50 @@ export class SovereigntyCommands {
       value,
       correctionEventId,
     });
+    const counts = corrected.replaced;
+    const check = this.correctionSelfCheck(projectId, entry.key, entry.value, corrected.value, correctionEventId);
     this.shell.trace.append('profile_corrected', {
       projectId,
       ledger: entry.ledger,
       key: entry.key,
       version: corrected.version,
       eventId: correctionEventId,
+      replaced: counts,
     });
+    const layers = [
+      `画像 ${counts.profile} ✓`,
+      `信念/事实 ${counts.beliefs + counts.facts} ✓${counts.beliefs + counts.facts ? ' 已替换' : ''}`,
+      `语义帧 ${counts.frames} ✓${counts.frames ? ' 已作废' : ''}`,
+      counts.cards > 0 ? `情节卡 ${counts.cards} ⚠ 已加注「后有纠正」` : '情节卡 0 ✓',
+    ].join(' · ');
+    const hit = check.hit ? `${corrected.value} ✓` : `${corrected.value} 未命中 ✗`;
+    const oldHits = `旧值「${entry.value}」作为当前值出现 ${check.oldHits} 次 ${check.oldHits === 0 ? '✓' : '✗'}`;
     return {
-      text: `已纠正 ${entry.ledger} · ${entry.key}：${entry.value} → ${corrected.value}（v${corrected.version}）。下一次召回起全局按新值。`,
+      text: `已纠正 ${entry.ledger} · ${entry.key}：${entry.value} → ${corrected.value}（v${corrected.version}）\n· ${layers}\n· 自检：「${check.question}」→ ${hit}；${oldHits}`,
       receipt: true,
-      data: { profile_correction: { ledger: entry.ledger, key: entry.key, value: corrected.value, version: corrected.version } },
+      data: { profile_correction: { ledger: entry.ledger, key: entry.key, value: corrected.value, version: corrected.version, replaced: counts, selfCheck: check } },
     };
   }
 
-  /**
-   * `/correct` on a practice (#264). The compiler already reads `metadata.procedureCorrection`, but
-   * nothing in the shell wrote it. A proposal is not a correction: the mark is written only by
-   * `confirmProcedureCorrection`, and until then the book is untouched.
-   */
+  private correctionSelfCheck(projectId: string, key: string, oldValue: string, newValue: string, correctionEventId: string) {
+    const question = `${key.replace(/[|._]+/gu, ' ')} 现在是什么？`;
+    const recall = (query: string) => this.shell.backend.recall({ agentId: this.shell.config.agentId, projectId, query, limit: 8 });
+    const asked = recall(question);
+    const oldAsked = recall(oldValue);
+    const oldHits = new Set<string>();
+    for (const item of [...asked.items, ...oldAsked.items]) {
+      if (item.sourceAnchor?.eventId === correctionEventId || item.id === correctionEventId) continue;
+      if (item.text.split(newValue).join('').includes(oldValue)) oldHits.add(item.id);
+    }
+    return { question, hit: asked.items.some((item) => item.text.includes(newValue)), oldHits: oldHits.size };
+  }
+
   private proposeProcedureCorrection(key: string, value: string, knownProfiles: string): CommandReply {
     const projectId = this.shell.config.projectId;
     this.shell.kernel.procedures.compile({ projectId, now: this.shell.now() });
     const current = this.shell.kernel.procedures.entries({ projectId }).filter((entry) => entry.status === 'current');
     const named = current.filter((entry) =>
       entry.key === key || `${entry.domain}:${entry.key}` === key || entry.domain === key);
-    // An imported guide and an own practice can share a key; the owner's correction replaces the
-    // practice they actually do, and the imported book stays recallable as what was read.
     const own = named.filter((entry) => entry.origin !== 'imported');
     const matches = own.length > 0 ? own : named;
     if (matches.length === 0) {
@@ -227,13 +240,10 @@ export class SovereigntyCommands {
     };
   }
 
-  /** `/correct confirm`: write the practice correction and recompile, so the next recall reads it. */
   async confirmProcedureCorrection(): Promise<CommandReply> {
     const pending = this.pendingProcedureCorrection;
     if (!pending) return { text: '还没有做法提议：先 /correct <做法键> <新做法>。', receipt: true };
     const projectId = this.shell.config.projectId;
-    // The mark is the compiler's evidence: a `user` turn carrying the domain and key. The command
-    // line is that turn, recorded through the same backend every typed message uses.
     const turn = await this.shell.backend.rememberTurnWithResult({
       agentId: this.shell.config.agentId,
       projectId,
@@ -280,7 +290,6 @@ export class SovereigntyCommands {
 
 }
 
-/** Whether `target` resolves inside `root`; a sibling whose name starts with `..` is not inside. */
 function isWithin(root: string, target: string): boolean {
   const rel = relative(resolve(root), resolve(target));
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));

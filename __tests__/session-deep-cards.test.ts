@@ -644,7 +644,7 @@ describe('a corrected episode card names the later correction (#499)', () => {
         content: '其实我不喝乌龙茶了，现在喜欢红茶。',
         occurredAt: T0 + 24_000 + GAP + 2_000,
       });
-      kernel.profile.correct({
+      const corrected = kernel.profile.correct({
         projectId,
         ledger: 'preferences',
         key: entry.key,
@@ -653,6 +653,7 @@ describe('a corrected episode card names the later correction (#499)', () => {
         now: T0 + 24_000 + GAP + 3_000,
       });
 
+      expect(corrected.replaced).toEqual({ profile: 1, beliefs: 1, facts: 0, frames: 0, cards: 1 });
       const card = kernel.sessionContext.digest({ projectId, agentId, sessionId }).entries.find((item) => item.kind === 'deep')!;
       expect(card.sourceRefs).toContain(sourceId);
       expect(card.text).toContain(`后有纠正：mem:${correction.eventId}`);

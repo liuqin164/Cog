@@ -232,6 +232,13 @@ export function mergeDeepCardEntries(
   return [...cards, ...entries];
 }
 
+export function countCorrectedDeepCards(db: Database, projectId: string, eventIds: readonly string[]): number {
+  if (!tableExists(db) || eventIds.length === 0) return 0;
+  const ids = new Set(eventIds);
+  return (db.query(`SELECT source_refs_json FROM ${CARD_TABLE} WHERE project_id = ?`).all(projectId) as Array<Pick<CardRow, 'source_refs_json'>>)
+    .filter((row) => parseRefs(row.source_refs_json).some((eventId) => ids.has(eventId))).length;
+}
+
 export async function compileSessionDeepCards(
   db: Database,
   input: SessionDeepCompileRunInput = {},

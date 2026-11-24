@@ -1,8 +1,4 @@
-/**
- * #242 through the resident's real `/correct` command. The kernel contract test covers the derived
- * books; this one pins the path the owner actually uses and the default recall that follows it.
- */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 
 import { makeShell, makeTempDir, ScriptedProvider } from './helpers.ts';
 
@@ -53,11 +49,43 @@ describe('/correct propagates through the system triggers', () => {
 
       const reply = await shell.runCommand('correct', `${entry.key} 红茶`);
       expect(reply.text).toContain('已纠正');
+      expect(reply.text).toContain('· 画像 1 ✓');
+      expect(reply.text).toContain('· 信念/事实 1 ✓ 已替换');
+      expect(reply.text).toContain('· 语义帧 0 ✓');
+      expect(reply.text).toContain('· 情节卡 0 ✓');
+      expect(reply.text).toContain('· 自检：「');
+      expect(reply.text).toContain('红茶 ✓');
+      expect(reply.text).toContain('旧值「乌龙茶」作为当前值出现 0 次 ✓');
+      const receipt = reply.data?.profile_correction as { replaced: Record<string, number> };
+      expect(receipt.replaced).toEqual({ profile: 1, beliefs: 1, facts: 0, frames: 0, cards: 0 });
 
       const recalled = shell.backend.recall({ agentId: shell.config.agentId, projectId, query: '乌龙茶 红茶', limit: 8 });
       const text = recalled.items.map((item) => item.text).join('\n');
       expect(text).toContain('红茶');
       expect(text).not.toContain('乌龙茶');
+    } finally {
+      await shell.stop();
+    }
+  });
+
+  test('the self-check reports a stale old value instead of a green receipt', async () => {
+    const shell = await startedShell(makeTempDir());
+    const projectId = shell.config.projectId;
+    try {
+      preference(shell, '我喜欢喝乌龙茶。', '乌龙茶', projectId);
+      shell.kernel.profile.compile({ projectId, now: T0 + 1_000 });
+      const entry = shell.kernel.profile.entries({ projectId, ledger: 'preferences' })[0]!;
+      const recall = shell.backend.recall.bind(shell.backend);
+      const spy = spyOn(shell.backend, 'recall').mockImplementation((query) => {
+        const result = recall(query);
+        return query.query === '乌龙茶' ? { ...result, items: [{ id: 'stale-old', text: '乌龙茶', tags: [] }, ...result.items] } : result;
+      });
+      try {
+        const reply = await shell.runCommand('correct', `${entry.key} 红茶`);
+        expect(reply.text).toContain('旧值「乌龙茶」作为当前值出现 1 次 ✗');
+      } finally {
+        spy.mockRestore();
+      }
     } finally {
       await shell.stop();
     }

@@ -109,7 +109,7 @@ describe('a profile correction reaches frames and their Atlas nodes', () => {
     });
     const entry = kernel.profile.entries({ projectId, ledger: 'facts' })
       .find((candidate) => candidate.value === '乌龙茶')!;
-    kernel.profile.correct({
+    const corrected = kernel.profile.correct({
       projectId,
       ledger: 'facts',
       key: entry.key,
@@ -118,6 +118,7 @@ describe('a profile correction reaches frames and their Atlas nodes', () => {
       now: T0 + 3_000,
     });
 
+    expect(corrected.replaced).toEqual({ profile: 1, beliefs: 1, facts: 0, frames: 1, cards: 0 });
     expect(kernel.memoryFrameStore.get(frameId)?.status).toBe('superseded');
     const immediate = backend.recall({ projectId, agentId: 'hermes', query: '乌龙茶 红茶', limit: 8 });
     const immediateText = immediate.items.map((item) => item.text).join('\n');
