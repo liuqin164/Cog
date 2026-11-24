@@ -38,8 +38,14 @@ function stringValues(value: unknown, out: string[] = []): string[] {
 export function forgetNeedles(texts: readonly string[]): string[] {
   return [...new Set(texts.flatMap((text) => {
     const trimmed = text.trim();
-    return [trimmed, ...trimmed.split(/[^\p{L}\p{N}_-]+/u)].filter((token) => token.length >= 8);
+    return [trimmed, ...trimmed.split(/[^\p{L}\p{N}_-]+/u)].filter(longEnoughForTrace);
   }))];
+}
+
+const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+
+function longEnoughForTrace(token: string): boolean {
+  return token.length >= (CJK.test(token) ? 4 : 8);
 }
 
 export function forgetHash(value: string): string {
@@ -48,7 +54,7 @@ export function forgetHash(value: string): string {
 
 function hashedValue(value: string, hashes: ReadonlySet<string>): boolean {
   return [value.trim(), ...value.trim().split(/[^\p{L}\p{N}_-]+/u)]
-    .some((token) => token.length >= 8 && hashes.has(forgetHash(token)));
+    .some((token) => longEnoughForTrace(token) && hashes.has(forgetHash(token)));
 }
 
 function shouldForget(record: TraceRecord, start: number, end: number, needles: readonly string[], hashes: ReadonlySet<string>): boolean {

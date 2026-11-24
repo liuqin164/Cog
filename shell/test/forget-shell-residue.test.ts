@@ -384,4 +384,68 @@ describe('/forget covers the shell checkpoint and trace', () => {
       await shell.stop();
     }
   }, 30_000);
+
+  test('#504 a six-character Chinese sentence is a trace needle', async () => {
+    const dir = makeTempDir('forget-shell-cjk-');
+    const data = join(dir, 'data');
+    const phrase = '我对花生过敏';
+    const shell = makeShell(dir, new ScriptedProvider([{ text: '记下了。', toolCalls: [] }]));
+    await shell.start();
+    try {
+      await shell.submit(phrase);
+      const db = shell.kernel.factStore.getDatabase();
+      const row = db.prepare(`
+        SELECT event_id, occurred_at FROM memory_events
+        WHERE role='user' AND payload_json LIKE ? ORDER BY occurred_at DESC LIMIT 1
+      `).get(`%${phrase}%`) as { event_id: string; occurred_at: number };
+      shell.trace.append('command_proposed', { id: 'cjk-late', command: 'bash', args: phrase, reason: phrase }, row.occurred_at + 60_000);
+      expect(scan(join(data, 'shell-events.jsonl'), phrase)).toBe(true);
+
+      await shell.runCommand('forget', `${new Date(row.occurred_at - 1).toISOString()} ${new Date(row.occurred_at + 1).toISOString()}`);
+      await shell.runCommand('forget', 'confirm');
+      expect(scan(join(data, 'shell-events.jsonl'), phrase)).toBe(false);
+    } finally {
+      await shell.stop();
+    }
+  }, 30_000);
+
+  test('#504 text from an event pulled in by its episode is collected after expansion', async () => {
+    const dir = makeTempDir('forget-shell-cross-window-');
+    const data = join(dir, 'data');
+    const marker = 'zz-cross-window-9f3a';
+    const outsideText = `${marker} 窗外的会议记录`;
+    const shell = makeShell(dir, new ScriptedProvider([{ text: '记下了。', toolCalls: [] }]));
+    await shell.start();
+    try {
+      const base = Date.UTC(2026, 2, 5, 9);
+      const sessionId = 'cross-window-session';
+      const projectId = shell.config.projectId;
+      const events = [0, 1, 2].map((index) => {
+        const event = shell.kernel.recordRawEvent({
+          projectId,
+          threadId: sessionId,
+          sessionId,
+          role: index % 2 === 0 ? 'user' : 'assistant',
+          content: index === 1 ? outsideText : `episode turn ${index}`,
+          occurredAt: base + index * 60_000,
+        });
+        shell.kernel.appendRawEventToEpisode(event, { projectId, sessionId, sourceAgent: 'cross-agent', now: base + index * 60_000 });
+        return event;
+      });
+      shell.trace.append('run_prompt', {
+        runId: 'run-cross-window',
+        sessionId,
+        chars: outsideText.length,
+        text: outsideText,
+      }, base + 5 * 60_000);
+      expect(scan(join(data, 'shell-events.jsonl'), marker)).toBe(true);
+
+      await shell.runCommand('forget', `${new Date(base - 1).toISOString()} ${new Date(base + 1).toISOString()}`);
+      await shell.runCommand('forget', 'confirm');
+      expect(shell.kernel.eventStore.getEvent(events[1]!.eventId)).toBeFalsy();
+      expect(scan(join(data, 'shell-events.jsonl'), marker)).toBe(false);
+    } finally {
+      await shell.stop();
+    }
+  }, 30_000);
 });

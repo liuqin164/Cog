@@ -367,8 +367,6 @@ export class MemorySovereigntyService {
       if (event.occurredAt < input.start || event.occurredAt >= input.end) return;
       rangeIds.add(event.eventId);
       earliestRecordedAt = Math.min(earliestRecordedAt, event.createdAt ?? event.occurredAt);
-      const text = eventText(event);
-      if (text) input.collectText?.(text);
     }, { startTime: input.start, endTime: input.end });
     const derived: MemoryEvent[] = [];
     this.eachEvent(scope, (event) => {
@@ -442,6 +440,12 @@ export class MemorySovereigntyService {
         for (const id of added) deleteIds.add(id);
         for (const id of added) insertEventId.run(id);
       }
+
+      this.eachEvent(scope, (event) => {
+        if (!deleteIds.has(event.eventId)) return;
+        const text = eventText(event);
+        if (text) input.collectText?.(text);
+      });
 
       this.ports.db.transaction(() => {
       this.deleteIfTable('memory_events_fts', `DELETE FROM memory_events_fts WHERE event_id IN (SELECT id FROM _sovereignty_event_ids)`, []);
