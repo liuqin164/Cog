@@ -234,6 +234,12 @@ export interface ShellRuntimeState {
     /** Consumed candidate keys, oldest first. The shell keeps the newest 500. */
     consumed: string[];
   };
+  selfCare?: {
+    day?: string;
+    conditions?: Record<string, { at: number; severity: number }>;
+    pendingEpisodes?: number;
+    backlogSamples?: Array<{ day: string; count: number }>;
+  };
   /**
    * A restart was requested by the plugin surface, and the open assignment should continue once the
    * new process is up. Only a requested restart sets this: a kill does not, so the kill matrix's
@@ -306,6 +312,7 @@ const RUNTIME_KEYS: Record<keyof ShellRuntimeState, true> = {
   retainedConstraints: true,
   suspension: true,
   emergence: true,
+  selfCare: true,
   resumeAfterRestart: true,
   capturePaused: true,
   pendingForget: true,

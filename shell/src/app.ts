@@ -55,6 +55,7 @@ import { ProposalsHandlers } from './proposals-handlers.ts';
 import { SovereigntyCommands } from './sovereignty.ts';
 import { StatusFace } from './status-face.ts';
 import { ResidentTick } from './resident-tick.ts';
+import { SelfCare } from './self-care.ts';
 
 const SHUTDOWN_RUN_TIMEOUT_MS = 10_000;
 
@@ -139,6 +140,7 @@ export class CompanionShell implements ShellControl, AttachShell {
   readonly pluginProposals: PluginProposals;
   readonly upgradeAdmin: UpgradeAdmin;
   readonly statusFace: StatusFace;
+  readonly selfCare: SelfCare;
   readonly contextLanes: ContextLanes;
   readonly runLoop: RunLoop;
   readonly residentTick: ResidentTick;
@@ -360,6 +362,7 @@ export class CompanionShell implements ShellControl, AttachShell {
       onChange: (proposal) => void this.host.bus.emit('companion_command_proposal', { proposal }),
     });
     this.upgradeAdmin = new UpgradeAdmin(this);
+    this.selfCare = new SelfCare(this);
     this.statusFace = new StatusFace(this);
     this.contextLanes = new ContextLanes(this);
     this.runLoop = new RunLoop(this);
@@ -433,6 +436,10 @@ export class CompanionShell implements ShellControl, AttachShell {
 
   get httpUrl(): string | undefined {
     return this.http?.baseUrl;
+  }
+
+  get nightModelBudget(): { spent: number; cap: number } {
+    return { spent: this.nightSpent, cap: this.nightCap };
   }
 
   private buildModelRegistry(): ShellModelRegistry {
@@ -1348,7 +1355,7 @@ export class CompanionShell implements ShellControl, AttachShell {
    */
   private readonly commandHost: CommandHost = {
     config: () => this.config,
-    lifecycle: () => ({ state: this.machine.state, seq: this.machine.seq, costDayTokens: this.machine.runtime.costDayTokens ?? 0, sandbox: this.statusFace.sandboxState(), failedInbound: this.statusFace.failedInbound() }),
+    lifecycle: () => ({ state: this.machine.state, seq: this.machine.seq, costDayTokens: this.machine.runtime.costDayTokens ?? 0, sandbox: this.statusFace.sandboxState(), failedInbound: this.statusFace.failedInbound(), selfCare: this.statusFace.selfCareStatus().line }),
     resendFailedInbound: (id) => this.resendFailedInbound(id),
     contextTokens: () => this.contextTokenEstimate,
     contextToolOutput: () => this.lastToolOutput,

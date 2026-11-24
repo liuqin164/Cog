@@ -144,6 +144,7 @@ export class ResidentTick {
     if (this.shell.machine.state === 'DREAMING') return;
     await this.backfillFreshness(at);
     await this.applyDueWakeIntent(at);
+    this.shell.selfCare.tick(at);
     const quiet = this.shell.clock!.quietWindowOpen(at);
     if (!quiet && this.shell.machine.state === 'IDLE') {
       const queue = [...(this.shell.machine.runtime.awayQueue ?? [])];
@@ -151,6 +152,11 @@ export class ResidentTick {
       if (deferred >= 0) {
         const [entry] = queue.splice(deferred, 1);
         this.shell.machine.updateRuntime({ awayQueue: queue });
+        if (entry!.source === 'self_care') {
+          this.shell.selfCare.speak(entry!.text, at, 'incidental');
+          this.shell.trace.append('emergence_quiet_delivered', { projectId: this.shell.config.projectId, id: entry!.id, at });
+          return;
+        }
         this.consumeEmergence({ id: entry!.id, source: entry!.source, observedAt: entry!.observedAt, sourceRefs: entry!.sourceRefs }, at);
         await this.speakEmergence({
           id: entry!.id,

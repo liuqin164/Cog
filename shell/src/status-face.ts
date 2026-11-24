@@ -132,6 +132,7 @@ export class StatusFace {
       nextWakeReason: next?.reason,
       model: this.shell.modelLabel,
       memoryModel: this.memoryModelHealth(),
+      selfCare: this.selfCareStatus(),
       workspace: this.shell.config.workspaceRoot,
       showWorkspace: true,
       contextTokens: this.shell.contextTokenEstimate,
@@ -173,6 +174,10 @@ export class StatusFace {
       backlogEpisodes,
       line: `记忆模型：${route}/${role.modelName}（${stateText}）`,
     };
+  }
+
+  selfCareStatus(at = this.shell.now()): { active: boolean; line: string } {
+    return this.shell.selfCare.status(at);
   }
 
   /** `/status` and the status bar say whether bash is isolated; a silent degradation is the bug (#284). */

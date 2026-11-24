@@ -22,6 +22,7 @@ export interface StatusState {
   nextWakeReason?: string;
   model: string;
   memoryModel?: { route: string; model: string; baseUrl: string; state: 'reachable' | 'unreachable' | 'degraded' | 'rule_only'; line: string };
+  selfCare?: { active: boolean; line: string };
   workspace: string;
   showWorkspace: boolean;
   contextTokens: number;

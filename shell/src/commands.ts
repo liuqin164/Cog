@@ -28,7 +28,7 @@ export interface CommandReply {
 /** Everything a handler may ask of the shell; `CompanionShell` provides it as `commandHost`. */
 export interface CommandHost {
   config(): { dbPath: string; agentId: string; contextSweetSpot: number };
-  lifecycle(): { state: string; seq: number; costDayTokens: number; sandbox: 'on' | 'off'; failedInbound: number };
+  lifecycle(): { state: string; seq: number; costDayTokens: number; sandbox: 'on' | 'off'; failedInbound: number; selfCare: string };
   contextTokens(): number;
   /** The newest request's tool-output account (#319); `undefined` before the first request. */
   contextToolOutput?(): ToolOutputAccount | undefined;
@@ -251,7 +251,7 @@ export const CORE_COMMANDS: readonly CoreCommand[] = [
     description: '健康状态页',
     surfaces: ['palette', 'resident', 'tui'],
     run(host) {
-      const { state, seq, costDayTokens, sandbox, failedInbound } = host.lifecycle();
+      const { state, seq, costDayTokens, sandbox, failedInbound, selfCare } = host.lifecycle();
       const sandboxLine = sandbox === 'on' ? '沙箱 开（bwrap，网络隔离）' : '沙箱 关（bwrap 不可用，bash 无隔离）';
       const modulated = (host.surfacingFeedback?.().types ?? []).filter((type) => type.level > 0 || type.stopped);
       const feedbackLine = modulated.length === 0
@@ -261,7 +261,7 @@ export const CORE_COMMANDS: readonly CoreCommand[] = [
       const quietLine = quiet === undefined
         ? '勿扰窗：关'
         : `勿扰窗：${String(quiet.startHour).padStart(2, '0')}:00–${String(quiet.endHour).padStart(2, '0')}:00（${quiet.active ? '生效中' : '未生效'}）`;
-      return { text: `生命周期 ${state}，checkpoint seq ${seq}，本日 ${costDayTokens} token，${sandboxLine}。${quietLine}。${feedbackLine}。未送达 ${failedInbound} 条。` };
+      return { text: `生命周期 ${state}，checkpoint seq ${seq}，本日 ${costDayTokens} token，${sandboxLine}。${quietLine}。${feedbackLine}。${selfCare}。未送达 ${failedInbound} 条。` };
     },
   },
   {

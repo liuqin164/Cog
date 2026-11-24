@@ -2595,6 +2595,7 @@ function applyLoaded() {
 function applyHashTarget() {
   const hash = decodeURIComponent(location.hash.replace(/^#/u, ''));
   if (hash === 'credentials') { showView('credentials'); return; }
+  if (hash === 'classification') { showView('classification'); return; }
   if (!hash.startsWith('node=')) return;
   const node = state.nodeIndex.get(hash.slice('node='.length));
   if (node) selectNode(node, { fromSnapshot: true });

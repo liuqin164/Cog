@@ -209,6 +209,7 @@ export type { EpisodeClosureReceipt, EpisodeDreamStatus, EpisodeListOptions, Mem
 const ATLAS_RECALL_REFRESH_MS = 24 * 60 * 60 * 1000;
 export const CONFIRMATION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const CONFIRMATION_WARNING_MS = 7 * 24 * 60 * 60 * 1000;
+const CONFIRMATION_SOON_MS = 72 * 60 * 60 * 1000;
 const CANDIDATE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const HIGH_PRIVILEGE_CANDIDATE_TYPES = ['preferences', 'user_preference', 'long_term_goal', 'boundary', 'failure_lesson'];
 export type * from './factory/KernelOptions.js';
@@ -1840,6 +1841,9 @@ export class MemoryKernel extends KernelServices {
     const highPrivilegeAging = this.deepWriteCandidateStore.countNeedsConfirmationAging({
       projectId, expiredBefore, warningBefore, candidateTypes: HIGH_PRIVILEGE_CANDIDATE_TYPES,
     });
+    const expiring72h = this.deepWriteCandidateStore.countNeedsConfirmationAging({
+      projectId, expiredBefore, warningBefore: expiredBefore + CONFIRMATION_SOON_MS,
+    });
     const oldestCandidateAt = this.deepWriteCandidateStore.oldestCandidateCreatedAt(projectId);
     return {
       measuredAt: now,
@@ -1851,6 +1855,7 @@ export class MemoryKernel extends KernelServices {
         oldestCandidateAt,
         oldestCandidateAgeMs: oldestCandidateAt === null ? null : Math.max(0, now - oldestCandidateAt),
         needsConfirmationExpiringSoon: aging.expiringSoon,
+        needsConfirmationExpiring72h: expiring72h.expiringSoon,
         needsConfirmationOverdue: aging.overdue,
         highPrivilege: {
           needsConfirmation: this.countDreamCandidates({ projectId, statuses: ['needs_confirmation'], candidateTypes: HIGH_PRIVILEGE_CANDIDATE_TYPES }),

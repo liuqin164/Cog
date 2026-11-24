@@ -151,6 +151,7 @@ function statusLines(view: TuiView): string[] {
     `待浮现攒压：${presence?.emergence.length ?? 0} 条`,
     `临期承诺：${dueSoon} 条（待办 ${pending} 条）`,
     view.status.memoryModel?.line ?? '记忆模型：等待常驻进程应答',
+    ...(view.status.selfCare ? [view.status.selfCare.line] : []),
     `下次唤醒：${view.status.nextWakeAt === undefined ? '无安排' : formatWakeAt(view.status.nextWakeAt, view.status.timeZone)}`,
     view.status.quietWindow === undefined
       ? '勿扰窗：关'
